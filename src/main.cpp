@@ -437,32 +437,7 @@ static std::vector<std::string> render_left_column(const lsm::model::Snapshot& s
   auto scale_proc_cpu = [&](double raw)->double{
     return (g_ui.cpu_scale==UIState::CPUScale::Total) ? (raw / (double)ncpu) : raw;
   };
-  // bar_line with percent kept for future use (currently not used)
-  // Variant with no percent/suffix (bar only) to avoid redundancy with SYSTEM box
-  auto bar_line_no_pct = [&](const std::string& key, const std::string& label, double pct_raw){
-    const int label_w = 8;
-    // label + space + '[' + bar + ']' must fit inside iw
-    int barw = std::max(10, iw - (label_w + 3));
-    double bar_pct = smooth_value(key, pct_raw);
-    std::string bar = lsm::util::retro_bar(bar_pct, barw);
-    std::ostringstream os; os << trunc_pad(label, label_w) << " " << bar;
-    return os.str();
-  };
-
-  // CPU
-  std::vector<std::string> cpu_lines;
-  // CPU: bar only (details live in SYSTEM box)
-  cpu_lines.push_back(bar_line_no_pct("cpu.total", "CPU", s.cpu.usage_pct));
-  auto cpu_box = make_box("PROCESSOR", cpu_lines, width, 1);
-  all.insert(all.end(), cpu_box.begin(), cpu_box.end());
-
-  // Memory
-  std::vector<std::string> mem_lines;
-  // memory details displayed in SYSTEM box
-  // Memory: bar only (details live in SYSTEM box)
-  mem_lines.push_back(bar_line_no_pct("mem.used", "MEMORY", s.mem.used_pct));
-  auto mem_box = make_box("MEMORY", mem_lines, width, 1);
-  all.insert(all.end(), mem_box.begin(), mem_box.end());
+  // CPU and Memory panels moved to right column.
 
   // Processes
   std::vector<std::string> proc_lines; proc_lines.reserve(64);
@@ -569,7 +544,6 @@ static std::vector<std::string> render_left_column(const lsm::model::Snapshot& s
   // We already appended cpu_box and mem_box to 'all'. Compute their heights:
   // Note: cpu_box and mem_box were appended above.
   int used_fixed = (int)all.size();
-  if (used_fixed == 0) { used_fixed = 6; } // fallback estimate: two boxes of 3 lines each
   int remaining_for_proc = std::max(5, target_rows - used_fixed);
   int proc_inner_min = std::max(14, remaining_for_proc - 2); // minus borders
   int desired_rows2 = std::max(1, proc_inner_min - 1); // minus header row inside box
@@ -648,11 +622,27 @@ static std::vector<std::string> render_right_column(const lsm::model::Snapshot& 
   };
   bool show_disk = g_ui.show_disk, show_net = g_ui.show_net,
        show_thermal = g_ui.show_thermal, show_gpumon = g_ui.show_gpumon;
+  // Shared helper for one-line retro bars (label width 8, bar-only)
+  auto bar_line8 = [&](const std::string& key, const char* label8, double pct_raw){
+    const int label_w = 8;
+    int barw = std::max(10, iw - (label_w + 3));
+    double bar_pct = smooth_value(key, pct_raw);
+    std::string bar = lsm::util::retro_bar(bar_pct, barw);
+    std::ostringstream os; os << trunc_pad(label8, label_w) << " " << bar;
+    return os.str();
+  };
+
+  // PROCESSOR (CPU) — first on right
+  {
+    std::vector<std::string> lines;
+    lines.push_back(bar_line8("cpu.total", "CPU", s.cpu.usage_pct));
+    box_add("PROCESSOR", lines, 1);
+  }
   // (DISK I/O and NETWORK moved below GPU MONITOR)
   // GPU Info removed (details live in SYSTEM)
   // VRAM panel removed; VRAM appears as a row in GPU MONITOR and details in SYSTEM
   // THERMALS moved into SYSTEM box (removed)
-  // GPU Monitor — fixed size with gentle spacing between rows
+  // GPU — fixed size with gentle spacing between rows
   if (show_gpumon) {
     std::vector<std::string> lines;
     auto gpu_line = [&](const std::string& key, const char* label8, double pct_raw){
@@ -677,9 +667,15 @@ static std::vector<std::string> render_right_column(const lsm::model::Snapshot& 
     // POWER removed from GPU MONITOR (shown in SYSTEM)
     // Remove the trailing spacer if present
     if (!lines.empty() && lines.back().empty()) lines.pop_back();
-    box_add("GPU MONITOR", lines, (int)lines.size());
+    box_add("GPU", lines, (int)lines.size());
   }
-  // DISK I/O (after GPU MONITOR)
+  // MEMORY (after GPU)
+  {
+    std::vector<std::string> lines;
+    lines.push_back(bar_line8("mem.used", "MEMORY", s.mem.used_pct));
+    box_add("MEMORY", lines, 1);
+  }
+  // DISK I/O (after MEMORY)
   if (show_disk) {
     std::vector<std::string> lines;
     {
