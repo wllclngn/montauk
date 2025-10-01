@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/lsmcpp.dir/link.d CMakeFiles/lsmcpp.dir/src/main.cpp.o -o lsmcpp  liblsm_core.a /usr/lib/libnvidia-ml.so
