@@ -1,4 +1,4 @@
-Legendary Linux Terminal System Monitor (C++23)
+Linux System Monitor
 
 Overview
 - Standalone, offline‑friendly C++23 system monitor for Linux. No external libraries or packages are required to build and run the default text mode.
