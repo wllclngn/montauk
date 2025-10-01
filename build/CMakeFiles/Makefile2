@@ -64,14 +64,14 @@ CMAKE_BINARY_DIR = "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-S
 
 # The main recursive "all" target.
 all: CMakeFiles/lsm_core.dir/all
-all: CMakeFiles/lsmcpp.dir/all
+all: CMakeFiles/lsm.dir/all
 all: CMakeFiles/lsm_analyze.dir/all
 all: CMakeFiles/lsm_tests.dir/all
 .PHONY : all
 
 # The main recursive "codegen" target.
 codegen: CMakeFiles/lsm_core.dir/codegen
-codegen: CMakeFiles/lsmcpp.dir/codegen
+codegen: CMakeFiles/lsm.dir/codegen
 codegen: CMakeFiles/lsm_analyze.dir/codegen
 codegen: CMakeFiles/lsm_tests.dir/codegen
 .PHONY : codegen
@@ -82,7 +82,7 @@ preinstall:
 
 # The main recursive "clean" target.
 clean: CMakeFiles/lsm_core.dir/clean
-clean: CMakeFiles/lsmcpp.dir/clean
+clean: CMakeFiles/lsm.dir/clean
 clean: CMakeFiles/lsm_analyze.dir/clean
 clean: CMakeFiles/lsm_tests.dir/clean
 clean: CMakeFiles/check.dir/clean
@@ -95,7 +95,7 @@ clean: CMakeFiles/check.dir/clean
 CMakeFiles/lsm_core.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18 "Built target lsm_core"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 "Built target lsm_core"
 .PHONY : CMakeFiles/lsm_core.dir/all
 
 # Build rule for subdir invocation for target.
@@ -112,7 +112,7 @@ lsm_core: CMakeFiles/lsm_core.dir/rule
 # codegen rule for target.
 CMakeFiles/lsm_core.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18 "Finished codegen for target lsm_core"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 "Finished codegen for target lsm_core"
 .PHONY : CMakeFiles/lsm_core.dir/codegen
 
 # clean rule for target.
@@ -121,36 +121,36 @@ CMakeFiles/lsm_core.dir/clean:
 .PHONY : CMakeFiles/lsm_core.dir/clean
 
 #=============================================================================
-# Target rules for target CMakeFiles/lsmcpp.dir
+# Target rules for target CMakeFiles/lsm.dir
 
 # All Build rule for target.
-CMakeFiles/lsmcpp.dir/all: CMakeFiles/lsm_core.dir/all
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsmcpp.dir/build.make CMakeFiles/lsmcpp.dir/depend
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsmcpp.dir/build.make CMakeFiles/lsmcpp.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=34,35 "Built target lsmcpp"
-.PHONY : CMakeFiles/lsmcpp.dir/all
+CMakeFiles/lsm.dir/all: CMakeFiles/lsm_core.dir/all
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=1,2 "Built target lsm"
+.PHONY : CMakeFiles/lsm.dir/all
 
 # Build rule for subdir invocation for target.
-CMakeFiles/lsmcpp.dir/rule: cmake_check_build_system
+CMakeFiles/lsm.dir/rule: cmake_check_build_system
 	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 18
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/lsmcpp.dir/all
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/lsm.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 0
-.PHONY : CMakeFiles/lsmcpp.dir/rule
+.PHONY : CMakeFiles/lsm.dir/rule
 
 # Convenience name for target.
-lsmcpp: CMakeFiles/lsmcpp.dir/rule
-.PHONY : lsmcpp
+lsm: CMakeFiles/lsm.dir/rule
+.PHONY : lsm
 
 # codegen rule for target.
-CMakeFiles/lsmcpp.dir/codegen:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsmcpp.dir/build.make CMakeFiles/lsmcpp.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=34,35 "Finished codegen for target lsmcpp"
-.PHONY : CMakeFiles/lsmcpp.dir/codegen
+CMakeFiles/lsm.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=1,2 "Finished codegen for target lsm"
+.PHONY : CMakeFiles/lsm.dir/codegen
 
 # clean rule for target.
-CMakeFiles/lsmcpp.dir/clean:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsmcpp.dir/build.make CMakeFiles/lsmcpp.dir/clean
-.PHONY : CMakeFiles/lsmcpp.dir/clean
+CMakeFiles/lsm.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/clean
+.PHONY : CMakeFiles/lsm.dir/clean
 
 #=============================================================================
 # Target rules for target CMakeFiles/lsm_analyze.dir
@@ -159,7 +159,7 @@ CMakeFiles/lsmcpp.dir/clean:
 CMakeFiles/lsm_analyze.dir/all: CMakeFiles/lsm_core.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_analyze.dir/build.make CMakeFiles/lsm_analyze.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_analyze.dir/build.make CMakeFiles/lsm_analyze.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=1,2 "Built target lsm_analyze"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=3,4 "Built target lsm_analyze"
 .PHONY : CMakeFiles/lsm_analyze.dir/all
 
 # Build rule for subdir invocation for target.
@@ -176,7 +176,7 @@ lsm_analyze: CMakeFiles/lsm_analyze.dir/rule
 # codegen rule for target.
 CMakeFiles/lsm_analyze.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_analyze.dir/build.make CMakeFiles/lsm_analyze.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=1,2 "Finished codegen for target lsm_analyze"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=3,4 "Finished codegen for target lsm_analyze"
 .PHONY : CMakeFiles/lsm_analyze.dir/codegen
 
 # clean rule for target.
@@ -191,7 +191,7 @@ CMakeFiles/lsm_analyze.dir/clean:
 CMakeFiles/lsm_tests.dir/all: CMakeFiles/lsm_core.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=19,20,21,22,23,24,25,26,27,28,29,30,31,32,33 "Built target lsm_tests"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=21,22,23,24,25,26,27,28,29,30,31,32,33,34,35 "Built target lsm_tests"
 .PHONY : CMakeFiles/lsm_tests.dir/all
 
 # Build rule for subdir invocation for target.
@@ -208,7 +208,7 @@ lsm_tests: CMakeFiles/lsm_tests.dir/rule
 # codegen rule for target.
 CMakeFiles/lsm_tests.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=19,20,21,22,23,24,25,26,27,28,29,30,31,32,33 "Finished codegen for target lsm_tests"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=21,22,23,24,25,26,27,28,29,30,31,32,33,34,35 "Finished codegen for target lsm_tests"
 .PHONY : CMakeFiles/lsm_tests.dir/codegen
 
 # clean rule for target.

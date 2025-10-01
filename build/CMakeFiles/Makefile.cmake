@@ -115,7 +115,7 @@ set(CMAKE_MAKEFILE_PRODUCTS
 # Dependency information for all targets:
 set(CMAKE_DEPEND_INFO_FILES
   "CMakeFiles/lsm_core.dir/DependInfo.cmake"
-  "CMakeFiles/lsmcpp.dir/DependInfo.cmake"
+  "CMakeFiles/lsm.dir/DependInfo.cmake"
   "CMakeFiles/lsm_analyze.dir/DependInfo.cmake"
   "CMakeFiles/lsm_tests.dir/DependInfo.cmake"
   "CMakeFiles/check.dir/DependInfo.cmake"

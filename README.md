@@ -11,10 +11,12 @@ Build
 - Release: `make build`
 - Debug: `make debug`
 - Clean: `make clean` / `make distclean`
+- One-shot install: `./scripts/auto_install.sh` (to `/usr/local`)
 
 Run
-- Text mode (default): `./build/lsmcpp [--iterations N] [--sleep-ms MS]`
-- Self test: `./build/lsmcpp --self-test-seconds 5`
+- Text mode (default): `./build/lsm [--iterations N] [--sleep-ms MS]`
+- Self test: `./build/lsm --self-test-seconds 5`
+- System install path: `/usr/local/bin/lsm` (via CMake install)
 
 UI Controls
 - q: quit
@@ -32,7 +34,7 @@ CPU Scale (Processes)
 Quick Tips
 - Prefer machine‑share CPU (default). Press `i` to flip to per‑core if you want IRIX‑style numbers.
 - Want a gentler or stricter top‑proc alert? Set `LSM_TOPPROC_ALERT_FRAMES` (e.g., `2` for sensitive, `12` for sustained).
-- Avoid alt screen if you plan to copy/paste terminal contents: `LSM_ALT_SCREEN=0 ./build/lsmcpp`.
+- Avoid alt screen if you plan to copy/paste terminal contents: `LSM_ALT_SCREEN=0 ./build/lsm`.
 - Concurrency‑safe rendering is enabled by default by copying each snapshot at frame start. Disable for maximal throughput: `LSM_COPY_FRONT=0`.
 
  
@@ -46,13 +48,23 @@ Policy: No Secondary Dependencies
 - The default build uses only the C++ standard library and Linux kernel interfaces (/proc, /sys). NVML (for NVIDIA GPU metrics) is attempted automatically and gracefully disabled when not found.
 
 Packaging (Arch Linux)
-- A `PKGBUILD` is provided. NVML is auto-detected. The UI is text‑only.
-- Dependencies: `nvidia-utils` (runtime), build deps: `cmake`, `cuda`.
+- A PKGBUILD is provided. NVML is auto‑detected. The UI is text‑only.
+- Build deps: `cmake`, `gcc`, `make`. Optional runtime: `nvidia-utils`.
+- Tests are disabled by default for packaging: `LSM_BUILD_TESTS=OFF`.
 - Install: `makepkg -si`
-- Result: `/usr/bin/lsmcpp` (text UI).
+- Result: `/usr/bin/lsm` (text UI).
+
+Notes
+- Paths with spaces: PKGBUILD mitigates Arch’s `-ffile-prefix-map` issue; if you still encounter it, use the helper: `./scripts/system_install.sh --aur`.
+- Direct CMake install: `./scripts/system_install.sh --cmake` (installs to `/usr/local`).
 
 Tests
-- `make test` runs a lightweight test suite (no external framework) writing temporary fixtures under `/tmp`.
+- Enable in CMake: `cmake -S . -B build -DLSM_BUILD_TESTS=ON && cmake --build build -j && ./build/lsm_tests`
+- The `Makefile` target `make test` assumes tests are built already.
+- Packaging disables tests by default.
+
+Uninstall (CMake installs)
+- `sudo xargs rm -v < build/install_manifest.txt`
 
 Configuration (Environment Variables)
 - UI/Terminal

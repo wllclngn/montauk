@@ -25,6 +25,9 @@
 #include <fcntl.h>
 #include <cctype>
 
+// Forward declaration used before definition below
+static inline void best_effort_write(int fd, const char* buf, size_t len);
+
 using namespace std::chrono_literals;
 
 static std::atomic<bool> g_stop{false};
@@ -34,9 +37,9 @@ static void restore_terminal_minimal() {
   const char* alt_off = "\x1B[?1049l";
   const char* show_cur = "\x1B[?25h";
   const char* reset = "\x1B[0m";
-  if (g_alt_in_use.load()) ::write(STDOUT_FILENO, alt_off, std::char_traits<char>::length(alt_off));
-  ::write(STDOUT_FILENO, show_cur, std::char_traits<char>::length(show_cur));
-  ::write(STDOUT_FILENO, reset, std::char_traits<char>::length(reset));
+  if (g_alt_in_use.load()) best_effort_write(STDOUT_FILENO, alt_off, std::char_traits<char>::length(alt_off));
+  best_effort_write(STDOUT_FILENO, show_cur, std::char_traits<char>::length(show_cur));
+  best_effort_write(STDOUT_FILENO, reset, std::char_traits<char>::length(reset));
 }
 static void on_sigint(int){ restore_terminal_minimal(); g_stop.store(true); }
 
@@ -78,6 +81,13 @@ static bool tty_stdout() {
 static std::string sgr(const char* code) {
   if (!tty_stdout()) return {};
   return std::string("\x1B[") + code + "m";
+}
+
+// Best-effort terminal write that satisfies warn_unused_result without
+// escalating errors. Used for small control sequences and frame flushes.
+static inline void best_effort_write(int fd, const char* buf, size_t len) {
+  if (len == 0) return;
+  if (::write(fd, buf, len) < 0) { /* ignore */ }
 }
 
 static std::string sgr_reset() { return tty_stdout()? std::string("\x1B[0m") : std::string(); }
@@ -389,10 +399,10 @@ class CursorGuard {
   bool active_{false};
 public:
   CursorGuard() {
-    if (tty_stdout()) { ::write(STDOUT_FILENO, "\x1B[?25l", 6); active_ = true; }
+    if (tty_stdout()) { best_effort_write(STDOUT_FILENO, "\x1B[?25l", 6); active_ = true; }
   }
   ~CursorGuard() {
-    if (active_) ::write(STDOUT_FILENO, "\x1B[?25h", 6);
+    if (active_) best_effort_write(STDOUT_FILENO, "\x1B[?25h", 6);
   }
 };
 
@@ -400,10 +410,10 @@ class AltScreenGuard {
   bool active_{false};
 public:
   explicit AltScreenGuard(bool enable) {
-    if (enable && tty_stdout()) { ::write(STDOUT_FILENO, "\x1B[?1049h", 8); active_ = true; g_alt_in_use.store(true); }
+    if (enable && tty_stdout()) { best_effort_write(STDOUT_FILENO, "\x1B[?1049h", 8); active_ = true; g_alt_in_use.store(true); }
   }
   ~AltScreenGuard() {
-    if (active_) { ::write(STDOUT_FILENO, "\x1B[?1049l", 8); g_alt_in_use.store(false); }
+    if (active_) { best_effort_write(STDOUT_FILENO, "\x1B[?1049l", 8); g_alt_in_use.store(false); }
   }
 };
 
@@ -885,7 +895,7 @@ static void render_screen(const lsm::model::Snapshot& s, bool show_help_line, co
   }
   // Position cursor to last cell and flush so teardown never interleaves with the frame
   frame += "\x1B[" + std::to_string(rows) + ";" + std::to_string(cols) + "H";
-  ::write(STDOUT_FILENO, frame.data(), frame.size());
+  best_effort_write(STDOUT_FILENO, frame.data(), frame.size());
 }
 
 
@@ -943,7 +953,7 @@ int main(int argc, char** argv) {
     else if (a == "--self-test-seconds" && i + 1 < argc) self_test_secs = std::stoi(argv[++i]);
     // --tui/--no-tui removed: text UI is the only mode
     else if (a == "-h" || a == "--help") {
-      std::cout << "Usage: lsmcpp [--self-test-seconds S] [--iterations N] [--sleep-ms MS]\n";
+      std::cout << "Usage: lsm [--self-test-seconds S] [--iterations N] [--sleep-ms MS]\n";
       std::cout << "Notes: Text UI runs until Ctrl+C by default.\n";
       return 0;
     }
@@ -994,7 +1004,7 @@ int main(int argc, char** argv) {
   int alert_frames = 0; int alert_needed = getenv_int("LSM_TOPPROC_ALERT_FRAMES", 5); // consecutive frames over threshold
   bool did_first_clear = false;
   for (int i = 0; (iterations <= 0 || i < iterations) && !g_stop.load(); ++i) {
-    if (use_alt && !did_first_clear) { ::write(STDOUT_FILENO, "\x1B[2J\x1B[H", 7); did_first_clear = true; }
+    if (use_alt && !did_first_clear) { best_effort_write(STDOUT_FILENO, "\x1B[2J\x1B[H", 7); did_first_clear = true; }
     // Non-blocking input with poll
     struct pollfd pfd{.fd=STDIN_FILENO,.events=POLLIN,.revents=0};
     int to = sleep_ms; if (to < 10) to = 10; if (to > 1000) to = 1000;

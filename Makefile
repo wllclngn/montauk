@@ -11,7 +11,7 @@ debug:
 	@cmake --build build -j
 
 run: build
-	@./build/lsmcpp || true
+	@./build/lsm || true
 
 test: build
 	@./build/lsm_tests

@@ -19,6 +19,9 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# Build options
+option(LSM_BUILD_TESTS "Build unit tests" OFF)
+
 add_library(lsm_core
     src/util/Procfs.cpp
     src/util/Retro.cpp
@@ -52,12 +55,12 @@ else()
   message(STATUS "NVML not found: building without NVML (device VRAM/util via sysfs if available)")
 endif()
 
-add_executable(lsmcpp src/main.cpp)
-target_link_libraries(lsmcpp PRIVATE lsm_core)
-target_compile_options(lsmcpp PRIVATE -Wall -Wextra -Werror)
+add_executable(lsm src/main.cpp)
+target_link_libraries(lsm PRIVATE lsm_core)
+target_compile_options(lsm PRIVATE -Wall -Wextra -Werror)
 
 
-install(TARGETS lsmcpp RUNTIME DESTINATION bin)
+install(TARGETS lsm RUNTIME DESTINATION bin)
 
 # Lightweight on-box process analyzer (no external deps)
 add_executable(lsm_analyze src/tools/analyze_proc.cpp)
@@ -65,26 +68,28 @@ target_include_directories(lsm_analyze PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/inclu
 target_link_libraries(lsm_analyze PRIVATE lsm_core)
 target_compile_options(lsm_analyze PRIVATE -Wall -Wextra -Werror)
 
-# Lightweight unit tests without external deps
-add_executable(lsm_tests
-  tests/test_main.cpp
-  tests/test_memory.cpp
-  tests/test_cpu.cpp
-  tests/test_net.cpp
-  tests/test_disk.cpp
-  tests/test_gpu_fallback.cpp
-  tests/test_gpu_cache.cpp
-  tests/test_fdinfo_collector.cpp
-  tests/test_snapshot_buffers.cpp
-  tests/test_producer_basic.cpp
-  tests/test_stress.cpp
-  tests/test_filters.cpp
-  tests/test_alerts.cpp
-  tests/test_thermal.cpp
-)
-target_include_directories(lsm_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-target_link_libraries(lsm_tests PRIVATE lsm_core)
-target_compile_options(lsm_tests PRIVATE -Wall -Wextra -Werror)
-target_compile_definitions(lsm_tests PRIVATE LSM_TESTING=1)
+if(LSM_BUILD_TESTS)
+  # Lightweight unit tests without external deps
+  add_executable(lsm_tests
+    tests/test_main.cpp
+    tests/test_memory.cpp
+    tests/test_cpu.cpp
+    tests/test_net.cpp
+    tests/test_disk.cpp
+    tests/test_gpu_fallback.cpp
+    tests/test_gpu_cache.cpp
+    tests/test_fdinfo_collector.cpp
+    tests/test_snapshot_buffers.cpp
+    tests/test_producer_basic.cpp
+    tests/test_stress.cpp
+    tests/test_filters.cpp
+    tests/test_alerts.cpp
+    tests/test_thermal.cpp
+  )
+  target_include_directories(lsm_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+  target_link_libraries(lsm_tests PRIVATE lsm_core)
+  target_compile_options(lsm_tests PRIVATE -Wall -Wextra -Werror)
+  target_compile_definitions(lsm_tests PRIVATE LSM_TESTING=1)
 
-add_custom_target(check COMMAND lsm_tests DEPENDS lsm_tests)
+  add_custom_target(check COMMAND lsm_tests DEPENDS lsm_tests)
+endif()

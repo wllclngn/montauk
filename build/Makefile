@@ -175,17 +175,17 @@ lsm_core/fast:
 .PHONY : lsm_core/fast
 
 #=============================================================================
-# Target rules for targets named lsmcpp
+# Target rules for targets named lsm
 
 # Build rule for target.
-lsmcpp: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lsmcpp
-.PHONY : lsmcpp
+lsm: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lsm
+.PHONY : lsm
 
 # fast build rule for target.
-lsmcpp/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsmcpp.dir/build.make CMakeFiles/lsmcpp.dir/build
-.PHONY : lsmcpp/fast
+lsm/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/build
+.PHONY : lsm/fast
 
 #=============================================================================
 # Target rules for targets named lsm_analyze
@@ -543,7 +543,7 @@ src/main.o: src/main.cpp.o
 
 # target to build an object file
 src/main.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsmcpp.dir/build.make CMakeFiles/lsmcpp.dir/src/main.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/src/main.cpp.o
 .PHONY : src/main.cpp.o
 
 src/main.i: src/main.cpp.i
@@ -551,7 +551,7 @@ src/main.i: src/main.cpp.i
 
 # target to preprocess a source file
 src/main.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsmcpp.dir/build.make CMakeFiles/lsmcpp.dir/src/main.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/src/main.cpp.i
 .PHONY : src/main.cpp.i
 
 src/main.s: src/main.cpp.s
@@ -559,7 +559,7 @@ src/main.s: src/main.cpp.s
 
 # target to generate assembly for a file
 src/main.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsmcpp.dir/build.make CMakeFiles/lsmcpp.dir/src/main.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/src/main.cpp.s
 .PHONY : src/main.cpp.s
 
 src/tools/analyze_proc.o: src/tools/analyze_proc.cpp.o
@@ -983,10 +983,10 @@ help:
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
 	@echo "... check"
+	@echo "... lsm"
 	@echo "... lsm_analyze"
 	@echo "... lsm_core"
 	@echo "... lsm_tests"
-	@echo "... lsmcpp"
 	@echo "... src/app/Alerts.o"
 	@echo "... src/app/Alerts.i"
 	@echo "... src/app/Alerts.s"
