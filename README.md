@@ -1,4 +1,11 @@
-Linux System Monitor
+```
+███╗   ███╗  ██████╗  ███╗   ██╗ ████████╗  █████╗  ██╗   ██╗ ██╗  ██╗
+████╗ ████║ ██╔═══██╗ ████╗  ██║ ╚══██╔══╝ ██╔══██╗ ██║   ██║ ██║ ██╔╝
+██╔████╔██║ ██║   ██║ ██╔██╗ ██║    ██║    ███████║ ██║   ██║ █████╔╝ 
+██║╚██╔╝██║ ██║   ██║ ██║╚██╗██║    ██║    ██╔══██║ ██║   ██║ ██╔═██╗ 
+██║ ╚═╝ ██║ ╚██████╔╝ ██║ ╚████║    ██║    ██║  ██║ ╚██████╔╝ ██║  ██╗
+╚═╝     ╚═╝  ╚═════╝  ╚═╝  ╚═══╝    ╚═╝    ╚═╝  ╚═╝  ╚═════╝  ╚═╝  ╚═╝
+```
 
 Overview
 - Standalone, offline‑friendly C++23 system monitor for Linux. No external libraries or packages are required to build and run the default text mode.
@@ -14,9 +21,9 @@ Build
 - One-shot install: `./scripts/auto_install.sh` (to `/usr/local`)
 
 Run
-- Text mode (default): `./build/lsm [--iterations N] [--sleep-ms MS]`
-- Self test: `./build/lsm --self-test-seconds 5`
-- System install path: `/usr/local/bin/lsm` (via CMake install)
+- Text mode (default): `./build/montauk [--iterations N] [--sleep-ms MS]`
+- Self test: `./build/montauk --self-test-seconds 5`
+- System install path: `/usr/local/bin/montauk` (via CMake install)
 
 UI Controls
 - q: quit
@@ -33,9 +40,9 @@ CPU Scale (Processes)
 
 Quick Tips
 - Prefer machine‑share CPU (default). Press `i` to flip to per‑core if you want IRIX‑style numbers.
-- Want a gentler or stricter top‑proc alert? Set `LSM_TOPPROC_ALERT_FRAMES` (e.g., `2` for sensitive, `12` for sustained).
-- Avoid alt screen if you plan to copy/paste terminal contents: `LSM_ALT_SCREEN=0 ./build/lsm`.
-- Concurrency‑safe rendering is enabled by default by copying each snapshot at frame start. Disable for maximal throughput: `LSM_COPY_FRONT=0`.
+- Want a gentler or stricter top‑proc alert? Set `MONTAUK_TOPPROC_ALERT_FRAMES` (e.g., `2` for sensitive, `12` for sustained).
+- Avoid alt screen if you plan to copy/paste terminal contents: `MONTAUK_ALT_SCREEN=0 ./build/montauk`.
+- Concurrency‑safe rendering is enabled by default by copying each snapshot at frame start. Disable for maximal throughput: `MONTAUK_COPY_FRONT=0`.
 
  
 
@@ -50,16 +57,16 @@ Policy: No Secondary Dependencies
 Packaging (Arch Linux)
 - A PKGBUILD is provided. NVML is auto‑detected. The UI is text‑only.
 - Build deps: `cmake`, `gcc`, `make`. Optional runtime: `nvidia-utils`.
-- Tests are disabled by default for packaging: `LSM_BUILD_TESTS=OFF`.
+- Tests are disabled by default for packaging: `MONTAUK_BUILD_TESTS=OFF`.
 - Install: `makepkg -si`
-- Result: `/usr/bin/lsm` (text UI).
+- Result: `/usr/bin/montauk` (text UI).
 
 Notes
 - Paths with spaces: PKGBUILD mitigates Arch’s `-ffile-prefix-map` issue; if you still encounter it, use the helper: `./scripts/system_install.sh --aur`.
 - Direct CMake install: `./scripts/system_install.sh --cmake` (installs to `/usr/local`).
 
 Tests
-- Enable in CMake: `cmake -S . -B build -DLSM_BUILD_TESTS=ON && cmake --build build -j && ./build/lsm_tests`
+- Enable in CMake: `cmake -S . -B build -DMONTAUK_BUILD_TESTS=ON && cmake --build build -j && ./build/montauk_tests`
 - The `Makefile` target `make test` assumes tests are built already.
 - Packaging disables tests by default.
 
@@ -68,29 +75,29 @@ Uninstall (CMake installs)
 
 Configuration (Environment Variables)
 - UI/Terminal
-  - `LSM_ALT_SCREEN`=1|0: use alt screen (default 1).
-  - `LSM_TITLE_IDX` (palette index) or `LSM_TITLE_HEX` (e.g., `#FFB000`) for title color.
+  - `MONTAUK_ALT_SCREEN`=1|0: use alt screen (default 1).
+  - `MONTAUK_TITLE_IDX` (palette index) or `MONTAUK_TITLE_HEX` (e.g., `#FFB000`) for title color.
 - Colors/Thresholds
-  - `LSM_ACCENT_IDX`, `LSM_CAUTION_IDX`, `LSM_WARNING_IDX`: palette indices for accent/caution/warning.
-  - `LSM_PROC_CAUTION_PCT`, `LSM_PROC_WARNING_PCT`: process CPU% color thresholds.
+  - `MONTAUK_ACCENT_IDX`, `MONTAUK_CAUTION_IDX`, `MONTAUK_WARNING_IDX`: palette indices for accent/caution/warning.
+  - `MONTAUK_PROC_CAUTION_PCT`, `MONTAUK_PROC_WARNING_PCT`: process CPU% color thresholds.
 - Alerts
-  - `LSM_TOPPROC_ALERT_FRAMES`: consecutive frames above warning required to show the top‑proc banner (default 5). Respects current CPU scale.
+  - `MONTAUK_TOPPROC_ALERT_FRAMES`: consecutive frames above warning required to show the top‑proc banner (default 5). Respects current CPU scale.
 - Processes
-  - `LSM_PROC_CPU_SCALE`=total|core: default process CPU scale (total = machine‑share, core = per‑core).
-  - `LSM_COPY_FRONT`=1|0: copy the live snapshot at frame start to avoid read/write overlap (default 1).
+  - `MONTAUK_PROC_CPU_SCALE`=total|core: default process CPU scale (total = machine‑share, core = per‑core).
+  - `MONTAUK_COPY_FRONT`=1|0: copy the live snapshot at frame start to avoid read/write overlap (default 1).
  - Thermals
    - Dynamic thresholds are discovered from vendor APIs where possible:
      - NVIDIA (NVML): slowdown (warning) for GPU edge; memory max for VRAM temp when available.
      - AMD/Intel (sysfs/hwmon): per‑sensor crit/max/emergency files (edge/junction/hotspot/mem) used as warning.
    - Fallback and overrides:
-     - Shared delta: `LSM_TEMP_CAUTION_DELTA_C` (default 10°C) when only a warning is known.
-     - CPU: `LSM_CPU_TEMP_WARNING_C` (default 90), `LSM_CPU_TEMP_CAUTION_C` (default warning − delta).
-     - GPU generic: `LSM_GPU_TEMP_WARNING_C` (default 90), `LSM_GPU_TEMP_CAUTION_C` (default warning − delta).
+     - Shared delta: `MONTAUK_TEMP_CAUTION_DELTA_C` (default 10°C) when only a warning is known.
+     - CPU: `MONTAUK_CPU_TEMP_WARNING_C` (default 90), `MONTAUK_CPU_TEMP_CAUTION_C` (default warning − delta).
+     - GPU generic: `MONTAUK_GPU_TEMP_WARNING_C` (default 90), `MONTAUK_GPU_TEMP_CAUTION_C` (default warning − delta).
      - GPU per‑sensor warning/ca ution overrides:
-       - Edge: `LSM_GPU_TEMP_EDGE_WARNING_C`, `LSM_GPU_TEMP_EDGE_CAUTION_C`
-       - Hotspot: `LSM_GPU_TEMP_HOT_WARNING_C`, `LSM_GPU_TEMP_HOT_CAUTION_C`
-       - Memory: `LSM_GPU_TEMP_MEM_WARNING_C`, `LSM_GPU_TEMP_MEM_CAUTION_C`
-   - Show resolved warning thresholds inline on THERMALS lines: `LSM_SHOW_TEMP_WARN`=1|0 (default 0).
+       - Edge: `MONTAUK_GPU_TEMP_EDGE_WARNING_C`, `MONTAUK_GPU_TEMP_EDGE_CAUTION_C`
+       - Hotspot: `MONTAUK_GPU_TEMP_HOT_WARNING_C`, `MONTAUK_GPU_TEMP_HOT_CAUTION_C`
+       - Memory: `MONTAUK_GPU_TEMP_MEM_WARNING_C`, `MONTAUK_GPU_TEMP_MEM_CAUTION_C`
+   - Show resolved warning thresholds inline on THERMALS lines: `MONTAUK_SHOW_TEMP_WARN`=1|0 (default 0).
 - Testing/Dev
-  - `LSM_PROC_ROOT` remaps absolute `/proc` paths.
-  - `LSM_SYS_ROOT` remaps absolute `/sys` paths.
+  - `MONTAUK_PROC_ROOT` remaps absolute `/proc` paths.
+  - `MONTAUK_SYS_ROOT` remaps absolute `/sys` paths.

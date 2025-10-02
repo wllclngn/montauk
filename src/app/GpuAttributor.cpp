@@ -3,32 +3,43 @@
 #include <cstdio>
 #include <filesystem>
 
-#ifdef LSM_HAVE_NVML
+#ifdef MONTAUK_HAVE_NVML
 #include <nvml.h>
 #endif
 
 using namespace std::chrono;
 
-namespace lsm::app {
+namespace montauk::app {
 
 GpuAttributor::GpuAttributor() {}
 GpuAttributor::~GpuAttributor() {
-#ifdef LSM_HAVE_NVML
+#ifdef MONTAUK_HAVE_NVML
   nvml_shutdown_if_needed();
 #endif
 }
 
 static int as_int_pct(double v) { if (v < 0) v = 0; if (v > 100) v = 100; return (int)(v + 0.5); }
 
-void GpuAttributor::enrich(lsm::model::Snapshot& s) {
+void GpuAttributor::enrich(montauk::model::Snapshot& s) {
   auto now_tp = steady_clock::now();
   std::unordered_map<int,int> pid_to_gpu; // per-PID util percent
   std::unordered_set<int> running_pids;
   std::unordered_map<int, uint64_t> pid_to_gpu_mem_kb;
-#ifdef LSM_HAVE_NVML
+#ifdef MONTAUK_HAVE_NVML
   // NVML path (NVIDIA)
   ensure_nvml_init();
-  const bool log_nvml = []{ const char* v = std::getenv("LSM_LOG_NVML"); return v && (v[0]=='1'||v[0]=='t'||v[0]=='T'||v[0]=='y'||v[0]=='Y'); }();
+  const bool log_nvml = []{
+    auto getenv_compat = [](const char* name)->const char*{
+      const char* vv = std::getenv(name);
+      if (vv && *vv) return vv;
+      std::string n(name);
+      if (n.rfind("MONTAUK_",0)==0) { std::string alt = std::string("montauk_") + n.substr(8); vv = std::getenv(alt.c_str()); if (vv&&*vv) return vv; }
+      else if (n.rfind("montauk_",0)==0) { std::string alt = std::string("MONTAUK_") + n.substr(8); vv = std::getenv(alt.c_str()); if (vv&&*vv) return vv; }
+      return nullptr;
+    };
+    const char* v = getenv_compat("MONTAUK_LOG_NVML");
+    return v && (v[0]=='1'||v[0]=='t'||v[0]=='T'||v[0]=='y'||v[0]=='Y');
+  }();
   if (nvml_ok_) {
     unsigned int ndev=0; if (nvmlDeviceGetCount_v2(&ndev)==NVML_SUCCESS) {
       if (nvml_last_proc_ts_per_dev_.size() != ndev) nvml_last_proc_ts_per_dev_.assign(ndev, 0ull);
@@ -117,9 +128,21 @@ void GpuAttributor::enrich(lsm::model::Snapshot& s) {
   }
 
   // Optional NVIDIA PMON fallback (off by default): parse `nvidia-smi pmon` for per-process sm/enc/dec
-  // Default-on PMON unless explicitly disabled (LSM_NVIDIA_PMON=0)
-  auto env_true = [](const char* name, bool defv=true){ const char* v = std::getenv(name); if(!v) return defv; return !(v[0]=='0'||v[0]=='f'||v[0]=='F'); };
-  if (pid_to_gpu.empty() && env_true("LSM_NVIDIA_PMON", true) && !s.nvml.mig_enabled) {
+  // Default-on PMON unless explicitly disabled (MONTAUK_NVIDIA_PMON=0 or montauk_NVIDIA_PMON=0)
+  auto env_true = [](const char* name, bool defv=true){
+    auto getenv_compat = [](const char* nm)->const char*{
+      const char* vv = std::getenv(nm);
+      if (vv && *vv) return vv;
+      std::string n(nm);
+      if (n.rfind("MONTAUK_",0)==0) { std::string alt = std::string("montauk_") + n.substr(8); vv = std::getenv(alt.c_str()); if (vv&&*vv) return vv; }
+      else if (n.rfind("montauk_",0)==0) { std::string alt = std::string("MONTAUK_") + n.substr(8); vv = std::getenv(alt.c_str()); if (vv&&*vv) return vv; }
+      return nullptr;
+    };
+    const char* v = getenv_compat(name);
+    if (!v) return defv;
+    return !(v[0]=='0'||v[0]=='f'||v[0]=='F');
+  };
+  if (pid_to_gpu.empty() && env_true("MONTAUK_NVIDIA_PMON", true) && !s.nvml.mig_enabled) {
     FILE* fp = ::popen("nvidia-smi pmon -c 1 -s u 2>/dev/null", "r");
     if (fp) {
       char buf[512];
@@ -187,7 +210,7 @@ void GpuAttributor::enrich(lsm::model::Snapshot& s) {
   };
 
   // Optional NVIDIA memory query via nvidia-smi (compute contexts)
-  if (pid_to_gpu_mem_kb.empty() && env_true("LSM_NVIDIA_MEM", true) && !s.nvml.mig_enabled) {
+  if (pid_to_gpu_mem_kb.empty() && env_true("MONTAUK_NVIDIA_MEM", true) && !s.nvml.mig_enabled) {
     FILE* fp = ::popen("nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null", "r");
     if (fp) {
       char line[256];
@@ -325,11 +348,11 @@ void GpuAttributor::enrich(lsm::model::Snapshot& s) {
   for (auto it = gpu_smooth_.begin(); it != gpu_smooth_.end(); ) { auto age = now_tp - it->second.last_sample; if (age > std::chrono::seconds(30)) it = gpu_smooth_.erase(it); else ++it; }
 }
 
-#ifdef LSM_HAVE_NVML
+#ifdef MONTAUK_HAVE_NVML
 void GpuAttributor::ensure_nvml_init() {
   if (!nvml_inited_) { nvml_inited_ = true; nvml_ok_ = (nvmlInit_v2() == NVML_SUCCESS); }
 }
 void GpuAttributor::nvml_shutdown_if_needed() { if (nvml_inited_ && nvml_ok_) { nvmlShutdown(); nvml_ok_ = false; } }
 #endif
 
-} // namespace lsm::app
+} // namespace montauk::app

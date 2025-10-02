@@ -11,10 +11,10 @@ debug:
 	@cmake --build build -j
 
 run: build
-	@./build/lsm || true
+	@./build/montauk || true
 
 test: build
-	@./build/lsm_tests
+	@./build/montauk_tests
 
 clean:
 	@cmake --build build --target clean >/dev/null 2>&1 || true

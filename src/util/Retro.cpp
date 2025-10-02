@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace lsm::util {
+namespace montauk::util {
 
 auto retro_bar(double pct, int width, const std::string& fill, const std::string& track) -> std::string {
   pct = std::clamp(pct, 0.0, 100.0);
@@ -18,4 +18,4 @@ auto retro_bar(double pct, int width, const std::string& fill, const std::string
   return s;
 }
 
-} // namespace lsm::util
+} // namespace montauk::util

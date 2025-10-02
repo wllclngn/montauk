@@ -23,7 +23,7 @@ using namespace std::chrono_literals;
 namespace fs = std::filesystem;
 
 static uint64_t read_cpu_total() {
-  auto txt = lsm::util::read_file_string("/proc/stat"); if (!txt) return 0;
+  auto txt = montauk::util::read_file_string("/proc/stat"); if (!txt) return 0;
   std::istringstream ss(*txt); std::string line; if (!std::getline(ss, line)) return 0;
   size_t pos = line.find(' '); if (pos == std::string::npos) return 0;
   std::string_view rest(line.c_str() + pos + 1);
@@ -38,7 +38,7 @@ static uint64_t read_cpu_total() {
 }
 
 static unsigned read_cpu_count() {
-  auto txt = lsm::util::read_file_string("/proc/stat"); if (!txt) return 1;
+  auto txt = montauk::util::read_file_string("/proc/stat"); if (!txt) return 1;
   std::istringstream ss(*txt); std::string line; unsigned count = 0; bool first = true;
   while (std::getline(ss, line)) {
     if (line.rfind("cpu", 0) == 0) {
@@ -63,7 +63,7 @@ static bool parse_stat_line(const std::string& content, int32_t& ppid, uint64_t&
 
 static std::string read_cmdline(int32_t pid) {
   auto path = std::string("/proc/")+std::to_string(pid)+"/cmdline";
-  auto bytes = lsm::util::read_file_bytes(path); if (!bytes) return {};
+  auto bytes = montauk::util::read_file_bytes(path); if (!bytes) return {};
   std::string out; out.reserve(bytes->size()); bool sep=true;
   for (auto b : *bytes) { if (b==0) { if(!sep){ out.push_back(' '); sep=true; } } else { out.push_back(static_cast<char>(b)); sep=false; } }
   if (!out.empty() && out.back()==' ') out.pop_back();
@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
 
   // Find candidate PIDs by substring in cmdline or image path
   std::set<int32_t> pids;
-  for (auto& name : lsm::util::list_dir("/proc")) {
+  for (auto& name : montauk::util::list_dir("/proc")) {
     if (name.empty() || name[0]<'0' || name[0]>'9') continue;
     int32_t pid = std::strtol(name.c_str(), nullptr, 10);
     auto cmd = read_cmdline(pid);
@@ -125,18 +125,18 @@ int main(int argc, char** argv) {
     for (auto pid : std::vector<int32_t>(pids.begin(), pids.end())) {
       // Threads under /proc/pid/task
       auto tdir = std::string("/proc/") + std::to_string(pid) + "/task";
-      for (auto& tname : lsm::util::list_dir(tdir)) {
+      for (auto& tname : montauk::util::list_dir(tdir)) {
         if (tname.empty() || tname[0]<'0' || tname[0]>'9') continue;
         int32_t tid = std::strtol(tname.c_str(), nullptr, 10);
         auto statp = std::string("/proc/") + std::to_string(pid) + "/task/" + std::to_string(tid) + "/stat";
-        auto txt = lsm::util::read_file_string(statp); if (!txt) continue;
+        auto txt = montauk::util::read_file_string(statp); if (!txt) continue;
         int32_t dummy_ppid=0; uint64_t ut=0, st=0; std::string comm;
         if (!parse_stat_line(*txt, dummy_ppid, ut, st, comm)) continue;
         uint64_t total = ut + st;
         auto& ts = per_pid_threads[pid][tid];
         if (ts.name.empty()) {
           auto commp = std::string("/proc/") + std::to_string(pid) + "/task/" + std::to_string(tid) + "/comm";
-          auto n = lsm::util::read_file_string(commp); ts.name = n? *n : comm;
+          auto n = montauk::util::read_file_string(commp); ts.name = n? *n : comm;
           // Trim trailing newline from comm
           if (!ts.name.empty() && (ts.name.back()=='\n' || ts.name.back()=='\r')) ts.name.pop_back();
         }

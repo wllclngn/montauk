@@ -2,11 +2,11 @@
 #include <chrono>
 namespace steady = std::chrono;
 
-namespace lsm::app {
+namespace montauk::app {
 
 AlertEngine::AlertEngine(AlertRules rules) : rules_(rules) {}
 
-std::vector<Alert> AlertEngine::evaluate(const lsm::model::Snapshot& s) {
+std::vector<Alert> AlertEngine::evaluate(const montauk::model::Snapshot& s) {
   std::vector<Alert> out;
   auto now = steady::steady_clock::now();
   // CPU total sustained
@@ -28,4 +28,4 @@ std::vector<Alert> AlertEngine::evaluate(const lsm::model::Snapshot& s) {
   return out;
 }
 
-} // namespace lsm::app
+} // namespace montauk::app

@@ -7,7 +7,7 @@
 
 using namespace std::chrono;
 
-namespace lsm::collectors {
+namespace montauk::collectors {
 
 static bool is_number(const std::string& s) {
   if (s.empty()) return false;
@@ -76,18 +76,18 @@ bool FdinfoProcessCollector::sample(std::unordered_map<int,int>& pid_to_gpu,
   pid_to_gpu.clear(); pid_to_gpu_mem_kb.clear(); running_pids.clear();
   bool any = false;
   auto now = Clock::now();
-  for (const auto& pd : lsm::util::list_dir("/proc")) {
+  for (const auto& pd : montauk::util::list_dir("/proc")) {
     if (!is_number(pd)) continue;
     int pid = std::strtol(pd.c_str(), nullptr, 10);
     // Enumerate fdinfo files
     std::string fdinfo_dir = std::string("/proc/") + pd + "/fdinfo";
-    auto fds = lsm::util::list_dir(fdinfo_dir);
+    auto fds = montauk::util::list_dir(fdinfo_dir);
     if (fds.empty()) continue;
     IntelCycles intel_acc{}; AmdEngines amd_acc{}; uint64_t vram_kb = 0;
     bool saw_drm = false;
     for (const auto& fn : fds) {
       if (!is_number(fn)) continue;
-      auto content_opt = lsm::util::read_file_string(fdinfo_dir + "/" + fn);
+      auto content_opt = montauk::util::read_file_string(fdinfo_dir + "/" + fn);
       if (!content_opt) continue;
       const auto& txt = *content_opt;
       // Quick filter: skip if no DRM keys
@@ -170,4 +170,4 @@ bool FdinfoProcessCollector::sample(std::unordered_map<int,int>& pid_to_gpu,
   return any;
 }
 
-} // namespace lsm::collectors
+} // namespace montauk::collectors

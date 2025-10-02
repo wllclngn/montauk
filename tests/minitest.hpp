@@ -15,7 +15,7 @@ struct Registrar {
 };
 
 inline int run_all() {
-  const char* json_env = std::getenv("LSM_TEST_JSON");
+  const char* json_env = std::getenv("MONTAUK_TEST_JSON");
   bool json = json_env && (*json_env == '1' || *json_env == 't' || *json_env == 'T' || *json_env == 'y' || *json_env == 'Y');
   int failed = 0; int passed = 0;
   for (auto& t : registry()) {

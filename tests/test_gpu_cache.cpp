@@ -6,11 +6,11 @@
 using namespace std::chrono;
 
 TEST(gpu_cache_persists_between_samples) {
-  lsm::app::SnapshotBuffers bufs;
-  lsm::app::Producer prod(bufs);
+  montauk::app::SnapshotBuffers bufs;
+  montauk::app::Producer prod(bufs);
 
-  lsm::model::ProcessSnapshot procs{};
-  lsm::model::ProcSample p{}; p.pid = 4242; p.cmd = "gpuwork"; p.has_gpu_util = false; p.gpu_util_pct = 0.0;
+  montauk::model::ProcessSnapshot procs{};
+  montauk::model::ProcSample p{}; p.pid = 4242; p.cmd = "gpuwork"; p.has_gpu_util = false; p.gpu_util_pct = 0.0;
   procs.processes.push_back(p);
 
   auto t0 = steady_clock::now();

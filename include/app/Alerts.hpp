@@ -4,7 +4,7 @@
 #include <vector>
 #include <chrono>
 
-namespace lsm::app {
+namespace montauk::app {
 
 struct Alert {
   std::string severity; // info|warn|crit
@@ -22,12 +22,12 @@ class AlertEngine {
 public:
   explicit AlertEngine(AlertRules rules = {});
   // Evaluate snapshot; may return empty if healthy
-  std::vector<Alert> evaluate(const lsm::model::Snapshot& s);
+  std::vector<Alert> evaluate(const montauk::model::Snapshot& s);
 private:
   AlertRules rules_;
   std::chrono::steady_clock::time_point cpu_high_since_{};
   std::chrono::steady_clock::time_point mem_high_since_{};
 };
 
-} // namespace lsm::app
+} // namespace montauk::app
 

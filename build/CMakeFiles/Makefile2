@@ -54,26 +54,24 @@ RM = /usr/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR"
+CMAKE_SOURCE_DIR = "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk"
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build"
+CMAKE_BINARY_DIR = "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build"
 
 #=============================================================================
 # Directory level rules for the build root directory
 
 # The main recursive "all" target.
-all: CMakeFiles/lsm_core.dir/all
-all: CMakeFiles/lsm.dir/all
-all: CMakeFiles/lsm_analyze.dir/all
-all: CMakeFiles/lsm_tests.dir/all
+all: CMakeFiles/montauk_core.dir/all
+all: CMakeFiles/montauk.dir/all
+all: CMakeFiles/montauk_analyze.dir/all
 .PHONY : all
 
 # The main recursive "codegen" target.
-codegen: CMakeFiles/lsm_core.dir/codegen
-codegen: CMakeFiles/lsm.dir/codegen
-codegen: CMakeFiles/lsm_analyze.dir/codegen
-codegen: CMakeFiles/lsm_tests.dir/codegen
+codegen: CMakeFiles/montauk_core.dir/codegen
+codegen: CMakeFiles/montauk.dir/codegen
+codegen: CMakeFiles/montauk_analyze.dir/codegen
 .PHONY : codegen
 
 # The main recursive "preinstall" target.
@@ -81,172 +79,106 @@ preinstall:
 .PHONY : preinstall
 
 # The main recursive "clean" target.
-clean: CMakeFiles/lsm_core.dir/clean
-clean: CMakeFiles/lsm.dir/clean
-clean: CMakeFiles/lsm_analyze.dir/clean
-clean: CMakeFiles/lsm_tests.dir/clean
-clean: CMakeFiles/check.dir/clean
+clean: CMakeFiles/montauk_core.dir/clean
+clean: CMakeFiles/montauk.dir/clean
+clean: CMakeFiles/montauk_analyze.dir/clean
 .PHONY : clean
 
 #=============================================================================
-# Target rules for target CMakeFiles/lsm_core.dir
+# Target rules for target CMakeFiles/montauk_core.dir
 
 # All Build rule for target.
-CMakeFiles/lsm_core.dir/all:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/depend
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 "Built target lsm_core"
-.PHONY : CMakeFiles/lsm_core.dir/all
+CMakeFiles/montauk_core.dir/all:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" --progress-num=5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21 "Built target montauk_core"
+.PHONY : CMakeFiles/montauk_core.dir/all
 
 # Build rule for subdir invocation for target.
-CMakeFiles/lsm_core.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 16
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/lsm_core.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 0
-.PHONY : CMakeFiles/lsm_core.dir/rule
+CMakeFiles/montauk_core.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" 17
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/montauk_core.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" 0
+.PHONY : CMakeFiles/montauk_core.dir/rule
 
 # Convenience name for target.
-lsm_core: CMakeFiles/lsm_core.dir/rule
-.PHONY : lsm_core
+montauk_core: CMakeFiles/montauk_core.dir/rule
+.PHONY : montauk_core
 
 # codegen rule for target.
-CMakeFiles/lsm_core.dir/codegen:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20 "Finished codegen for target lsm_core"
-.PHONY : CMakeFiles/lsm_core.dir/codegen
+CMakeFiles/montauk_core.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" --progress-num=5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21 "Finished codegen for target montauk_core"
+.PHONY : CMakeFiles/montauk_core.dir/codegen
 
 # clean rule for target.
-CMakeFiles/lsm_core.dir/clean:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/clean
-.PHONY : CMakeFiles/lsm_core.dir/clean
+CMakeFiles/montauk_core.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/clean
+.PHONY : CMakeFiles/montauk_core.dir/clean
 
 #=============================================================================
-# Target rules for target CMakeFiles/lsm.dir
+# Target rules for target CMakeFiles/montauk.dir
 
 # All Build rule for target.
-CMakeFiles/lsm.dir/all: CMakeFiles/lsm_core.dir/all
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/depend
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=1,2 "Built target lsm"
-.PHONY : CMakeFiles/lsm.dir/all
+CMakeFiles/montauk.dir/all: CMakeFiles/montauk_core.dir/all
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk.dir/build.make CMakeFiles/montauk.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk.dir/build.make CMakeFiles/montauk.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" --progress-num=1,2 "Built target montauk"
+.PHONY : CMakeFiles/montauk.dir/all
 
 # Build rule for subdir invocation for target.
-CMakeFiles/lsm.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 18
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/lsm.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 0
-.PHONY : CMakeFiles/lsm.dir/rule
+CMakeFiles/montauk.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" 19
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/montauk.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" 0
+.PHONY : CMakeFiles/montauk.dir/rule
 
 # Convenience name for target.
-lsm: CMakeFiles/lsm.dir/rule
-.PHONY : lsm
+montauk: CMakeFiles/montauk.dir/rule
+.PHONY : montauk
 
 # codegen rule for target.
-CMakeFiles/lsm.dir/codegen:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=1,2 "Finished codegen for target lsm"
-.PHONY : CMakeFiles/lsm.dir/codegen
+CMakeFiles/montauk.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk.dir/build.make CMakeFiles/montauk.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" --progress-num=1,2 "Finished codegen for target montauk"
+.PHONY : CMakeFiles/montauk.dir/codegen
 
 # clean rule for target.
-CMakeFiles/lsm.dir/clean:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/clean
-.PHONY : CMakeFiles/lsm.dir/clean
+CMakeFiles/montauk.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk.dir/build.make CMakeFiles/montauk.dir/clean
+.PHONY : CMakeFiles/montauk.dir/clean
 
 #=============================================================================
-# Target rules for target CMakeFiles/lsm_analyze.dir
+# Target rules for target CMakeFiles/montauk_analyze.dir
 
 # All Build rule for target.
-CMakeFiles/lsm_analyze.dir/all: CMakeFiles/lsm_core.dir/all
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_analyze.dir/build.make CMakeFiles/lsm_analyze.dir/depend
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_analyze.dir/build.make CMakeFiles/lsm_analyze.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=3,4 "Built target lsm_analyze"
-.PHONY : CMakeFiles/lsm_analyze.dir/all
+CMakeFiles/montauk_analyze.dir/all: CMakeFiles/montauk_core.dir/all
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_analyze.dir/build.make CMakeFiles/montauk_analyze.dir/depend
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_analyze.dir/build.make CMakeFiles/montauk_analyze.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" --progress-num=3,4 "Built target montauk_analyze"
+.PHONY : CMakeFiles/montauk_analyze.dir/all
 
 # Build rule for subdir invocation for target.
-CMakeFiles/lsm_analyze.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 18
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/lsm_analyze.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 0
-.PHONY : CMakeFiles/lsm_analyze.dir/rule
+CMakeFiles/montauk_analyze.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" 19
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/montauk_analyze.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" 0
+.PHONY : CMakeFiles/montauk_analyze.dir/rule
 
 # Convenience name for target.
-lsm_analyze: CMakeFiles/lsm_analyze.dir/rule
-.PHONY : lsm_analyze
+montauk_analyze: CMakeFiles/montauk_analyze.dir/rule
+.PHONY : montauk_analyze
 
 # codegen rule for target.
-CMakeFiles/lsm_analyze.dir/codegen:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_analyze.dir/build.make CMakeFiles/lsm_analyze.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=3,4 "Finished codegen for target lsm_analyze"
-.PHONY : CMakeFiles/lsm_analyze.dir/codegen
+CMakeFiles/montauk_analyze.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_analyze.dir/build.make CMakeFiles/montauk_analyze.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" --progress-num=3,4 "Finished codegen for target montauk_analyze"
+.PHONY : CMakeFiles/montauk_analyze.dir/codegen
 
 # clean rule for target.
-CMakeFiles/lsm_analyze.dir/clean:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_analyze.dir/build.make CMakeFiles/lsm_analyze.dir/clean
-.PHONY : CMakeFiles/lsm_analyze.dir/clean
-
-#=============================================================================
-# Target rules for target CMakeFiles/lsm_tests.dir
-
-# All Build rule for target.
-CMakeFiles/lsm_tests.dir/all: CMakeFiles/lsm_core.dir/all
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/depend
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=21,22,23,24,25,26,27,28,29,30,31,32,33,34,35 "Built target lsm_tests"
-.PHONY : CMakeFiles/lsm_tests.dir/all
-
-# Build rule for subdir invocation for target.
-CMakeFiles/lsm_tests.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 31
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/lsm_tests.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 0
-.PHONY : CMakeFiles/lsm_tests.dir/rule
-
-# Convenience name for target.
-lsm_tests: CMakeFiles/lsm_tests.dir/rule
-.PHONY : lsm_tests
-
-# codegen rule for target.
-CMakeFiles/lsm_tests.dir/codegen:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num=21,22,23,24,25,26,27,28,29,30,31,32,33,34,35 "Finished codegen for target lsm_tests"
-.PHONY : CMakeFiles/lsm_tests.dir/codegen
-
-# clean rule for target.
-CMakeFiles/lsm_tests.dir/clean:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/clean
-.PHONY : CMakeFiles/lsm_tests.dir/clean
-
-#=============================================================================
-# Target rules for target CMakeFiles/check.dir
-
-# All Build rule for target.
-CMakeFiles/check.dir/all: CMakeFiles/lsm_tests.dir/all
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/check.dir/build.make CMakeFiles/check.dir/depend
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/check.dir/build.make CMakeFiles/check.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num= "Built target check"
-.PHONY : CMakeFiles/check.dir/all
-
-# Build rule for subdir invocation for target.
-CMakeFiles/check.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 31
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/check.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 0
-.PHONY : CMakeFiles/check.dir/rule
-
-# Convenience name for target.
-check: CMakeFiles/check.dir/rule
-.PHONY : check
-
-# codegen rule for target.
-CMakeFiles/check.dir/codegen: CMakeFiles/lsm_tests.dir/all
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/check.dir/build.make CMakeFiles/check.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir="/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" --progress-num= "Finished codegen for target check"
-.PHONY : CMakeFiles/check.dir/codegen
-
-# clean rule for target.
-CMakeFiles/check.dir/clean:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/check.dir/build.make CMakeFiles/check.dir/clean
-.PHONY : CMakeFiles/check.dir/clean
+CMakeFiles/montauk_analyze.dir/clean:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_analyze.dir/build.make CMakeFiles/montauk_analyze.dir/clean
+.PHONY : CMakeFiles/montauk_analyze.dir/clean
 
 #=============================================================================
 # Special targets to cleanup operation of make.

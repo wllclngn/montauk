@@ -5,14 +5,14 @@
 
 using namespace std::chrono;
 
-namespace lsm::collectors {
+namespace montauk::collectors {
 
 static double now_secs() {
   return duration_cast<duration<double>>(steady_clock::now().time_since_epoch()).count();
 }
 
-bool NetCollector::sample(lsm::model::NetSnapshot& out) {
-  auto txt_opt = lsm::util::read_file_string("/proc/net/dev");
+bool NetCollector::sample(montauk::model::NetSnapshot& out) {
+  auto txt_opt = montauk::util::read_file_string("/proc/net/dev");
   if (!txt_opt) return false;
   const std::string& txt = *txt_opt;
   out.interfaces.clear(); out.agg_rx_bps = out.agg_tx_bps = 0.0;
@@ -32,7 +32,7 @@ bool NetCollector::sample(lsm::model::NetSnapshot& out) {
     ns >> rx_bytes; // rx bytes
     for (int i=0;i<7;i++){ uint64_t tmp; ns >> tmp; }
     ns >> tx_bytes; // tx bytes
-    lsm::model::NetIf nif; nif.name = name; nif.rx_bytes = rx_bytes; nif.tx_bytes = tx_bytes; nif.last_ts = ts;
+    montauk::model::NetIf nif; nif.name = name; nif.rx_bytes = rx_bytes; nif.tx_bytes = tx_bytes; nif.last_ts = ts;
     // find previous
     for (auto& p: last_) {
       if (p.name == name) {
@@ -49,5 +49,5 @@ bool NetCollector::sample(lsm::model::NetSnapshot& out) {
   return true;
 }
 
-} // namespace lsm::collectors
+} // namespace montauk::collectors
 

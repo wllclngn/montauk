@@ -1,4 +1,4 @@
-# Install script for directory: /home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR
+# Install script for directory: /home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -43,17 +43,17 @@ if(NOT DEFINED CMAKE_OBJDUMP)
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  if(EXISTS "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/lsm" AND
-     NOT IS_SYMLINK "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/lsm")
+  if(EXISTS "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/montauk" AND
+     NOT IS_SYMLINK "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/montauk")
     file(RPATH_CHECK
-         FILE "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/lsm"
+         FILE "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/montauk"
          RPATH "")
   endif()
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/bin" TYPE EXECUTABLE FILES "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/lsm")
-  if(EXISTS "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/lsm" AND
-     NOT IS_SYMLINK "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/lsm")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/bin" TYPE EXECUTABLE FILES "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/montauk")
+  if(EXISTS "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/montauk" AND
+     NOT IS_SYMLINK "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/montauk")
     if(CMAKE_INSTALL_DO_STRIP)
-      execute_process(COMMAND "/usr/bin/strip" "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/lsm")
+      execute_process(COMMAND "/usr/bin/strip" "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/montauk")
     endif()
   endif()
 endif()
@@ -61,7 +61,7 @@ endif()
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/install_local_manifest.txt"
+  file(WRITE "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()
 if(CMAKE_INSTALL_COMPONENT)
@@ -77,6 +77,6 @@ else()
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/${CMAKE_INSTALL_MANIFEST}"
+  file(WRITE "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()

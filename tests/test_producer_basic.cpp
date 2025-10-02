@@ -8,7 +8,7 @@
 namespace fs = std::filesystem;
 
 static fs::path make_root_prod() {
-  auto root = fs::temp_directory_path() / fs::path("lsm_cpp_test_prod_") / fs::path(std::to_string(::getpid()));
+  auto root = fs::temp_directory_path() / fs::path("montauk_test_prod_") / fs::path(std::to_string(::getpid()));
   fs::create_directories(root / "proc/net");
   // meminfo
   std::ofstream(root / "proc/meminfo") <<
@@ -29,8 +29,8 @@ static fs::path make_root_prod() {
 
 TEST(producer_publishes_snapshots) {
   auto root = make_root_prod();
-  setenv("LSM_PROC_ROOT", root.c_str(), 1);
-  lsm::app::SnapshotBuffers buffers; lsm::app::Producer producer(buffers);
+  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  montauk::app::SnapshotBuffers buffers; montauk::app::Producer producer(buffers);
   producer.start();
   std::this_thread::sleep_for(std::chrono::milliseconds(600));
   auto seq1 = buffers.seq();

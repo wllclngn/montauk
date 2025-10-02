@@ -1,7 +1,7 @@
 {
 	"InstallScripts" : 
 	[
-		"/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/cmake_install.cmake"
+		"/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/cmake_install.cmake"
 	],
 	"Parallel" : false
 }

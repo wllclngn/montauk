@@ -8,7 +8,7 @@
 namespace fs = std::filesystem;
 
 static fs::path make_root_net() {
-  auto root = fs::temp_directory_path() / fs::path("lsm_cpp_test_net_") / fs::path(std::to_string(::getpid()));
+  auto root = fs::temp_directory_path() / fs::path("montauk_test_net_") / fs::path(std::to_string(::getpid()));
   fs::create_directories(root / "proc/net");
   return root;
 }
@@ -19,8 +19,8 @@ TEST(net_collector_parses_and_deltas) {
     "Inter-|   Receive                                                |  Transmit\n"
     " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n"
     "eth0: 1000 0 0 0 0 0 0 0  2000 0 0 0 0 0 0 0\n";
-  setenv("LSM_PROC_ROOT", root.c_str(), 1);
-  lsm::collectors::NetCollector c; lsm::model::NetSnapshot s{};
+  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  montauk::collectors::NetCollector c; montauk::model::NetSnapshot s{};
   ASSERT_TRUE(c.sample(s));
   ASSERT_TRUE(!s.interfaces.empty());
   std::this_thread::sleep_for(std::chrono::milliseconds(120));

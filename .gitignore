@@ -13,10 +13,10 @@ cmake-build-*/
 /compile_commands.json
 
 # Binary outputs (if ever created at repo root)
-/lsm
-/lsm_analyze
-/lsm_tests
-/liblsm_core.a
+/montauk
+/montauk_analyze
+/montauk_tests
+/libmontauk_core.a
 
 # Arch makepkg artifacts (keep source tree clean)
 /pkg/

@@ -6,7 +6,7 @@
 
 namespace fs = std::filesystem;
 
-namespace lsm::collectors {
+namespace montauk::collectors {
 
 static bool read_number_file(const fs::path& p, long& out) {
   std::ifstream f(p);
@@ -15,11 +15,11 @@ static bool read_number_file(const fs::path& p, long& out) {
 }
 
 // Read from hwmon first; fallback to thermal_zone
-bool ThermalCollector::sample(lsm::model::Thermal& out) {
+bool ThermalCollector::sample(montauk::model::Thermal& out) {
   out.has_temp = false; out.cpu_max_c = 0.0; out.has_warn = false; out.warn_c = 0.0;
   // hwmon: /sys/class/hwmon/hwmon*/temp*_input (millidegrees C)
   try {
-    fs::path hw(lsm::util::map_sys_path("/sys/class/hwmon"));
+    fs::path hw(montauk::util::map_sys_path("/sys/class/hwmon"));
     if (fs::exists(hw)) {
       double min_warn_c = 0.0; bool have_any_warn = false;
       for (auto& e : fs::recursive_directory_iterator(hw)) {
@@ -43,7 +43,7 @@ bool ThermalCollector::sample(lsm::model::Thermal& out) {
       if (have_any_warn) { out.has_warn = true; out.warn_c = min_warn_c; }
     }
     if (!out.has_temp) {
-      fs::path tz(lsm::util::map_sys_path("/sys/class/thermal"));
+      fs::path tz(montauk::util::map_sys_path("/sys/class/thermal"));
       if (fs::exists(tz)) {
         for (auto& z : fs::directory_iterator(tz)) {
           if (z.path().filename().string().rfind("thermal_zone",0)!=0) continue;
@@ -59,4 +59,4 @@ bool ThermalCollector::sample(lsm::model::Thermal& out) {
   return out.has_temp;
 }
 
-} // namespace lsm::collectors
+} // namespace montauk::collectors

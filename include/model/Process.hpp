@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace lsm::model {
+namespace montauk::model {
 
 struct ProcSample {
   int32_t pid{};
@@ -31,4 +31,4 @@ struct ProcessSnapshot {
   size_t running_processes{};
 };
 
-} // namespace lsm::model
+} // namespace montauk::model

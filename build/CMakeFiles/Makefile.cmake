@@ -7,9 +7,9 @@ set(CMAKE_DEPENDS_GENERATOR "Unix Makefiles")
 # The top level Makefile was generated from the following files:
 set(CMAKE_MAKEFILE_DEPENDS
   "CMakeCache.txt"
-  "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/CMakeLists.txt"
-  "CMakeFiles/4.1.1/CMakeCXXCompiler.cmake"
-  "CMakeFiles/4.1.1/CMakeSystem.cmake"
+  "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/CMakeLists.txt"
+  "CMakeFiles/4.1.2/CMakeCXXCompiler.cmake"
+  "CMakeFiles/4.1.2/CMakeSystem.cmake"
   "/usr/share/cmake/Modules/CMakeCXXCompiler.cmake.in"
   "/usr/share/cmake/Modules/CMakeCXXCompilerABI.cpp"
   "/usr/share/cmake/Modules/CMakeCXXInformation.cmake"
@@ -105,18 +105,16 @@ set(CMAKE_MAKEFILE_OUTPUTS
 
 # Byproducts of CMake generate step:
 set(CMAKE_MAKEFILE_PRODUCTS
-  "CMakeFiles/4.1.1/CMakeSystem.cmake"
-  "CMakeFiles/4.1.1/CMakeCXXCompiler.cmake"
-  "CMakeFiles/4.1.1/CMakeCXXCompiler.cmake"
-  "CMakeFiles/4.1.1/CMakeCXXCompiler.cmake"
+  "CMakeFiles/4.1.2/CMakeSystem.cmake"
+  "CMakeFiles/4.1.2/CMakeCXXCompiler.cmake"
+  "CMakeFiles/4.1.2/CMakeCXXCompiler.cmake"
+  "CMakeFiles/4.1.2/CMakeCXXCompiler.cmake"
   "CMakeFiles/CMakeDirectoryInformation.cmake"
   )
 
 # Dependency information for all targets:
 set(CMAKE_DEPEND_INFO_FILES
-  "CMakeFiles/lsm_core.dir/DependInfo.cmake"
-  "CMakeFiles/lsm.dir/DependInfo.cmake"
-  "CMakeFiles/lsm_analyze.dir/DependInfo.cmake"
-  "CMakeFiles/lsm_tests.dir/DependInfo.cmake"
-  "CMakeFiles/check.dir/DependInfo.cmake"
+  "CMakeFiles/montauk_core.dir/DependInfo.cmake"
+  "CMakeFiles/montauk.dir/DependInfo.cmake"
+  "CMakeFiles/montauk_analyze.dir/DependInfo.cmake"
   )

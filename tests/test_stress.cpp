@@ -9,7 +9,7 @@
 namespace fs = std::filesystem;
 
 TEST(stress_producer_with_mutations) {
-  auto root = fs::temp_directory_path() / fs::path("lsm_cpp_test_stress_") / fs::path(std::to_string(::getpid()));
+  auto root = fs::temp_directory_path() / fs::path("montauk_test_stress_") / fs::path(std::to_string(::getpid()));
   fs::create_directories(root / "proc/net");
   // seed files
   std::ofstream(root / "proc/meminfo") << "MemTotal:  1048576 kB\nMemAvailable:  524288 kB\n";
@@ -19,9 +19,9 @@ TEST(stress_producer_with_mutations) {
     " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n"
     "eth0: 1000 0 0 0 0 0 0 0  2000 0 0 0 0 0 0 0\n";
   std::ofstream(root / "proc/diskstats") << "   8       0 sda 100 0 1000 0  200 0 2000 0  0  100 0\n";
-  setenv("LSM_PROC_ROOT", root.c_str(), 1);
+  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
 
-  lsm::app::SnapshotBuffers buffers; lsm::app::Producer producer(buffers);
+  montauk::app::SnapshotBuffers buffers; montauk::app::Producer producer(buffers);
   producer.start();
   std::atomic<bool> run{true};
   std::thread mut([&]{

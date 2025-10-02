@@ -1,15 +1,15 @@
 #pragma once
 #include "model/Snapshot.hpp"
 
-namespace lsm::collectors {
+namespace montauk::collectors {
 
 class NetCollector {
 public:
-  bool sample(lsm::model::NetSnapshot& out);
+  bool sample(montauk::model::NetSnapshot& out);
 private:
   // keep previous by interface name for deltas
-  std::vector<lsm::model::NetIf> last_{};
+  std::vector<montauk::model::NetIf> last_{};
 };
 
-} // namespace lsm::collectors
+} // namespace montauk::collectors
 

@@ -6,9 +6,9 @@
 
 #include <string_view>
 
-namespace lsm::collectors {
+namespace montauk::collectors {
 
-static void parse_cpu_line(const std::string_view& line, lsm::model::CpuTimes& out) {
+static void parse_cpu_line(const std::string_view& line, montauk::model::CpuTimes& out) {
   // line starts with 'cpu' or 'cpuN'
   size_t pos = 0; // skip label
   // find first space after label
@@ -32,10 +32,10 @@ static void parse_cpu_line(const std::string_view& line, lsm::model::CpuTimes& o
   out.iowait = vals[4]; out.irq = vals[5]; out.softirq = vals[6]; out.steal = vals[7];
 }
 
-bool CpuCollector::sample(lsm::model::CpuSnapshot& out) {
+bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
   // Load CPU model once
   if (cpu_model_.empty()) {
-    auto txt_opt = lsm::util::read_file_string("/proc/cpuinfo");
+    auto txt_opt = montauk::util::read_file_string("/proc/cpuinfo");
     if (txt_opt) {
       std::istringstream ss(*txt_opt);
       std::string line;
@@ -90,16 +90,16 @@ bool CpuCollector::sample(lsm::model::CpuSnapshot& out) {
       (void)g_phys_cache;
     }
   }
-  auto txt_opt = lsm::util::read_file_string("/proc/stat");
+  auto txt_opt = montauk::util::read_file_string("/proc/stat");
   if (!txt_opt) return false;
   const std::string& txt = *txt_opt;
-  lsm::model::CpuTimes agg{}; std::vector<lsm::model::CpuTimes> per;
+  montauk::model::CpuTimes agg{}; std::vector<montauk::model::CpuTimes> per;
   size_t start = 0; bool after_cpu = false;
   while (start < txt.size()) {
     size_t end = txt.find('\n', start); if (end == std::string::npos) end = txt.size();
     std::string_view line(txt.data() + start, end - start);
     if (line.starts_with("cpu ")) { parse_cpu_line(line, agg); after_cpu = true; }
-    else if (after_cpu && line.starts_with("cpu")) { lsm::model::CpuTimes t{}; parse_cpu_line(line, t); per.push_back(t); }
+    else if (after_cpu && line.starts_with("cpu")) { montauk::model::CpuTimes t{}; parse_cpu_line(line, t); per.push_back(t); }
     else if (after_cpu) break;
     start = end + 1;
   }
@@ -131,4 +131,4 @@ bool CpuCollector::sample(lsm::model::CpuSnapshot& out) {
   return true;
 }
 
-} // namespace lsm::collectors
+} // namespace montauk::collectors

@@ -3,7 +3,7 @@
 #include <vector>
 #include <string>
 
-namespace lsm::model {
+namespace montauk::model {
 
 struct CpuTimes {
   uint64_t user{}, nice{}, system{}, idle{}, iowait{}, irq{}, softirq{}, steal{};
@@ -21,4 +21,4 @@ struct CpuSnapshot {
   int logical_threads{0};          // total logical CPUs (threads)
 };
 
-} // namespace lsm::model
+} // namespace montauk::model

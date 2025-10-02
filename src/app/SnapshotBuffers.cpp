@@ -1,12 +1,12 @@
 #include "app/SnapshotBuffers.hpp"
 
-namespace lsm::app {
+namespace montauk::app {
 
 SnapshotBuffers::SnapshotBuffers() {
   a_.seq = 0; b_.seq = 0;
 }
 
-lsm::model::Snapshot& SnapshotBuffers::back() { return *back_; }
+montauk::model::Snapshot& SnapshotBuffers::back() { return *back_; }
 
 void SnapshotBuffers::publish() {
   // increment sequence before publish
@@ -17,9 +17,9 @@ void SnapshotBuffers::publish() {
   back_ = old_front; // now becomes new back
 }
 
-const lsm::model::Snapshot& SnapshotBuffers::front() const {
+const montauk::model::Snapshot& SnapshotBuffers::front() const {
   return *front_.load(std::memory_order_acquire);
 }
 
-} // namespace lsm::app
+} // namespace montauk::app
 

@@ -8,7 +8,7 @@
 #include "model/Process.hpp"
 #include "model/Thermal.hpp"
 
-namespace lsm::model {
+namespace montauk::model {
 
 struct Memory {
   uint64_t total_kb{};
@@ -75,7 +75,7 @@ struct NvmlDiag {
 
 struct Snapshot {
   uint64_t seq{};
-  lsm::model::CpuSnapshot cpu;
+  montauk::model::CpuSnapshot cpu;
   Memory   mem;
   GpuVram  vram;
   NetSnapshot net;
@@ -86,4 +86,4 @@ struct Snapshot {
   NvmlDiag nvml;
 };
 
-} // namespace lsm::model
+} // namespace montauk::model

@@ -1,6 +1,6 @@
 #pragma once
 
-namespace lsm::model {
+namespace montauk::model {
 
 struct Thermal {
   bool   has_temp{false};
@@ -9,4 +9,4 @@ struct Thermal {
   double warn_c{0.0};
 };
 
-} // namespace lsm::model
+} // namespace montauk::model

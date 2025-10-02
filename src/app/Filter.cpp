@@ -1,12 +1,12 @@
 #include "app/Filter.hpp"
 
-namespace lsm::app {
+namespace montauk::app {
 
 ProcessFilter::ProcessFilter(ProcessFilterSpec spec) : spec_(std::move(spec)) {
   if (spec_.name_regex) compiled_.emplace(*spec_.name_regex, std::regex::icase);
 }
 
-std::vector<size_t> ProcessFilter::apply(const lsm::model::ProcessSnapshot& ps) const {
+std::vector<size_t> ProcessFilter::apply(const montauk::model::ProcessSnapshot& ps) const {
   std::vector<size_t> out;
   out.reserve(ps.processes.size());
   for (size_t i=0;i<ps.processes.size();++i) {
@@ -26,5 +26,5 @@ std::vector<size_t> ProcessFilter::apply(const lsm::model::ProcessSnapshot& ps) 
   return out;
 }
 
-} // namespace lsm::app
+} // namespace montauk::app
 

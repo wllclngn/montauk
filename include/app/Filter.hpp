@@ -3,7 +3,7 @@
 #include <regex>
 #include <optional>
 
-namespace lsm::app {
+namespace montauk::app {
 
 struct ProcessFilterSpec {
   std::optional<std::string> name_contains;
@@ -17,11 +17,11 @@ class ProcessFilter {
 public:
   explicit ProcessFilter(ProcessFilterSpec spec);
   // Returns filtered indices into ps.processes
-  std::vector<size_t> apply(const lsm::model::ProcessSnapshot& ps) const;
+  std::vector<size_t> apply(const montauk::model::ProcessSnapshot& ps) const;
 private:
   ProcessFilterSpec spec_;
   std::optional<std::regex> compiled_;
 };
 
-} // namespace lsm::app
+} // namespace montauk::app
 

@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace lsm::model {
+namespace montauk::model {
 
 struct NetIf {
   std::string name;
@@ -20,5 +20,5 @@ struct NetSnapshot {
   double agg_tx_bps{};
 };
 
-} // namespace lsm::model
+} // namespace montauk::model
 

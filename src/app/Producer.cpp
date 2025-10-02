@@ -8,7 +8,7 @@
 
 using namespace std::chrono;
 
-namespace lsm::app {
+namespace montauk::app {
 
 Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {}
 
@@ -54,7 +54,7 @@ void Producer::run(std::stop_token st) {
   // Throttle heavy NVML per-process sampling to ~1s to keep UI snappy
   auto next_nvml = steady_clock::now();
   const auto nvml_interval = 1000ms;
-  if (!gpu_attr_) gpu_attr_ = new lsm::app::GpuAttributor();
+  if (!gpu_attr_) gpu_attr_ = new montauk::app::GpuAttributor();
 
   // HOT start warm-up: take fast pre-samples so first publish has real deltas
   {
@@ -101,7 +101,7 @@ void Producer::run(std::stop_token st) {
     {
       auto a = alerts_.evaluate(s);
       s.alerts.clear();
-      for (auto& it : a) s.alerts.push_back(lsm::model::AlertItem{it.severity, it.message});
+      for (auto& it : a) s.alerts.push_back(montauk::model::AlertItem{it.severity, it.message});
     }
     buffers_.publish();
   }
@@ -126,7 +126,7 @@ void Producer::run(std::stop_token st) {
       {
         auto a = alerts_.evaluate(s);
         s.alerts.clear();
-        for (auto& it : a) s.alerts.push_back(lsm::model::AlertItem{it.severity, it.message});
+        for (auto& it : a) s.alerts.push_back(montauk::model::AlertItem{it.severity, it.message});
       }
       // Enrich per-process GPU utilization using NVML (best effort, throttled)
       if (nvml_ran) {
@@ -151,6 +151,6 @@ void Producer::run(std::stop_token st) {
   if (gpu_attr_) { delete gpu_attr_; gpu_attr_ = nullptr; }
 }
 
-// test_apply_gpu_samples is defined inline in Producer.hpp under LSM_TESTING
+// test_apply_gpu_samples is defined inline in Producer.hpp under MONTAUK_TESTING
 
-} // namespace lsm::app
+} // namespace montauk::app

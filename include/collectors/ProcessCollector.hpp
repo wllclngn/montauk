@@ -3,13 +3,13 @@
 #include <unordered_map>
 #include <chrono>
 
-namespace lsm::collectors {
+namespace montauk::collectors {
 
 class ProcessCollector {
 public:
   // min_interval_ms governs how often we compute; extra calls within the interval no-op
   explicit ProcessCollector(unsigned min_interval_ms = 500, size_t max_procs = 256);
-  bool sample(lsm::model::ProcessSnapshot& out);
+  bool sample(montauk::model::ProcessSnapshot& out);
 private:
   std::unordered_map<int32_t, uint64_t> last_per_proc_{}; // pid -> total_time
   uint64_t last_cpu_total_{};
@@ -24,4 +24,4 @@ private:
   static std::string user_from_status(int32_t pid);
 };
 
-} // namespace lsm::collectors
+} // namespace montauk::collectors

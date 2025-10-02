@@ -10,16 +10,16 @@
 #include <filesystem>
 #include <fstream>
 
-namespace lsm::util {
+namespace montauk::util {
 
 static std::string proc_root() {
-  const char* env = std::getenv("LSM_PROC_ROOT");
+  const char* env = std::getenv("MONTAUK_PROC_ROOT");
   if (env && *env) return std::string(env);
   return std::string();
 }
 
 static std::string sys_root() {
-  const char* env = std::getenv("LSM_SYS_ROOT");
+  const char* env = std::getenv("MONTAUK_SYS_ROOT");
   if (env && *env) return std::string(env);
   return std::string();
 }
@@ -70,4 +70,4 @@ auto list_dir(const std::string& abs) -> std::vector<std::string> {
   return out;
 }
 
-} // namespace lsm::util
+} // namespace montauk::util

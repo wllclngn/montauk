@@ -4,7 +4,7 @@
 #include <charconv>
 #include <string_view>
 
-namespace lsm::collectors {
+namespace montauk::collectors {
 
 static inline uint64_t parse_u64(const std::string_view& sv) {
   uint64_t v = 0;
@@ -17,8 +17,8 @@ static inline uint64_t parse_u64(const std::string_view& sv) {
   return v;
 }
 
-bool MemoryCollector::sample(lsm::model::Memory& out) const {
-  auto txt_opt = lsm::util::read_file_string("/proc/meminfo");
+bool MemoryCollector::sample(montauk::model::Memory& out) const {
+  auto txt_opt = montauk::util::read_file_string("/proc/meminfo");
   if (!txt_opt) return false;
   const std::string& txt = *txt_opt;
 
@@ -51,5 +51,5 @@ bool MemoryCollector::sample(lsm::model::Memory& out) const {
   return true;
 }
 
-} // namespace lsm::collectors
+} // namespace montauk::collectors
 

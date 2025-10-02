@@ -1,12 +1,12 @@
 #pragma once
 #include "model/Snapshot.hpp"
 
-namespace lsm::collectors {
+namespace montauk::collectors {
 
 class ThermalCollector {
 public:
-  bool sample(lsm::model::Thermal& out);
+  bool sample(montauk::model::Thermal& out);
 };
 
-} // namespace lsm::collectors
+} // namespace montauk::collectors
 

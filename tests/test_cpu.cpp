@@ -7,7 +7,7 @@
 namespace fs = std::filesystem;
 
 static fs::path make_root_cpu() {
-  auto root = fs::temp_directory_path() / fs::path("lsm_cpp_test_cpu_") / fs::path(std::to_string(::getpid()));
+  auto root = fs::temp_directory_path() / fs::path("montauk_test_cpu_") / fs::path(std::to_string(::getpid()));
   fs::create_directories(root / "proc");
   return root;
 }
@@ -17,8 +17,8 @@ TEST(cpu_collector_delta_usage) {
   // First sample
   std::ofstream(root / "proc/stat") << "cpu  100 0 100 1000 0 0 0 0\n"
                                         "cpu0 100 0 100 1000 0 0 0 0\n";
-  setenv("LSM_PROC_ROOT", root.c_str(), 1);
-  lsm::collectors::CpuCollector c; lsm::model::CpuSnapshot s{};
+  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  montauk::collectors::CpuCollector c; montauk::model::CpuSnapshot s{};
   ASSERT_TRUE(c.sample(s));
   // Second sample with more work and total
   std::ofstream(root / "proc/stat") << "cpu  150 0 150 1100 0 0 0 0\n"

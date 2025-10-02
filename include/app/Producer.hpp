@@ -13,7 +13,7 @@
 #include "app/Alerts.hpp"
 #include "collectors/ThermalCollector.hpp"
 
-namespace lsm::app {
+namespace montauk::app {
 
 class GpuAttributor; // forward decl
 
@@ -24,12 +24,12 @@ public:
   void stop();
   ~Producer();
 
-#ifdef LSM_TESTING
+#ifdef MONTAUK_TESTING
   // Test-only helper: apply a set of per-process GPU samples (pid->util%)
   // to the given ProcessSnapshot while updating the rolling cache. A TTL
   // is applied so intermittent sample windows still display stable values.
   void test_apply_gpu_samples(const std::unordered_map<int,int>& pid_to_gpu,
-                              lsm::model::ProcessSnapshot& procs,
+                              montauk::model::ProcessSnapshot& procs,
                               std::chrono::steady_clock::time_point now_tp);
 #endif
 
@@ -38,24 +38,24 @@ private:
   SnapshotBuffers& buffers_;
   std::jthread thread_{};
   // collectors
-  lsm::collectors::CpuCollector cpu_{};
-  lsm::collectors::MemoryCollector mem_{};
-  lsm::collectors::GpuCollector gpu_{};
-  lsm::collectors::NetCollector net_{};
-  lsm::collectors::DiskCollector disk_{};
+  montauk::collectors::CpuCollector cpu_{};
+  montauk::collectors::MemoryCollector mem_{};
+  montauk::collectors::GpuCollector gpu_{};
+  montauk::collectors::NetCollector net_{};
+  montauk::collectors::DiskCollector disk_{};
   // Use a smaller min interval to allow fast warm-up pre-samples; normal cadence is still 1s
-  lsm::collectors::ProcessCollector proc_{100};
-  lsm::app::AlertEngine alerts_{};
-  lsm::collectors::ThermalCollector thermal_{};
+  montauk::collectors::ProcessCollector proc_{100};
+  montauk::app::AlertEngine alerts_{};
+  montauk::collectors::ThermalCollector thermal_{};
   // Rolling cache of per-process GPU util with a short TTL to avoid flicker between NVML sample windows (test helper)
   std::unordered_map<int, std::pair<int, std::chrono::steady_clock::time_point>> last_proc_gpu_;
   // Unified GPU attributor (NVML + fdinfo)
-  lsm::app::GpuAttributor* gpu_attr_{nullptr};
+  montauk::app::GpuAttributor* gpu_attr_{nullptr};
 };
 
-#ifdef LSM_TESTING
+#ifdef MONTAUK_TESTING
 inline void Producer::test_apply_gpu_samples(const std::unordered_map<int,int>& pid_to_gpu,
-                                             lsm::model::ProcessSnapshot& procs,
+                                             montauk::model::ProcessSnapshot& procs,
                                              std::chrono::steady_clock::time_point now_tp) {
   for (const auto& kv : pid_to_gpu) {
     last_proc_gpu_[kv.first] = std::make_pair(kv.second, now_tp);
@@ -77,4 +77,4 @@ inline void Producer::test_apply_gpu_samples(const std::unordered_map<int,int>& 
 }
 #endif
 
-} // namespace lsm::app
+} // namespace montauk::app

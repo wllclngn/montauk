@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace lsm::model {
+namespace montauk::model {
 
 struct DiskDev {
   std::string name;
@@ -32,5 +32,5 @@ struct DiskSnapshot {
   double total_write_bps{};
 };
 
-} // namespace lsm::model
+} // namespace montauk::model
 

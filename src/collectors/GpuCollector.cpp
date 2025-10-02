@@ -11,7 +11,7 @@
 
 namespace fs = std::filesystem;
 
-namespace lsm::collectors {
+namespace montauk::collectors {
 
 static std::string trim(std::string s) {
   auto issp = [](unsigned char c){ return c==' '||c=='\t'||c=='\r'||c=='\n'; };
@@ -20,8 +20,8 @@ static std::string trim(std::string s) {
   return s;
 }
 
-static bool read_nvidia_proc(lsm::model::GpuVram& out) {
-  fs::path root(lsm::util::map_proc_path("/proc/driver/nvidia/gpus"));
+static bool read_nvidia_proc(montauk::model::GpuVram& out) {
+  fs::path root(montauk::util::map_proc_path("/proc/driver/nvidia/gpus"));
   if (!fs::exists(root)) return false;
   bool any = false;
   uint64_t total_mb_sum = 0, used_mb_sum = 0;
@@ -29,7 +29,7 @@ static bool read_nvidia_proc(lsm::model::GpuVram& out) {
   for (auto& entry : fs::directory_iterator(root)) {
     if (!entry.is_directory()) continue;
     auto p = entry.path() / "fb_memory_usage";
-    auto txt = lsm::util::read_file_string(p.string());
+    auto txt = montauk::util::read_file_string(p.string());
     if (!txt) continue;
     uint64_t total_mb = 0, used_mb = 0;
     for (const auto& line : {std::string("Total"), std::string("Used")}) {
@@ -71,7 +71,7 @@ static bool read_nvidia_proc(lsm::model::GpuVram& out) {
       any = true;
       total_mb_sum += total_mb;
       used_mb_sum  += used_mb;
-      out.devices.push_back(lsm::model::GpuVramDevice{ friendly, total_mb, used_mb });
+      out.devices.push_back(montauk::model::GpuVramDevice{ friendly, total_mb, used_mb });
       model_names.push_back(friendly);
     }
   }
@@ -93,8 +93,8 @@ static bool read_nvidia_proc(lsm::model::GpuVram& out) {
   return any;
 }
 
-static bool read_amd_sysfs(lsm::model::GpuVram& out) {
-  fs::path drm(lsm::util::map_sys_path("/sys/class/drm"));
+static bool read_amd_sysfs(montauk::model::GpuVram& out) {
+  fs::path drm(montauk::util::map_sys_path("/sys/class/drm"));
   if (!fs::exists(drm)) return false;
   bool any = false;
   uint64_t total_mb_sum = 0, used_mb_sum = 0;
@@ -107,8 +107,8 @@ static bool read_amd_sysfs(lsm::model::GpuVram& out) {
     auto tot = dev / "mem_info_vram_total";
     auto usd = dev / "mem_info_vram_used";
     if (!fs::exists(tot) || !fs::exists(usd)) continue;
-    auto s_tot = lsm::util::read_file_string(tot.string());
-    auto s_usd = lsm::util::read_file_string(usd.string());
+    auto s_tot = montauk::util::read_file_string(tot.string());
+    auto s_usd = montauk::util::read_file_string(usd.string());
     if (!s_tot || !s_usd) continue;
     uint64_t t = 0, u = 0;
     try {
@@ -137,7 +137,7 @@ static bool read_amd_sysfs(lsm::model::GpuVram& out) {
       }
     } catch(...) { /* ignore */ }
     if (friendly.empty()) friendly = name;
-    lsm::model::GpuVramDevice rec{ friendly, t_mb, u_mb };
+    montauk::model::GpuVramDevice rec{ friendly, t_mb, u_mb };
     // Read temps via hwmon if exposed
     try {
       fs::path hwmons = dev / "hwmon";
@@ -197,11 +197,19 @@ static bool read_amd_sysfs(lsm::model::GpuVram& out) {
   return any;
 }
 
-#ifdef LSM_HAVE_NVML
+#ifdef MONTAUK_HAVE_NVML
 #include <nvml.h>
-static bool read_nvml(lsm::model::GpuVram& out) {
+static bool read_nvml(montauk::model::GpuVram& out) {
   if (nvmlInit_v2() != NVML_SUCCESS) {
-    if (const char* v = std::getenv("LSM_LOG_NVML"); v && (v[0]=='1'||v[0]=='t'||v[0]=='T'||v[0]=='y'||v[0]=='Y')) {
+    auto getenv_compat = [](const char* name)->const char*{
+      const char* vv = std::getenv(name);
+      if (vv && *vv) return vv;
+      std::string n(name);
+      if (n.rfind("MONTAUK_",0)==0) { std::string alt = std::string("montauk_") + n.substr(8); vv = std::getenv(alt.c_str()); if (vv&&*vv) return vv; }
+      else if (n.rfind("montauk_",0)==0) { std::string alt = std::string("MONTAUK_") + n.substr(8); vv = std::getenv(alt.c_str()); if (vv&&*vv) return vv; }
+      return nullptr;
+    };
+    if (const char* v = getenv_compat("MONTAUK_LOG_NVML"); v && (v[0]=='1'||v[0]=='t'||v[0]=='T'||v[0]=='y'||v[0]=='Y')) {
       ::fprintf(stderr, "NVML: init failed in collector (device-level metrics disabled)\n");
     }
     return false;
@@ -223,7 +231,7 @@ static bool read_nvml(lsm::model::GpuVram& out) {
     if (t_mb == 0) continue;
     any = true; total_mb_sum += t_mb; used_mb_sum += u_mb;
     char name[96]; name[0] = '\0';
-    lsm::model::GpuVramDevice rec{};
+    montauk::model::GpuVramDevice rec{};
     if (nvmlDeviceGetName(dev, name, sizeof(name)) == NVML_SUCCESS) {
       rec.name = name; model_names.emplace_back(name);
     } else {
@@ -293,10 +301,10 @@ static bool read_nvml(lsm::model::GpuVram& out) {
   return any;
 }
 #else
-static bool read_nvml(lsm::model::GpuVram&) { return false; }
+static bool read_nvml(montauk::model::GpuVram&) { return false; }
 #endif
 
-bool GpuCollector::sample(lsm::model::GpuVram& out) const {
+bool GpuCollector::sample(montauk::model::GpuVram& out) const {
   out = {};
   if (read_nvml(out)) return true;
   bool ok = false;
@@ -304,7 +312,7 @@ bool GpuCollector::sample(lsm::model::GpuVram& out) const {
   ok = read_amd_sysfs(out)   || ok;
   // AMD core busy percent
   try {
-    fs::path drm(lsm::util::map_sys_path("/sys/class/drm"));
+    fs::path drm(montauk::util::map_sys_path("/sys/class/drm"));
     if (fs::exists(drm)) {
       double sum_busy = 0.0; unsigned cnt = 0;
       for (auto& entry : fs::directory_iterator(drm)) {
@@ -321,7 +329,7 @@ bool GpuCollector::sample(lsm::model::GpuVram& out) const {
   } catch (...) { /* ignore */ }
   // Power via hwmon (all vendors): sum power1_average/input if present
   try {
-    fs::path drm(lsm::util::map_sys_path("/sys/class/drm"));
+    fs::path drm(montauk::util::map_sys_path("/sys/class/drm"));
     if (fs::exists(drm)) {
       double total_w = 0.0; bool have = false;
       for (auto& entry : fs::directory_iterator(drm)) {
@@ -346,4 +354,4 @@ bool GpuCollector::sample(lsm::model::GpuVram& out) const {
   return ok;
 }
 
-} // namespace lsm::collectors
+} // namespace montauk::collectors

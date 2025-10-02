@@ -2,7 +2,7 @@
 #include "app/SnapshotBuffers.hpp"
 
 TEST(snapshot_buffers_publish_swaps_and_increments_seq) {
-  lsm::app::SnapshotBuffers bufs;
+  montauk::app::SnapshotBuffers bufs;
   auto& back = bufs.back();
   back.mem.total_kb = 1000; back.mem.used_kb = 500; back.mem.used_pct = 50.0;
   bufs.publish();

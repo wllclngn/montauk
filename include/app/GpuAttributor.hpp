@@ -5,7 +5,7 @@
 #include "model/Snapshot.hpp"
 #include "collectors/FdinfoProcessCollector.hpp"
 
-namespace lsm::app {
+namespace montauk::app {
 
 // Unifies per-process GPU attribution across NVML (NVIDIA) and DRM fdinfo (AMD/Intel).
 // Applies smoothing/hold/decay and fallbacks; updates Snapshot process fields and NVML diagnostics.
@@ -15,14 +15,14 @@ public:
   GpuAttributor();
   ~GpuAttributor();
   // Enrich snapshot 's' with per-process GPU%. Called periodically (~1 Hz recommended).
-  void enrich(lsm::model::Snapshot& s);
+  void enrich(montauk::model::Snapshot& s);
 
 private:
   struct GpuSmooth { double ema{0.0}; Clock::time_point last_sample{}; Clock::time_point last_running{}; };
   std::unordered_map<int, GpuSmooth> gpu_smooth_;
-  lsm::collectors::FdinfoProcessCollector fdinfo_{};
+  montauk::collectors::FdinfoProcessCollector fdinfo_{};
 
-#ifdef LSM_HAVE_NVML
+#ifdef MONTAUK_HAVE_NVML
   bool nvml_inited_{false};
   bool nvml_ok_{false};
   std::vector<unsigned long long> nvml_last_proc_ts_per_dev_{};
@@ -32,5 +32,5 @@ private:
 #endif
 };
 
-} // namespace lsm::app
+} // namespace montauk::app
 

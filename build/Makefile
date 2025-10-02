@@ -57,10 +57,10 @@ RM = /usr/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR"
+CMAKE_SOURCE_DIR = "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk"
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build"
+CMAKE_BINARY_DIR = "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build"
 
 #=============================================================================
 # Targets provided globally by CMake.
@@ -132,9 +132,9 @@ install/strip/fast: preinstall/fast
 
 # The main all target
 all: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build//CMakeFiles/progress.marks"
+	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build//CMakeFiles/progress.marks"
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 all
-	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/LINUX-SYS-MONITOR/build/CMakeFiles" 0
+	$(CMAKE_COMMAND) -E cmake_progress_start "/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles" 0
 .PHONY : all
 
 # The main clean target
@@ -162,76 +162,50 @@ depend:
 .PHONY : depend
 
 #=============================================================================
-# Target rules for targets named lsm_core
+# Target rules for targets named montauk_core
 
 # Build rule for target.
-lsm_core: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lsm_core
-.PHONY : lsm_core
+montauk_core: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 montauk_core
+.PHONY : montauk_core
 
 # fast build rule for target.
-lsm_core/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/build
-.PHONY : lsm_core/fast
+montauk_core/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/build
+.PHONY : montauk_core/fast
 
 #=============================================================================
-# Target rules for targets named lsm
+# Target rules for targets named montauk
 
 # Build rule for target.
-lsm: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lsm
-.PHONY : lsm
+montauk: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 montauk
+.PHONY : montauk
 
 # fast build rule for target.
-lsm/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/build
-.PHONY : lsm/fast
+montauk/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk.dir/build.make CMakeFiles/montauk.dir/build
+.PHONY : montauk/fast
 
 #=============================================================================
-# Target rules for targets named lsm_analyze
+# Target rules for targets named montauk_analyze
 
 # Build rule for target.
-lsm_analyze: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lsm_analyze
-.PHONY : lsm_analyze
+montauk_analyze: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 montauk_analyze
+.PHONY : montauk_analyze
 
 # fast build rule for target.
-lsm_analyze/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_analyze.dir/build.make CMakeFiles/lsm_analyze.dir/build
-.PHONY : lsm_analyze/fast
-
-#=============================================================================
-# Target rules for targets named lsm_tests
-
-# Build rule for target.
-lsm_tests: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 lsm_tests
-.PHONY : lsm_tests
-
-# fast build rule for target.
-lsm_tests/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/build
-.PHONY : lsm_tests/fast
-
-#=============================================================================
-# Target rules for targets named check
-
-# Build rule for target.
-check: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 check
-.PHONY : check
-
-# fast build rule for target.
-check/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/check.dir/build.make CMakeFiles/check.dir/build
-.PHONY : check/fast
+montauk_analyze/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_analyze.dir/build.make CMakeFiles/montauk_analyze.dir/build
+.PHONY : montauk_analyze/fast
 
 src/app/Alerts.o: src/app/Alerts.cpp.o
 .PHONY : src/app/Alerts.o
 
 # target to build an object file
 src/app/Alerts.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/Alerts.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Alerts.cpp.o
 .PHONY : src/app/Alerts.cpp.o
 
 src/app/Alerts.i: src/app/Alerts.cpp.i
@@ -239,7 +213,7 @@ src/app/Alerts.i: src/app/Alerts.cpp.i
 
 # target to preprocess a source file
 src/app/Alerts.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/Alerts.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Alerts.cpp.i
 .PHONY : src/app/Alerts.cpp.i
 
 src/app/Alerts.s: src/app/Alerts.cpp.s
@@ -247,7 +221,7 @@ src/app/Alerts.s: src/app/Alerts.cpp.s
 
 # target to generate assembly for a file
 src/app/Alerts.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/Alerts.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Alerts.cpp.s
 .PHONY : src/app/Alerts.cpp.s
 
 src/app/Filter.o: src/app/Filter.cpp.o
@@ -255,7 +229,7 @@ src/app/Filter.o: src/app/Filter.cpp.o
 
 # target to build an object file
 src/app/Filter.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/Filter.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Filter.cpp.o
 .PHONY : src/app/Filter.cpp.o
 
 src/app/Filter.i: src/app/Filter.cpp.i
@@ -263,7 +237,7 @@ src/app/Filter.i: src/app/Filter.cpp.i
 
 # target to preprocess a source file
 src/app/Filter.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/Filter.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Filter.cpp.i
 .PHONY : src/app/Filter.cpp.i
 
 src/app/Filter.s: src/app/Filter.cpp.s
@@ -271,7 +245,7 @@ src/app/Filter.s: src/app/Filter.cpp.s
 
 # target to generate assembly for a file
 src/app/Filter.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/Filter.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Filter.cpp.s
 .PHONY : src/app/Filter.cpp.s
 
 src/app/GpuAttributor.o: src/app/GpuAttributor.cpp.o
@@ -279,7 +253,7 @@ src/app/GpuAttributor.o: src/app/GpuAttributor.cpp.o
 
 # target to build an object file
 src/app/GpuAttributor.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/GpuAttributor.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/GpuAttributor.cpp.o
 .PHONY : src/app/GpuAttributor.cpp.o
 
 src/app/GpuAttributor.i: src/app/GpuAttributor.cpp.i
@@ -287,7 +261,7 @@ src/app/GpuAttributor.i: src/app/GpuAttributor.cpp.i
 
 # target to preprocess a source file
 src/app/GpuAttributor.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/GpuAttributor.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/GpuAttributor.cpp.i
 .PHONY : src/app/GpuAttributor.cpp.i
 
 src/app/GpuAttributor.s: src/app/GpuAttributor.cpp.s
@@ -295,7 +269,7 @@ src/app/GpuAttributor.s: src/app/GpuAttributor.cpp.s
 
 # target to generate assembly for a file
 src/app/GpuAttributor.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/GpuAttributor.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/GpuAttributor.cpp.s
 .PHONY : src/app/GpuAttributor.cpp.s
 
 src/app/Producer.o: src/app/Producer.cpp.o
@@ -303,7 +277,7 @@ src/app/Producer.o: src/app/Producer.cpp.o
 
 # target to build an object file
 src/app/Producer.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/Producer.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Producer.cpp.o
 .PHONY : src/app/Producer.cpp.o
 
 src/app/Producer.i: src/app/Producer.cpp.i
@@ -311,7 +285,7 @@ src/app/Producer.i: src/app/Producer.cpp.i
 
 # target to preprocess a source file
 src/app/Producer.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/Producer.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Producer.cpp.i
 .PHONY : src/app/Producer.cpp.i
 
 src/app/Producer.s: src/app/Producer.cpp.s
@@ -319,7 +293,7 @@ src/app/Producer.s: src/app/Producer.cpp.s
 
 # target to generate assembly for a file
 src/app/Producer.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/Producer.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Producer.cpp.s
 .PHONY : src/app/Producer.cpp.s
 
 src/app/SnapshotBuffers.o: src/app/SnapshotBuffers.cpp.o
@@ -327,7 +301,7 @@ src/app/SnapshotBuffers.o: src/app/SnapshotBuffers.cpp.o
 
 # target to build an object file
 src/app/SnapshotBuffers.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/SnapshotBuffers.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/SnapshotBuffers.cpp.o
 .PHONY : src/app/SnapshotBuffers.cpp.o
 
 src/app/SnapshotBuffers.i: src/app/SnapshotBuffers.cpp.i
@@ -335,7 +309,7 @@ src/app/SnapshotBuffers.i: src/app/SnapshotBuffers.cpp.i
 
 # target to preprocess a source file
 src/app/SnapshotBuffers.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/SnapshotBuffers.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/SnapshotBuffers.cpp.i
 .PHONY : src/app/SnapshotBuffers.cpp.i
 
 src/app/SnapshotBuffers.s: src/app/SnapshotBuffers.cpp.s
@@ -343,7 +317,7 @@ src/app/SnapshotBuffers.s: src/app/SnapshotBuffers.cpp.s
 
 # target to generate assembly for a file
 src/app/SnapshotBuffers.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/app/SnapshotBuffers.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/SnapshotBuffers.cpp.s
 .PHONY : src/app/SnapshotBuffers.cpp.s
 
 src/collectors/CpuCollector.o: src/collectors/CpuCollector.cpp.o
@@ -351,7 +325,7 @@ src/collectors/CpuCollector.o: src/collectors/CpuCollector.cpp.o
 
 # target to build an object file
 src/collectors/CpuCollector.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/CpuCollector.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/CpuCollector.cpp.o
 .PHONY : src/collectors/CpuCollector.cpp.o
 
 src/collectors/CpuCollector.i: src/collectors/CpuCollector.cpp.i
@@ -359,7 +333,7 @@ src/collectors/CpuCollector.i: src/collectors/CpuCollector.cpp.i
 
 # target to preprocess a source file
 src/collectors/CpuCollector.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/CpuCollector.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/CpuCollector.cpp.i
 .PHONY : src/collectors/CpuCollector.cpp.i
 
 src/collectors/CpuCollector.s: src/collectors/CpuCollector.cpp.s
@@ -367,7 +341,7 @@ src/collectors/CpuCollector.s: src/collectors/CpuCollector.cpp.s
 
 # target to generate assembly for a file
 src/collectors/CpuCollector.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/CpuCollector.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/CpuCollector.cpp.s
 .PHONY : src/collectors/CpuCollector.cpp.s
 
 src/collectors/DiskCollector.o: src/collectors/DiskCollector.cpp.o
@@ -375,7 +349,7 @@ src/collectors/DiskCollector.o: src/collectors/DiskCollector.cpp.o
 
 # target to build an object file
 src/collectors/DiskCollector.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/DiskCollector.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/DiskCollector.cpp.o
 .PHONY : src/collectors/DiskCollector.cpp.o
 
 src/collectors/DiskCollector.i: src/collectors/DiskCollector.cpp.i
@@ -383,7 +357,7 @@ src/collectors/DiskCollector.i: src/collectors/DiskCollector.cpp.i
 
 # target to preprocess a source file
 src/collectors/DiskCollector.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/DiskCollector.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/DiskCollector.cpp.i
 .PHONY : src/collectors/DiskCollector.cpp.i
 
 src/collectors/DiskCollector.s: src/collectors/DiskCollector.cpp.s
@@ -391,7 +365,7 @@ src/collectors/DiskCollector.s: src/collectors/DiskCollector.cpp.s
 
 # target to generate assembly for a file
 src/collectors/DiskCollector.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/DiskCollector.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/DiskCollector.cpp.s
 .PHONY : src/collectors/DiskCollector.cpp.s
 
 src/collectors/FdinfoProcessCollector.o: src/collectors/FdinfoProcessCollector.cpp.o
@@ -399,7 +373,7 @@ src/collectors/FdinfoProcessCollector.o: src/collectors/FdinfoProcessCollector.c
 
 # target to build an object file
 src/collectors/FdinfoProcessCollector.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/FdinfoProcessCollector.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/FdinfoProcessCollector.cpp.o
 .PHONY : src/collectors/FdinfoProcessCollector.cpp.o
 
 src/collectors/FdinfoProcessCollector.i: src/collectors/FdinfoProcessCollector.cpp.i
@@ -407,7 +381,7 @@ src/collectors/FdinfoProcessCollector.i: src/collectors/FdinfoProcessCollector.c
 
 # target to preprocess a source file
 src/collectors/FdinfoProcessCollector.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/FdinfoProcessCollector.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/FdinfoProcessCollector.cpp.i
 .PHONY : src/collectors/FdinfoProcessCollector.cpp.i
 
 src/collectors/FdinfoProcessCollector.s: src/collectors/FdinfoProcessCollector.cpp.s
@@ -415,7 +389,7 @@ src/collectors/FdinfoProcessCollector.s: src/collectors/FdinfoProcessCollector.c
 
 # target to generate assembly for a file
 src/collectors/FdinfoProcessCollector.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/FdinfoProcessCollector.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/FdinfoProcessCollector.cpp.s
 .PHONY : src/collectors/FdinfoProcessCollector.cpp.s
 
 src/collectors/GpuCollector.o: src/collectors/GpuCollector.cpp.o
@@ -423,7 +397,7 @@ src/collectors/GpuCollector.o: src/collectors/GpuCollector.cpp.o
 
 # target to build an object file
 src/collectors/GpuCollector.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/GpuCollector.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/GpuCollector.cpp.o
 .PHONY : src/collectors/GpuCollector.cpp.o
 
 src/collectors/GpuCollector.i: src/collectors/GpuCollector.cpp.i
@@ -431,7 +405,7 @@ src/collectors/GpuCollector.i: src/collectors/GpuCollector.cpp.i
 
 # target to preprocess a source file
 src/collectors/GpuCollector.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/GpuCollector.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/GpuCollector.cpp.i
 .PHONY : src/collectors/GpuCollector.cpp.i
 
 src/collectors/GpuCollector.s: src/collectors/GpuCollector.cpp.s
@@ -439,7 +413,7 @@ src/collectors/GpuCollector.s: src/collectors/GpuCollector.cpp.s
 
 # target to generate assembly for a file
 src/collectors/GpuCollector.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/GpuCollector.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/GpuCollector.cpp.s
 .PHONY : src/collectors/GpuCollector.cpp.s
 
 src/collectors/MemoryCollector.o: src/collectors/MemoryCollector.cpp.o
@@ -447,7 +421,7 @@ src/collectors/MemoryCollector.o: src/collectors/MemoryCollector.cpp.o
 
 # target to build an object file
 src/collectors/MemoryCollector.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/MemoryCollector.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/MemoryCollector.cpp.o
 .PHONY : src/collectors/MemoryCollector.cpp.o
 
 src/collectors/MemoryCollector.i: src/collectors/MemoryCollector.cpp.i
@@ -455,7 +429,7 @@ src/collectors/MemoryCollector.i: src/collectors/MemoryCollector.cpp.i
 
 # target to preprocess a source file
 src/collectors/MemoryCollector.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/MemoryCollector.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/MemoryCollector.cpp.i
 .PHONY : src/collectors/MemoryCollector.cpp.i
 
 src/collectors/MemoryCollector.s: src/collectors/MemoryCollector.cpp.s
@@ -463,7 +437,7 @@ src/collectors/MemoryCollector.s: src/collectors/MemoryCollector.cpp.s
 
 # target to generate assembly for a file
 src/collectors/MemoryCollector.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/MemoryCollector.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/MemoryCollector.cpp.s
 .PHONY : src/collectors/MemoryCollector.cpp.s
 
 src/collectors/NetCollector.o: src/collectors/NetCollector.cpp.o
@@ -471,7 +445,7 @@ src/collectors/NetCollector.o: src/collectors/NetCollector.cpp.o
 
 # target to build an object file
 src/collectors/NetCollector.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/NetCollector.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/NetCollector.cpp.o
 .PHONY : src/collectors/NetCollector.cpp.o
 
 src/collectors/NetCollector.i: src/collectors/NetCollector.cpp.i
@@ -479,7 +453,7 @@ src/collectors/NetCollector.i: src/collectors/NetCollector.cpp.i
 
 # target to preprocess a source file
 src/collectors/NetCollector.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/NetCollector.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/NetCollector.cpp.i
 .PHONY : src/collectors/NetCollector.cpp.i
 
 src/collectors/NetCollector.s: src/collectors/NetCollector.cpp.s
@@ -487,7 +461,7 @@ src/collectors/NetCollector.s: src/collectors/NetCollector.cpp.s
 
 # target to generate assembly for a file
 src/collectors/NetCollector.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/NetCollector.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/NetCollector.cpp.s
 .PHONY : src/collectors/NetCollector.cpp.s
 
 src/collectors/ProcessCollector.o: src/collectors/ProcessCollector.cpp.o
@@ -495,7 +469,7 @@ src/collectors/ProcessCollector.o: src/collectors/ProcessCollector.cpp.o
 
 # target to build an object file
 src/collectors/ProcessCollector.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/ProcessCollector.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/ProcessCollector.cpp.o
 .PHONY : src/collectors/ProcessCollector.cpp.o
 
 src/collectors/ProcessCollector.i: src/collectors/ProcessCollector.cpp.i
@@ -503,7 +477,7 @@ src/collectors/ProcessCollector.i: src/collectors/ProcessCollector.cpp.i
 
 # target to preprocess a source file
 src/collectors/ProcessCollector.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/ProcessCollector.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/ProcessCollector.cpp.i
 .PHONY : src/collectors/ProcessCollector.cpp.i
 
 src/collectors/ProcessCollector.s: src/collectors/ProcessCollector.cpp.s
@@ -511,7 +485,7 @@ src/collectors/ProcessCollector.s: src/collectors/ProcessCollector.cpp.s
 
 # target to generate assembly for a file
 src/collectors/ProcessCollector.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/ProcessCollector.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/ProcessCollector.cpp.s
 .PHONY : src/collectors/ProcessCollector.cpp.s
 
 src/collectors/ThermalCollector.o: src/collectors/ThermalCollector.cpp.o
@@ -519,7 +493,7 @@ src/collectors/ThermalCollector.o: src/collectors/ThermalCollector.cpp.o
 
 # target to build an object file
 src/collectors/ThermalCollector.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/ThermalCollector.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/ThermalCollector.cpp.o
 .PHONY : src/collectors/ThermalCollector.cpp.o
 
 src/collectors/ThermalCollector.i: src/collectors/ThermalCollector.cpp.i
@@ -527,7 +501,7 @@ src/collectors/ThermalCollector.i: src/collectors/ThermalCollector.cpp.i
 
 # target to preprocess a source file
 src/collectors/ThermalCollector.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/ThermalCollector.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/ThermalCollector.cpp.i
 .PHONY : src/collectors/ThermalCollector.cpp.i
 
 src/collectors/ThermalCollector.s: src/collectors/ThermalCollector.cpp.s
@@ -535,7 +509,7 @@ src/collectors/ThermalCollector.s: src/collectors/ThermalCollector.cpp.s
 
 # target to generate assembly for a file
 src/collectors/ThermalCollector.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/collectors/ThermalCollector.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/ThermalCollector.cpp.s
 .PHONY : src/collectors/ThermalCollector.cpp.s
 
 src/main.o: src/main.cpp.o
@@ -543,7 +517,7 @@ src/main.o: src/main.cpp.o
 
 # target to build an object file
 src/main.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/src/main.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk.dir/build.make CMakeFiles/montauk.dir/src/main.cpp.o
 .PHONY : src/main.cpp.o
 
 src/main.i: src/main.cpp.i
@@ -551,7 +525,7 @@ src/main.i: src/main.cpp.i
 
 # target to preprocess a source file
 src/main.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/src/main.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk.dir/build.make CMakeFiles/montauk.dir/src/main.cpp.i
 .PHONY : src/main.cpp.i
 
 src/main.s: src/main.cpp.s
@@ -559,7 +533,7 @@ src/main.s: src/main.cpp.s
 
 # target to generate assembly for a file
 src/main.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm.dir/build.make CMakeFiles/lsm.dir/src/main.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk.dir/build.make CMakeFiles/montauk.dir/src/main.cpp.s
 .PHONY : src/main.cpp.s
 
 src/tools/analyze_proc.o: src/tools/analyze_proc.cpp.o
@@ -567,7 +541,7 @@ src/tools/analyze_proc.o: src/tools/analyze_proc.cpp.o
 
 # target to build an object file
 src/tools/analyze_proc.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_analyze.dir/build.make CMakeFiles/lsm_analyze.dir/src/tools/analyze_proc.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_analyze.dir/build.make CMakeFiles/montauk_analyze.dir/src/tools/analyze_proc.cpp.o
 .PHONY : src/tools/analyze_proc.cpp.o
 
 src/tools/analyze_proc.i: src/tools/analyze_proc.cpp.i
@@ -575,7 +549,7 @@ src/tools/analyze_proc.i: src/tools/analyze_proc.cpp.i
 
 # target to preprocess a source file
 src/tools/analyze_proc.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_analyze.dir/build.make CMakeFiles/lsm_analyze.dir/src/tools/analyze_proc.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_analyze.dir/build.make CMakeFiles/montauk_analyze.dir/src/tools/analyze_proc.cpp.i
 .PHONY : src/tools/analyze_proc.cpp.i
 
 src/tools/analyze_proc.s: src/tools/analyze_proc.cpp.s
@@ -583,15 +557,39 @@ src/tools/analyze_proc.s: src/tools/analyze_proc.cpp.s
 
 # target to generate assembly for a file
 src/tools/analyze_proc.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_analyze.dir/build.make CMakeFiles/lsm_analyze.dir/src/tools/analyze_proc.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_analyze.dir/build.make CMakeFiles/montauk_analyze.dir/src/tools/analyze_proc.cpp.s
 .PHONY : src/tools/analyze_proc.cpp.s
+
+src/util/AdaptiveSort.o: src/util/AdaptiveSort.cpp.o
+.PHONY : src/util/AdaptiveSort.o
+
+# target to build an object file
+src/util/AdaptiveSort.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/AdaptiveSort.cpp.o
+.PHONY : src/util/AdaptiveSort.cpp.o
+
+src/util/AdaptiveSort.i: src/util/AdaptiveSort.cpp.i
+.PHONY : src/util/AdaptiveSort.i
+
+# target to preprocess a source file
+src/util/AdaptiveSort.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/AdaptiveSort.cpp.i
+.PHONY : src/util/AdaptiveSort.cpp.i
+
+src/util/AdaptiveSort.s: src/util/AdaptiveSort.cpp.s
+.PHONY : src/util/AdaptiveSort.s
+
+# target to generate assembly for a file
+src/util/AdaptiveSort.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/AdaptiveSort.cpp.s
+.PHONY : src/util/AdaptiveSort.cpp.s
 
 src/util/Procfs.o: src/util/Procfs.cpp.o
 .PHONY : src/util/Procfs.o
 
 # target to build an object file
 src/util/Procfs.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/util/Procfs.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/Procfs.cpp.o
 .PHONY : src/util/Procfs.cpp.o
 
 src/util/Procfs.i: src/util/Procfs.cpp.i
@@ -599,7 +597,7 @@ src/util/Procfs.i: src/util/Procfs.cpp.i
 
 # target to preprocess a source file
 src/util/Procfs.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/util/Procfs.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/Procfs.cpp.i
 .PHONY : src/util/Procfs.cpp.i
 
 src/util/Procfs.s: src/util/Procfs.cpp.s
@@ -607,7 +605,7 @@ src/util/Procfs.s: src/util/Procfs.cpp.s
 
 # target to generate assembly for a file
 src/util/Procfs.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/util/Procfs.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/Procfs.cpp.s
 .PHONY : src/util/Procfs.cpp.s
 
 src/util/Retro.o: src/util/Retro.cpp.o
@@ -615,7 +613,7 @@ src/util/Retro.o: src/util/Retro.cpp.o
 
 # target to build an object file
 src/util/Retro.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/util/Retro.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/Retro.cpp.o
 .PHONY : src/util/Retro.cpp.o
 
 src/util/Retro.i: src/util/Retro.cpp.i
@@ -623,7 +621,7 @@ src/util/Retro.i: src/util/Retro.cpp.i
 
 # target to preprocess a source file
 src/util/Retro.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/util/Retro.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/Retro.cpp.i
 .PHONY : src/util/Retro.cpp.i
 
 src/util/Retro.s: src/util/Retro.cpp.s
@@ -631,344 +629,8 @@ src/util/Retro.s: src/util/Retro.cpp.s
 
 # target to generate assembly for a file
 src/util/Retro.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_core.dir/build.make CMakeFiles/lsm_core.dir/src/util/Retro.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/Retro.cpp.s
 .PHONY : src/util/Retro.cpp.s
-
-tests/test_alerts.o: tests/test_alerts.cpp.o
-.PHONY : tests/test_alerts.o
-
-# target to build an object file
-tests/test_alerts.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_alerts.cpp.o
-.PHONY : tests/test_alerts.cpp.o
-
-tests/test_alerts.i: tests/test_alerts.cpp.i
-.PHONY : tests/test_alerts.i
-
-# target to preprocess a source file
-tests/test_alerts.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_alerts.cpp.i
-.PHONY : tests/test_alerts.cpp.i
-
-tests/test_alerts.s: tests/test_alerts.cpp.s
-.PHONY : tests/test_alerts.s
-
-# target to generate assembly for a file
-tests/test_alerts.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_alerts.cpp.s
-.PHONY : tests/test_alerts.cpp.s
-
-tests/test_cpu.o: tests/test_cpu.cpp.o
-.PHONY : tests/test_cpu.o
-
-# target to build an object file
-tests/test_cpu.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_cpu.cpp.o
-.PHONY : tests/test_cpu.cpp.o
-
-tests/test_cpu.i: tests/test_cpu.cpp.i
-.PHONY : tests/test_cpu.i
-
-# target to preprocess a source file
-tests/test_cpu.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_cpu.cpp.i
-.PHONY : tests/test_cpu.cpp.i
-
-tests/test_cpu.s: tests/test_cpu.cpp.s
-.PHONY : tests/test_cpu.s
-
-# target to generate assembly for a file
-tests/test_cpu.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_cpu.cpp.s
-.PHONY : tests/test_cpu.cpp.s
-
-tests/test_disk.o: tests/test_disk.cpp.o
-.PHONY : tests/test_disk.o
-
-# target to build an object file
-tests/test_disk.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_disk.cpp.o
-.PHONY : tests/test_disk.cpp.o
-
-tests/test_disk.i: tests/test_disk.cpp.i
-.PHONY : tests/test_disk.i
-
-# target to preprocess a source file
-tests/test_disk.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_disk.cpp.i
-.PHONY : tests/test_disk.cpp.i
-
-tests/test_disk.s: tests/test_disk.cpp.s
-.PHONY : tests/test_disk.s
-
-# target to generate assembly for a file
-tests/test_disk.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_disk.cpp.s
-.PHONY : tests/test_disk.cpp.s
-
-tests/test_fdinfo_collector.o: tests/test_fdinfo_collector.cpp.o
-.PHONY : tests/test_fdinfo_collector.o
-
-# target to build an object file
-tests/test_fdinfo_collector.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_fdinfo_collector.cpp.o
-.PHONY : tests/test_fdinfo_collector.cpp.o
-
-tests/test_fdinfo_collector.i: tests/test_fdinfo_collector.cpp.i
-.PHONY : tests/test_fdinfo_collector.i
-
-# target to preprocess a source file
-tests/test_fdinfo_collector.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_fdinfo_collector.cpp.i
-.PHONY : tests/test_fdinfo_collector.cpp.i
-
-tests/test_fdinfo_collector.s: tests/test_fdinfo_collector.cpp.s
-.PHONY : tests/test_fdinfo_collector.s
-
-# target to generate assembly for a file
-tests/test_fdinfo_collector.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_fdinfo_collector.cpp.s
-.PHONY : tests/test_fdinfo_collector.cpp.s
-
-tests/test_filters.o: tests/test_filters.cpp.o
-.PHONY : tests/test_filters.o
-
-# target to build an object file
-tests/test_filters.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_filters.cpp.o
-.PHONY : tests/test_filters.cpp.o
-
-tests/test_filters.i: tests/test_filters.cpp.i
-.PHONY : tests/test_filters.i
-
-# target to preprocess a source file
-tests/test_filters.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_filters.cpp.i
-.PHONY : tests/test_filters.cpp.i
-
-tests/test_filters.s: tests/test_filters.cpp.s
-.PHONY : tests/test_filters.s
-
-# target to generate assembly for a file
-tests/test_filters.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_filters.cpp.s
-.PHONY : tests/test_filters.cpp.s
-
-tests/test_gpu_cache.o: tests/test_gpu_cache.cpp.o
-.PHONY : tests/test_gpu_cache.o
-
-# target to build an object file
-tests/test_gpu_cache.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_gpu_cache.cpp.o
-.PHONY : tests/test_gpu_cache.cpp.o
-
-tests/test_gpu_cache.i: tests/test_gpu_cache.cpp.i
-.PHONY : tests/test_gpu_cache.i
-
-# target to preprocess a source file
-tests/test_gpu_cache.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_gpu_cache.cpp.i
-.PHONY : tests/test_gpu_cache.cpp.i
-
-tests/test_gpu_cache.s: tests/test_gpu_cache.cpp.s
-.PHONY : tests/test_gpu_cache.s
-
-# target to generate assembly for a file
-tests/test_gpu_cache.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_gpu_cache.cpp.s
-.PHONY : tests/test_gpu_cache.cpp.s
-
-tests/test_gpu_fallback.o: tests/test_gpu_fallback.cpp.o
-.PHONY : tests/test_gpu_fallback.o
-
-# target to build an object file
-tests/test_gpu_fallback.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_gpu_fallback.cpp.o
-.PHONY : tests/test_gpu_fallback.cpp.o
-
-tests/test_gpu_fallback.i: tests/test_gpu_fallback.cpp.i
-.PHONY : tests/test_gpu_fallback.i
-
-# target to preprocess a source file
-tests/test_gpu_fallback.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_gpu_fallback.cpp.i
-.PHONY : tests/test_gpu_fallback.cpp.i
-
-tests/test_gpu_fallback.s: tests/test_gpu_fallback.cpp.s
-.PHONY : tests/test_gpu_fallback.s
-
-# target to generate assembly for a file
-tests/test_gpu_fallback.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_gpu_fallback.cpp.s
-.PHONY : tests/test_gpu_fallback.cpp.s
-
-tests/test_main.o: tests/test_main.cpp.o
-.PHONY : tests/test_main.o
-
-# target to build an object file
-tests/test_main.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_main.cpp.o
-.PHONY : tests/test_main.cpp.o
-
-tests/test_main.i: tests/test_main.cpp.i
-.PHONY : tests/test_main.i
-
-# target to preprocess a source file
-tests/test_main.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_main.cpp.i
-.PHONY : tests/test_main.cpp.i
-
-tests/test_main.s: tests/test_main.cpp.s
-.PHONY : tests/test_main.s
-
-# target to generate assembly for a file
-tests/test_main.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_main.cpp.s
-.PHONY : tests/test_main.cpp.s
-
-tests/test_memory.o: tests/test_memory.cpp.o
-.PHONY : tests/test_memory.o
-
-# target to build an object file
-tests/test_memory.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_memory.cpp.o
-.PHONY : tests/test_memory.cpp.o
-
-tests/test_memory.i: tests/test_memory.cpp.i
-.PHONY : tests/test_memory.i
-
-# target to preprocess a source file
-tests/test_memory.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_memory.cpp.i
-.PHONY : tests/test_memory.cpp.i
-
-tests/test_memory.s: tests/test_memory.cpp.s
-.PHONY : tests/test_memory.s
-
-# target to generate assembly for a file
-tests/test_memory.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_memory.cpp.s
-.PHONY : tests/test_memory.cpp.s
-
-tests/test_net.o: tests/test_net.cpp.o
-.PHONY : tests/test_net.o
-
-# target to build an object file
-tests/test_net.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_net.cpp.o
-.PHONY : tests/test_net.cpp.o
-
-tests/test_net.i: tests/test_net.cpp.i
-.PHONY : tests/test_net.i
-
-# target to preprocess a source file
-tests/test_net.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_net.cpp.i
-.PHONY : tests/test_net.cpp.i
-
-tests/test_net.s: tests/test_net.cpp.s
-.PHONY : tests/test_net.s
-
-# target to generate assembly for a file
-tests/test_net.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_net.cpp.s
-.PHONY : tests/test_net.cpp.s
-
-tests/test_producer_basic.o: tests/test_producer_basic.cpp.o
-.PHONY : tests/test_producer_basic.o
-
-# target to build an object file
-tests/test_producer_basic.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_producer_basic.cpp.o
-.PHONY : tests/test_producer_basic.cpp.o
-
-tests/test_producer_basic.i: tests/test_producer_basic.cpp.i
-.PHONY : tests/test_producer_basic.i
-
-# target to preprocess a source file
-tests/test_producer_basic.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_producer_basic.cpp.i
-.PHONY : tests/test_producer_basic.cpp.i
-
-tests/test_producer_basic.s: tests/test_producer_basic.cpp.s
-.PHONY : tests/test_producer_basic.s
-
-# target to generate assembly for a file
-tests/test_producer_basic.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_producer_basic.cpp.s
-.PHONY : tests/test_producer_basic.cpp.s
-
-tests/test_snapshot_buffers.o: tests/test_snapshot_buffers.cpp.o
-.PHONY : tests/test_snapshot_buffers.o
-
-# target to build an object file
-tests/test_snapshot_buffers.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_snapshot_buffers.cpp.o
-.PHONY : tests/test_snapshot_buffers.cpp.o
-
-tests/test_snapshot_buffers.i: tests/test_snapshot_buffers.cpp.i
-.PHONY : tests/test_snapshot_buffers.i
-
-# target to preprocess a source file
-tests/test_snapshot_buffers.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_snapshot_buffers.cpp.i
-.PHONY : tests/test_snapshot_buffers.cpp.i
-
-tests/test_snapshot_buffers.s: tests/test_snapshot_buffers.cpp.s
-.PHONY : tests/test_snapshot_buffers.s
-
-# target to generate assembly for a file
-tests/test_snapshot_buffers.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_snapshot_buffers.cpp.s
-.PHONY : tests/test_snapshot_buffers.cpp.s
-
-tests/test_stress.o: tests/test_stress.cpp.o
-.PHONY : tests/test_stress.o
-
-# target to build an object file
-tests/test_stress.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_stress.cpp.o
-.PHONY : tests/test_stress.cpp.o
-
-tests/test_stress.i: tests/test_stress.cpp.i
-.PHONY : tests/test_stress.i
-
-# target to preprocess a source file
-tests/test_stress.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_stress.cpp.i
-.PHONY : tests/test_stress.cpp.i
-
-tests/test_stress.s: tests/test_stress.cpp.s
-.PHONY : tests/test_stress.s
-
-# target to generate assembly for a file
-tests/test_stress.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_stress.cpp.s
-.PHONY : tests/test_stress.cpp.s
-
-tests/test_thermal.o: tests/test_thermal.cpp.o
-.PHONY : tests/test_thermal.o
-
-# target to build an object file
-tests/test_thermal.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_thermal.cpp.o
-.PHONY : tests/test_thermal.cpp.o
-
-tests/test_thermal.i: tests/test_thermal.cpp.i
-.PHONY : tests/test_thermal.i
-
-# target to preprocess a source file
-tests/test_thermal.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_thermal.cpp.i
-.PHONY : tests/test_thermal.cpp.i
-
-tests/test_thermal.s: tests/test_thermal.cpp.s
-.PHONY : tests/test_thermal.s
-
-# target to generate assembly for a file
-tests/test_thermal.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/lsm_tests.dir/build.make CMakeFiles/lsm_tests.dir/tests/test_thermal.cpp.s
-.PHONY : tests/test_thermal.cpp.s
 
 # Help Target
 help:
@@ -982,11 +644,9 @@ help:
 	@echo "... install/strip"
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
-	@echo "... check"
-	@echo "... lsm"
-	@echo "... lsm_analyze"
-	@echo "... lsm_core"
-	@echo "... lsm_tests"
+	@echo "... montauk"
+	@echo "... montauk_analyze"
+	@echo "... montauk_core"
 	@echo "... src/app/Alerts.o"
 	@echo "... src/app/Alerts.i"
 	@echo "... src/app/Alerts.s"
@@ -1032,54 +692,15 @@ help:
 	@echo "... src/tools/analyze_proc.o"
 	@echo "... src/tools/analyze_proc.i"
 	@echo "... src/tools/analyze_proc.s"
+	@echo "... src/util/AdaptiveSort.o"
+	@echo "... src/util/AdaptiveSort.i"
+	@echo "... src/util/AdaptiveSort.s"
 	@echo "... src/util/Procfs.o"
 	@echo "... src/util/Procfs.i"
 	@echo "... src/util/Procfs.s"
 	@echo "... src/util/Retro.o"
 	@echo "... src/util/Retro.i"
 	@echo "... src/util/Retro.s"
-	@echo "... tests/test_alerts.o"
-	@echo "... tests/test_alerts.i"
-	@echo "... tests/test_alerts.s"
-	@echo "... tests/test_cpu.o"
-	@echo "... tests/test_cpu.i"
-	@echo "... tests/test_cpu.s"
-	@echo "... tests/test_disk.o"
-	@echo "... tests/test_disk.i"
-	@echo "... tests/test_disk.s"
-	@echo "... tests/test_fdinfo_collector.o"
-	@echo "... tests/test_fdinfo_collector.i"
-	@echo "... tests/test_fdinfo_collector.s"
-	@echo "... tests/test_filters.o"
-	@echo "... tests/test_filters.i"
-	@echo "... tests/test_filters.s"
-	@echo "... tests/test_gpu_cache.o"
-	@echo "... tests/test_gpu_cache.i"
-	@echo "... tests/test_gpu_cache.s"
-	@echo "... tests/test_gpu_fallback.o"
-	@echo "... tests/test_gpu_fallback.i"
-	@echo "... tests/test_gpu_fallback.s"
-	@echo "... tests/test_main.o"
-	@echo "... tests/test_main.i"
-	@echo "... tests/test_main.s"
-	@echo "... tests/test_memory.o"
-	@echo "... tests/test_memory.i"
-	@echo "... tests/test_memory.s"
-	@echo "... tests/test_net.o"
-	@echo "... tests/test_net.i"
-	@echo "... tests/test_net.s"
-	@echo "... tests/test_producer_basic.o"
-	@echo "... tests/test_producer_basic.i"
-	@echo "... tests/test_producer_basic.s"
-	@echo "... tests/test_snapshot_buffers.o"
-	@echo "... tests/test_snapshot_buffers.i"
-	@echo "... tests/test_snapshot_buffers.s"
-	@echo "... tests/test_stress.o"
-	@echo "... tests/test_stress.i"
-	@echo "... tests/test_stress.s"
-	@echo "... tests/test_thermal.o"
-	@echo "... tests/test_thermal.i"
-	@echo "... tests/test_thermal.s"
 .PHONY : help
 
 

@@ -3,7 +3,7 @@
 #include <unordered_set>
 #include <chrono>
 
-namespace lsm::collectors {
+namespace montauk::collectors {
 
 // Minimal per-process GPU utilization collector using Linux DRM fdinfo.
 // Supports a subset of AMD/Intel fdinfo formats to attribute per-PID GPU%.
@@ -31,4 +31,4 @@ private:
   std::unordered_map<int, LastSample> last_;
 };
 
-} // namespace lsm::collectors
+} // namespace montauk::collectors
