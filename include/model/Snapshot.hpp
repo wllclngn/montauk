@@ -84,6 +84,7 @@ struct Snapshot {
   std::vector<AlertItem> alerts; // latest generated alerts with severity
   Thermal thermal;
   NvmlDiag nvml;
+  struct ChurnDiag { int recent_2s_events{0}; int recent_2s_proc{0}; int recent_2s_sys{0}; } churn;
 };
 
 } // namespace montauk::model

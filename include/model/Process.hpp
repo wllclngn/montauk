@@ -13,6 +13,8 @@ struct ProcSample {
   uint64_t total_time{}; // utime+stime
   uint64_t rss_kb{};
   double   cpu_pct{}; // 0..100 (overall machine)
+  // True when this row had /proc churn (could not read/parse this cycle)
+  bool     churn{false};
   // Optional GPU metrics (per process)
   bool     has_gpu_util{false};
   double   gpu_util_pct{0.0};

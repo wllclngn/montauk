@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <unordered_set>
+#include "util/Churn.hpp"
 
 namespace fs = std::filesystem;
 
@@ -53,7 +54,8 @@ static bool read_nvidia_proc(montauk::model::GpuVram& out) {
     try {
       auto inf = entry.path() / "information";
       std::ifstream in(inf);
-      if (in) {
+      if (!in) { /* optional; ignore */ }
+      else {
         std::string line;
         while (std::getline(in, line)) {
           if (line.rfind("Model:", 0) == 0) {
@@ -65,7 +67,7 @@ static bool read_nvidia_proc(montauk::model::GpuVram& out) {
           }
         }
       }
-    } catch (...) { /* ignore */ }
+    } catch (...) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); }
 
     if (total_mb > 0) {
       any = true;
@@ -135,7 +137,7 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out) {
         if (!driver.empty()) friendly += driver;
         if (!pciid.empty()) friendly += (friendly.empty()?"":" ") + std::string("(") + pciid + ")";
       }
-    } catch(...) { /* ignore */ }
+    } catch(...) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); }
     if (friendly.empty()) friendly = name;
     montauk::model::GpuVramDevice rec{ friendly, t_mb, u_mb };
     // Read temps via hwmon if exposed
@@ -153,7 +155,7 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out) {
                 std::ifstream lf(hm.path() / (base + "_label"));
                 if (lf) std::getline(lf, label);
               } catch(...) {}
-              long mdeg=0; std::ifstream inf(file.path()); if (!inf) continue; inf >> mdeg; if (!inf) continue;
+              long mdeg=0; std::ifstream inf(file.path()); if (!inf) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); continue; } inf >> mdeg; if (!inf) continue;
               double c = mdeg / 1000.0;
               // Try thresholds for this sensor (crit/max/emergency)
               double warn_tc = 0.0; bool have_warn = false;

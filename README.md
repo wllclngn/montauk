@@ -13,6 +13,7 @@ Overview
 - Atomic snapshot publication; minimal CPU overhead.
 - NVIDIA support via NVML is auto-detected at build; recommended for reliable VRAM/power on NVIDIA.
  - HOT start pre‑warm: first visible frame has real deltas (no startup flicker).
+ - Robust to /proc and /sysfs churn: transient disappearances are handled and surfaced as warnings (see below).
 
 Build
 - Release: `make build`
@@ -43,6 +44,26 @@ Quick Tips
 - Want a gentler or stricter top‑proc alert? Set `MONTAUK_TOPPROC_ALERT_FRAMES` (e.g., `2` for sensitive, `12` for sustained).
 - Avoid alt screen if you plan to copy/paste terminal contents: `MONTAUK_ALT_SCREEN=0 ./build/montauk`.
 - Concurrency‑safe rendering is enabled by default by copying each snapshot at frame start. Disable for maximal throughput: `MONTAUK_COPY_FRONT=0`.
+
+Proc/Sysfs Churn Warnings
+- Context: On busy systems (e.g., during package installs or large builds), entries under `/proc` and `/sys` can appear and disappear between directory iteration and file reads. Previously, this could surface as a C++ iostream failure. Montauk now treats these as transient “churn” and reports them without crashing.
+- Process row signal (per‑row): when a process churns during sampling, its row is colored as a WARNING and the numeric columns are replaced by the message below. It sorts like `0%` CPU and clears on the next clean sample.
+  - Display: `PROC CHURN DETECTED` (replaces `CPU%  GPU%  GMEM  MEM`)
+- System sticky summary: a short‑lived line appears under the TEMP entries counting churn events in the recent window across both `/proc` and `/sys`.
+  - Display: `PROC CHURN  N events [LAST 2s]` (WARNING/red). Auto‑hides when churn subsides.
+- Example (rows shown inline with a churned process):
+  
+      PID     USER      CPU%  GPU%  GMEM   MEM    NAME
+      103923  mod       38.4    0     0M   350M   cc1plus -quiet -I ext/…
+      103981  mod       PROC CHURN DETECTED       cc1plus -quiet -I ext/…    (warning/red line)
+      103931  mod       21.4    0     0M   441M   cc1plus -quiet -I ext/…
+  
+  SYSTEM (excerpt)
+  
+      CPU TEMP                                             57°C
+      GPU TEMP                                             E:57°C
+      
+      PROC CHURN                              3 events [LAST 2s]         (warning/red)
 
  
 

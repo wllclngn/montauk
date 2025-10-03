@@ -545,7 +545,7 @@ static std::vector<std::string> render_left_column(const montauk::model::Snapsho
     if (p.has_gpu_util) { int gdig = (int)std::to_string((int)(p.gpu_util_pct+0.5)).size(); if (gdig > gpu_digit_w_meas) gpu_digit_w_meas = gdig; }
     std::string hm = [&]{ uint64_t kib=p.rss_kb; if (kib >= (1024ull*1024ull)) { double g=kib/(1024.0*1024.0); return std::to_string((int)(g+0.5))+"G"; } if (kib>=1024ull){ double m=kib/1024.0; return std::to_string((int)(m+0.5))+"M";} return std::to_string((int)kib)+"K"; }();
     if ((int)hm.size() > mem_w_meas) mem_w_meas = (int)hm.size();
-    std::string hg = [&]{ if (!p.has_gpu_mem) return std::string("-"); uint64_t kib=p.gpu_mem_kb; if (kib >= (1024ull*1024ull)) { double g=kib/(1024.0*1024.0); return std::to_string((int)(g+0.5))+"G"; } if (kib>=1024ull){ double m=kib/1024.0; return std::to_string((int)(m+0.5))+"M";} return std::to_string((int)kib)+"K"; }();
+    std::string hg = [&]{ uint64_t kib = p.has_gpu_mem ? p.gpu_mem_kb : 0ull; if (kib >= (1024ull*1024ull)) { double g=kib/(1024.0*1024.0); return std::to_string((int)(g+0.5))+"G"; } if (kib>=1024ull){ double m=kib/1024.0; return std::to_string((int)(m+0.5))+"M";} return std::to_string((int)kib)+"K"; }();
     if ((int)hg.size() > gmem_w_meas) gmem_w_meas = (int)hg.size();
   }
   // Clamp
@@ -592,7 +592,7 @@ static std::vector<std::string> render_left_column(const montauk::model::Snapsho
     double cpu_disp = sm[order[ii]]; // show smoothed CPU (scaled per setting)
     int val = (int)(cpu_disp + 0.5);
     const auto& ui = ui_config();
-    int sev = 0; if (val >= ui.warning_pct) sev = 2; else if (val >= ui.caution_pct) sev = 1;
+    int sev = 0; if (p.churn) sev = 2; else if (val >= ui.warning_pct) sev = 2; else if (val >= ui.caution_pct) sev = 1;
     auto fmt_gpu = [&](const montauk::model::ProcSample& pp){
       // Heuristic: prefer raw if present this frame; otherwise use smoothed
       bool has = pp.has_gpu_util_raw ? true : pp.has_gpu_util;
@@ -615,18 +615,30 @@ static std::vector<std::string> render_left_column(const montauk::model::Snapsho
       return std::string(pad, ' ') + m + "  ";
     };
     auto fmt_gmem = [&](bool has, uint64_t gkib){
-      std::string m = has ? human_kib(gkib) : std::string("-");
+      std::string m = human_kib(has ? gkib : 0ull);
       int pad = gmemw - (int)m.size(); if (pad < 0) pad = 0;
       return std::string(pad, ' ') + m + "  ";
     };
     // Compute command width dynamically
-    const int cmd_w = iw - (pidw+2 + userw+2 + 7 + (gpud+3) + (gmemw+2) + (memw+2));
+    const int fields_w = 7 + (gpud+3) + (gmemw+2) + (memw+2);
+    const int cmd_w = iw - (pidw+2 + userw+2 + fields_w);
     os << std::setw(pidw) << p.pid << "  "
        << trunc_pad(user,userw) << "  "
-       << fmt_cpu_field(cpu_disp, /*colorize=*/sev==0)
-       << fmt_gpu(p)
-       << fmt_gmem(p.has_gpu_mem, p.gpu_mem_kb)
-       << fmt_mem(p.rss_kb)
+       << [&]{
+            if (!p.churn) {
+              std::ostringstream tmp; tmp
+                << fmt_cpu_field(cpu_disp, /*colorize=*/sev==0)
+                << fmt_gpu(p)
+                << fmt_gmem(p.has_gpu_mem, p.gpu_mem_kb)
+                << fmt_mem(p.rss_kb);
+              return tmp.str();
+            } else {
+              std::string msg = "PROC CHURN DETECTED";
+              if ((int)msg.size() < fields_w) msg += std::string(fields_w - (int)msg.size(), ' ');
+              else if ((int)msg.size() > fields_w) msg = msg.substr(0, fields_w);
+              return msg;
+            }
+          }()
        << trunc_pad(p.cmd.empty()? std::to_string(p.pid) : p.cmd, std::max(8, cmd_w));
     proc_lines.push_back(os.str());
     proc_sev.push_back(sev);
@@ -864,6 +876,11 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
           push(lr_align(iw, label, rr.str()), dev_sev);
         }
       }
+    }
+    // Add sticky churn summary below temps (warning) when recent events occurred
+    if (s.churn.recent_2s_events > 0) {
+      std::ostringstream rr; rr << s.churn.recent_2s_events << " events [LAST 2s]";
+      push(lr_align(iw, "PROC CHURN", rr.str()), 2);
     }
     // Build box then apply full-line coloring for temperature lines if needed
     auto sys_box = make_box("SYSTEM", sys, width, inner_min);

@@ -584,6 +584,30 @@ src/util/AdaptiveSort.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/AdaptiveSort.cpp.s
 .PHONY : src/util/AdaptiveSort.cpp.s
 
+src/util/Churn.o: src/util/Churn.cpp.o
+.PHONY : src/util/Churn.o
+
+# target to build an object file
+src/util/Churn.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/Churn.cpp.o
+.PHONY : src/util/Churn.cpp.o
+
+src/util/Churn.i: src/util/Churn.cpp.i
+.PHONY : src/util/Churn.i
+
+# target to preprocess a source file
+src/util/Churn.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/Churn.cpp.i
+.PHONY : src/util/Churn.cpp.i
+
+src/util/Churn.s: src/util/Churn.cpp.s
+.PHONY : src/util/Churn.s
+
+# target to generate assembly for a file
+src/util/Churn.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/Churn.cpp.s
+.PHONY : src/util/Churn.cpp.s
+
 src/util/Procfs.o: src/util/Procfs.cpp.o
 .PHONY : src/util/Procfs.o
 
@@ -695,6 +719,9 @@ help:
 	@echo "... src/util/AdaptiveSort.o"
 	@echo "... src/util/AdaptiveSort.i"
 	@echo "... src/util/AdaptiveSort.s"
+	@echo "... src/util/Churn.o"
+	@echo "... src/util/Churn.i"
+	@echo "... src/util/Churn.s"
 	@echo "... src/util/Procfs.o"
 	@echo "... src/util/Procfs.i"
 	@echo "... src/util/Procfs.s"

@@ -24,6 +24,7 @@ option(MONTAUK_BUILD_TESTS "Build unit tests" OFF)
 
 add_library(montauk_core
     src/util/Procfs.cpp
+    src/util/Churn.cpp
     src/util/Retro.cpp
     src/util/AdaptiveSort.cpp
     src/app/SnapshotBuffers.cpp

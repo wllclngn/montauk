@@ -3,6 +3,7 @@
 #include <fstream>
 #include <string>
 #include "util/Procfs.hpp"
+#include "util/Churn.hpp"
 
 namespace fs = std::filesystem;
 
@@ -10,7 +11,7 @@ namespace montauk::collectors {
 
 static bool read_number_file(const fs::path& p, long& out) {
   std::ifstream f(p);
-  if (!f) return false;
+  if (!f) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); return false; }
   f >> out; return f.good();
 }
 

@@ -2,6 +2,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <sstream>
+#include <vector>
+#include <string>
 
 #ifdef MONTAUK_HAVE_NVML
 #include <nvml.h>
@@ -142,30 +145,91 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
     if (!v) return defv;
     return !(v[0]=='0'||v[0]=='f'||v[0]=='F');
   };
-  if (pid_to_gpu.empty() && env_true("MONTAUK_NVIDIA_PMON", true) && !s.nvml.mig_enabled) {
-    FILE* fp = ::popen("nvidia-smi pmon -c 1 -s u 2>/dev/null", "r");
-    if (fp) {
+  if (env_true("MONTAUK_NVIDIA_PMON", true) && !s.nvml.mig_enabled) {
+    auto parse_pmon = [&](const char* cmd){
+      FILE* fp = ::popen(cmd, "r");
+      if (!fp) return false;
+      // Column indices discovered from header
+      int idx_pid=-1, idx_sm=-1, idx_mem=-1, idx_enc=-1, idx_dec=-1, idx_fb=-1;
       char buf[512];
-      // Format lines: "# gpu pid type sm mem enc dec command"
+      bool got_any = false;
       while (std::fgets(buf, sizeof(buf), fp)) {
-        if (buf[0] == '#') continue;
-        // tokenization by spaces
-        int gpu=-1, pid=-1, sm=-1, mem=-1, enc=-1, dec=-1;
-        char type[32] = {0};
-        // try a tolerant sscanf; some fields may be "-"
-        // Read fields we care about; command skipped
-        int matched = std::sscanf(buf, "%d %d %31s %d %d %d %d", &gpu, &pid, type, &sm, &mem, &enc, &dec);
-        if (matched >= 4 && pid > 0) {
-          auto fix = [](int v){ return (v<0||v>100)?0:v; };
-          int util = std::max({fix(sm), fix(enc), fix(dec)});
-          if (util > 0) {
-            auto it = pid_to_gpu.find(pid);
-            if (it == pid_to_gpu.end() || util > it->second) pid_to_gpu[pid] = util;
-            running_pids.insert(pid);
+        if (buf[0] == '#') {
+          // Example header: "# gpu pid type sm mem enc dec jpg ofa fb ccpm command"
+          std::string hdr(buf);
+          std::istringstream ih(hdr);
+          std::string tok;
+          std::vector<std::string> cols;
+          while (ih >> tok) cols.push_back(tok);
+          for (size_t i=0;i<cols.size();++i) {
+            const std::string& c = cols[i];
+            if (c == "pid") idx_pid = (int)i;
+            else if (c == "sm") idx_sm = (int)i;
+            else if (c == "mem") idx_mem = (int)i;
+            else if (c == "enc") idx_enc = (int)i;
+            else if (c == "dec") idx_dec = (int)i;
+            else if (c == "fb") idx_fb = (int)i;
+          }
+          continue;
+        }
+        std::string line(buf);
+        // Tokenize by whitespace (command field may have spaces; we only read numeric columns)
+        std::vector<std::string> tok; tok.reserve(16);
+        {
+          std::istringstream iss(line);
+          std::string t;
+          while (iss >> t) tok.push_back(t);
+        }
+        if (tok.size() < 4) continue;
+        auto to_int = [](const std::string& s)->int{
+          if (s.empty()) return -1;
+          bool neg = (s[0]=='-');
+          if (neg && s.size()==1) return -1; // dash placeholder
+          int v = -1; try { v = std::stoi(s); } catch (...) { return -1; }
+          return v;
+        };
+        int pid = -1;
+        if (idx_pid >= 0 && idx_pid < (int)tok.size()) pid = to_int(tok[idx_pid]);
+        else if (tok.size() > 1) pid = to_int(tok[1]);
+        if (pid <= 0) continue;
+        running_pids.insert(pid);
+        auto fix = [](int v){ return (v<0||v>100)?0:v; };
+        int sm  = 0, enc = 0, dec = 0;
+        if (idx_sm  >= 0 && idx_sm  < (int)tok.size())  sm  = fix(to_int(tok[idx_sm]));
+        if (idx_enc >= 0 && idx_enc < (int)tok.size())  enc = fix(to_int(tok[idx_enc]));
+        if (idx_dec >= 0 && idx_dec < (int)tok.size())  dec = fix(to_int(tok[idx_dec]));
+        if (idx_sm < 0)  sm  = fix(to_int(tok.size() > 3 ? tok[3] : std::string()));
+        if (idx_enc < 0) enc = fix(to_int(tok.size() > 5 ? tok[5] : std::string()));
+        if (idx_dec < 0) dec = fix(to_int(tok.size() > 6 ? tok[6] : std::string()));
+        int util = std::max({sm, enc, dec});
+        if (util > 0) {
+          auto it = pid_to_gpu.find(pid);
+          if (it == pid_to_gpu.end() || util > it->second) pid_to_gpu[pid] = util;
+        }
+        // Prefer exact FB column if available; else try percent mem to estimate
+        if (idx_fb >= 0 && idx_fb < (int)tok.size()) {
+          int fb = to_int(tok[idx_fb]);
+          if (fb > 0) {
+            uint64_t kb = (uint64_t)fb * 1024ull;
+            auto it = pid_to_gpu_mem_kb.find(pid);
+            if (it == pid_to_gpu_mem_kb.end() || kb > it->second) pid_to_gpu_mem_kb[pid] = kb;
+          }
+        } else if (idx_mem >= 0 && idx_mem < (int)tok.size() && s.vram.total_mb > 0) {
+          int m = to_int(tok[idx_mem]); // percent
+          if (m > 0 && m <= 100) {
+            uint64_t kb = (uint64_t)((long double)m * (long double)s.vram.total_mb * 10.24L);
+            auto it = pid_to_gpu_mem_kb.find(pid);
+            if (it == pid_to_gpu_mem_kb.end() || kb > it->second) pid_to_gpu_mem_kb[pid] = kb;
           }
         }
+        got_any = true;
       }
       ::pclose(fp);
+      return got_any;
+    };
+    bool any = parse_pmon("nvidia-smi pmon -c 1 -s um 2>/dev/null");
+    if (!any) {
+      parse_pmon("nvidia-smi pmon -c 1 -s u 2>/dev/null");
     }
   }
 
@@ -268,6 +332,20 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
           pid_to_gpu_mem_kb[chosen] += residual;
         }
       }
+    }
+  }
+
+  // Ensure every running GPU pid has at least minimal GMEM so UI does not show "-"
+  if (!s.nvml.mig_enabled) {
+    uint64_t dev_used_kb = s.vram.used_mb * 1024ull;
+    uint64_t known = 0; for (auto& kv : pid_to_gpu_mem_kb) known += kv.second;
+    std::vector<int> missing;
+    for (int pid : running_pids) if (pid_to_gpu_mem_kb.find(pid) == pid_to_gpu_mem_kb.end()) missing.push_back(pid);
+    if (!missing.empty()) {
+      uint64_t residual = (dev_used_kb > known) ? (dev_used_kb - known) : 0ull;
+      uint64_t per = missing.size() ? (residual / missing.size()) : 0ull;
+      if (per < 1024ull) per = 1024ull;
+      for (int pid : missing) pid_to_gpu_mem_kb[pid] = per;
     }
   }
 

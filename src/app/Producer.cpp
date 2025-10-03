@@ -5,6 +5,7 @@
 #include <unordered_set>
 #include <vector>
 #include "app/GpuAttributor.hpp"
+#include "util/Churn.hpp"
 
 using namespace std::chrono;
 
@@ -128,6 +129,10 @@ void Producer::run(std::stop_token st) {
         s.alerts.clear();
         for (auto& it : a) s.alerts.push_back(montauk::model::AlertItem{it.severity, it.message});
       }
+      // Populate churn diagnostics for SYSTEM sticky line
+      s.churn.recent_2s_events = montauk::util::count_recent_ms(2000);
+      s.churn.recent_2s_proc   = montauk::util::count_recent_kind_ms(montauk::util::ChurnKind::Proc, 2000);
+      s.churn.recent_2s_sys    = montauk::util::count_recent_kind_ms(montauk::util::ChurnKind::Sysfs, 2000);
       // Enrich per-process GPU utilization using NVML (best effort, throttled)
       if (nvml_ran) {
         // Attribute per-process GPU% across NVML/fdinfo backends

@@ -5,6 +5,7 @@
 #include <fstream>
 #include <unistd.h>
 #include <charconv>
+#include "util/Churn.hpp"
 
 namespace fs = std::filesystem;
 
@@ -69,7 +70,9 @@ bool ProcessCollector::parse_stat_line(const std::string& content, int32_t& ppid
 
 std::string ProcessCollector::read_cmdline(int32_t pid) {
   auto path = std::string("/proc/")+std::to_string(pid)+"/cmdline";
-  auto bytes = montauk::util::read_file_bytes(path); if (!bytes) return {};
+  std::optional<std::vector<unsigned char>> bytes;
+  try { bytes = montauk::util::read_file_bytes(path); } catch(...) { bytes = std::nullopt; montauk::util::note_churn(montauk::util::ChurnKind::Proc); }
+  if (!bytes) return {};
   std::string out; out.reserve(bytes->size()); bool sep=true;
   for (auto b : *bytes) { if (b==0) { if(!sep){ out.push_back(' '); sep=true; } } else { out.push_back(static_cast<char>(b)); sep=false; } }
   if (!out.empty() && out.back()==' ') out.pop_back();
@@ -97,7 +100,9 @@ static std::string user_name_cached(uint32_t uid) {
 
 std::string ProcessCollector::user_from_status(int32_t pid) {
   auto path = std::string("/proc/")+std::to_string(pid)+"/status";
-  auto txt = montauk::util::read_file_string(path); if (!txt) return {};
+  std::optional<std::string> txt;
+  try { txt = montauk::util::read_file_string(path); } catch(...) { txt = std::nullopt; montauk::util::note_churn(montauk::util::ChurnKind::Proc); }
+  if (!txt) return {};
   std::istringstream ss(*txt); std::string line;
   while (std::getline(ss, line)) {
     if (line.rfind("Uid:",0)==0) {
@@ -126,9 +131,23 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     if (name.empty() || name[0]<'0' || name[0]>'9') continue; // numeric
     int32_t pid = std::strtol(name.c_str(), nullptr, 10);
     auto stat_path = std::string("/proc/")+name+"/stat";
-    auto content_opt = montauk::util::read_file_string(stat_path); if (!content_opt) continue;
+    std::optional<std::string> content_opt;
+    try { content_opt = montauk::util::read_file_string(stat_path); }
+    catch(...) { content_opt = std::nullopt; }
+    if (!content_opt) {
+      // Record churn and emit a placeholder row so the user sees it happened
+      montauk::util::note_churn(montauk::util::ChurnKind::Proc);
+      montauk::model::ProcSample ps; ps.pid = pid; ps.ppid = 0; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn = true; ps.cmd = name;
+      out.processes.push_back(std::move(ps));
+      continue;
+    }
     int32_t ppid=0; uint64_t ut=0, st=0; int64_t rssp=0; std::string comm;
-    if (!parse_stat_line(*content_opt, ppid, ut, st, rssp, comm)) continue;
+    if (!parse_stat_line(*content_opt, ppid, ut, st, rssp, comm)) {
+      montauk::util::note_churn(montauk::util::ChurnKind::Proc);
+      montauk::model::ProcSample ps; ps.pid = pid; ps.ppid = 0; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn = true; ps.cmd = comm.empty()? name : comm;
+      out.processes.push_back(std::move(ps));
+      continue;
+    }
     uint64_t total_proc = ut + st;
     double cpu_pct = 0.0;
     if (have_last_) {
