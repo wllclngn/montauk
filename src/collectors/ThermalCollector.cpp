@@ -10,15 +10,9 @@ namespace fs = std::filesystem;
 namespace montauk::collectors {
 
 static bool read_number_file(const fs::path& p, long& out) {
-  try {
-    std::ifstream f(p);
-    if (!f) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); return false; }
-    f >> out; 
-    return f.good();
-  } catch(...) {
-    montauk::util::note_churn(montauk::util::ChurnKind::Sysfs);
-    return false;
-  }
+  std::ifstream f(p);
+  if (!f) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); return false; }
+  f >> out; return f.good();
 }
 
 // Read from hwmon first; fallback to thermal_zone

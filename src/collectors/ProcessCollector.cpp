@@ -1,15 +1,11 @@
 #include "collectors/ProcessCollector.hpp"
 #include "util/Procfs.hpp"
-#include "util/Churn.hpp"
-#include "util/AdaptiveSort.hpp"
-
 #include <filesystem>
 #include <sstream>
 #include <fstream>
 #include <unistd.h>
 #include <charconv>
-#include <algorithm>
-#include <numeric>
+#include "util/Churn.hpp"
 
 namespace fs = std::filesystem;
 
@@ -87,21 +83,17 @@ static std::string user_name_cached(uint32_t uid) {
   static std::unordered_map<uint32_t, std::string> cache;
   auto it = cache.find(uid);
   if (it != cache.end()) return it->second;
-  try {
-    std::ifstream pw("/etc/passwd"); std::string pl;
-    while (std::getline(pw, pl)) {
-      auto c1 = pl.find(':'); if (c1==std::string::npos) continue;
-      auto c2 = pl.find(':', c1+1); if (c2==std::string::npos) continue;
-      auto c3 = pl.find(':', c2+1); if (c3==std::string::npos) continue;
-      uint32_t fuid = std::strtoul(pl.c_str()+c2+1, nullptr, 10);
-      if (fuid==uid) {
-        std::string name = pl.substr(0, c1);
-        cache.emplace(uid, name);
-        return name;
+  std::ifstream pw("/etc/passwd"); std::string pl;
+  while (std::getline(pw, pl)) {
+    auto c1 = pl.find(':'); if (c1==std::string::npos) continue;
+    auto c2 = pl.find(':', c1+1); if (c2==std::string::npos) continue;
+    auto c3 = pl.find(':', c2+1); if (c3==std::string::npos) continue;
+    uint32_t fuid = std::strtoul(pl.c_str()+c2+1, nullptr, 10);
+    if (fuid==uid) {
+      std::string name = pl.substr(0, c1);
+      cache.emplace(uid, name);
+      return name;
     }
-  }
-  } catch(...) {
-    // /etc/passwd read failed or disappeared
   }
   return std::to_string(uid);
 }
@@ -170,25 +162,11 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     out.processes.push_back(std::move(ps));
   }
   out.total_processes = out.processes.size();
-  
-  // Sort by CPU desc using adaptive TimSort via index array
-  // This exploits the fact that process ordering is usually nearly-sorted between samples
-  std::vector<size_t> order(out.processes.size());
-  std::iota(order.begin(), order.end(), 0);
-  montauk::util::adaptive_timsort(order.begin(), order.end(), 
-    [&](size_t a, size_t b){ return out.processes[a].cpu_pct > out.processes[b].cpu_pct; });
-  
-  // Reorder processes based on sorted indices (only top max_procs_)
-  size_t keep = std::min<size_t>(out.processes.size(), max_procs_);
-  std::vector<montauk::model::ProcSample> sorted;
-  sorted.reserve(keep);
-  for (size_t i = 0; i < keep; i++) {
-    sorted.push_back(std::move(out.processes[order[i]]));
-  }
-  out.processes = std::move(sorted);
-  
+  // sort by cpu desc
+  std::sort(out.processes.begin(), out.processes.end(), [](const auto& a, const auto& b){ return a.cpu_pct > b.cpu_pct; });
+  if (out.processes.size() > max_procs_) out.processes.resize(max_procs_);
   // enrich top N (cmdline and user)
-  size_t enrich_n = std::min<size_t>(out.processes.size(), 24);
+  size_t enrich_n = std::min<size_t>(out.processes.size(), 256);
   for (size_t i=0;i<enrich_n;i++) {
     auto& ps = out.processes[i];
     auto cmd = read_cmdline(ps.pid); if (!cmd.empty()) ps.cmd = std::move(cmd);

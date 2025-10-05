@@ -43,25 +43,17 @@ auto map_sys_path(const std::string& abs) -> std::string {
 }
 
 auto read_file_string(const std::string& abs) -> std::optional<std::string> {
-  try {
-    std::ifstream in(map_proc_path(abs));
-    if (!in) return std::nullopt;
-    std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    return s;
-  } catch(...) {
-    return std::nullopt;
-  }
+  std::ifstream in(map_proc_path(abs));
+  if (!in) return std::nullopt;
+  std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  return s;
 }
 
 auto read_file_bytes(const std::string& abs) -> std::optional<std::vector<unsigned char>> {
-  try {
-    std::ifstream in(map_proc_path(abs), std::ios::binary);
-    if (!in) return std::nullopt;
-    std::vector<unsigned char> buf((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    return buf;
-  } catch(...) {
-    return std::nullopt;
-  }
+  std::ifstream in(map_proc_path(abs), std::ios::binary);
+  if (!in) return std::nullopt;
+  std::vector<unsigned char> buf((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  return buf;
 }
 
 auto list_dir(const std::string& abs) -> std::vector<std::string> {

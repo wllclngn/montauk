@@ -7,120 +7,301 @@
 ╚═╝     ╚═╝  ╚═════╝  ╚═╝  ╚═══╝    ╚═╝    ╚═╝  ╚═╝  ╚═════╝  ╚═╝  ╚═╝
 ```
 
-Overview
-- Standalone, offline‑friendly C++23 system monitor for Linux. No external libraries or packages are required to build and run the default text mode.
-- Collectors: CPU, Memory, Net, Disk, Processes, GPU VRAM (proc/sysfs), Thermal.
-- Atomic snapshot publication; minimal CPU overhead.
-- NVIDIA support via NVML is auto-detected at build; recommended for reliable VRAM/power on NVIDIA.
- - HOT start pre‑warm: first visible frame has real deltas (no startup flicker).
- - Robust to /proc and /sysfs churn: transient disappearances are handled and surfaced as warnings (see below).
+## Overview
 
-Build
-- Release: `make build`
-- Debug: `make debug`
-- Clean: `make clean` / `make distclean`
-- One-shot install: `./scripts/auto_install.sh` (to `/usr/local`)
+A standalone, offline‑friendly C++23 system monitor for Linux with comprehensive GPU support. No external dependencies required for the default build.
 
-Run
-- Text mode (default): `./build/montauk [--iterations N] [--sleep-ms MS]`
-- Self test: `./build/montauk --self-test-seconds 5`
-- System install path: `/usr/local/bin/montauk` (via CMake install)
+**Key Features:**
+- **Deep GPU Integration**: Per-process GPU utilization and memory tracking with intelligent attribution
+- **Multi-vendor Support**: NVIDIA (NVML + fallbacks), AMD (sysfs), Intel (fdinfo)
+- **Sophisticated Attribution**: Multiple fallback mechanisms for GPU metrics when vendor APIs are unavailable
+- **Thermal Monitoring**: Multi-sensor temperature tracking (edge, hotspot, memory) with vendor-specific thresholds
+- **Process Tracking**: Up to 256 processes with full command-line enrichment for accurate identification
+- **Atomic Snapshots**: Minimal CPU overhead with lock-free snapshot publication
+- **Zero Dependencies**: Builds with standard library only; NVML auto-detected and optional
+- **Churn Resilient**: Handles /proc and /sysfs transients gracefully during heavy system activity
 
-UI Controls
-- q: quit
-- c/m/p/n: sort by CPU/MEM/PID/NAME
-- +/-: increase/decrease refresh rate (FPS)
-- ↑/↓/PgUp/PgDn: scroll process table
-- g/t/d/N: toggle GPU/Thermal/Disk/Net panels
-- i: toggle process CPU scale (total machine‑share vs per‑core)
-- h: show/hide help line
+## Build
 
-CPU Scale (Processes)
-- Default = total/machine‑share. A process at 100% means it uses the entire machine’s CPU capacity; multiple processes sum sensibly toward the big CPU bar.
-- Toggle to per‑core scale with `i` (IRIX‑style: one full core = 100%, two cores = 200%, etc.).
+```bash
+make build    # Release build
+make debug    # Debug build with symbols
+make clean    # Clean build artifacts
+```
 
-Quick Tips
-- Prefer machine‑share CPU (default). Press `i` to flip to per‑core if you want IRIX‑style numbers.
-- Want a gentler or stricter top‑proc alert? Set `MONTAUK_TOPPROC_ALERT_FRAMES` (e.g., `2` for sensitive, `12` for sustained).
-- Avoid alt screen if you plan to copy/paste terminal contents: `MONTAUK_ALT_SCREEN=0 ./build/montauk`.
-- Concurrency‑safe rendering is enabled by default by copying each snapshot at frame start. Disable for maximal throughput: `MONTAUK_COPY_FRONT=0`.
+## Installation
 
-Proc/Sysfs Churn Warnings
-- Context: On busy systems (e.g., during package installs or large builds), entries under `/proc` and `/sys` can appear and disappear between directory iteration and file reads. Previously, this could surface as a C++ iostream failure. Montauk now treats these as transient “churn” and reports them without crashing.
-- Process row signal (per‑row): when a process churns during sampling, its row is colored as a WARNING and the numeric columns are replaced by the message below. It sorts like `0%` CPU and clears on the next clean sample.
-  - Display: `PROC CHURN DETECTED` (replaces `CPU%  GPU%  GMEM  MEM`)
-- System sticky summary: a short‑lived line appears under the TEMP entries counting churn events in the recent window across both `/proc` and `/sys`.
-  - Display: `PROC CHURN  N events [LAST 2s]` (WARNING/red). Auto‑hides when churn subsides.
-- Example (rows shown inline with a churned process):
-  
-      PID     USER      CPU%  GPU%  GMEM   MEM    NAME
-      103923  mod       38.4    0     0M   350M   cc1plus -quiet -I ext/…
-      103981  mod       PROC CHURN DETECTED       cc1plus -quiet -I ext/…    (warning/red line)
-      103931  mod       21.4    0     0M   441M   cc1plus -quiet -I ext/…
-  
-  SYSTEM (excerpt)
-  
-      CPU TEMP                                             57°C
-      GPU TEMP                                             E:57°C
-  
-      PROC CHURN                              3 events [LAST 2s]         (warning/red)
+**Local build:**
+```bash
+./build/montauk
+```
 
- 
+**System install (Arch Linux):**
+```bash
+makepkg -si   # From PKGBUILD in pkg/ directory
+```
 
-NVIDIA (NVML)
-- NVML is auto-detected; no flags required. If found, per-process GPU% and additional device metrics are enabled. If not found, the build continues without NVML.
-  - Runtime: ensure `nvidia-utils` is installed (provides `libnvidia-ml.so`).
-  - Headers: ensure `cuda` is installed (provides `/opt/cuda/include/nvml.h`).
+**CMake install:**
+```bash
+cmake --install build --prefix /usr/local
+```
 
-Policy: No Secondary Dependencies
-- The default build uses only the C++ standard library and Linux kernel interfaces (/proc, /sys). NVML (for NVIDIA GPU metrics) is attempted automatically and gracefully disabled when not found.
+## UI Controls
 
-Packaging (Arch Linux)
-- A PKGBUILD is provided. NVML is auto‑detected. The UI is text‑only.
-- Build deps: `cmake`, `gcc`, `make`. Optional runtime: `nvidia-utils`.
-- Tests are disabled by default for packaging: `MONTAUK_BUILD_TESTS=OFF`.
-- Install: `makepkg -si`
-- Result: `/usr/bin/montauk` (text UI).
+**Navigation:**
+- `q` — Quit
+- `↑/↓` — Scroll process list
+- `PgUp/PgDn` — Page up/down
 
-Notes
-- Paths with spaces: PKGBUILD mitigates Arch’s `-ffile-prefix-map` issue; if you still encounter it, use the helper: `./scripts/system_install.sh --aur`.
-- Direct CMake install: `./scripts/system_install.sh --cmake` (installs to `/usr/local`).
+**Sorting:**
+- `c` — Sort by CPU%
+- `m` — Sort by Memory
+- `g` — Sort by GPU%
+- `v` — Sort by GPU Memory (GMEM)
+- `p` — Sort by PID
+- `n` — Sort by Name
 
-Tests
-- Enable in CMake: `cmake -S . -B build -DMONTAUK_BUILD_TESTS=ON && cmake --build build -j && ./build/montauk_tests`
-- The `Makefile` target `make test` assumes tests are built already.
-- Packaging disables tests by default.
+**Display Toggles:**
+- `G` — Toggle GPU panel
+- `t` — Toggle Thermal panel
+- `d` — Toggle Disk panel
+- `N` — Toggle Network panel
+- `h` — Toggle help line
 
-Uninstall (CMake installs)
-- `sudo xargs rm -v < build/install_manifest.txt`
+**Modes:**
+- `i` — Toggle CPU scale (machine-share ↔ per-core)
+- `u` — Toggle GPU scale (reserved for future modes)
+- `+/-` — Increase/decrease refresh rate
 
-Configuration (Environment Variables)
-- UI/Terminal
-  - `MONTAUK_ALT_SCREEN`=1|0: use alt screen (default 1).
-  - `MONTAUK_TITLE_IDX` (palette index) or `MONTAUK_TITLE_HEX` (e.g., `#FFB000`) for title color.
-- Colors/Thresholds
-  - `MONTAUK_ACCENT_IDX`, `MONTAUK_CAUTION_IDX`, `MONTAUK_WARNING_IDX`: palette indices for accent/caution/warning.
-  - `MONTAUK_PROC_CAUTION_PCT`, `MONTAUK_PROC_WARNING_PCT`: process CPU% color thresholds.
-- Alerts
-  - `MONTAUK_TOPPROC_ALERT_FRAMES`: consecutive frames above warning required to show the top‑proc banner (default 5). Respects current CPU scale.
-- Processes
-  - `MONTAUK_PROC_CPU_SCALE`=total|core: default process CPU scale (total = machine‑share, core = per‑core).
-  - `MONTAUK_COPY_FRONT`=1|0: copy the live snapshot at frame start to avoid read/write overlap (default 1).
- - Thermals
-   - Dynamic thresholds are discovered from vendor APIs where possible:
-     - NVIDIA (NVML): slowdown (warning) for GPU edge; memory max for VRAM temp when available.
-     - AMD/Intel (sysfs/hwmon): per‑sensor crit/max/emergency files (edge/junction/hotspot/mem) used as warning.
-   - Fallback and overrides:
-     - Shared delta: `MONTAUK_TEMP_CAUTION_DELTA_C` (default 10°C) when only a warning is known.
-     - CPU: `MONTAUK_CPU_TEMP_WARNING_C` (default 90), `MONTAUK_CPU_TEMP_CAUTION_C` (default warning − delta).
-     - GPU generic: `MONTAUK_GPU_TEMP_WARNING_C` (default 90), `MONTAUK_GPU_TEMP_CAUTION_C` (default warning − delta).
-     - GPU per‑sensor warning/ca ution overrides:
-       - Edge: `MONTAUK_GPU_TEMP_EDGE_WARNING_C`, `MONTAUK_GPU_TEMP_EDGE_CAUTION_C`
-       - Hotspot: `MONTAUK_GPU_TEMP_HOT_WARNING_C`, `MONTAUK_GPU_TEMP_HOT_CAUTION_C`
-       - Memory: `MONTAUK_GPU_TEMP_MEM_WARNING_C`, `MONTAUK_GPU_TEMP_MEM_CAUTION_C`
-   - Show resolved warning thresholds inline on THERMALS lines: `MONTAUK_SHOW_TEMP_WARN`=1|0 (default 0).
-- Testing/Dev
-  - `MONTAUK_PROC_ROOT` remaps absolute `/proc` paths.
-  - `MONTAUK_SYS_ROOT` remaps absolute `/sys` paths.
+## CPU Scale Modes
 
- 
+**Machine-share (default):**
+- 100% = entire machine's CPU capacity
+- Processes sum naturally toward total system usage
+- Best for understanding system-wide resource consumption
+
+**Per-core (IRIX-style):**
+- 100% = one full CPU core
+- Multi-threaded apps can exceed 100%
+- Toggle with `i` key
+
+## GPU Support
+
+### NVIDIA
+
+**Full NVML Integration** (recommended):
+- Per-process GPU utilization (SM, encoder, decoder)
+- Per-process VRAM usage
+- Device-level metrics (util, power, temps, clocks)
+- MIG mode detection
+- PRIME render offload support
+
+**Requirements:**
+- Runtime: `nvidia-utils` (provides `libnvidia-ml.so`)
+- Build: `cuda` package (provides `/opt/cuda/include/nvml.h`)
+
+**Fallback Chain** (when NVML unavailable or insufficient):
+1. `nvidia-smi pmon` — Per-process utilization sampling
+2. `nvidia-smi --query-compute-apps` — Compute context memory
+3. `/proc/driver/nvidia/gpus/*/fb_memory_usage` — Device VRAM
+4. Heuristic distribution based on device-level metrics
+
+### AMD/Intel
+
+- `/sys/class/drm` — VRAM usage, temperatures, power
+- `/proc/*/fdinfo` — Per-process GPU utilization (DRM)
+- `gpu_busy_percent` — Device utilization
+
+### Browser GPU Process Detection
+
+Montauk automatically identifies browser GPU processes (Chrome, Chromium, Helium, etc.) by:
+- Scanning for `--type=gpu-process` in command lines
+- Enriching up to 256 processes with full cmdline data
+- Applying intelligent fallback attribution when processes use minimal CPU
+- Using `/proc/*/fd` device file inspection for decode-only workloads
+
+### GPU Environment Variables
+
+```bash
+MONTAUK_NVIDIA_PMON=0     # Disable nvidia-smi pmon fallback (default: 1)
+MONTAUK_NVIDIA_MEM=0      # Disable nvidia-smi memory query (default: 1)
+MONTAUK_LOG_NVML=1        # Enable NVML debug logging
+```
+
+## Display Details
+
+**Process Columns:**
+- **PID** — Process ID
+- **USER** — Owner username
+- **CPU%** — CPU utilization (0-100% in machine-share, 0-N×100% in per-core)
+- **GPU%** — GPU SM/compute utilization
+- **GMEM** — GPU memory (VRAM) usage
+- **MEM** — System RAM usage
+- **COMMAND** — Process name or full command line
+
+**Minimum Display Values:**
+- CPU% and GPU% show **1%** for any non-zero activity (0.01%-0.49%)
+- This makes low-activity processes clearly visible instead of appearing idle
+
+## Churn Handling
+
+During heavy system activity (builds, installs), `/proc` and `/sys` entries can vanish between directory scans and file reads. Montauk handles this gracefully:
+
+**Per-process signal:**
+- Churned processes show `PROC CHURN DETECTED` in place of metrics
+- Colored as WARNING
+- Clears on next successful sample
+
+**System summary:**
+- Sticky banner: `PROC CHURN  N events [LAST 2s]`
+- Auto-hides when churn subsides
+
+Example:
+```
+  PID     USER      CPU%  GPU%  GMEM   MEM    COMMAND
+103923  mod       38.4    0     0M   350M   cc1plus -quiet...
+103981  mod       PROC CHURN DETECTED       cc1plus -quiet...  ⚠
+103931  mod       21.4    0     0M   441M   cc1plus -quiet...
+```
+
+## Configuration (Environment Variables)
+
+### UI/Terminal
+```bash
+MONTAUK_ALT_SCREEN=0           # Disable alt screen (default: 1)
+MONTAUK_TITLE_HEX=#FFB000      # Title color (hex)
+MONTAUK_TITLE_IDX=214          # Title color (palette index)
+```
+
+### Colors/Thresholds
+```bash
+MONTAUK_ACCENT_IDX=39          # Accent color
+MONTAUK_CAUTION_IDX=220        # Caution color  
+MONTAUK_WARNING_IDX=196        # Warning color
+MONTAUK_PROC_CAUTION_PCT=50    # Process caution threshold
+MONTAUK_PROC_WARNING_PCT=80    # Process warning threshold
+```
+
+### Alerts
+```bash
+MONTAUK_TOPPROC_ALERT_FRAMES=5  # Frames before top-proc alert (default: 5)
+                                 # Lower = more sensitive, higher = sustained load only
+```
+
+### Process Display
+```bash
+MONTAUK_PROC_CPU_SCALE=total   # Default CPU scale: total|core
+MONTAUK_COPY_FRONT=1           # Snapshot copy for concurrency safety (default: 1)
+```
+
+### Thermal Thresholds
+
+**Dynamic (preferred):**
+- NVIDIA: Auto-discovered via NVML (slowdown, mem_max)
+- AMD/Intel: Auto-discovered via sysfs hwmon (crit, max, emergency)
+
+**Overrides:**
+```bash
+# Generic CPU/GPU
+MONTAUK_CPU_TEMP_WARNING_C=90
+MONTAUK_CPU_TEMP_CAUTION_C=80
+MONTAUK_GPU_TEMP_WARNING_C=90
+MONTAUK_GPU_TEMP_CAUTION_C=80
+MONTAUK_TEMP_CAUTION_DELTA_C=10   # Default offset when only warning known
+
+# GPU per-sensor overrides
+MONTAUK_GPU_TEMP_EDGE_WARNING_C=85
+MONTAUK_GPU_TEMP_EDGE_CAUTION_C=75
+MONTAUK_GPU_TEMP_HOT_WARNING_C=95
+MONTAUK_GPU_TEMP_HOT_CAUTION_C=85
+MONTAUK_GPU_TEMP_MEM_WARNING_C=95
+MONTAUK_GPU_TEMP_MEM_CAUTION_C=85
+
+# Display thresholds inline
+MONTAUK_SHOW_TEMP_WARN=1          # Show warning temps on thermal lines
+```
+
+### Testing/Development
+```bash
+MONTAUK_PROC_ROOT=/custom/proc    # Remap /proc paths
+MONTAUK_SYS_ROOT=/custom/sys      # Remap /sys paths
+```
+
+## Testing
+
+**Build with tests:**
+```bash
+cmake -S . -B build -DMONTAUK_BUILD_TESTS=ON
+cmake --build build -j
+./build/montauk_tests
+```
+
+**Self-test mode:**
+```bash
+./build/montauk --self-test-seconds 5
+```
+
+**Note:** Tests are disabled by default in packaging builds.
+
+## Uninstall (CMake)
+
+```bash
+sudo xargs rm -v < build/install_manifest.txt
+```
+
+## Packaging (Arch Linux)
+
+- PKGBUILD provided in `pkg/` directory
+- NVML auto-detected at build time
+- Build deps: `cmake`, `gcc`, `make`
+- Optional runtime: `nvidia-utils`
+- Tests disabled by default: `MONTAUK_BUILD_TESTS=OFF`
+
+**Install:**
+```bash
+makepkg -si
+```
+
+**Result:** `/usr/bin/montauk`
+
+## Architecture
+
+**Collectors:**
+- `CpuCollector` — Per-core usage, freq, model
+- `MemoryCollector` — RAM, swap, buffers, cache
+- `ProcessCollector` — Top 256 processes by CPU, full cmdline enrichment
+- `GpuCollector` — VRAM, temps, power (multi-vendor)
+- `GpuAttributor` — Per-process GPU util/mem with fallback chains
+- `NetCollector` — Interface stats, throughput
+- `DiskCollector` — I/O stats, throughput  
+- `ThermalCollector` — Multi-sensor temps with vendor thresholds
+
+**Snapshot Pipeline:**
+1. Collectors sample independently
+2. Atomic snapshot publication
+3. GpuAttributor enriches with per-process GPU data
+4. UI renders from stable snapshot (optional copy for concurrency)
+
+**GPU Attribution Logic:**
+1. NVML per-process queries (preferred)
+2. `nvidia-smi pmon` parsing
+3. `/proc/*/fdinfo` DRM stats
+4. Heuristic distribution from device metrics
+5. Residual VRAM attribution to clear GPU processes
+6. `/proc/*/fd` device inspection for decode workloads
+
+## Performance
+
+- **Overhead:** <1% CPU on typical systems
+- **Sampling:** 500ms default (adjustable with +/-)
+- **Process limit:** 256 (top by CPU usage)
+- **Cmdline enrichment:** All 256 processes (full command lines for accurate GPU detection)
+- **Memory:** ~10MB resident
+
+## Policy
+
+**No external dependencies** for default build. NVML is auto-detected and gracefully disabled when unavailable. No vendoring, no FetchContent, no ExternalProject.
+
+## License
+
+MIT License. See LICENSE file in repository.

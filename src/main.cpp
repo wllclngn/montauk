@@ -16,7 +16,6 @@
 #include <algorithm>
 #include <numeric>
 #include <climits>
-#include <exception>
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <cstring>
@@ -447,6 +446,8 @@ static bool env_flag(const char* name, bool defv=true){ const char* v=getenv_com
 // Format a colored CPU% field with fixed visible width (digits right-aligned to 4 cols).
 static std::string fmt_cpu_field(double cpu_pct, bool colorize=true) {
   int val = (int)(cpu_pct + 0.5);
+  // Show minimum 1% if there's any CPU activity
+  if (val == 0 && cpu_pct > 0.0) val = 1;
   std::string digits = std::to_string(val);
   int pad = 4 - (int)digits.size(); if (pad < 0) pad = 0;
   const auto& ui = ui_config();
@@ -546,7 +547,7 @@ static std::vector<std::string> render_left_column(const montauk::model::Snapsho
     if (p.has_gpu_util) { int gdig = (int)std::to_string((int)(p.gpu_util_pct+0.5)).size(); if (gdig > gpu_digit_w_meas) gpu_digit_w_meas = gdig; }
     std::string hm = [&]{ uint64_t kib=p.rss_kb; if (kib >= (1024ull*1024ull)) { double g=kib/(1024.0*1024.0); return std::to_string((int)(g+0.5))+"G"; } if (kib>=1024ull){ double m=kib/1024.0; return std::to_string((int)(m+0.5))+"M";} return std::to_string((int)kib)+"K"; }();
     if ((int)hm.size() > mem_w_meas) mem_w_meas = (int)hm.size();
-    std::string hg = [&]{ uint64_t kib = p.has_gpu_mem ? p.gpu_mem_kb : 0ull; if (kib >= (1024ull*1024ull)) { double g=kib/(1024.0*1024.0); return std::to_string((int)(g+0.5))+"G"; } if (kib>=1024ull){ double m=kib/1024.0; return std::to_string((int)(m+0.5))+"M";} return std::to_string((int)kib)+"K"; }();
+    std::string hg = [&]{ if (!p.has_gpu_mem) return std::string("-"); uint64_t kib=p.gpu_mem_kb; if (kib >= (1024ull*1024ull)) { double g=kib/(1024.0*1024.0); return std::to_string((int)(g+0.5))+"G"; } if (kib>=1024ull){ double m=kib/1024.0; return std::to_string((int)(m+0.5))+"M";} return std::to_string((int)kib)+"K"; }();
     if ((int)hg.size() > gmem_w_meas) gmem_w_meas = (int)hg.size();
   }
   // Clamp
@@ -606,6 +607,8 @@ static std::vector<std::string> render_left_column(const montauk::model::Snapsho
       
       int g = has ? (int)(v + 0.5) : 0; // show 0 when missing
       if (g < 0) g = 0;
+      // Show minimum 1% if there's any GPU activity
+      if (has && g == 0 && v > 0.0) g = 1;
       std::string digits = std::to_string(g);
       int pad = gpud - (int)digits.size(); if (pad < 0) pad = 0;
       return std::string(pad, ' ') + digits + "%  ";
@@ -616,7 +619,7 @@ static std::vector<std::string> render_left_column(const montauk::model::Snapsho
       return std::string(pad, ' ') + m + "  ";
     };
     auto fmt_gmem = [&](bool has, uint64_t gkib){
-      std::string m = human_kib(has ? gkib : 0ull);
+      std::string m = has ? human_kib(gkib) : std::string("-");
       int pad = gmemw - (int)m.size(); if (pad < 0) pad = 0;
       return std::string(pad, ' ') + m + "  ";
     };
