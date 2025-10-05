@@ -27,6 +27,7 @@ static bool read_nvidia_proc(montauk::model::GpuVram& out) {
   bool any = false;
   uint64_t total_mb_sum = 0, used_mb_sum = 0;
   std::vector<std::string> model_names;
+  try {
   for (auto& entry : fs::directory_iterator(root)) {
     if (!entry.is_directory()) continue;
     auto p = entry.path() / "fb_memory_usage";
@@ -77,6 +78,10 @@ static bool read_nvidia_proc(montauk::model::GpuVram& out) {
       model_names.push_back(friendly);
     }
   }
+  } catch (...) {
+    // Directory iteration or file I/O can throw when files disappear (churn)
+    montauk::util::note_churn(montauk::util::ChurnKind::Proc);
+  }
   if (any) {
     out.total_mb = total_mb_sum;
     out.used_mb  = used_mb_sum;
@@ -101,6 +106,7 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out) {
   bool any = false;
   uint64_t total_mb_sum = 0, used_mb_sum = 0;
   std::vector<std::string> names;
+  try {
   for (auto& entry : fs::directory_iterator(drm)) {
     auto name = entry.path().filename().string();
     if (!entry.is_directory()) continue;
@@ -155,13 +161,22 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out) {
                 std::ifstream lf(hm.path() / (base + "_label"));
                 if (lf) std::getline(lf, label);
               } catch(...) {}
-              long mdeg=0; std::ifstream inf(file.path()); if (!inf) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); continue; } inf >> mdeg; if (!inf) continue;
+              long mdeg=0; 
+              try {
+                std::ifstream inf(file.path()); 
+                if (!inf) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); continue; } 
+                inf >> mdeg; 
+                if (!inf) continue;
+              } catch(...) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); continue; }
               double c = mdeg / 1000.0;
               // Try thresholds for this sensor (crit/max/emergency)
               double warn_tc = 0.0; bool have_warn = false;
               for (const char* suff : {"_crit", "_max", "_emergency"}) {
-                long thr = 0; std::ifstream tf(hm.path() / (base + suff));
-                if (tf) { tf >> thr; if (tf) { warn_tc = thr / 1000.0; have_warn = true; break; } }
+                long thr = 0; 
+                try {
+                  std::ifstream tf(hm.path() / (base + suff));
+                  if (tf) { tf >> thr; if (tf) { warn_tc = thr / 1000.0; have_warn = true; break; } }
+                } catch(...) { /* file disappeared; try next */ }
               }
               std::string lab = label; for (auto& ch : lab) ch = std::tolower((unsigned char)ch);
               if (lab.find("edge")!=std::string::npos || (label.empty() && !rec.has_temp_edge)) { rec.has_temp_edge = true; rec.temp_edge_c = c; }
@@ -180,6 +195,10 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out) {
     } catch(...) { /* ignore */ }
     out.devices.push_back(std::move(rec));
     names.push_back(friendly);
+  }
+  } catch (...) {
+    // Directory iteration or file I/O can throw when files disappear (churn)
+    montauk::util::note_churn(montauk::util::ChurnKind::Sysfs);
   }
   if (any) {
     out.total_mb = total_mb_sum;
@@ -321,10 +340,12 @@ bool GpuCollector::sample(montauk::model::GpuVram& out) const {
         if (!entry.is_directory()) continue;
         if (!entry.path().filename().string().starts_with("card")) continue;
         auto busy = entry.path() / "device" / "gpu_busy_percent";
-        std::ifstream f(busy);
-        if (!f) continue;
-        double v = 0.0; f >> v; if (!f) continue;
-        sum_busy += v; cnt++;
+        try {
+          std::ifstream f(busy);
+          if (!f) continue;
+          double v = 0.0; f >> v; if (!f) continue;
+          sum_busy += v; cnt++;
+        } catch(...) { /* file disappeared; skip */ }
       }
       if (cnt > 0) { out.has_util = true; out.gpu_util_pct = sum_busy / cnt; }
     }
@@ -343,10 +364,12 @@ bool GpuCollector::sample(montauk::model::GpuVram& out) const {
           auto pavg = hm.path() / "power1_average";
           auto pinp = hm.path() / "power1_input";
           for (auto p : {pavg, pinp}) {
-            std::ifstream f(p);
-            if (!f) continue;
-            long long microw = 0; f >> microw; if (!f) continue;
-            if (microw > 0) { total_w += static_cast<double>(microw) / 1'000'000.0; have = true; break; }
+            try {
+              std::ifstream f(p);
+              if (!f) continue;
+              long long microw = 0; f >> microw; if (!f) continue;
+              if (microw > 0) { total_w += static_cast<double>(microw) / 1'000'000.0; have = true; break; }
+            } catch(...) { /* file disappeared; try next */ }
           }
         }
       }

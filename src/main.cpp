@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <numeric>
 #include <climits>
+#include <exception>
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <cstring>

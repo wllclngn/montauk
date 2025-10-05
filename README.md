@@ -62,7 +62,7 @@ Proc/Sysfs Churn Warnings
   
       CPU TEMP                                             57°C
       GPU TEMP                                             E:57°C
-      
+  
       PROC CHURN                              3 events [LAST 2s]         (warning/red)
 
  
@@ -122,3 +122,5 @@ Configuration (Environment Variables)
 - Testing/Dev
   - `MONTAUK_PROC_ROOT` remaps absolute `/proc` paths.
   - `MONTAUK_SYS_ROOT` remaps absolute `/sys` paths.
+
+ 
