@@ -9,7 +9,7 @@
 #include "collectors/CpuCollector.hpp"
 #include "collectors/NetCollector.hpp"
 #include "collectors/DiskCollector.hpp"
-#include "collectors/ProcessCollector.hpp"
+#include "collectors/IProcessCollector.hpp"
 #include "app/Alerts.hpp"
 #include "collectors/ThermalCollector.hpp"
 
@@ -43,8 +43,8 @@ private:
   montauk::collectors::GpuCollector gpu_{};
   montauk::collectors::NetCollector net_{};
   montauk::collectors::DiskCollector disk_{};
-  // Use a smaller min interval to allow fast warm-up pre-samples; normal cadence is still 1s
-  montauk::collectors::ProcessCollector proc_{100};
+  // Process collector (event-driven if available, else traditional)
+  std::unique_ptr<montauk::collectors::IProcessCollector> proc_;
   montauk::app::AlertEngine alerts_{};
   montauk::collectors::ThermalCollector thermal_{};
   // Rolling cache of per-process GPU util with a short TTL to avoid flicker between NVML sample windows (test helper)

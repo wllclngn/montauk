@@ -464,6 +464,30 @@ src/collectors/NetCollector.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/NetCollector.cpp.s
 .PHONY : src/collectors/NetCollector.cpp.s
 
+src/collectors/NetlinkProcessCollector.o: src/collectors/NetlinkProcessCollector.cpp.o
+.PHONY : src/collectors/NetlinkProcessCollector.o
+
+# target to build an object file
+src/collectors/NetlinkProcessCollector.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/NetlinkProcessCollector.cpp.o
+.PHONY : src/collectors/NetlinkProcessCollector.cpp.o
+
+src/collectors/NetlinkProcessCollector.i: src/collectors/NetlinkProcessCollector.cpp.i
+.PHONY : src/collectors/NetlinkProcessCollector.i
+
+# target to preprocess a source file
+src/collectors/NetlinkProcessCollector.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/NetlinkProcessCollector.cpp.i
+.PHONY : src/collectors/NetlinkProcessCollector.cpp.i
+
+src/collectors/NetlinkProcessCollector.s: src/collectors/NetlinkProcessCollector.cpp.s
+.PHONY : src/collectors/NetlinkProcessCollector.s
+
+# target to generate assembly for a file
+src/collectors/NetlinkProcessCollector.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/NetlinkProcessCollector.cpp.s
+.PHONY : src/collectors/NetlinkProcessCollector.cpp.s
+
 src/collectors/ProcessCollector.o: src/collectors/ProcessCollector.cpp.o
 .PHONY : src/collectors/ProcessCollector.o
 
@@ -704,6 +728,9 @@ help:
 	@echo "... src/collectors/NetCollector.o"
 	@echo "... src/collectors/NetCollector.i"
 	@echo "... src/collectors/NetCollector.s"
+	@echo "... src/collectors/NetlinkProcessCollector.o"
+	@echo "... src/collectors/NetlinkProcessCollector.i"
+	@echo "... src/collectors/NetlinkProcessCollector.s"
 	@echo "... src/collectors/ProcessCollector.o"
 	@echo "... src/collectors/ProcessCollector.i"
 	@echo "... src/collectors/ProcessCollector.s"

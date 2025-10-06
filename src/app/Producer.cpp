@@ -1,17 +1,53 @@
 #include "app/Producer.hpp"
 #include <unistd.h>
 #include <cstdio>
+#include <cstring>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "app/GpuAttributor.hpp"
 #include "util/Churn.hpp"
+#include "collectors/ProcessCollector.hpp"
+#include "collectors/NetlinkProcessCollector.hpp"
 
 using namespace std::chrono;
 
 namespace montauk::app {
 
-Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {}
+Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
+  // Choose process collector: try netlink first, then fallback to traditional
+  const char* force = std::getenv("MONTAUK_COLLECTOR");
+  auto make_traditional = [](){
+    // Default to ~100ms min interval to allow quick warm-up; steady cadence remains ~1s
+    return std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::ProcessCollector(100));
+  };
+
+#ifdef __linux__
+  if (force && std::strcmp(force, "traditional") == 0) {
+    proc_ = make_traditional();
+  } else {
+    // Try netlink unless forced traditional
+    auto netlink = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::NetlinkProcessCollector(256));
+    if (force && std::strcmp(force, "netlink") == 0) {
+      if (!netlink->init()) {
+        std::fprintf(stderr, "Netlink collector unavailable (need CAP_NET_ADMIN?). Falling back to traditional.\n");
+        proc_ = make_traditional();
+      } else {
+        proc_ = std::move(netlink);
+      }
+    } else {
+      if (netlink->init()) {
+        proc_ = std::move(netlink);
+      } else {
+        proc_ = make_traditional();
+      }
+    }
+  }
+#else
+  (void)force;
+  proc_ = make_traditional();
+#endif
+}
 
 void Producer::start() {
   if (thread_.joinable()) return;
@@ -66,7 +102,7 @@ void Producer::run(std::stop_token st) {
     gpu_.sample(s.vram);
     net_.sample(s.net);
     disk_.sample(s.disk);
-    proc_.sample(s.procs);
+    if (proc_) proc_->sample(s.procs);
     thermal_.sample(s.thermal);
 
     // Time budget for warm-up (~180ms max)
@@ -80,7 +116,7 @@ void Producer::run(std::stop_token st) {
       auto nap = milliseconds(std::min<int>(tick_ms, static_cast<int>(rem.count())));
       if (nap.count() > 0) std::this_thread::sleep_for(nap);
       cpu_.sample(s.cpu);
-      proc_.sample(s.procs);
+      if (proc_) proc_->sample(s.procs);
     }
 
     // Net + Disk: short spaced reads for non-zero bps/util
@@ -117,7 +153,7 @@ void Producer::run(std::stop_token st) {
     if (now >= next_gpu) { gpu_.sample(s.vram); next_gpu = now + gpu_interval; ran = true; }
     if (now >= next_net) { net_.sample(s.net); next_net = now + net_interval; ran = true; }
     if (now >= next_disk){ disk_.sample(s.disk); next_disk = now + disk_interval; ran = true; }
-    if (now >= next_proc){ proc_.sample(s.procs); next_proc = now + proc_interval; ran = true; }
+    if (now >= next_proc){ if (proc_) proc_->sample(s.procs); next_proc = now + proc_interval; ran = true; }
     if (now >= next_therm){ thermal_.sample(s.thermal); next_therm = now + therm_interval; ran = true; }
     bool time_to_publish = false;
     if (now >= next_pub) { time_to_publish = true; next_pub = now + pub_interval; }

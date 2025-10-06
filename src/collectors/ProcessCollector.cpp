@@ -1,6 +1,7 @@
 #include "collectors/ProcessCollector.hpp"
 #include "util/Procfs.hpp"
 #include <filesystem>
+#include <algorithm>
 #include <sstream>
 #include <fstream>
 #include <unistd.h>
@@ -162,9 +163,13 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     out.processes.push_back(std::move(ps));
   }
   out.total_processes = out.processes.size();
-  // sort by cpu desc
+  // Efficient top-K selection (K = max_procs_): partition then sort top K
+  if (out.processes.size() > max_procs_) {
+    auto nth = out.processes.begin() + static_cast<std::ptrdiff_t>(max_procs_);
+    std::nth_element(out.processes.begin(), nth, out.processes.end(), [](const auto& a, const auto& b){ return a.cpu_pct > b.cpu_pct; });
+    out.processes.resize(max_procs_);
+  }
   std::sort(out.processes.begin(), out.processes.end(), [](const auto& a, const auto& b){ return a.cpu_pct > b.cpu_pct; });
-  if (out.processes.size() > max_procs_) out.processes.resize(max_procs_);
   // enrich top N (cmdline and user)
   size_t enrich_n = std::min<size_t>(out.processes.size(), 256);
   for (size_t i=0;i<enrich_n;i++) {

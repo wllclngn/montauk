@@ -39,6 +39,7 @@ add_library(montauk_core
     src/collectors/NetCollector.cpp
     src/collectors/DiskCollector.cpp
     src/collectors/ProcessCollector.cpp
+    src/collectors/NetlinkProcessCollector.cpp
     src/collectors/ThermalCollector.cpp
 )
 target_include_directories(montauk_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
