@@ -392,6 +392,30 @@ src/collectors/FdinfoProcessCollector.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/FdinfoProcessCollector.cpp.s
 .PHONY : src/collectors/FdinfoProcessCollector.cpp.s
 
+src/collectors/FsCollector.o: src/collectors/FsCollector.cpp.o
+.PHONY : src/collectors/FsCollector.o
+
+# target to build an object file
+src/collectors/FsCollector.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/FsCollector.cpp.o
+.PHONY : src/collectors/FsCollector.cpp.o
+
+src/collectors/FsCollector.i: src/collectors/FsCollector.cpp.i
+.PHONY : src/collectors/FsCollector.i
+
+# target to preprocess a source file
+src/collectors/FsCollector.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/FsCollector.cpp.i
+.PHONY : src/collectors/FsCollector.cpp.i
+
+src/collectors/FsCollector.s: src/collectors/FsCollector.cpp.s
+.PHONY : src/collectors/FsCollector.s
+
+# target to generate assembly for a file
+src/collectors/FsCollector.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/collectors/FsCollector.cpp.s
+.PHONY : src/collectors/FsCollector.cpp.s
+
 src/collectors/GpuCollector.o: src/collectors/GpuCollector.cpp.o
 .PHONY : src/collectors/GpuCollector.o
 
@@ -719,6 +743,9 @@ help:
 	@echo "... src/collectors/FdinfoProcessCollector.o"
 	@echo "... src/collectors/FdinfoProcessCollector.i"
 	@echo "... src/collectors/FdinfoProcessCollector.s"
+	@echo "... src/collectors/FsCollector.o"
+	@echo "... src/collectors/FsCollector.i"
+	@echo "... src/collectors/FsCollector.s"
 	@echo "... src/collectors/GpuCollector.o"
 	@echo "... src/collectors/GpuCollector.i"
 	@echo "... src/collectors/GpuCollector.s"

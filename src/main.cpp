@@ -798,30 +798,21 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
     int inner_min = std::max(1, remaining - 2);
     std::vector<std::string> sys; std::vector<int> sys_sev; // 0 none, 1 caution, 2 warning
     auto push = [&](const std::string& s, int sev=0){ sys.push_back(trunc_pad(s, iw)); sys_sev.push_back(sev); };
-    // CPU model header (show 6C/12T when available)
+    
+    // === CPU SECTION ===
     if (!s.cpu.model.empty()) {
-      std::ostringstream hdr;
-      hdr << "CPU: " << s.cpu.model;
-      int phys = s.cpu.physical_cores;
-      // Show only core count; omit threads to avoid redundancy with next line
-      if (phys > 0) {
-        hdr << " (" << phys << "C)";
-      }
-      push(hdr.str(), 0);
+      push(std::string("CPU: ") + s.cpu.model, 0);
     }
-    // CPU summary (right-aligned only)
     int ncpu = (int)std::max<size_t>(1, s.cpu.per_core_pct.size());
     double topc = 0.0; for (double v : s.cpu.per_core_pct) if (v > topc) topc = v;
     {
       std::ostringstream rt; rt << "THREADS: " << ncpu
                                 << " TOP: " << (int)(topc+0.5) << "%  AVG: " << (int)(s.cpu.usage_pct+0.5) << "%";
-      push(lr_align(iw, "", rt.str()), 0);
+      push(rt.str(), 0);
     }
-    // subtle spacing between sections
     push("", 0);
-    // DISK omitted here to avoid redundancy with DISK I/O box
-    // NET omitted here to avoid redundancy with NETWORK box
-    // GPU summary
+    
+    // === GPU SECTION ===
     if (!s.vram.name.empty()) push(std::string("GPU: ") + trunc_pad(s.vram.name, iw-5), 0);
     if (s.vram.total_mb > 0) {
       std::ostringstream rr; rr << std::fixed << std::setprecision(1) << s.vram.used_pct << "%  ["
@@ -833,33 +824,29 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
       if (s.vram.has_encdec) rr << "  E:" << (int)(s.vram.enc_util_pct+0.5) << "%  D:" << (int)(s.vram.dec_util_pct+0.5) << "%";
       push(lr_align(iw, "UTIL", rr.str()), 0);
     }
-    // NVML diagnostic line (always show when available)
     if (s.nvml.available) {
-      // Derive a simple per‑PID attribution status so users can tell at a glance
-      // whether per‑process GPU% comes from NVML samples or a fallback. No env flags.
       auto pid_status = [&](){
-        // When NVML returned per‑PID samples this cycle
         if (s.nvml.sampled_pids > 0) return std::string("nvml");
-        // If device shows activity and we detected running GPU PIDs, UI will
-        // attribute by normalized share heuristics – call this "share".
         int dev_util = (int)(s.vram.gpu_util_pct + 0.5);
         if (dev_util > 0 && s.nvml.running_pids > 0) return std::string("share");
-        // Otherwise we have no visibility
         return std::string("none");
       }();
       std::ostringstream rr; rr << (s.nvml.available? "OK" : "OFF")
-                                << " dev:" << s.nvml.devices
-                                << " run:" << s.nvml.running_pids
-                                << " samp:" << s.nvml.sampled_pids
-                                << " age:" << s.nvml.sample_age_ms << "ms"
-                                << " mig:" << (s.nvml.mig_enabled? "on":"off")
-                                << " pid:" << pid_status;
+                                << " DEV:" << s.nvml.devices
+                                << " RUN:" << s.nvml.running_pids
+                                << " SAMP:" << s.nvml.sampled_pids
+                                << " AGE:" << s.nvml.sample_age_ms << "ms"
+                                << " MIG:" << (s.nvml.mig_enabled? "on":"off")
+                                << " PID:" << pid_status;
       push(lr_align(iw, "NVML", rr.str()), 0);
     }
-    if (s.vram.has_power) { std::ostringstream rr; rr << (int)(s.vram.power_draw_w+0.5) << "W"; push(lr_align(iw, "POWER", rr.str()), 0); }
-    // subtle spacing between sections
+    if (s.vram.has_power) { 
+      std::ostringstream rr; rr << (int)(s.vram.power_draw_w+0.5) << "W"; 
+      push(lr_align(iw, "POWER", rr.str()), 0); 
+    }
     push("", 0);
-    // Memory (moved below GPU)
+    
+    // === MEMORY SECTION ===
     double mem_used_gb = s.mem.used_kb/1048576.0, mem_tot_gb = s.mem.total_kb/1048576.0;
     {
       std::ostringstream rr; rr << std::fixed << std::setprecision(1) << s.mem.used_pct << "%  ["
@@ -873,17 +860,32 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
                                  << std::setprecision(2) << swap_used_gb << "GB/" << swap_tot_gb << "GB]";
       push(lr_align(iw, "SWAP", rr.str()), 0);
     }
-    // subtle spacing before temps
     push("", 0);
-    // Process monitoring statistics
-    {
-      std::ostringstream rr; 
-      rr << "tracked:" << s.procs.processes.size() << "  total:" << s.procs.total_processes;
-      push(lr_align(iw, "PROCESSES", rr.str()), 0);
+    
+    // === DISK I/O / FILESYSTEMS SECTION ===
+    if (!s.fs.mounts.empty()) {
+      push("DISK I/O:", 0);
+      auto human_bytes = [](uint64_t b){
+        const double kb = 1024.0, mb = kb*1024.0, gb = mb*1024.0, tb = gb*1024.0;
+        std::ostringstream os; os.setf(std::ios::fixed); os<<std::setprecision(1);
+        if (b >= (uint64_t)tb) { os<< (b/tb) << "T"; }
+        else if (b >= (uint64_t)gb) { os<< (b/gb) << "G"; }
+        else if (b >= (uint64_t)mb) { os<< (b/mb) << "M"; }
+        else { os<< (int)(b/kb+0.5) << "K"; }
+        return os.str();
+      };
+      size_t lim = std::min<size_t>(s.fs.mounts.size(), 3);
+      for (size_t i=0;i<lim;i++) {
+        const auto& m = s.fs.mounts[i];
+        std::ostringstream right; right << (int)(m.used_pct+0.5) << "%  ["
+                                        << human_bytes(m.used_bytes) << "/" << human_bytes(m.total_bytes) << "]";
+        std::string left = m.device.empty() ? m.fstype : m.device;
+        push(lr_align(iw, left, right.str()), 0);
+      }
+      push("", 0);
     }
-    // subtle spacing before temps
-    push("", 0);
-    // Temps (respect thermal toggle) — CPU line and per-GPU device lines with severity
+    
+    // === TEMPERATURE SECTION ===
     if (show_thermal) {
       auto thr_from = [&](bool has_thr, double thr_c, const char* env_warn, const char* env_warn_fallback){
         int def_warn = getenv_int(env_warn_fallback, 90);
@@ -892,7 +894,7 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
                                  getenv_int("MONTAUK_GPU_TEMP_CAUTION_C", std::max(0, warn - getenv_int("MONTAUK_TEMP_CAUTION_DELTA_C", 10))));
         return std::pair<int,int>{caution,warn};
       };
-      // CPU line
+      // CPU temp
       if (s.thermal.has_temp) {
         int warn = s.thermal.has_warn ? (int)(s.thermal.warn_c + 0.5) : getenv_int("MONTAUK_CPU_TEMP_WARNING_C", 90);
         int caution = getenv_int("MONTAUK_CPU_TEMP_CAUTION_C", std::max(0, warn - getenv_int("MONTAUK_TEMP_CAUTION_DELTA_C", 10)));
@@ -901,7 +903,7 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
         std::ostringstream rr; rr << val << "°C";
         push(lr_align(iw, "CPU TEMP", rr.str()), sev);
       }
-      // Per-GPU lines
+      // GPU temps
       for (size_t i=0;i<s.vram.devices.size(); ++i) {
         const auto& d = s.vram.devices[i];
         if (!(d.has_temp_edge || d.has_temp_hotspot || d.has_temp_mem)) continue;
@@ -916,8 +918,21 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
           push(lr_align(iw, label, rr.str()), dev_sev);
         }
       }
+      push("", 0);
     }
-    // Add sticky churn summary below temps (warning) when recent events occurred
+    
+    // === COLLECTOR & PROCESS STATS ===
+    if (!s.collector_name.empty()) {
+      push(lr_align(iw, "COLLECTOR", s.collector_name), 0);
+    }
+    {
+      std::ostringstream rr; 
+      rr << "TRACKED:" << s.procs.processes.size() << "  TOTAL:" << s.procs.total_processes;
+      push(lr_align(iw, "PROCESSES", rr.str()), 0);
+    }
+    push("", 0);
+    
+    // Churn summary (if active)
     if (s.churn.recent_2s_events > 0) {
       std::ostringstream rr; rr << s.churn.recent_2s_events << " events [LAST 2s]";
       push(lr_align(iw, "PROC CHURN", rr.str()), 2);

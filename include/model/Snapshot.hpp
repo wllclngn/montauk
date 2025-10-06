@@ -7,6 +7,7 @@
 #include "model/Disk.hpp"
 #include "model/Process.hpp"
 #include "model/Thermal.hpp"
+#include "model/Fs.hpp"
 
 namespace montauk::model {
 
@@ -80,11 +81,14 @@ struct Snapshot {
   GpuVram  vram;
   NetSnapshot net;
   DiskSnapshot disk;
+  FsSnapshot fs;
   ProcessSnapshot procs;
   std::vector<AlertItem> alerts; // latest generated alerts with severity
   Thermal thermal;
   NvmlDiag nvml;
   struct ChurnDiag { int recent_2s_events{0}; int recent_2s_proc{0}; int recent_2s_sys{0}; } churn;
+  // Active process collector indicator (e.g., "Event-Driven Netlink" or "Traditional /proc Scanner")
+  std::string collector_name;
 };
 
 } // namespace montauk::model

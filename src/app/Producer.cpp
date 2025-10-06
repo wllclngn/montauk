@@ -76,6 +76,7 @@ void Producer::run(std::stop_token st) {
   auto next_gpu = steady_clock::now();
   auto next_net = steady_clock::now();
   auto next_disk = steady_clock::now();
+  auto next_fs = steady_clock::now();
   auto next_proc = steady_clock::now();
   auto next_therm = steady_clock::now();
   const auto cpu_interval = 500ms;
@@ -83,6 +84,7 @@ void Producer::run(std::stop_token st) {
   const auto gpu_interval = 1000ms;
   const auto net_interval = 1000ms;
   const auto disk_interval = 1000ms;
+  const auto fs_interval = 5000ms;
   const auto proc_interval = 1000ms;
   const auto therm_interval = 2000ms;
   // Publish cadence to smooth UI updates (stable rhythm independent of collector jitter)
@@ -97,11 +99,13 @@ void Producer::run(std::stop_token st) {
   {
     auto& s = buffers_.back();
     // Seed with an initial read for all
+    if (proc_) { s.collector_name = proc_->name(); }
     cpu_.sample(s.cpu);
     mem_.sample(s.mem);
     gpu_.sample(s.vram);
     net_.sample(s.net);
     disk_.sample(s.disk);
+    fs_.sample(s.fs);  // Sample filesystem once at startup (changes slowly)
     if (proc_) proc_->sample(s.procs);
     thermal_.sample(s.thermal);
 
@@ -133,6 +137,9 @@ void Producer::run(std::stop_token st) {
     mem_.sample(s.mem);
     thermal_.sample(s.thermal);
     gpu_.sample(s.vram);
+    
+    // Enrich GPU attribution once at startup for stable NVML display
+    if (gpu_attr_) gpu_attr_->enrich(s);
 
     // Generate alerts and publish once — first visible frame uses this snapshot
     {
@@ -153,6 +160,7 @@ void Producer::run(std::stop_token st) {
     if (now >= next_gpu) { gpu_.sample(s.vram); next_gpu = now + gpu_interval; ran = true; }
     if (now >= next_net) { net_.sample(s.net); next_net = now + net_interval; ran = true; }
     if (now >= next_disk){ disk_.sample(s.disk); next_disk = now + disk_interval; ran = true; }
+    if (now >= next_fs)  { fs_.sample(s.fs);     next_fs  = now + fs_interval; ran = true; }
     if (now >= next_proc){ if (proc_) proc_->sample(s.procs); next_proc = now + proc_interval; ran = true; }
     if (now >= next_therm){ thermal_.sample(s.thermal); next_therm = now + therm_interval; ran = true; }
     bool time_to_publish = false;
@@ -160,6 +168,7 @@ void Producer::run(std::stop_token st) {
     bool nvml_ran = false;
     if (now >= next_nvml) nvml_ran = true;
     if (ran || time_to_publish || nvml_ran) {
+      if (proc_) { s.collector_name = proc_->name(); }
       {
         auto a = alerts_.evaluate(s);
         s.alerts.clear();

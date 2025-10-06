@@ -38,6 +38,7 @@ add_library(montauk_core
     src/collectors/CpuCollector.cpp
     src/collectors/NetCollector.cpp
     src/collectors/DiskCollector.cpp
+    src/collectors/FsCollector.cpp
     src/collectors/ProcessCollector.cpp
     src/collectors/NetlinkProcessCollector.cpp
     src/collectors/ThermalCollector.cpp
@@ -90,6 +91,7 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_filters.cpp
     tests/test_alerts.cpp
     tests/test_thermal.cpp
+    tests/test_netlink_smoke.cpp
   )
   target_include_directories(montauk_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(montauk_tests PRIVATE montauk_core)

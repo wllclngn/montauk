@@ -9,6 +9,7 @@
 #include "collectors/CpuCollector.hpp"
 #include "collectors/NetCollector.hpp"
 #include "collectors/DiskCollector.hpp"
+#include "collectors/FsCollector.hpp"
 #include "collectors/IProcessCollector.hpp"
 #include "app/Alerts.hpp"
 #include "collectors/ThermalCollector.hpp"
@@ -43,6 +44,7 @@ private:
   montauk::collectors::GpuCollector gpu_{};
   montauk::collectors::NetCollector net_{};
   montauk::collectors::DiskCollector disk_{};
+  montauk::collectors::FsCollector fs_{};
   // Process collector (event-driven if available, else traditional)
   std::unique_ptr<montauk::collectors::IProcessCollector> proc_;
   montauk::app::AlertEngine alerts_{};
