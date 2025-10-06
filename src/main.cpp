@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <numeric>
 #include <climits>
+#include <cmath>
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <cstring>
@@ -443,19 +444,35 @@ public:
 
 static bool env_flag(const char* name, bool defv=true){ const char* v=getenv_compat(name); if(!v) return defv; if(v[0]=='0'||v[0]=='f'||v[0]=='F') return false; return true; }
 
-// Format a colored CPU% field with fixed visible width (digits right-aligned to 4 cols).
+// Format a colored CPU% field with fixed visible width (aligned to match 4-char "CPU%" header).
 static std::string fmt_cpu_field(double cpu_pct, bool colorize=true) {
-  int val = (int)(cpu_pct + 0.5);
-  // Show minimum 1% if there's any CPU activity
-  if (val == 0 && cpu_pct > 0.0) val = 1;
-  std::string digits = std::to_string(val);
-  int pad = 4 - (int)digits.size(); if (pad < 0) pad = 0;
+  std::string digits;
+  int display_val;
+  
+  // For values < 1%, show decimal precision (0.1%, 0.2%, etc.)
+  if (cpu_pct > 0.0 && cpu_pct < 1.0) {
+    double rounded = std::round(cpu_pct * 10.0) / 10.0;
+    if (rounded < 0.1) rounded = 0.1; // minimum 0.1%
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(1) << rounded;
+    digits = oss.str();
+    display_val = 0; // for color thresholding
+  } else {
+    display_val = (int)(cpu_pct + 0.5);
+    digits = std::to_string(display_val);
+  }
+  
+  // Build the value string with %
+  std::string value_str = digits + "%";
+  int pad = 4 - (int)value_str.size(); if (pad < 0) pad = 0;
+  
   const auto& ui = ui_config();
   const std::string* col = nullptr;
   if (colorize) {
-    if (val >= ui.warning_pct) col = &ui.warning;
-    else if (val >= ui.caution_pct) col = &ui.caution;
+    if (display_val >= ui.warning_pct) col = &ui.warning;
+    else if (display_val >= ui.caution_pct) col = &ui.caution;
   }
+  
   std::string out;
   out.reserve(4 + 3 + 16);
   out.append(pad, ' ');
@@ -605,11 +622,22 @@ static std::vector<std::string> render_left_column(const montauk::model::Snapsho
       // - Utilization (press 'u'): same as Capacity (kept for future distinction)
       // Note: smUtil from NVML is already the correct "% of GPU power used"
       
-      int g = has ? (int)(v + 0.5) : 0; // show 0 when missing
-      if (g < 0) g = 0;
-      // Show minimum 1% if there's any GPU activity
-      if (has && g == 0 && v > 0.0) g = 1;
-      std::string digits = std::to_string(g);
+      std::string digits;
+      if (!has) {
+        digits = "0";
+      } else if (v > 0.0 && v < 1.0) {
+        // For values < 1%, show decimal precision (0.1%, 0.2%, etc.)
+        double rounded = std::round(v * 10.0) / 10.0;
+        if (rounded < 0.1) rounded = 0.1; // minimum 0.1%
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(1) << rounded;
+        digits = oss.str();
+      } else {
+        int g = (int)(v + 0.5);
+        if (g < 0) g = 0;
+        digits = std::to_string(g);
+      }
+      
       int pad = gpud - (int)digits.size(); if (pad < 0) pad = 0;
       return std::string(pad, ' ') + digits + "%  ";
     };
@@ -619,12 +647,12 @@ static std::vector<std::string> render_left_column(const montauk::model::Snapsho
       return std::string(pad, ' ') + m + "  ";
     };
     auto fmt_gmem = [&](bool has, uint64_t gkib){
-      std::string m = has ? human_kib(gkib) : std::string("-");
+      std::string m = has ? human_kib(gkib) : std::string("0K");
       int pad = gmemw - (int)m.size(); if (pad < 0) pad = 0;
       return std::string(pad, ' ') + m + "  ";
     };
     // Compute command width dynamically
-    const int fields_w = 7 + (gpud+3) + (gmemw+2) + (memw+2);
+    const int fields_w = 6 + (gpud+3) + (gmemw+2) + (memw+2);
     const int cmd_w = iw - (pidw+2 + userw+2 + fields_w);
     os << std::setw(pidw) << p.pid << "  "
        << trunc_pad(user,userw) << "  "
@@ -844,6 +872,14 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
       std::ostringstream rr; rr << std::fixed << std::setprecision(1) << swap_pct << "%  ["
                                  << std::setprecision(2) << swap_used_gb << "GB/" << swap_tot_gb << "GB]";
       push(lr_align(iw, "SWAP", rr.str()), 0);
+    }
+    // subtle spacing before temps
+    push("", 0);
+    // Process monitoring statistics
+    {
+      std::ostringstream rr; 
+      rr << "tracked:" << s.procs.processes.size() << "  total:" << s.procs.total_processes;
+      push(lr_align(iw, "PROCESSES", rr.str()), 0);
     }
     // subtle spacing before temps
     push("", 0);
