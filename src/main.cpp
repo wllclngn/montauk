@@ -1059,9 +1059,10 @@ int main(int argc, char** argv) {
     }
   }
 
-  montauk::app::SnapshotBuffers buffers;
-  montauk::app::Producer producer(buffers);
-  producer.start();
+  try {
+    montauk::app::SnapshotBuffers buffers;
+    montauk::app::Producer producer(buffers);
+    producer.start();
 
   // No JSON stream output path
 
@@ -1180,6 +1181,22 @@ int main(int argc, char** argv) {
   }
   producer.stop();
   return 0;
+
+  } catch (const std::exception& e) {
+    // Safety net: catch any unhandled exceptions to prevent crashes
+    restore_terminal_minimal();
+    std::cerr << "\nFATAL ERROR: Unhandled exception: " << e.what() << "\n";
+    std::cerr << "This is likely caused by a transient filesystem issue (proc/sys files disappearing).\n";
+    std::cerr << "Please report this error if it persists.\n";
+    return 1;
+  } catch (...) {
+    // Catch-all for non-standard exceptions
+    restore_terminal_minimal();
+    std::cerr << "\nFATAL ERROR: Unknown exception caught.\n";
+    std::cerr << "This is likely caused by a transient filesystem issue (proc/sys files disappearing).\n";
+    std::cerr << "Please report this error if it persists.\n";
+    return 1;
+  }
 
   return 0;
 }
