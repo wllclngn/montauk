@@ -64,8 +64,8 @@ struct UIState {
   enum class CPUScale { Total, Core } cpu_scale{CPUScale::Total};
   enum class GPUScale { Capacity, Utilization } gpu_scale{GPUScale::Capacity};
   // Dynamic process table column widths (sticky with gentle shrink)
-  int col_pid_w{5};       // 4..6
-  int col_user_w{8};      // 6..12
+  int col_pid_w{5};       // 5..6
+  int col_user_w{4};      // 4..12
   int col_gpu_digit_w{4}; // 3..4 (digits area only; then we append "%  ")
   int col_mem_w{5};       // 4..6 (human_kib width)
   // Optional GMEM column toggle and width
@@ -247,6 +247,16 @@ static std::string trunc_pad(const std::string& s, int w) {
   if (cols < w) return s + std::string(w - cols, ' ');
   if (w <= 1) return take_cols(s, w);
   return take_cols(s, w - 1) + (use_unicode()? "…" : ".");
+}
+
+// Right-align within width by padding on the left; if longer, truncate from left.
+static std::string rpad_trunc(const std::string& s, int w) {
+  if (w <= 0) return "";
+  int cols = display_cols(s);
+  if (cols == w) return s;
+  if (cols < w) return std::string(w - cols, ' ') + s;
+  // If too long, take rightmost characters to preserve the end
+  return take_cols(s, w);
 }
 
 // Left/Right align within interior width (iw): left label on the left, numeric cluster on the right.
@@ -555,9 +565,9 @@ static std::vector<std::string> render_left_column(const montauk::model::Snapsho
   size_t start = std::min<size_t>((size_t)g_ui.scroll, avail);
   size_t desired_rows = std::max(1, g_ui.last_proc_page_rows);
   size_t lim = std::min<size_t>(avail, start + (size_t)desired_rows);
-  // Measure visible rows for dynamic widths (two-pass for visible slice)
-  int pid_w_meas = 4, user_w_meas = 6, gpu_digit_w_meas = 3, mem_w_meas = 4, gmem_w_meas = 4;
-  for (size_t ii=start; ii<lim; ++ii) {
+  // Measure ALL processes for all column widths (so columns don't shift when scrolling)
+  int pid_w_meas = 5, user_w_meas = 4, gpu_digit_w_meas = 3, mem_w_meas = 4, gmem_w_meas = 4;
+  for (size_t ii=0; ii<avail; ++ii) {
     const auto& p = s.procs.processes[order[ii]];
     int pid_digits = (int)std::to_string(p.pid).size(); if (pid_digits > pid_w_meas) pid_w_meas = pid_digits;
     int user_vis = display_cols(p.user_name); if (user_vis > user_w_meas) user_w_meas = user_vis;
@@ -568,28 +578,28 @@ static std::vector<std::string> render_left_column(const montauk::model::Snapsho
     if ((int)hg.size() > gmem_w_meas) gmem_w_meas = (int)hg.size();
   }
   // Clamp
-  pid_w_meas = std::min(6, std::max(4, pid_w_meas));
-  user_w_meas = std::min(12, std::max(6, user_w_meas));
+  pid_w_meas = std::min(6, std::max(5, pid_w_meas));
+  user_w_meas = std::min(7, std::max(4, user_w_meas));
   gpu_digit_w_meas = std::min(4, std::max(3, gpu_digit_w_meas));
   mem_w_meas = std::min(6, std::max(4, mem_w_meas));
   gmem_w_meas = std::min(6, std::max(4, gmem_w_meas));
-  // Sticky with gentle shrink
-  auto shrink_one = [](int current, int target){ return (target >= current)? target : std::max(target, current-1); };
-  g_ui.col_pid_w = shrink_one(g_ui.col_pid_w, pid_w_meas);
-  g_ui.col_user_w = shrink_one(g_ui.col_user_w, user_w_meas);
-  g_ui.col_gpu_digit_w = shrink_one(g_ui.col_gpu_digit_w, gpu_digit_w_meas);
-  g_ui.col_mem_w = shrink_one(g_ui.col_mem_w, mem_w_meas);
-  g_ui.col_gmem_w = shrink_one(g_ui.col_gmem_w, gmem_w_meas);
+  // All columns: expand immediately when needed, but never shrink (sticky)
+  g_ui.col_pid_w = std::max(g_ui.col_pid_w, pid_w_meas);
+  g_ui.col_user_w = std::max(g_ui.col_user_w, user_w_meas);
+  g_ui.col_gpu_digit_w = std::max(g_ui.col_gpu_digit_w, gpu_digit_w_meas);
+  g_ui.col_mem_w = std::max(g_ui.col_mem_w, mem_w_meas);
+  g_ui.col_gmem_w = std::max(g_ui.col_gmem_w, gmem_w_meas);
   int pidw = g_ui.col_pid_w, userw = g_ui.col_user_w, gpud = g_ui.col_gpu_digit_w, memw = g_ui.col_mem_w, gmemw = g_ui.col_gmem_w;
   // Header (align numeric headers to the right of their columns)
+  // Match the actual column widths from the data formatting
   {
     std::ostringstream h;
     h << std::setw(pidw) << "PID" << "  "
-      << trunc_pad("USER", userw) << "  "
-      << std::setw(4) << "CPU%" << "  "
-      << std::setw(gpud) << "GPU%" << "  "
-      << std::setw(gmemw) << "GMEM" << "  "
-      << std::setw(memw) << "MEM" << "  "
+      << rpad_trunc("USER", userw) << "  "
+      << std::setw(4) << "CPU%" << "  "           // CPU% field: 4 chars + 2 separator
+      << std::setw(gpud + 1) << "GPU%" << "  "   // GPU% field: gpud digits + "%" + 2 separator
+      << std::setw(gmemw) << "GMEM" << "  "      // GMEM field: gmemw chars + 2 separator
+      << std::setw(memw) << "MEM" << "  "        // MEM field: memw chars + 2 separator
       << "COMMAND";
     proc_lines.push_back(trunc_pad(h.str(), iw));
   }
@@ -655,12 +665,12 @@ static std::vector<std::string> render_left_column(const montauk::model::Snapsho
     const int fields_w = 6 + (gpud+3) + (gmemw+2) + (memw+2);
     const int cmd_w = iw - (pidw+2 + userw+2 + fields_w);
     os << std::setw(pidw) << p.pid << "  "
-       << trunc_pad(user,userw) << "  "
-       << [&]{
-            if (!p.churn) {
-              std::ostringstream tmp; tmp
-                << fmt_cpu_field(cpu_disp, /*colorize=*/sev==0)
-                << fmt_gpu(p)
+       << rpad_trunc(user,userw) << "  "
+        << [&]{
+             if (!p.churn) {
+               std::ostringstream tmp; tmp
+                 << fmt_cpu_field(cpu_disp, /*colorize=*/sev==0)
+                 << fmt_gpu(p)
                 << fmt_gmem(p.has_gpu_mem, p.gpu_mem_kb)
                 << fmt_mem(p.rss_kb);
               return tmp.str();
