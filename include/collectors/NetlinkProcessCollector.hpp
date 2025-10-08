@@ -14,7 +14,7 @@ namespace montauk::collectors {
 // Falls back gracefully if unavailable.
 class NetlinkProcessCollector : public IProcessCollector {
 public:
-  explicit NetlinkProcessCollector(size_t max_procs = 256);
+  explicit NetlinkProcessCollector(size_t max_procs = 256, size_t enrich_top_n = 256);
   ~NetlinkProcessCollector() override;
 
   bool init() override;        // returns false if socket cannot be created/bound
@@ -43,6 +43,7 @@ private:
 
   // Limits
   size_t max_procs_{};
+  size_t enrich_top_n_{};
   size_t sample_budget_{2048}; // max processes to sample per tick
   size_t rr_cursor_{0};        // round-robin cursor over active set
   std::vector<int32_t> last_top_; // last published top-K pids
@@ -56,7 +57,7 @@ private:
   // Sampling helpers (shared with traditional logic but replicated here to avoid refactor)
   static uint64_t read_cpu_total();
   static unsigned read_cpu_count();
-  static bool parse_stat_line(const std::string& content, int32_t& ppid, uint64_t& utime, uint64_t& stime, int64_t& rss_pages, std::string& comm);
+  static bool parse_stat_line(const std::string& content, char& state, int32_t& ppid, uint64_t& utime, uint64_t& stime, int64_t& rss_pages, std::string& comm);
   static std::string read_cmdline(int32_t pid);
   static std::string user_from_status(int32_t pid);
 };

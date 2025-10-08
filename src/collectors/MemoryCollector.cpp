@@ -45,6 +45,8 @@ bool MemoryCollector::sample(montauk::model::Memory& out) const {
     uint64_t sum = mem_free + buffers + cached;
     out.used_kb = (mem_total > sum) ? (mem_total - sum) : 0;
   }
+  out.cached_kb = cached;
+  out.buffers_kb = buffers;
   out.swap_total_kb = swap_total;
   out.swap_used_kb  = (swap_total > swap_free) ? (swap_total - swap_free) : 0;
   out.used_pct = (out.total_kb > 0) ? (100.0 * static_cast<double>(out.used_kb) / static_cast<double>(out.total_kb)) : 0.0;
@@ -52,4 +54,3 @@ bool MemoryCollector::sample(montauk::model::Memory& out) const {
 }
 
 } // namespace montauk::collectors
-

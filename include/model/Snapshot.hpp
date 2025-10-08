@@ -14,6 +14,8 @@ namespace montauk::model {
 struct Memory {
   uint64_t total_kb{};
   uint64_t used_kb{};
+  uint64_t cached_kb{};
+  uint64_t buffers_kb{};
   uint64_t swap_total_kb{};
   uint64_t swap_used_kb{};
   double   used_pct{}; // 0..100
@@ -49,6 +51,11 @@ struct GpuVram {
   // Optional instantaneous power draw in Watts if available via sysfs/hwmon
   bool    has_power{false};
   double  power_draw_w{0.0};
+  // Optional power limit (Watts) and P-state (NVML)
+  bool    has_power_limit{false};
+  double  power_limit_w{0.0};
+  bool    has_pstate{false};
+  int     pstate{-1}; // 0..15 for P0..P15
   // Optional GPU utilization (aggregated across devices when multiple are present)
   bool    has_util{false};        // true if core utilization is available
   double  gpu_util_pct{0.0};      // SM/3D engine utilization percent (0..100)

@@ -87,9 +87,19 @@ MONTAUK_COLLECTOR=traditional ./montauk  # Force traditional polling
 - `h` — Toggle help line
 
 **Modes:**
+- `s` — Toggle System focus (right side shows only SYSTEM box)
 - `i` — Toggle CPU scale (machine-share ↔ per-core)
 - `u` — Toggle GPU scale (reserved for future modes)
 - `+/-` — Increase/decrease refresh rate
+
+## Configuration
+
+- `MONTAUK_MAX_PROCS` — Maximum number of processes tracked and rendered in the Process Monitor (default: `256`). Set to `1024` for deeper lists. Valid range: `32–4096`.
+- `MONTAUK_ENRICH_TOP_N` — Number of top processes to enrich with full command line and user name (default: `min(256, MONTAUK_MAX_PROCS)`). Keep at `256` for low overhead; increase to `512+` for more detail.
+
+Notes:
+- Tracking more processes has minimal CPU overhead; enrichment (reading `/proc/[pid]/cmdline` and `/proc/[pid]/status`) is the primary cost. Consider keeping `ENRICH_TOP_N` below `MAX_PROCS` for best responsiveness.
+- Both variables accept either `MONTAUK_…` or `montauk_…` prefixes.
 
 ## CPU Scale Modes
 

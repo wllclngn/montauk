@@ -19,8 +19,8 @@
 
 namespace montauk::collectors {
 
-NetlinkProcessCollector::NetlinkProcessCollector(size_t max_procs)
-  : max_procs_(max_procs) {}
+NetlinkProcessCollector::NetlinkProcessCollector(size_t max_procs, size_t enrich_top_n)
+  : max_procs_(max_procs), enrich_top_n_(enrich_top_n) {}
 
 NetlinkProcessCollector::~NetlinkProcessCollector() { shutdown(); }
 
@@ -104,7 +104,7 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   uint64_t cpu_total = read_cpu_total();
   if (ncpu_ == 0) ncpu_ = read_cpu_count();
 
-  out.processes.clear(); out.total_processes = 0; out.running_processes = 0;
+  out.processes.clear(); out.total_processes = 0; out.running_processes = 0; out.state_running=0; out.state_sleeping=0; out.state_zombie=0;
 
   // Build candidate set within sampling budget: last top-K, hot events, then RR fill
   std::vector<int32_t> candidates; candidates.reserve(std::min(sample_budget_, all_pids.size()));
@@ -150,8 +150,8 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
       continue;
     }
 
-    int32_t ppid = 0; uint64_t ut=0, st=0; int64_t rssp=0; std::string comm;
-    if (!parse_stat_line(*content_opt, ppid, ut, st, rssp, comm)) {
+    int32_t ppid = 0; uint64_t ut=0, st=0; int64_t rssp=0; std::string comm; char stch='?';
+    if (!parse_stat_line(*content_opt, stch, ppid, ut, st, rssp, comm)) {
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
       continue;
     }
@@ -171,9 +171,13 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     ps.rss_kb = (rssp > 0 ? static_cast<uint64_t>(rssp) * (getpagesize()/1024) : 0);
     ps.cpu_pct = cpu_pct; ps.cmd = comm;
     out.processes.push_back(std::move(ps));
+    if (stch == 'R') out.state_running++;
+    else if (stch == 'S' || stch == 'D') out.state_sleeping++;
+    else if (stch == 'Z') out.state_zombie++;
   }
 
   out.total_processes = out.processes.size();
+  out.running_processes = out.state_running;
   // Efficient top-K selection (K = max_procs_)
   if (out.processes.size() > max_procs_) {
     auto nth = out.processes.begin() + static_cast<std::ptrdiff_t>(max_procs_);
@@ -183,7 +187,9 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   std::sort(out.processes.begin(), out.processes.end(), [](const auto& a, const auto& b){ return a.cpu_pct > b.cpu_pct; });
 
   // Enrich top N: command and user
-  size_t enrich_n = std::min<size_t>(out.processes.size(), 256);
+  out.tracked_count = out.processes.size();
+  size_t enrich_n = std::min<size_t>(out.processes.size(), enrich_top_n_);
+  out.enriched_count = enrich_n;
   for (size_t i = 0; i < enrich_n; ++i) {
     auto& ps = out.processes[i];
     
@@ -346,12 +352,12 @@ unsigned NetlinkProcessCollector::read_cpu_count() {
   return count;
 }
 
-bool NetlinkProcessCollector::parse_stat_line(const std::string& content, int32_t& ppid, uint64_t& utime, uint64_t& stime, int64_t& rss_pages, std::string& comm) {
+bool NetlinkProcessCollector::parse_stat_line(const std::string& content, char& state, int32_t& ppid, uint64_t& utime, uint64_t& stime, int64_t& rss_pages, std::string& comm) {
   auto lp = content.find('('); auto rp = content.rfind(')'); if (lp==std::string::npos||rp==std::string::npos||rp<lp) return false;
   comm = content.substr(lp+1, rp-lp-1);
   std::string rest = content.substr(rp+2);
   std::istringstream ss(rest);
-  char state; ss >> state; // state
+  ss >> state; // state
   ss >> ppid; // ppid
   for (int i=0;i<9;i++){ std::string tmp; ss >> tmp; }
   ss >> utime; ss >> stime;

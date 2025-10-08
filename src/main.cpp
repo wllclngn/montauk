@@ -25,6 +25,12 @@
 #include <poll.h>
 #include <fcntl.h>
 #include <cctype>
+#include <ctime>
+#include <clocale>
+#ifdef __linux__
+#include <langinfo.h>
+#endif
+#include "util/Procfs.hpp"
 
 // Forward declaration used before definition below
 static inline void best_effort_write(int fd, const char* buf, size_t len);
@@ -42,6 +48,7 @@ static void restore_terminal_minimal() {
   best_effort_write(STDOUT_FILENO, show_cur, std::char_traits<char>::length(show_cur));
   best_effort_write(STDOUT_FILENO, reset, std::char_traits<char>::length(reset));
 }
+
 static void on_sigint(int){ restore_terminal_minimal(); g_stop.store(true); }
 
 static void on_atexit_restore(){
@@ -63,6 +70,7 @@ struct UIState {
   int last_proc_page_rows{14};
   enum class CPUScale { Total, Core } cpu_scale{CPUScale::Total};
   enum class GPUScale { Capacity, Utilization } gpu_scale{GPUScale::Capacity};
+  bool system_focus{false};
   // Dynamic process table column widths (sticky with gentle shrink)
   int col_pid_w{5};       // 5..6
   int col_user_w{4};      // 4..12
@@ -73,6 +81,17 @@ struct UIState {
   int  col_gmem_w{5};     // 4..6 (human_kib width)
 };
 static UIState g_ui{};
+
+static void reset_ui_defaults() {
+  g_ui.sort = SortMode::CPU;
+  g_ui.scroll = 0;
+  g_ui.system_focus = false;
+  g_ui.show_disk = true;
+  g_ui.show_net = true;
+  g_ui.show_gpumon = true;
+  g_ui.cpu_scale = UIState::CPUScale::Total;
+  g_ui.gpu_scale = UIState::GPUScale::Capacity;
+}
 
 // Runtime-only terminal styling that inherits the terminal palette.
 // Uses only standard SGR indices (no 24-bit RGB, no flags, no external deps).
@@ -269,6 +288,85 @@ static std::string lr_align(int iw, const std::string& left, const std::string& 
   int lvis = display_cols(l);
   int space = iw - lvis - rvis; if (space < 0) space = 0;
   return l + std::string(space, ' ') + right;
+}
+
+// -------- Locale-aware date/time helpers --------
+static bool prefer_12h_clock_from_locale() {
+#ifdef __linux__
+  // Initialize locale for time formatting (once per run)
+  static bool inited = false; if (!inited) { std::setlocale(LC_TIME, ""); inited = true; }
+#ifdef T_FMT
+  const char* tfmt = nl_langinfo(T_FMT);
+  if (tfmt && *tfmt) {
+    std::string f = tfmt;
+    if (f.find("%I") != std::string::npos || f.find("%p") != std::string::npos) return true;
+  }
+#endif
+#endif
+  return false; // default to 24h if uncertain
+}
+
+static std::string format_time_now(bool prefer12h) {
+  std::time_t t = std::time(nullptr);
+  std::tm lt{};
+#ifdef _GNU_SOURCE
+  localtime_r(&t, &lt);
+#else
+  lt = *std::localtime(&t);
+#endif
+  char buf[64];
+  const char* fmt = prefer12h ? "%I:%M:%S %p %Z" : "%H:%M:%S %Z";
+  if (std::strftime(buf, sizeof(buf), fmt, &lt) == 0) return std::string();
+  // Trim leading zero in 12-hour mode (e.g., 08 -> 8)
+  if (prefer12h && buf[0] == '0') {
+    return std::string(buf + 1);
+  }
+  return std::string(buf);
+}
+
+static std::string format_date_now_locale() {
+  std::time_t t = std::time(nullptr);
+  std::tm lt{};
+#ifdef _GNU_SOURCE
+  localtime_r(&t, &lt);
+#else
+  lt = *std::localtime(&t);
+#endif
+  char buf[64];
+  const char* fmt = "%x"; // locale date representation
+  if (std::strftime(buf, sizeof(buf), fmt, &lt) == 0) return std::string();
+  return std::string(buf);
+}
+
+// -------- System info helpers (best-effort, lightweight) --------
+static void read_loadavg(double& a1, double& a5, double& a15) {
+  a1=a5=a15=0.0; auto txt = montauk::util::read_file_string("/proc/loadavg"); if (!txt) return;
+  std::istringstream ss(*txt);
+  ss >> a1 >> a5 >> a15; // ignore trailing fields
+}
+
+struct CpuFreqInfo { bool has_cur{false}; bool has_max{false}; double cur_ghz{0.0}; double max_ghz{0.0}; std::string governor; std::string turbo; };
+static CpuFreqInfo read_cpu_freq_info() {
+  static auto last = std::chrono::steady_clock::time_point{}; static CpuFreqInfo cache; auto now = std::chrono::steady_clock::now();
+  if (last.time_since_epoch().count()!=0) {
+    auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count();
+    if (dt < 1000) return cache; // throttle to 1s
+  }
+  CpuFreqInfo out;
+  auto rd = [](const std::string& p)->std::string{ auto s = montauk::util::read_file_string(p); return s? *s : std::string(); };
+  auto to_num = [](const std::string& s)->long long{ try { return std::stoll(s); } catch(...) { return 0; } };
+  std::string cur = rd("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq");
+  if (!cur.empty()) { long long khz = to_num(cur); if (khz>0) { out.has_cur = true; out.cur_ghz = (double)khz / 1'000'000.0; } }
+  std::string mx = rd("/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq");
+  if (!mx.empty()) { long long khz = to_num(mx); if (khz>0) { out.has_max = true; out.max_ghz = (double)khz / 1'000'000.0; } }
+  out.governor = rd("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor");
+  if (!out.governor.empty()) { while(!out.governor.empty() && (out.governor.back()=='\n'||out.governor.back()=='\r')) out.governor.pop_back(); }
+  std::string nt = rd("/sys/devices/system/cpu/intel_pstate/no_turbo");
+  if (!nt.empty()) { long long v = to_num(nt); out.turbo = (v==0? "on":"off"); }
+  else {
+    std::string boost = rd("/sys/devices/system/cpu/cpufreq/boost"); if (!boost.empty()) { long long v = to_num(boost); out.turbo = (v!=0? "on":"off"); }
+  }
+  cache = out; last = now; return out;
 }
 
 static std::vector<std::string> make_box(const std::string& title, const std::vector<std::string>& lines, int width, int min_height = 0) {
@@ -718,6 +816,12 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
   };
   bool show_disk = g_ui.show_disk, show_net = g_ui.show_net,
        show_thermal = g_ui.show_thermal, show_gpumon = g_ui.show_gpumon;
+  // In SYSTEM focus, hide other panels; when leaving focus, restore default panels
+  if (g_ui.system_focus) {
+    show_disk=false; show_net=false; show_gpumon=false;
+  } else {
+    show_disk=true; show_net=true; show_gpumon=true;
+  }
   // Shared helper for one-line retro bars (label width 8, bar-only)
   auto bar_line8 = [&](const std::string& key, const char* label8, double pct_raw){
     const int label_w = 8;
@@ -728,8 +832,8 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
     return os.str();
   };
 
-  // PROCESSOR (CPU) — first on right
-  {
+  // PROCESSOR (CPU) — first on right (hidden in SYSTEM focus)
+  if (!g_ui.system_focus) {
     std::vector<std::string> lines;
     lines.push_back(bar_line8("cpu.total", "CPU", s.cpu.usage_pct));
     box_add("PROCESSOR", lines, 1);
@@ -765,8 +869,8 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
     if (!lines.empty() && lines.back().empty()) lines.pop_back();
     box_add("GPU", lines, (int)lines.size());
   }
-  // MEMORY (after GPU)
-  {
+  // MEMORY (after GPU) — hidden in SYSTEM focus
+  if (!g_ui.system_focus) {
     std::vector<std::string> lines;
     lines.push_back(bar_line8("mem.used", "MEMORY", s.mem.used_pct));
     box_add("MEMORY", lines, 1);
@@ -809,23 +913,65 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
     std::vector<std::string> sys; std::vector<int> sys_sev; // 0 none, 1 caution, 2 warning
     auto push = [&](const std::string& s, int sev=0){ sys.push_back(trunc_pad(s, iw)); sys_sev.push_back(sev); };
     
+    // Date/Time (show in SYSTEM focus only)
+    if (g_ui.system_focus) {
+      bool prefer12 = [](){
+        const char* v = getenv_compat("MONTAUK_TIME_FORMAT");
+        if (v && *v) { std::string s=v; for (auto& c: s) c=std::tolower((unsigned char)c); if (s.find("12")!=std::string::npos) return true; if (s.find("24")!=std::string::npos) return false; }
+        return prefer_12h_clock_from_locale();
+      }();
+      std::string dates = format_date_now_locale();
+      std::string times = format_time_now(prefer12);
+      push(lr_align(iw, "DATE", dates), 0);
+      push(lr_align(iw, "TIME", times), 0);
+      push("", 0);
+    }
+
     // === CPU SECTION ===
     if (!s.cpu.model.empty()) {
-      push(std::string("CPU: ") + s.cpu.model, 0);
+      push(lr_align(iw, "CPU", s.cpu.model), 0);
     }
     int ncpu = (int)std::max<size_t>(1, s.cpu.per_core_pct.size());
     double topc = 0.0; for (double v : s.cpu.per_core_pct) if (v > topc) topc = v;
     {
-      std::ostringstream rt; rt << "THREADS: " << ncpu
-                                << " TOP: " << (int)(topc+0.5) << "%  AVG: " << (int)(s.cpu.usage_pct+0.5) << "%";
-      push(rt.str(), 0);
+      std::ostringstream rr; rr << ncpu << " TOP: " << (int)(topc+0.5) << "%  AVG: " << (int)(s.cpu.usage_pct+0.5) << "%";
+      push(lr_align(iw, "THREADS", rr.str()), 0);
+    }
+    // CPU freq/governor/turbo
+    if (g_ui.system_focus) {
+      auto fi = read_cpu_freq_info();
+      std::ostringstream rr; rr.setf(std::ios::fixed);
+      if (fi.has_cur) { rr << std::setprecision(1) << fi.cur_ghz << "GHz  "; } else { rr << "N/A  "; }
+      rr << "MAX:";
+      if (fi.has_max) { rr << std::setprecision(1) << fi.max_ghz << "GHz "; } else { rr << "N/A "; }
+      if (!fi.governor.empty()) rr << "GOV:" << fi.governor << "  ";
+      if (!fi.turbo.empty()) rr << "TURBO:" << fi.turbo;
+      push(lr_align(iw, "FREQ", rr.str()), 0);
+    }
+    // CPU UTIL breakdown
+    if (g_ui.system_focus) {
+      std::ostringstream rr; rr.setf(std::ios::fixed);
+      auto pcti = [](double v){ int x = (int)(v+0.5); if (x<0) x=0; return x; };
+      rr << "USR:" << pcti(s.cpu.pct_user) << "%  "
+         << "SYS:" << pcti(s.cpu.pct_system) << "%  "
+         << "IOWAIT:" << pcti(s.cpu.pct_iowait) << "%  "
+         << "IRQ:" << pcti(s.cpu.pct_irq) << "%  "
+         << "STEAL:" << pcti(s.cpu.pct_steal) << "%";
+      push(lr_align(iw, "UTIL", rr.str()), 0);
+    }
+    // LOAD AVG
+    if (g_ui.system_focus) {
+      double a1=0,a5=0,a15=0; read_loadavg(a1,a5,a15);
+      std::ostringstream rr; rr.setf(std::ios::fixed);
+      rr << std::setprecision(2) << a1 << "  " << a5 << "  " << a15;
+      push(lr_align(iw, "LOAD AVG", rr.str()), 0);
     }
     push("", 0);
     
     // === GPU SECTION ===
-    if (!s.vram.name.empty()) push(std::string("GPU: ") + trunc_pad(s.vram.name, iw-5), 0);
+    if (!s.vram.name.empty()) push(lr_align(iw, "GPU", s.vram.name), 0);
     if (s.vram.total_mb > 0) {
-      std::ostringstream rr; rr << std::fixed << std::setprecision(1) << s.vram.used_pct << "%  ["
+      std::ostringstream rr; rr << std::fixed << std::setprecision(1) << s.vram.used_pct << "% ["
                                  << std::setprecision(2) << (s.vram.used_mb/1024.0) << "GB/" << (s.vram.total_mb/1024.0) << "GB]";
       push(lr_align(iw, "VRAM", rr.str()), 0);
     }
@@ -854,27 +1000,55 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
       std::ostringstream rr; rr << (int)(s.vram.power_draw_w+0.5) << "W"; 
       push(lr_align(iw, "POWER", rr.str()), 0); 
     }
+    if (g_ui.system_focus) {
+      if (s.vram.has_power_limit) {
+        std::ostringstream rr; rr << (int)(s.vram.power_limit_w+0.5) << "W";
+        push(lr_align(iw, "PLIMIT", rr.str()), 0);
+      }
+      if (s.vram.has_pstate) {
+        std::ostringstream rr; rr << "P" << std::max(0, s.vram.pstate);
+        push(lr_align(iw, "PSTATE", rr.str()), 0);
+      }
+      if (s.vram.has_power && s.vram.has_power_limit && s.vram.power_limit_w > 0.0) {
+        int utilp = (int)((s.vram.power_draw_w / s.vram.power_limit_w) * 100.0 + 0.5);
+        if (utilp < 0) utilp = 0;
+        if (utilp > 100) utilp = 100;
+        std::ostringstream rr; rr << utilp << "%";
+        push(lr_align(iw, "UTILPOWER", rr.str()), 0);
+      }
+    }
     push("", 0);
     
     // === MEMORY SECTION ===
     double mem_used_gb = s.mem.used_kb/1048576.0, mem_tot_gb = s.mem.total_kb/1048576.0;
     {
-      std::ostringstream rr; rr << std::fixed << std::setprecision(1) << s.mem.used_pct << "%  ["
+      std::ostringstream rr; rr << std::fixed << std::setprecision(1) << s.mem.used_pct << "% ["
                                  << std::setprecision(2) << mem_used_gb << "GB/" << mem_tot_gb << "GB]";
       push(lr_align(iw, "MEM", rr.str()), 0);
     }
-    if (s.mem.swap_total_kb > 0) {
-      double swap_used_gb = s.mem.swap_used_kb/1048576.0, swap_tot_gb = s.mem.swap_total_kb/1048576.0;
-      double swap_pct = (s.mem.swap_total_kb>0)? (100.0 * (double)s.mem.swap_used_kb / (double)s.mem.swap_total_kb) : 0.0;
-      std::ostringstream rr; rr << std::fixed << std::setprecision(1) << swap_pct << "%  ["
-                                 << std::setprecision(2) << swap_used_gb << "GB/" << swap_tot_gb << "GB]";
-      push(lr_align(iw, "SWAP", rr.str()), 0);
+    if (g_ui.system_focus) {
+      std::ostringstream rr1; rr1 << std::fixed << std::setprecision(1) << (s.mem.cached_kb/1048576.0) << "GB";
+      push(lr_align(iw, "CACHE", rr1.str()), 0);
+      std::ostringstream rr2; rr2 << std::fixed << std::setprecision(1) << (s.mem.buffers_kb/1048576.0) << "GB";
+      push(lr_align(iw, "BUFFERS", rr2.str()), 0);
     }
+    // No SWAP line in SYSTEM focus per design preference
     push("", 0);
     
     // === DISK I/O / FILESYSTEMS SECTION ===
     if (!s.fs.mounts.empty()) {
       push("DISK I/O:", 0);
+      // Aggregate read/write throughput (SYSTEM focus only)
+      if (g_ui.system_focus) {
+        {
+          std::ostringstream os; os << (int)(s.disk.total_read_bps/1000000) << "MB/s";
+          push(lr_align(iw, "READ", os.str()), 0);
+        }
+        {
+          std::ostringstream os; os << (int)(s.disk.total_write_bps/1000000) << "MB/s";
+          push(lr_align(iw, "WRITE", os.str()), 0);
+        }
+      }
       auto human_bytes = [](uint64_t b){
         const double kb = 1024.0, mb = kb*1024.0, gb = mb*1024.0, tb = gb*1024.0;
         std::ostringstream os; os.setf(std::ios::fixed); os<<std::setprecision(1);
@@ -887,10 +1061,29 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
       size_t lim = std::min<size_t>(s.fs.mounts.size(), 3);
       for (size_t i=0;i<lim;i++) {
         const auto& m = s.fs.mounts[i];
-        std::ostringstream right; right << (int)(m.used_pct+0.5) << "%  ["
+        std::ostringstream right; right << (int)(m.used_pct+0.5) << "% ["
                                         << human_bytes(m.used_bytes) << "/" << human_bytes(m.total_bytes) << "]";
         std::string left = m.device.empty() ? m.fstype : m.device;
         push(lr_align(iw, left, right.str()), 0);
+      }
+      push("", 0);
+    }
+    // === NETWORK SECTION (inside SYSTEM focus) ===
+    if (g_ui.system_focus) {
+      push("NETWORK", 0);
+      {
+        std::ostringstream rs; rs << "\xE2\x86\x93" << (int)(s.net.agg_rx_bps/1024) << "KB/s"; // ↓
+        push(lr_align(iw, "DOWNLOAD", rs.str()), 0);
+      }
+      {
+        std::ostringstream rs; rs << "\xE2\x86\x91" << (int)(s.net.agg_tx_bps/1024) << "KB/s"; // ↑
+        push(lr_align(iw, "UPLOAD", rs.str()), 0);
+      }
+      size_t lim = std::min<size_t>(s.net.interfaces.size(), 2);
+      for (size_t i=0;i<lim;i++) {
+        const auto& n = s.net.interfaces[i];
+        std::ostringstream rr; rr << "\xE2\x86\x93" << (int)(n.rx_bps/1024) << "KB/s  \xE2\x86\x91" << (int)(n.tx_bps/1024) << "KB/s";
+        push(lr_align(iw, n.name, rr.str()), 0);
       }
       push("", 0);
     }
@@ -928,6 +1121,23 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
           push(lr_align(iw, label, rr.str()), dev_sev);
         }
       }
+      // Margin temps summary line (SYSTEM focus): CPU Δ.., GPU Δ..
+      if (g_ui.system_focus) {
+        int cpu_delta = 0; int gpu_delta = 0; bool have_gpu=false;
+        if (s.thermal.has_temp) {
+          int warn = s.thermal.has_warn ? (int)(s.thermal.warn_c + 0.5) : getenv_int("MONTAUK_CPU_TEMP_WARNING_C", 90);
+          int val = (int)(s.thermal.cpu_max_c + 0.5); cpu_delta = std::max(0, warn - val);
+        }
+        for (const auto& d : s.vram.devices) {
+          int best = INT_MAX; bool any=false;
+          if (d.has_temp_edge) { int warn = d.has_thr_edge? (int)(d.thr_edge_c+0.5) : getenv_int("MONTAUK_GPU_TEMP_WARNING_C", 90); int v=(int)(d.temp_edge_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
+          if (d.has_temp_hotspot) { int warn = d.has_thr_hotspot? (int)(d.thr_hotspot_c+0.5) : getenv_int("MONTAUK_GPU_TEMP_WARNING_C", 90); int v=(int)(d.temp_hotspot_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
+          if (d.has_temp_mem) { int warn = d.has_thr_mem? (int)(d.thr_mem_c+0.5) : getenv_int("MONTAUK_GPU_TEMP_WARNING_C", 90); int v=(int)(d.temp_mem_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
+          if (any) { if (!have_gpu) { gpu_delta = best; have_gpu=true; } else { gpu_delta = std::min(gpu_delta, best); } }
+        }
+        std::ostringstream rr; rr << "CPU \xCE\x94" << cpu_delta << "°C"; if (have_gpu) rr << "  GPU \xCE\x94" << gpu_delta << "°C";
+        push(lr_align(iw, "MARGIN TEMPS", rr.str()), 0);
+      }
       push("", 0);
     }
     
@@ -937,8 +1147,13 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
     }
     {
       std::ostringstream rr; 
-      rr << "TRACKED:" << s.procs.processes.size() << "  TOTAL:" << s.procs.total_processes;
+      rr << "ENRICHED:" << s.procs.enriched_count << "  TOTAL:" << s.procs.total_processes;
       push(lr_align(iw, "PROCESSES", rr.str()), 0);
+    }
+    // States breakdown (System focus only)
+    if (g_ui.system_focus) {
+      std::ostringstream rr; rr << "R:" << s.procs.state_running << "  S:" << s.procs.state_sleeping << "  Z:" << s.procs.state_zombie;
+      push(lr_align(iw, "STATES", rr.str()), 0);
     }
     push("", 0);
     
@@ -974,8 +1189,11 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
 
 static void render_screen(const montauk::model::Snapshot& s, bool show_help_line, const std::string& help_text) {
   int cols = term_cols();
-  int gutter = 2;
+  // Reduce inter-column gutter from 2 → 1 to tighten layout
+  int gutter = 1;
   int left_w = (cols * 2) / 3; if (left_w < 40) left_w = cols - 20; if (left_w > cols-20) left_w = cols-20;
+  // Give the saved column from the gutter to the left panel when possible
+  if ((cols - (left_w + 1) - gutter) >= 20) left_w += 1;
   int right_w = cols - left_w - gutter; if (right_w < 20) right_w = 20;
   int rows = term_rows();
   // Optional 1 line for help; remaining rows for content
@@ -1107,11 +1325,20 @@ int main(int argc, char** argv) {
   bool use_alt = env_flag("MONTAUK_ALT_SCREEN", true) && tty_stdout();
   RawTermGuard raw{}; CursorGuard curs{}; AltScreenGuard alt{use_alt};
   std::atexit(&on_atexit_restore);
+  // Ensure a known-good default UI on startup (no sticky focus/panels)
+  // This prevents launching in System focus (same effect as pressing 's').
+  reset_ui_defaults();
   // Initialize CPU scale from env (default: total/machine share)
   g_ui.cpu_scale = getenv_cpu_scale("MONTAUK_PROC_CPU_SCALE", UIState::CPUScale::Total);
+  // Hard-enable the default right-side panels to match the documented default layout.
+  // Allow override via env: MONTAUK_SYSTEM_FOCUS=1 to start condensed.
+  g_ui.system_focus = env_flag("MONTAUK_SYSTEM_FOCUS", false);
+  g_ui.show_gpumon = true;
+  g_ui.show_disk = true;
+  g_ui.show_net = true;
   if (iterations <= 0) iterations = INT32_MAX; // effectively run until Ctrl+C
   bool show_help = false;
-  auto help_text = std::string("Keys: q quit  c/m/p/n sort  g GPU sort  v GMEM sort  G toggle GPU  +/- fps  arrows/PgUp/PgDn scroll  t Thermal  d Disk  N Net  i CPU scale  u GPU scale  h help");
+  auto help_text = std::string("Keys: q quit  c/m/p/n sort  g GPU sort  v GMEM sort  G toggle GPU  +/- fps  arrows/PgUp/PgDn scroll  t Thermal  d Disk  N Net  i CPU scale  u GPU scale  s System focus  R reset UI  h help");
   int alert_frames = 0; int alert_needed = getenv_int("MONTAUK_TOPPROC_ALERT_FRAMES", 5); // consecutive frames over threshold
   bool did_first_clear = false;
   for (int i = 0; (iterations <= 0 || i < iterations) && !g_stop.load(); ++i) {
@@ -1140,6 +1367,21 @@ int main(int argc, char** argv) {
           else if (c == 'g') { g_ui.sort = SortMode::GPU; }
           else if (c == 'i' || c == 'I') { g_ui.cpu_scale = (g_ui.cpu_scale==UIState::CPUScale::Total? UIState::CPUScale::Core : UIState::CPUScale::Total); }
           else if (c == 'u' || c == 'U') { g_ui.gpu_scale = (g_ui.gpu_scale==UIState::GPUScale::Capacity? UIState::GPUScale::Utilization : UIState::GPUScale::Capacity); }
+          else if (c == 's' || c == 'S') {
+            g_ui.system_focus = !g_ui.system_focus;
+            // Entering SYSTEM focus: hide other right-side panels
+            if (g_ui.system_focus) {
+              g_ui.show_gpumon = false;
+              g_ui.show_disk = false;
+              g_ui.show_net = false;
+            } else {
+              // Leaving SYSTEM focus: restore default panels
+              g_ui.show_gpumon = true;
+              g_ui.show_disk = true;
+              g_ui.show_net = true;
+            }
+          }
+          else if (c == 'R') { reset_ui_defaults(); }
           // 'o' previously toggled Ops UI; now Ops-style SYSTEM is default and 'o' is unused
           else if (c == 't' || c == 'T') { g_ui.show_thermal = !g_ui.show_thermal; }
           else if (c == 'd' || c == 'D') { g_ui.show_disk = !g_ui.show_disk; }
@@ -1173,7 +1415,13 @@ int main(int argc, char** argv) {
     if (env_flag("MONTAUK_COPY_FRONT", true)) { s_copy = *s_ptr; s_ptr = &s_copy; }
     const auto& s = *s_ptr;
     // Dynamic help with current sort/fps and optional alert banner
-    std::string sort_name = (g_ui.sort==SortMode::CPU?"cpu": g_ui.sort==SortMode::MEM?"mem": g_ui.sort==SortMode::PID?"pid":"name");
+    // Report the active sort mode accurately in the help line
+    std::string sort_name =
+      (g_ui.sort==SortMode::CPU?  "cpu" :
+      (g_ui.sort==SortMode::MEM?  "mem" :
+      (g_ui.sort==SortMode::PID?  "pid" :
+      (g_ui.sort==SortMode::NAME? "name" :
+      (g_ui.sort==SortMode::GPU?  "gpu" : "gmem")))));
     int fps = (sleep_ms>0)? (1000/std::max(1,sleep_ms)) : 0;
     // Alert: sustained top process CPU over warning threshold (respect current CPU scale)
     const auto& ui = ui_config();
@@ -1186,7 +1434,7 @@ int main(int argc, char** argv) {
       std::ostringstream os; os << ui.warning << "ALERT: top CPU " << (int)(top_cpu+0.5) << "%" << sgr_reset() << "  ";
       alert = os.str();
     }
-    std::string dyn_help = alert + "[sort:" + sort_name + "] [fps:" + std::to_string(fps) + "]  " + help_text;
+    std::string dyn_help = alert + "[sort:" + sort_name + "] [focus:" + (g_ui.system_focus? "system":"default") + "] [fps:" + std::to_string(fps) + "]  " + help_text;
     render_screen(s, show_help, dyn_help);
   }
   producer.stop();

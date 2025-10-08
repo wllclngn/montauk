@@ -31,6 +31,14 @@ struct ProcessSnapshot {
   std::vector<ProcSample> processes; // sorted by cpu desc
   size_t total_processes{};
   size_t running_processes{};
+  // Number of processes enriched with full cmdline+user this cycle
+  size_t enriched_count{};
+  // Number of processes tracked after top-K cap
+  size_t tracked_count{};
+  // State breakdown (counts)
+  size_t state_running{};   // 'R'
+  size_t state_sleeping{};  // 'S' + 'D'
+  size_t state_zombie{};    // 'Z'
 };
 
 } // namespace montauk::model

@@ -105,10 +105,19 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
   }
   // compute deltas
   double usage = 0.0; std::vector<double> per_pct(per.size(), 0.0);
+  double pct_user = 0.0, pct_sys = 0.0, pct_iow = 0.0, pct_irq = 0.0, pct_steal = 0.0;
   if (has_last_) {
     auto td = agg.total() - last_total_.total();
     auto wd = agg.work()  - last_total_.work();
     usage = (td > 0) ? (100.0 * static_cast<double>(wd) / static_cast<double>(td)) : 0.0;
+    if (td > 0) {
+      double inv = 100.0 / static_cast<double>(td);
+      pct_user  = inv * ( (double)(agg.user   - last_total_.user) + (double)(agg.nice - last_total_.nice) );
+      pct_sys   = inv * ( (double)(agg.system - last_total_.system) );
+      pct_iow   = inv * ( (double)(agg.iowait - last_total_.iowait) );
+      pct_irq   = inv * ( (double)(agg.irq    - last_total_.irq) + (double)(agg.softirq - last_total_.softirq) );
+      pct_steal = inv * ( (double)(agg.steal  - last_total_.steal) );
+    }
     for (size_t i = 0; i < per.size(); ++i) {
       if (i < last_per_.size()) {
         auto tdi = per[i].total() - last_per_[i].total();
@@ -119,6 +128,7 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
   }
   last_total_ = agg; last_per_ = per; has_last_ = true;
   out.total_times = agg; out.per_core = std::move(per); out.usage_pct = usage; out.per_core_pct = std::move(per_pct);
+  out.pct_user = pct_user; out.pct_system = pct_sys; out.pct_iowait = pct_iow; out.pct_irq = pct_irq; out.pct_steal = pct_steal;
   if (!cpu_model_.empty()) out.model = cpu_model_;
   // Set logical threads from per-core count
   out.logical_threads = (int)out.per_core_pct.size(); if (out.logical_threads<=0) out.logical_threads = 1;

@@ -12,8 +12,8 @@ namespace fs = std::filesystem;
 
 namespace montauk::collectors {
 
-ProcessCollector::ProcessCollector(unsigned min_interval_ms, size_t max_procs)
-  : min_interval_ms_(min_interval_ms), max_procs_(max_procs) {}
+ProcessCollector::ProcessCollector(unsigned min_interval_ms, size_t max_procs, size_t enrich_top_n)
+  : min_interval_ms_(min_interval_ms), max_procs_(max_procs), enrich_top_n_(enrich_top_n) {}
 
 static uint64_t read_cpu_total() {
   auto txt = montauk::util::read_file_string("/proc/stat"); if (!txt) return 0;
@@ -47,13 +47,13 @@ static unsigned read_cpu_count() {
   return count;
 }
 
-bool ProcessCollector::parse_stat_line(const std::string& content, int32_t& ppid, uint64_t& utime, uint64_t& stime, int64_t& rss_pages, std::string& comm) {
+bool ProcessCollector::parse_stat_line(const std::string& content, char& state, int32_t& ppid, uint64_t& utime, uint64_t& stime, int64_t& rss_pages, std::string& comm) {
   // find parentheses
   auto lp = content.find('('); auto rp = content.rfind(')'); if (lp==std::string::npos||rp==std::string::npos||rp<lp) return false;
   comm = content.substr(lp+1, rp-lp-1);
   std::string rest = content.substr(rp+2);
   std::istringstream ss(rest);
-  char state; ss >> state; // state
+  ss >> state; // state
   ss >> ppid; // ppid
   // skip fields up to utime (9 fields)
   for (int i=0;i<9;i++){ std::string tmp; ss >> tmp; }
@@ -127,7 +127,7 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
 
   uint64_t cpu_total = read_cpu_total();
   if (ncpu_ == 0) ncpu_ = read_cpu_count();
-  out.processes.clear(); out.total_processes=0; out.running_processes=0;
+  out.processes.clear(); out.total_processes=0; out.running_processes=0; out.state_running=0; out.state_sleeping=0; out.state_zombie=0;
   for (auto& name : montauk::util::list_dir("/proc")) {
     if (name.empty() || name[0]<'0' || name[0]>'9') continue; // numeric
     int32_t pid = std::strtol(name.c_str(), nullptr, 10);
@@ -143,7 +143,8 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
       continue;
     }
     int32_t ppid=0; uint64_t ut=0, st=0; int64_t rssp=0; std::string comm;
-    if (!parse_stat_line(*content_opt, ppid, ut, st, rssp, comm)) {
+    char stch='?';
+    if (!parse_stat_line(*content_opt, stch, ppid, ut, st, rssp, comm)) {
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
       montauk::model::ProcSample ps; ps.pid = pid; ps.ppid = 0; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn = true; ps.cmd = comm.empty()? name : comm;
       out.processes.push_back(std::move(ps));
@@ -161,8 +162,13 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     montauk::model::ProcSample ps; ps.pid=pid; ps.ppid=ppid; ps.utime=ut; ps.stime=st; ps.total_time=total_proc; ps.rss_kb = (rssp>0 ? static_cast<uint64_t>(rssp)* (getpagesize()/1024) : 0);
     ps.cpu_pct = cpu_pct; ps.cmd = comm; // will enrich command/user below
     out.processes.push_back(std::move(ps));
+    // Count process states
+    if (stch == 'R') out.state_running++;
+    else if (stch == 'S' || stch == 'D') out.state_sleeping++;
+    else if (stch == 'Z') out.state_zombie++;
   }
   out.total_processes = out.processes.size();
+  out.running_processes = out.state_running;
   // Efficient top-K selection (K = max_procs_): partition then sort top K
   if (out.processes.size() > max_procs_) {
     auto nth = out.processes.begin() + static_cast<std::ptrdiff_t>(max_procs_);
@@ -171,7 +177,9 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   }
   std::sort(out.processes.begin(), out.processes.end(), [](const auto& a, const auto& b){ return a.cpu_pct > b.cpu_pct; });
   // enrich top N (cmdline and user)
-  size_t enrich_n = std::min<size_t>(out.processes.size(), 256);
+  out.tracked_count = out.processes.size();
+  size_t enrich_n = std::min<size_t>(out.processes.size(), enrich_top_n_);
+  out.enriched_count = enrich_n;
   for (size_t i=0;i<enrich_n;i++) {
     auto& ps = out.processes[i];
     auto cmd = read_cmdline(ps.pid); if (!cmd.empty()) ps.cmd = std::move(cmd);

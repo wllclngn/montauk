@@ -220,6 +220,8 @@ static bool read_nvml(montauk::model::GpuVram& out) {
   bool any = false; uint64_t total_mb_sum = 0, used_mb_sum = 0;
   std::vector<std::string> model_names;
   double total_power_w = 0.0; bool have_power = false;
+  double total_plimit_w = 0.0; bool have_plimit = false;
+  int first_pstate = -1; bool have_pstate = false;
   // Utilization aggregates (average across devices)
   double sum_gpu_util = 0.0; unsigned util_count = 0;
   double sum_mem_util = 0.0; unsigned mem_util_count = 0;
@@ -262,6 +264,18 @@ static bool read_nvml(montauk::model::GpuVram& out) {
       total_power_w += static_cast<double>(mw) / 1000.0;
       have_power = true;
     }
+    // Optional power limit
+    unsigned int lim_mw = 0;
+    if (nvmlDeviceGetPowerManagementLimit(dev, &lim_mw) == NVML_SUCCESS && lim_mw > 0) {
+      total_plimit_w += static_cast<double>(lim_mw) / 1000.0;
+      have_plimit = true;
+    }
+    // Optional performance state (take first device's pstate)
+    nvmlPstates_t pst;
+    if (!have_pstate && nvmlDeviceGetPerformanceState(dev, &pst) == NVML_SUCCESS) {
+      first_pstate = (int)pst;
+      have_pstate = true;
+    }
     out.devices.push_back(std::move(rec));
     // Utilization (core + memory)
     nvmlUtilization_t ur{};
@@ -291,6 +305,14 @@ static bool read_nvml(montauk::model::GpuVram& out) {
     if (have_power) {
       out.has_power = true;
       out.power_draw_w = total_power_w;
+    }
+    if (have_plimit) {
+      out.has_power_limit = true;
+      out.power_limit_w = total_plimit_w;
+    }
+    if (have_pstate) {
+      out.has_pstate = true;
+      out.pstate = first_pstate;
     }
     if (util_count > 0) { out.has_util = true; out.gpu_util_pct = sum_gpu_util / util_count; }
     if (mem_util_count > 0) { out.has_mem_util = true; out.mem_util_pct = sum_mem_util / mem_util_count; }

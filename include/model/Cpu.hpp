@@ -19,6 +19,12 @@ struct CpuSnapshot {
   std::string model;               // CPU model name (static)
   int physical_cores{0};           // best-effort physical core count (per socket sum)
   int logical_threads{0};          // total logical CPUs (threads)
+  // Optional breakdown of utilization over last interval (percent of total time)
+  double pct_user{0.0};
+  double pct_system{0.0};
+  double pct_iowait{0.0};
+  double pct_irq{0.0};
+  double pct_steal{0.0};
 };
 
 } // namespace montauk::model

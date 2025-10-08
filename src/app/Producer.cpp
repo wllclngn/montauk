@@ -15,11 +15,34 @@ using namespace std::chrono;
 namespace montauk::app {
 
 Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
+  // Resolve configurable limits
+  auto getenv_compat = [](const char* name)->const char*{
+    const char* v = std::getenv(name);
+    if (v && *v) return v;
+    std::string n(name);
+    if (n.rfind("MONTAUK_", 0) == 0) {
+      std::string alt = std::string("montauk_") + n.substr(8);
+      v = std::getenv(alt.c_str());
+      if (v && *v) return v;
+    } else if (n.rfind("montauk_", 0) == 0) {
+      std::string alt = std::string("MONTAUK_") + n.substr(8);
+      v = std::getenv(alt.c_str());
+      if (v && *v) return v;
+    }
+    return nullptr;
+  };
+  auto getenv_int = [&](const char* name, int defv){ const char* v = getenv_compat(name); if(!v||!*v) return defv; try { return std::stoi(v); } catch(...) { return defv; } };
+  int max_procs = getenv_int("MONTAUK_MAX_PROCS", 256);
+  if (max_procs < 32) max_procs = 32;
+  if (max_procs > 4096) max_procs = 4096;
+  int enrich_top = getenv_int("MONTAUK_ENRICH_TOP_N", std::min(256, max_procs));
+  if (enrich_top < 0) enrich_top = 0;
+  if (enrich_top > max_procs) enrich_top = max_procs;
   // Choose process collector: try netlink first, then fallback to traditional
   const char* force = std::getenv("MONTAUK_COLLECTOR");
-  auto make_traditional = [](){
+  auto make_traditional = [&](){
     // Default to ~100ms min interval to allow quick warm-up; steady cadence remains ~1s
-    return std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::ProcessCollector(100));
+    return std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::ProcessCollector(100, (size_t)max_procs, (size_t)enrich_top));
   };
 
 #ifdef __linux__
@@ -27,7 +50,7 @@ Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
     proc_ = make_traditional();
   } else {
     // Try netlink unless forced traditional
-    auto netlink = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::NetlinkProcessCollector(256));
+    auto netlink = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::NetlinkProcessCollector((size_t)max_procs, (size_t)enrich_top));
     if (force && std::strcmp(force, "netlink") == 0) {
       if (!netlink->init()) {
         std::fprintf(stderr, "Netlink collector unavailable (need CAP_NET_ADMIN?). Falling back to traditional.\n");
