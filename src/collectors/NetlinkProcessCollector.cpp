@@ -19,6 +19,14 @@
 
 namespace montauk::collectors {
 
+// Forward declaration of helper struct and function
+struct StatusInfoNetlink {
+  std::string user;
+  int thread_count{1};
+};
+
+static StatusInfoNetlink info_from_status_netlink(int32_t pid);
+
 NetlinkProcessCollector::NetlinkProcessCollector(size_t max_procs, size_t enrich_top_n)
   : max_procs_(max_procs), enrich_top_n_(enrich_top_n) {}
 
@@ -105,6 +113,13 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   if (ncpu_ == 0) ncpu_ = read_cpu_count();
 
   out.processes.clear(); out.total_processes = 0; out.running_processes = 0; out.state_running=0; out.state_sleeping=0; out.state_zombie=0;
+  out.total_threads=0; out.threads_max=0;
+  
+  // Read system thread limit
+  auto threads_max_opt = montauk::util::read_file_string("/proc/sys/kernel/threads-max");
+  if (threads_max_opt) {
+    try { out.threads_max = std::stoull(*threads_max_opt); } catch(...) {}
+  }
 
   // Build candidate set within sampling budget: last top-K, hot events, then RR fill
   std::vector<int32_t> candidates; candidates.reserve(std::min(sample_budget_, all_pids.size()));
@@ -209,9 +224,15 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
       if (!cmd.empty()) ps.cmd = std::move(cmd);
     }
     
-    // User name from /proc/[pid]/status
-    auto user = user_from_status(ps.pid);
-    if (!user.empty()) ps.user_name = std::move(user);
+    // User name and thread count from /proc/[pid]/status
+    auto info = info_from_status_netlink(ps.pid);
+    if (!info.user.empty()) ps.user_name = std::move(info.user);
+    out.total_threads += info.thread_count;
+  }
+  
+  // For non-enriched processes, estimate 1 thread each (conservative)
+  if (out.processes.size() > enrich_n) {
+    out.total_threads += (out.processes.size() - enrich_n);
   }
 
   // Update last maps for cpu% deltas next cycle and remember the last published top-K
@@ -399,6 +420,26 @@ static std::string user_name_cached_local(uint32_t uid) {
     }
   }
   return std::to_string(uid);
+}
+
+static StatusInfoNetlink info_from_status_netlink(int32_t pid) {
+  StatusInfoNetlink info;
+  auto path = std::string("/proc/") + std::to_string(pid) + "/status";
+  auto txt = montauk::util::read_file_string(path);
+  if (!txt) return info;
+  std::istringstream ss(*txt); std::string line;
+  while (std::getline(ss, line)) {
+    if (line.rfind("Uid:", 0) == 0) {
+      std::istringstream ls(line.substr(4));
+      uint32_t uid; ls >> uid;
+      info.user = user_name_cached_local(uid);
+    }
+    else if (line.rfind("Threads:", 0) == 0) {
+      std::istringstream ls(line.substr(8));
+      ls >> info.thread_count;
+    }
+  }
+  return info;
 }
 
 std::string NetlinkProcessCollector::user_from_status(int32_t pid) {

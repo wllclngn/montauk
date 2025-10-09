@@ -25,6 +25,9 @@ struct CpuSnapshot {
   double pct_iowait{0.0};
   double pct_irq{0.0};
   double pct_steal{0.0};
+  // Context switches and interrupts per second
+  double ctxt_per_sec{0.0};
+  double intr_per_sec{0.0};
 };
 
 } // namespace montauk::model

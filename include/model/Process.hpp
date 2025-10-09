@@ -39,6 +39,9 @@ struct ProcessSnapshot {
   size_t state_running{};   // 'R'
   size_t state_sleeping{};  // 'S' + 'D'
   size_t state_zombie{};    // 'Z'
+  // System-wide thread statistics
+  size_t total_threads{};      // Total threads across all processes
+  size_t threads_max{};        // System limit from /proc/sys/kernel/threads-max
 };
 
 } // namespace montauk::model

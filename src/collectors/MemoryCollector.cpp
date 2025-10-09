@@ -39,6 +39,7 @@ bool MemoryCollector::sample(montauk::model::Memory& out) const {
   }
 
   out.total_kb = mem_total;
+  out.available_kb = mem_avail;
   if (mem_avail > 0) {
     out.used_kb = (mem_total > mem_avail) ? (mem_total - mem_avail) : 0;
   } else {

@@ -99,6 +99,27 @@ static std::string user_name_cached(uint32_t uid) {
   return std::to_string(uid);
 }
 
+StatusInfo ProcessCollector::info_from_status(int32_t pid) {
+  StatusInfo info;
+  auto path = std::string("/proc/")+std::to_string(pid)+"/status";
+  std::optional<std::string> txt;
+  try { txt = montauk::util::read_file_string(path); } catch(...) { txt = std::nullopt; montauk::util::note_churn(montauk::util::ChurnKind::Proc); }
+  if (!txt) return info;
+  std::istringstream ss(*txt); std::string line;
+  while (std::getline(ss, line)) {
+    if (line.rfind("Uid:",0)==0) {
+      std::istringstream ls(line.substr(4));
+      uint32_t uid; ls >> uid;
+      info.user = user_name_cached(uid);
+    }
+    else if (line.rfind("Threads:",0)==0) {
+      std::istringstream ls(line.substr(8));
+      ls >> info.thread_count;
+    }
+  }
+  return info;
+}
+
 std::string ProcessCollector::user_from_status(int32_t pid) {
   auto path = std::string("/proc/")+std::to_string(pid)+"/status";
   std::optional<std::string> txt;
@@ -128,6 +149,14 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   uint64_t cpu_total = read_cpu_total();
   if (ncpu_ == 0) ncpu_ = read_cpu_count();
   out.processes.clear(); out.total_processes=0; out.running_processes=0; out.state_running=0; out.state_sleeping=0; out.state_zombie=0;
+  out.total_threads=0; out.threads_max=0;
+  
+  // Read system thread limit
+  auto threads_max_opt = montauk::util::read_file_string("/proc/sys/kernel/threads-max");
+  if (threads_max_opt) {
+    try { out.threads_max = std::stoull(*threads_max_opt); } catch(...) {}
+  }
+  
   for (auto& name : montauk::util::list_dir("/proc")) {
     if (name.empty() || name[0]<'0' || name[0]>'9') continue; // numeric
     int32_t pid = std::strtol(name.c_str(), nullptr, 10);
@@ -176,14 +205,20 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     out.processes.resize(max_procs_);
   }
   std::sort(out.processes.begin(), out.processes.end(), [](const auto& a, const auto& b){ return a.cpu_pct > b.cpu_pct; });
-  // enrich top N (cmdline and user)
+  // enrich top N (cmdline and user) and accumulate thread counts
   out.tracked_count = out.processes.size();
   size_t enrich_n = std::min<size_t>(out.processes.size(), enrich_top_n_);
   out.enriched_count = enrich_n;
   for (size_t i=0;i<enrich_n;i++) {
     auto& ps = out.processes[i];
     auto cmd = read_cmdline(ps.pid); if (!cmd.empty()) ps.cmd = std::move(cmd);
-    auto user = user_from_status(ps.pid); if (!user.empty()) ps.user_name = std::move(user);
+    auto info = info_from_status(ps.pid);
+    if (!info.user.empty()) ps.user_name = std::move(info.user);
+    out.total_threads += info.thread_count;
+  }
+  // For non-enriched processes, estimate 1 thread each (conservative)
+  if (out.processes.size() > enrich_n) {
+    out.total_threads += (out.processes.size() - enrich_n);
   }
   // update last maps
   last_per_proc_.clear(); for (auto& p : out.processes) last_per_proc_[p.pid] = p.total_time;

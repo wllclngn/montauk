@@ -339,6 +339,42 @@ static std::string format_date_now_locale() {
 }
 
 // -------- System info helpers (best-effort, lightweight) --------
+static std::string read_hostname() {
+  auto txt = montauk::util::read_file_string("/proc/sys/kernel/hostname");
+  if (!txt) return "unknown";
+  std::string host = *txt;
+  // trim whitespace
+  while (!host.empty() && (host.back() == '\n' || host.back() == '\r' || host.back() == ' ')) host.pop_back();
+  return host.empty() ? "unknown" : host;
+}
+
+static std::string read_kernel_version() {
+  auto txt = montauk::util::read_file_string("/proc/sys/kernel/osrelease");
+  if (!txt) return "unknown";
+  std::string ver = *txt;
+  // trim whitespace
+  while (!ver.empty() && (ver.back() == '\n' || ver.back() == '\r' || ver.back() == ' ')) ver.pop_back();
+  return ver.empty() ? "unknown" : ver;
+}
+
+static std::string read_uptime_formatted() {
+  auto txt = montauk::util::read_file_string("/proc/uptime");
+  if (!txt) return "0D 0H 0M 0S";
+  std::istringstream ss(*txt);
+  double uptime_seconds = 0.0;
+  ss >> uptime_seconds;
+  
+  uint64_t total_secs = (uint64_t)uptime_seconds;
+  uint64_t days = total_secs / 86400;
+  uint64_t hours = (total_secs % 86400) / 3600;
+  uint64_t minutes = (total_secs % 3600) / 60;
+  uint64_t seconds = total_secs % 60;
+  
+  std::ostringstream os;
+  os << days << "D " << hours << "H " << minutes << "M " << seconds << "S";
+  return os.str();
+}
+
 static void read_loadavg(double& a1, double& a5, double& a15) {
   a1=a5=a15=0.0; auto txt = montauk::util::read_file_string("/proc/loadavg"); if (!txt) return;
   std::istringstream ss(*txt);
@@ -913,8 +949,14 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
     std::vector<std::string> sys; std::vector<int> sys_sev; // 0 none, 1 caution, 2 warning
     auto push = [&](const std::string& s, int sev=0){ sys.push_back(trunc_pad(s, iw)); sys_sev.push_back(sev); };
     
-    // Date/Time (show in SYSTEM focus only)
+    // Hostname/Date/Time/Uptime/Kernel (show in SYSTEM focus only)
     if (g_ui.system_focus) {
+      std::string hostname = read_hostname();
+      push(lr_align(iw, "HOSTNAME", hostname), 0);
+      
+      std::string kernel = read_kernel_version();
+      push(lr_align(iw, "KERNEL", kernel), 0);
+      
       bool prefer12 = [](){
         const char* v = getenv_compat("MONTAUK_TIME_FORMAT");
         if (v && *v) { std::string s=v; for (auto& c: s) c=std::tolower((unsigned char)c); if (s.find("12")!=std::string::npos) return true; if (s.find("24")!=std::string::npos) return false; }
@@ -924,6 +966,10 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
       std::string times = format_time_now(prefer12);
       push(lr_align(iw, "DATE", dates), 0);
       push(lr_align(iw, "TIME", times), 0);
+      
+      std::string uptime = read_uptime_formatted();
+      push(lr_align(iw, "UPTIME", uptime), 0);
+      
       push("", 0);
     }
 
@@ -934,13 +980,14 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
     int ncpu = (int)std::max<size_t>(1, s.cpu.per_core_pct.size());
     double topc = 0.0; for (double v : s.cpu.per_core_pct) if (v > topc) topc = v;
     {
-      std::ostringstream rr; rr << ncpu << " TOP: " << (int)(topc+0.5) << "%  AVG: " << (int)(s.cpu.usage_pct+0.5) << "%";
+      std::ostringstream rr; rr << "COUNT:" << ncpu << "  TOP: " << (int)(topc+0.5) << "%  AVG: " << (int)(s.cpu.usage_pct+0.5) << "%";
       push(lr_align(iw, "THREADS", rr.str()), 0);
     }
     // CPU freq/governor/turbo
     if (g_ui.system_focus) {
       auto fi = read_cpu_freq_info();
       std::ostringstream rr; rr.setf(std::ios::fixed);
+      rr << "CURRENT:";
       if (fi.has_cur) { rr << std::setprecision(1) << fi.cur_ghz << "GHz  "; } else { rr << "N/A  "; }
       rr << "MAX:";
       if (fi.has_max) { rr << std::setprecision(1) << fi.max_ghz << "GHz "; } else { rr << "N/A "; }
@@ -966,18 +1013,46 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
       rr << std::setprecision(2) << a1 << "  " << a5 << "  " << a15;
       push(lr_align(iw, "LOAD AVG", rr.str()), 0);
     }
+    // CTXT/INTR (context switches and interrupts per second)
+    if (g_ui.system_focus) {
+      std::ostringstream rr;
+      auto format_rate = [](double rate) -> std::string {
+        if (rate >= 1000.0) {
+          std::ostringstream os; os.setf(std::ios::fixed);
+          os << std::setprecision(0) << rate;
+          std::string s = os.str();
+          // Add thousand separators
+          int insertPosition = (int)s.length() - 3;
+          while (insertPosition > 0) {
+            s.insert(insertPosition, ",");
+            insertPosition -= 3;
+          }
+          return s;
+        } else {
+          std::ostringstream os; os.setf(std::ios::fixed);
+          os << std::setprecision(0) << rate;
+          return os.str();
+        }
+      };
+      rr << format_rate(s.cpu.ctxt_per_sec) << "/s  " << format_rate(s.cpu.intr_per_sec) << "/s";
+      push(lr_align(iw, "CTXT/INTR", rr.str()), 0);
+    }
     push("", 0);
     
     // === GPU SECTION ===
     if (!s.vram.name.empty()) push(lr_align(iw, "GPU", s.vram.name), 0);
-    if (s.vram.total_mb > 0) {
-      std::ostringstream rr; rr << std::fixed << std::setprecision(1) << s.vram.used_pct << "% ["
-                                 << std::setprecision(2) << (s.vram.used_mb/1024.0) << "GB/" << (s.vram.total_mb/1024.0) << "GB]";
-      push(lr_align(iw, "VRAM", rr.str()), 0);
-    }
-    if (s.vram.has_util) {
-      std::ostringstream rr; rr << "G:" << (int)(s.vram.gpu_util_pct+0.5) << "%  M:" << (int)(s.vram.mem_util_pct+0.5) << "%";
-      if (s.vram.has_encdec) rr << "  E:" << (int)(s.vram.enc_util_pct+0.5) << "%  D:" << (int)(s.vram.dec_util_pct+0.5) << "%";
+    if (s.vram.has_util || s.vram.total_mb > 0) {
+      std::ostringstream rr;
+      if (s.vram.has_util) {
+        rr << "G:" << (int)(s.vram.gpu_util_pct+0.5) << "% ";
+      }
+      if (s.vram.total_mb > 0) {
+        rr << "VRAM:" << std::fixed << std::setprecision(1) << s.vram.used_pct << "% ";
+      }
+      if (s.vram.has_util) {
+        rr << "M:" << (int)(s.vram.mem_util_pct+0.5) << "%";
+        if (s.vram.has_encdec) rr << "  E:" << (int)(s.vram.enc_util_pct+0.5) << "%  D:" << (int)(s.vram.dec_util_pct+0.5) << "%";
+      }
       push(lr_align(iw, "UTIL", rr.str()), 0);
     }
     if (s.nvml.available) {
@@ -1002,35 +1077,40 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
     }
     if (g_ui.system_focus) {
       if (s.vram.has_power_limit) {
-        std::ostringstream rr; rr << (int)(s.vram.power_limit_w+0.5) << "W";
+        int utilp = 0;
+        if (s.vram.has_power && s.vram.power_limit_w > 0.0) {
+          utilp = (int)((s.vram.power_draw_w / s.vram.power_limit_w) * 100.0 + 0.5);
+          if (utilp < 0) utilp = 0;
+          if (utilp > 100) utilp = 100;
+        }
+        std::ostringstream rr; 
+        rr << "[" << utilp << "% UTIL] " << (int)(s.vram.power_limit_w+0.5) << "W";
         push(lr_align(iw, "PLIMIT", rr.str()), 0);
       }
       if (s.vram.has_pstate) {
         std::ostringstream rr; rr << "P" << std::max(0, s.vram.pstate);
         push(lr_align(iw, "PSTATE", rr.str()), 0);
       }
-      if (s.vram.has_power && s.vram.has_power_limit && s.vram.power_limit_w > 0.0) {
-        int utilp = (int)((s.vram.power_draw_w / s.vram.power_limit_w) * 100.0 + 0.5);
-        if (utilp < 0) utilp = 0;
-        if (utilp > 100) utilp = 100;
-        std::ostringstream rr; rr << utilp << "%";
-        push(lr_align(iw, "UTILPOWER", rr.str()), 0);
-      }
     }
     push("", 0);
     
     // === MEMORY SECTION ===
     double mem_used_gb = s.mem.used_kb/1048576.0, mem_tot_gb = s.mem.total_kb/1048576.0;
+    double mem_avail_gb = s.mem.available_kb/1048576.0;
     {
-      std::ostringstream rr; rr << std::fixed << std::setprecision(1) << s.mem.used_pct << "% ["
-                                 << std::setprecision(2) << mem_used_gb << "GB/" << mem_tot_gb << "GB]";
+      std::ostringstream rr;
+      if (g_ui.system_focus && s.mem.available_kb > 0) {
+        rr << "AVAILABLE:" << std::fixed << std::setprecision(0) << mem_avail_gb << "GB  ";
+      }
+      rr << std::fixed << std::setprecision(1) << s.mem.used_pct << "% ["
+         << std::setprecision(2) << mem_used_gb << "GB/" << mem_tot_gb << "GB]";
       push(lr_align(iw, "MEM", rr.str()), 0);
     }
     if (g_ui.system_focus) {
-      std::ostringstream rr1; rr1 << std::fixed << std::setprecision(1) << (s.mem.cached_kb/1048576.0) << "GB";
-      push(lr_align(iw, "CACHE", rr1.str()), 0);
-      std::ostringstream rr2; rr2 << std::fixed << std::setprecision(1) << (s.mem.buffers_kb/1048576.0) << "GB";
-      push(lr_align(iw, "BUFFERS", rr2.str()), 0);
+      std::ostringstream rr;
+      rr << std::fixed << std::setprecision(1) << (s.mem.cached_kb/1048576.0) << "GB / " 
+         << std::setprecision(1) << (s.mem.buffers_kb/1048576.0) << "GB";
+      push(lr_align(iw, "CACHE/BUF", rr.str()), 0);
     }
     // No SWAP line in SYSTEM focus per design preference
     push("", 0);
@@ -1040,14 +1120,9 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
       push("DISK I/O:", 0);
       // Aggregate read/write throughput (SYSTEM focus only)
       if (g_ui.system_focus) {
-        {
-          std::ostringstream os; os << (int)(s.disk.total_read_bps/1000000) << "MB/s";
-          push(lr_align(iw, "READ", os.str()), 0);
-        }
-        {
-          std::ostringstream os; os << (int)(s.disk.total_write_bps/1000000) << "MB/s";
-          push(lr_align(iw, "WRITE", os.str()), 0);
-        }
+        std::ostringstream os; 
+        os << (int)(s.disk.total_read_bps/1000000) << "MB/s/" << (int)(s.disk.total_write_bps/1000000) << "MB/s";
+        push(lr_align(iw, "READ/WRITE", os.str()), 0);
       }
       auto human_bytes = [](uint64_t b){
         const double kb = 1024.0, mb = kb*1024.0, gb = mb*1024.0, tb = gb*1024.0;
@@ -1072,12 +1147,8 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
     if (g_ui.system_focus) {
       push("NETWORK", 0);
       {
-        std::ostringstream rs; rs << "\xE2\x86\x93" << (int)(s.net.agg_rx_bps/1024) << "KB/s"; // ↓
-        push(lr_align(iw, "DOWNLOAD", rs.str()), 0);
-      }
-      {
-        std::ostringstream rs; rs << "\xE2\x86\x91" << (int)(s.net.agg_tx_bps/1024) << "KB/s"; // ↑
-        push(lr_align(iw, "UPLOAD", rs.str()), 0);
+        std::ostringstream rs; rs << "\xE2\x86\x93" << (int)(s.net.agg_rx_bps/1024) << "KB/s  \xE2\x86\x91" << (int)(s.net.agg_tx_bps/1024) << "KB/s";
+        push(lr_align(iw, "DOWN/UP", rs.str()), 0);
       }
       size_t lim = std::min<size_t>(s.net.interfaces.size(), 2);
       for (size_t i=0;i<lim;i++) {
@@ -1149,6 +1220,18 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
       std::ostringstream rr; 
       rr << "ENRICHED:" << s.procs.enriched_count << "  TOTAL:" << s.procs.total_processes;
       push(lr_align(iw, "PROCESSES", rr.str()), 0);
+    }
+    // System threads (System focus only)
+    if (g_ui.system_focus && s.procs.total_threads > 0) {
+      std::ostringstream rr;
+      double avg_per_proc = (s.procs.total_processes > 0) ? 
+        (double)s.procs.total_threads / (double)s.procs.total_processes : 0.0;
+      double pct = (s.procs.threads_max > 0) ? 
+        (100.0 * (double)s.procs.total_threads / (double)s.procs.threads_max) : 0.0;
+      rr << "AVG:" << std::fixed << std::setprecision(1) << avg_per_proc << "/process [" 
+         << std::setprecision(1) << pct << "%] " 
+         << s.procs.total_threads << "/" << s.procs.threads_max;
+      push(lr_align(iw, "SYSTEM THREADS", rr.str()), 0);
     }
     // States breakdown (System focus only)
     if (g_ui.system_focus) {

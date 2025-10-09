@@ -3,6 +3,7 @@
 #include <string>
 #include <sstream>
 #include <map>
+#include <chrono>
 
 #include <string_view>
 
@@ -94,15 +95,49 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
   if (!txt_opt) return false;
   const std::string& txt = *txt_opt;
   montauk::model::CpuTimes agg{}; std::vector<montauk::model::CpuTimes> per;
+  uint64_t ctxt = 0, intr = 0;
   size_t start = 0; bool after_cpu = false;
   while (start < txt.size()) {
     size_t end = txt.find('\n', start); if (end == std::string::npos) end = txt.size();
     std::string_view line(txt.data() + start, end - start);
     if (line.starts_with("cpu ")) { parse_cpu_line(line, agg); after_cpu = true; }
     else if (after_cpu && line.starts_with("cpu")) { montauk::model::CpuTimes t{}; parse_cpu_line(line, t); per.push_back(t); }
-    else if (after_cpu) break;
+    else if (line.starts_with("ctxt ")) {
+      size_t pos = line.find(' ');
+      if (pos != std::string::npos) {
+        ctxt = std::strtoull(std::string(line.substr(pos + 1)).c_str(), nullptr, 10);
+      }
+    }
+    else if (line.starts_with("intr ")) {
+      size_t pos = line.find(' ');
+      if (pos != std::string::npos) {
+        // First number after "intr" is total interrupts
+        std::string_view rest = line.substr(pos + 1);
+        size_t space_pos = rest.find(' ');
+        if (space_pos != std::string::npos) {
+          intr = std::strtoull(std::string(rest.substr(0, space_pos)).c_str(), nullptr, 10);
+        } else {
+          intr = std::strtoull(std::string(rest).c_str(), nullptr, 10);
+        }
+      }
+    }
     start = end + 1;
   }
+  
+  // Calculate rates for ctxt and intr
+  auto now = std::chrono::steady_clock::now();
+  double ctxt_per_sec = 0.0, intr_per_sec = 0.0;
+  if (has_last_ && last_sample_time_.time_since_epoch().count() != 0) {
+    auto dt = std::chrono::duration<double>(now - last_sample_time_).count();
+    if (dt > 0.0) {
+      if (ctxt >= last_ctxt_) ctxt_per_sec = (double)(ctxt - last_ctxt_) / dt;
+      if (intr >= last_intr_) intr_per_sec = (double)(intr - last_intr_) / dt;
+    }
+  }
+  last_ctxt_ = ctxt;
+  last_intr_ = intr;
+  last_sample_time_ = now;
+  
   // compute deltas
   double usage = 0.0; std::vector<double> per_pct(per.size(), 0.0);
   double pct_user = 0.0, pct_sys = 0.0, pct_iow = 0.0, pct_irq = 0.0, pct_steal = 0.0;
@@ -129,6 +164,8 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
   last_total_ = agg; last_per_ = per; has_last_ = true;
   out.total_times = agg; out.per_core = std::move(per); out.usage_pct = usage; out.per_core_pct = std::move(per_pct);
   out.pct_user = pct_user; out.pct_system = pct_sys; out.pct_iowait = pct_iow; out.pct_irq = pct_irq; out.pct_steal = pct_steal;
+  out.ctxt_per_sec = ctxt_per_sec;
+  out.intr_per_sec = intr_per_sec;
   if (!cpu_model_.empty()) out.model = cpu_model_;
   // Set logical threads from per-core count
   out.logical_threads = (int)out.per_core_pct.size(); if (out.logical_threads<=0) out.logical_threads = 1;
