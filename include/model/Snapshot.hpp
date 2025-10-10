@@ -80,6 +80,10 @@ struct NvmlDiag {
   uint64_t sample_age_ms{0};
   int last_error{0};
   bool mig_enabled{false};
+  // Optional versions (populated when NVML present or via nvidia-smi fallback)
+  std::string driver_version; // NVIDIA driver version (e.g., "550.107.02")
+  std::string nvml_version;   // NVML library version (e.g., "12.550.87")
+  std::string cuda_version;   // CUDA driver/toolkit version (e.g., "12.4")
 };
 
 struct Snapshot {

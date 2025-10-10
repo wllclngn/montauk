@@ -656,6 +656,30 @@ src/util/Churn.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/Churn.cpp.s
 .PHONY : src/util/Churn.cpp.s
 
+src/util/NvmlDyn.o: src/util/NvmlDyn.cpp.o
+.PHONY : src/util/NvmlDyn.o
+
+# target to build an object file
+src/util/NvmlDyn.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/NvmlDyn.cpp.o
+.PHONY : src/util/NvmlDyn.cpp.o
+
+src/util/NvmlDyn.i: src/util/NvmlDyn.cpp.i
+.PHONY : src/util/NvmlDyn.i
+
+# target to preprocess a source file
+src/util/NvmlDyn.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/NvmlDyn.cpp.i
+.PHONY : src/util/NvmlDyn.cpp.i
+
+src/util/NvmlDyn.s: src/util/NvmlDyn.cpp.s
+.PHONY : src/util/NvmlDyn.s
+
+# target to generate assembly for a file
+src/util/NvmlDyn.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/util/NvmlDyn.cpp.s
+.PHONY : src/util/NvmlDyn.cpp.s
+
 src/util/Procfs.o: src/util/Procfs.cpp.o
 .PHONY : src/util/Procfs.o
 
@@ -776,6 +800,9 @@ help:
 	@echo "... src/util/Churn.o"
 	@echo "... src/util/Churn.i"
 	@echo "... src/util/Churn.s"
+	@echo "... src/util/NvmlDyn.o"
+	@echo "... src/util/NvmlDyn.i"
+	@echo "... src/util/NvmlDyn.s"
 	@echo "... src/util/Procfs.o"
 	@echo "... src/util/Procfs.i"
 	@echo "... src/util/Procfs.s"

@@ -27,10 +27,14 @@ private:
   bool nvml_ok_{false};
   std::vector<unsigned long long> nvml_last_proc_ts_per_dev_{};
   Clock::time_point last_nvml_sample_tp_{};
+  // Version cache to avoid repeated shelling out
+  bool nvml_versions_cached_{false};
+  std::string cached_driver_version_{};
+  std::string cached_nvml_version_{};
+  std::string cached_cuda_version_{};
   void ensure_nvml_init();
   void nvml_shutdown_if_needed();
 #endif
 };
 
 } // namespace montauk::app
-

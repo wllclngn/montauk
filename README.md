@@ -125,14 +125,16 @@ Notes:
 - PRIME render offload support
 
 **Requirements:**
-- Runtime: `nvidia-utils` (provides `libnvidia-ml.so`)
-- Build: `cuda` package (provides `/opt/cuda/include/nvml.h`)
+- Runtime: `nvidia-utils` (provides `libnvidia-ml.so.1`). Montauk now loads NVML dynamically and does not require dev headers.
+- Optional build: `cuda` headers if you opt-in to static NVML linkage via CMake.
 
 **Fallback Chain** (when NVML unavailable or insufficient):
-1. `nvidia-smi pmon` — Per-process utilization sampling
-2. `nvidia-smi --query-compute-apps` — Compute context memory
-3. `/proc/driver/nvidia/gpus/*/fb_memory_usage` — Device VRAM
-4. Heuristic distribution based on device-level metrics
+0. NVML (runtime loader) — Preferred when available
+1. Device-level via `nvidia-smi --query-gpu=…` — Name, VRAM, GPU/MEM util, temp, pstate, power
+2. `nvidia-smi pmon` — Per-process utilization sampling
+3. `nvidia-smi --query-compute-apps` — Compute context memory
+4. `/proc/driver/nvidia/gpus/*/fb_memory_usage` — Device VRAM
+5. Heuristic distribution based on device-level metrics
 
 ### AMD/Intel
 
@@ -154,6 +156,12 @@ Montauk automatically identifies browser GPU processes (Chrome, Chromium, Helium
 MONTAUK_NVIDIA_PMON=0     # Disable nvidia-smi pmon fallback (default: 1)
 MONTAUK_NVIDIA_MEM=0      # Disable nvidia-smi memory query (default: 1)
 MONTAUK_LOG_NVML=1        # Enable NVML debug logging
+MONTAUK_NVIDIA_SMI_DEV=0  # Disable device-level nvidia-smi fallback (default: 1)
+MONTAUK_NVIDIA_SMI_PATH=/usr/bin/nvidia-smi  # Override nvidia-smi path
+MONTAUK_SMI_MIN_INTERVAL_MS=1000             # Min interval between device-level SMI queries
+MONTAUK_GPU_DEBUG=1       # Log active GPU backend (nvml/smi/drm) to stderr
+MONTAUK_DISABLE_NVML=1    # Disable runtime NVML loader
+MONTAUK_NVML_PATH=/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1  # Override NVML lib path
 ```
 
 ## Display Details

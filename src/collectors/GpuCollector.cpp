@@ -2,6 +2,8 @@
 #include "util/Procfs.hpp"
 
 #include <filesystem>
+#include <chrono>
+#include <vector>
 #include <cstdio>
 #include <regex>
 #include <string_view>
@@ -9,10 +11,143 @@
 #include <sstream>
 #include <unordered_set>
 #include "util/Churn.hpp"
+#include "util/NvmlDyn.hpp"
 
 namespace fs = std::filesystem;
 
 namespace montauk::collectors {
+
+static const char* getenv_compat(const char* name) {
+  const char* vv = std::getenv(name);
+  if (vv && *vv) return vv;
+  std::string n(name);
+  if (n.rfind("MONTAUK_",0)==0) {
+    std::string alt = std::string("montauk_") + n.substr(8);
+    vv = std::getenv(alt.c_str());
+    if (vv && *vv) return vv;
+  } else if (n.rfind("montauk_",0)==0) {
+    std::string alt = std::string("MONTAUK_") + n.substr(8);
+    vv = std::getenv(alt.c_str());
+    if (vv && *vv) return vv;
+  }
+  return nullptr;
+}
+
+static bool env_true(const char* name, bool defv=true) {
+  if (const char* v = getenv_compat(name)) {
+    return !(v[0]=='0'||v[0]=='f'||v[0]=='F');
+  }
+  return defv;
+}
+
+static std::string find_nvidia_smi_path() {
+  if (const char* p = getenv_compat("MONTAUK_NVIDIA_SMI_PATH")) {
+    return std::string(p);
+  }
+  // Try PATH
+  if (const char* path = std::getenv("PATH")) {
+    std::string p(path);
+    size_t start = 0;
+    while (start <= p.size()) {
+      size_t end = p.find(':', start);
+      std::string dir = p.substr(start, end == std::string::npos ? std::string::npos : end - start);
+      if (!dir.empty()) {
+        std::string cand = dir + "/nvidia-smi";
+        std::error_code ec; if (std::filesystem::exists(cand, ec)) return cand;
+      }
+      if (end == std::string::npos) break; else start = end + 1;
+    }
+  }
+  // Common locations
+  const char* candidates[] = {
+    "/usr/bin/nvidia-smi",
+    "/usr/local/bin/nvidia-smi",
+    "/opt/nvidia/sbin/nvidia-smi",
+    "/bin/nvidia-smi"
+  };
+  for (const char* c : candidates) {
+    std::error_code ec; if (std::filesystem::exists(c, ec)) return std::string(c);
+  }
+  return std::string();
+}
+
+static bool read_nvidia_smi_device(montauk::model::GpuVram& out) {
+  if (!env_true("MONTAUK_NVIDIA_SMI_DEV", true)) return false;
+  static auto last_call = std::chrono::steady_clock::time_point{};
+  static montauk::model::GpuVram cached{};
+  static bool have_cache = false;
+  static int min_interval_ms = -1;
+  if (min_interval_ms < 0) {
+    if (const char* v = getenv_compat("MONTAUK_SMI_MIN_INTERVAL_MS")) {
+      try { min_interval_ms = std::max(0, std::stoi(v)); } catch(...) { min_interval_ms = 1000; }
+    } else { min_interval_ms = 1000; }
+  }
+  auto now = std::chrono::steady_clock::now();
+  if (have_cache && min_interval_ms > 0 && last_call.time_since_epoch().count() > 0) {
+    auto age = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_call).count();
+    if (age < min_interval_ms) { out = cached; return (out.total_mb > 0 || out.has_util); }
+  }
+  std::string smi = find_nvidia_smi_path();
+  if (smi.empty()) return false;
+  std::string cmd = smi + " --query-gpu=name,memory.total,memory.used,utilization.gpu,utilization.memory,temperature.gpu,pstate,power.draw --format=csv,noheader,nounits 2>/dev/null";
+  FILE* fp = ::popen(cmd.c_str(), "r");
+  if (!fp) return false;
+  char line[512];
+  std::vector<montauk::model::GpuVramDevice> devs;
+  uint64_t total_mb_sum = 0, used_mb_sum = 0;
+  double sum_gpu_util = 0.0; unsigned util_count = 0;
+  double sum_mem_util = 0.0; unsigned mem_util_count = 0;
+  double total_power_w = 0.0; bool have_power = false;
+  std::vector<std::string> model_names;
+  while (std::fgets(line, sizeof(line), fp)) {
+    std::string s(line);
+    // split by comma
+    std::vector<std::string> tok; tok.reserve(8);
+    size_t start = 0; while (start < s.size()) { size_t comma = s.find(',', start); std::string t = s.substr(start, (comma==std::string::npos? s.size() : comma) - start); while(!t.empty() && (t.back()=='\n'||t.back()=='\r'||t.back()==' '||t.back()=='\t')) t.pop_back(); while(!t.empty() && (t.front()==' '||t.front()=='\t')) t.erase(t.begin()); tok.push_back(t); if (comma==std::string::npos) break; start = comma + 1; }
+    if (tok.size() < 8) continue;
+    montauk::model::GpuVramDevice rec{};
+    rec.name = tok[0];
+    auto to_u64 = [](const std::string& x)->uint64_t{ try { return (uint64_t)std::stoull(x); } catch(...) { return 0ull; } };
+    auto to_int = [](const std::string& x)->int{ try { return (int)std::stoi(x); } catch(...) { return 0; } };
+    rec.total_mb = to_u64(tok[1]);
+    rec.used_mb  = to_u64(tok[2]);
+    int gpu_util = to_int(tok[3]);
+    int mem_util = to_int(tok[4]);
+    int temp_c   = to_int(tok[5]);
+    std::string pstate = tok[6];
+    double pow_w = 0.0; try { pow_w = std::stod(tok[7]); } catch(...) { pow_w = 0.0; }
+    if (rec.total_mb > 0) { total_mb_sum += rec.total_mb; used_mb_sum += rec.used_mb; }
+    if (temp_c > 0) { rec.has_temp_edge = true; rec.temp_edge_c = (double)temp_c; }
+    if (!pstate.empty() && (pstate[0] == 'P' || pstate[0] == 'p')) {
+      // device-level pstate aggregated later
+    }
+    if (pow_w > 0.0) { total_power_w += pow_w; have_power = true; }
+    devs.push_back(std::move(rec));
+    if (!tok[0].empty()) model_names.push_back(tok[0]);
+    if (gpu_util >= 0 && gpu_util <= 100) { sum_gpu_util += gpu_util; util_count++; }
+    if (mem_util >= 0 && mem_util <= 100) { sum_mem_util += mem_util; mem_util_count++; }
+  }
+  ::pclose(fp);
+  if (devs.empty()) return false;
+  montauk::model::GpuVram v{};
+  v.devices = std::move(devs);
+  v.total_mb = total_mb_sum;
+  v.used_mb  = used_mb_sum;
+  v.used_pct = v.total_mb ? (100.0 * (double)v.used_mb / (double)v.total_mb) : 0.0;
+  if (util_count > 0) { v.has_util = true; v.gpu_util_pct = sum_gpu_util / util_count; }
+  if (mem_util_count > 0) { v.has_mem_util = true; v.mem_util_pct = sum_mem_util / mem_util_count; }
+  if (have_power) { v.has_power = true; v.power_draw_w = total_power_w; }
+  // Aggregate a concise name
+  if (!model_names.empty()) {
+    std::unordered_set<std::string> uniq(model_names.begin(), model_names.end());
+    if (uniq.size() == 1) {
+      v.name = *uniq.begin(); if (model_names.size() > 1) v.name += " x" + std::to_string(model_names.size());
+    } else {
+      v.name = model_names[0] + " +" + std::to_string(model_names.size()-1) + " more";
+    }
+  }
+  cached = v; have_cache = true; last_call = now; out = v; return true;
+}
 
 static std::string trim(std::string s) {
   auto issp = [](unsigned char c){ return c==' '||c=='\t'||c=='\r'||c=='\n'; };
@@ -201,7 +336,7 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out) {
 
 #ifdef MONTAUK_HAVE_NVML
 #include <nvml.h>
-static bool read_nvml(montauk::model::GpuVram& out) {
+static bool read_nvml_compiled(montauk::model::GpuVram& out) {
   if (nvmlInit_v2() != NVML_SUCCESS) {
     auto getenv_compat = [](const char* name)->const char*{
       const char* vv = std::getenv(name);
@@ -325,12 +460,41 @@ static bool read_nvml(montauk::model::GpuVram& out) {
   return any;
 }
 #else
-static bool read_nvml(montauk::model::GpuVram&) { return false; }
+static bool read_nvml_compiled(montauk::model::GpuVram&) { return false; }
 #endif
+
+static bool read_nvml_dyn(montauk::model::GpuVram& out) {
+  auto& nv = montauk::util::NvmlDyn::instance();
+  if (!nv.load_once() || !nv.available()) return false;
+  return nv.read_devices(out);
+}
+
+static const char* getenv_compat_gpu(const char* name) {
+  const char* vv = std::getenv(name);
+  if (vv && *vv) return vv;
+  std::string n(name);
+  if (n.rfind("MONTAUK_",0)==0) { std::string alt = std::string("montauk_") + n.substr(8); vv = std::getenv(alt.c_str()); if (vv&&*vv) return vv; }
+  else if (n.rfind("montauk_",0)==0) { std::string alt = std::string("MONTAUK_") + n.substr(8); vv = std::getenv(alt.c_str()); if (vv&&*vv) return vv; }
+  return nullptr;
+}
+
+static void log_backend_once(const char* tag) {
+  static bool done = false;
+  if (done) return;
+  if (const char* v = getenv_compat_gpu("MONTAUK_GPU_DEBUG"); v && !(v[0]=='0'||v[0]=='f'||v[0]=='F')) {
+    ::fprintf(stderr, "GPU backend: %s\n", tag);
+    done = true;
+  }
+}
 
 bool GpuCollector::sample(montauk::model::GpuVram& out) const {
   out = {};
-  if (read_nvml(out)) return true;
+  // Prefer runtime NVML loader if available
+  if (read_nvml_dyn(out)) { log_backend_once("nvml-dyn"); return true; }
+  // Fall back to compiled NVML if present
+  if (read_nvml_compiled(out)) { log_backend_once("nvml-compiled"); return true; }
+  // NVIDIA device-level fallback via nvidia-smi
+  if (read_nvidia_smi_device(out)) { log_backend_once("smi-device"); return true; }
   bool ok = false;
   ok = read_nvidia_proc(out) || ok;
   ok = read_amd_sysfs(out)   || ok;

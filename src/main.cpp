@@ -1069,6 +1069,10 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
                                 << " AGE:" << s.nvml.sample_age_ms << "ms"
                                 << " MIG:" << (s.nvml.mig_enabled? "on":"off")
                                 << " PID:" << pid_status;
+      // Append versions if known
+      if (!s.nvml.driver_version.empty()) rr << " DRV:" << s.nvml.driver_version;
+      if (!s.nvml.nvml_version.empty())   rr << " NVML:" << s.nvml.nvml_version;
+      if (!s.nvml.cuda_version.empty())   rr << " CUDA:" << s.nvml.cuda_version;
       push(lr_align(iw, "NVML", rr.str()), 0);
     }
     if (s.vram.has_power) { 
@@ -1242,8 +1246,8 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
     
     // Churn summary (if active)
     if (s.churn.recent_2s_events > 0) {
-      std::ostringstream rr; rr << s.churn.recent_2s_events << " events [LAST 2s]";
-      push(lr_align(iw, "PROC CHURN", rr.str()), 2);
+      std::ostringstream rr; rr << s.churn.recent_2s_events << " EVENTS [LAST 2s]";
+      push(lr_align(iw, "PROC CHURN CAUTION", rr.str()), 1);
     }
     // Build box then apply full-line coloring for temperature lines if needed
     auto sys_box = make_box("SYSTEM", sys, width, inner_min);
