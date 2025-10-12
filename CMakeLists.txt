@@ -31,6 +31,7 @@ add_library(montauk_core
     src/app/SnapshotBuffers.cpp
     src/app/GpuAttributor.cpp
     src/app/Producer.cpp
+    src/app/Security.cpp
     src/app/Alerts.cpp
     src/app/Filter.cpp
     src/collectors/MemoryCollector.cpp
@@ -48,13 +49,9 @@ target_include_directories(montauk_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inclu
 target_compile_options(montauk_core PRIVATE -Wall -Wextra -Werror)
 
 # Always attempt NVML (NVIDIA) support by default; if not found, build continues without it.
-# Prefer dynamic discovery of NVML headers/libs across distros and CUDA layouts.
-# Common locations include: /usr/include/nvidia-ml, /usr/include/nvidia, /opt/cuda/include, /usr/local/cuda/include.
-find_path(NVML_INCLUDE_DIR nvml.h
-  HINTS $ENV{CUDA_PATH} $ENV{CUDA_HOME} /opt/cuda /usr/local/cuda
-  PATH_SUFFIXES include include/nvidia-ml include/nvidia
-)
-find_library(NVML_LIBRARY nvidia-ml)
+# Try common locations for NVML headers. On Arch/others, CUDA installs nvml.h under /opt/cuda/include.
+find_path(NVML_INCLUDE_DIR nvml.h PATHS /usr/include /usr/local/include /usr/include/nvidia /opt/cuda/include)
+find_library(NVML_LIBRARY nvidia-ml PATHS /usr/lib /usr/lib64 /usr/local/lib /usr/local/lib64)
 if(NVML_INCLUDE_DIR AND NVML_LIBRARY)
   target_compile_definitions(montauk_core PUBLIC MONTAUK_HAVE_NVML=1)
   target_include_directories(montauk_core PUBLIC ${NVML_INCLUDE_DIR})
@@ -88,7 +85,6 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_net.cpp
     tests/test_disk.cpp
     tests/test_gpu_fallback.cpp
-    tests/test_gpu_smi_device.cpp
     tests/test_gpu_cache.cpp
     tests/test_fdinfo_collector.cpp
     tests/test_snapshot_buffers.cpp

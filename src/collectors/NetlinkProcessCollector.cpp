@@ -26,6 +26,7 @@ struct StatusInfoNetlink {
 };
 
 static StatusInfoNetlink info_from_status_netlink(int32_t pid);
+static std::string read_exe_path_netlink(int32_t pid);
 
 NetlinkProcessCollector::NetlinkProcessCollector(size_t max_procs, size_t enrich_top_n)
   : max_procs_(max_procs), enrich_top_n_(enrich_top_n) {}
@@ -121,6 +122,18 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     try { out.threads_max = std::stoull(*threads_max_opt); } catch(...) {}
   }
 
+  std::unordered_map<int32_t, uint64_t> last_snapshot;
+  uint64_t last_cpu_total_snapshot = 0;
+  bool have_last_snapshot = false;
+  {
+    std::lock_guard<std::mutex> lk(active_mu_);
+    if (have_last_) {
+      have_last_snapshot = true;
+      last_snapshot = last_per_proc_;
+      last_cpu_total_snapshot = last_cpu_total_;
+    }
+  }
+
   // Build candidate set within sampling budget: last top-K, hot events, then RR fill
   std::vector<int32_t> candidates; candidates.reserve(std::min(sample_budget_, all_pids.size()));
   std::unordered_set<int32_t> selected;
@@ -158,26 +171,42 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
 
   for (int32_t pid : candidates) {
     auto stat_path = std::string("/proc/") + std::to_string(pid) + "/stat";
+    auto cached_comm = [&](){
+      std::lock_guard<std::mutex> lk(active_mu_);
+      auto it = pid_to_comm_.find(pid);
+      if (it != pid_to_comm_.end() && !it->second.empty()) return it->second;
+      return std::string();
+    }();
     auto content_opt = montauk::util::read_file_string(stat_path);
     if (!content_opt) {
-      // Likely exited; record churn and remove lazily next event
+      // Likely exited; record churn and surface placeholder row so UI can flag it.
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
+      montauk::model::ProcSample ps;
+      ps.pid = pid;
+      ps.churn = true;
+      ps.cmd = !cached_comm.empty() ? cached_comm : std::to_string(pid);
+      out.processes.push_back(std::move(ps));
       continue;
     }
 
     int32_t ppid = 0; uint64_t ut=0, st=0; int64_t rssp=0; std::string comm; char stch='?';
     if (!parse_stat_line(*content_opt, stch, ppid, ut, st, rssp, comm)) {
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
+      montauk::model::ProcSample ps;
+      ps.pid = pid;
+      ps.churn = true;
+      ps.cmd = !comm.empty() ? comm : (!cached_comm.empty() ? cached_comm : std::to_string(pid));
+      out.processes.push_back(std::move(ps));
       continue;
     }
 
     const uint64_t total_proc = ut + st;
     double cpu_pct = 0.0;
-    if (have_last_) {
-      auto it = last_per_proc_.find(pid);
-      const uint64_t lastp = (it==last_per_proc_.end()) ? total_proc : it->second;
+    if (have_last_snapshot) {
+      auto it = last_snapshot.find(pid);
+      const uint64_t lastp = (it==last_snapshot.end()) ? total_proc : it->second;
       const uint64_t dp = (total_proc > lastp) ? (total_proc - lastp) : 0;
-      const uint64_t dt = (cpu_total > last_cpu_total_) ? (cpu_total - last_cpu_total_) : 0;
+      const uint64_t dt = (cpu_total > last_cpu_total_snapshot) ? (cpu_total - last_cpu_total_snapshot) : 0;
       if (dt > 0) cpu_pct = (100.0 * static_cast<double>(dp) / static_cast<double>(dt)) * static_cast<double>(ncpu_);
     }
 
@@ -185,6 +214,7 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     ps.utime = ut; ps.stime = st; ps.total_time = total_proc;
     ps.rss_kb = (rssp > 0 ? static_cast<uint64_t>(rssp) * (getpagesize()/1024) : 0);
     ps.cpu_pct = cpu_pct; ps.cmd = comm;
+    ps.exe_path = read_exe_path_netlink(pid);
     out.processes.push_back(std::move(ps));
     if (stch == 'R') out.state_running++;
     else if (stch == 'S' || stch == 'D') out.state_sleeping++;
@@ -236,10 +266,19 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   }
 
   // Update last maps for cpu% deltas next cycle and remember the last published top-K
-  last_per_proc_.clear(); for (auto& p : out.processes) last_per_proc_[p.pid] = p.total_time;
-  last_cpu_total_ = cpu_total; have_last_ = true;
-  last_top_.clear(); last_top_.reserve(out.processes.size());
-  for (const auto& p : out.processes) last_top_.push_back(p.pid);
+  std::unordered_map<int32_t, uint64_t> next_last;
+  next_last.reserve(out.processes.size());
+  for (const auto& p : out.processes) next_last[p.pid] = p.total_time;
+  std::vector<int32_t> next_top;
+  next_top.reserve(out.processes.size());
+  for (const auto& p : out.processes) next_top.push_back(p.pid);
+  {
+    std::lock_guard<std::mutex> lk(active_mu_);
+    last_per_proc_ = std::move(next_last);
+    last_cpu_total_ = cpu_total;
+    have_last_ = true;
+    last_top_ = std::move(next_top);
+  }
   return true;
 }
 
@@ -296,7 +335,6 @@ void NetlinkProcessCollector::handle_cn_msg(void* cn_msg_ptr, ssize_t /*len*/) {
     case PROC_EVENT_EXIT:
       active_pids_.erase(ev->event_data.exit.process_pid);
       pid_to_comm_.erase(ev->event_data.exit.process_pid);
-      last_per_proc_.erase(ev->event_data.exit.process_pid);
       break;
     case PROC_EVENT_COMM: {
       int32_t pid = ev->event_data.comm.process_pid;
@@ -401,6 +439,12 @@ std::string NetlinkProcessCollector::read_cmdline(int32_t pid) {
   }
   if (!out.empty() && out.back()==' ') out.pop_back();
   return out;
+}
+
+static std::string read_exe_path_netlink(int32_t pid) {
+  auto link = montauk::util::read_symlink(std::string("/proc/") + std::to_string(pid) + "/exe");
+  if (!link) return {};
+  return *link;
 }
 
 static std::string user_name_cached_local(uint32_t uid) {

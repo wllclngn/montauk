@@ -296,6 +296,30 @@ src/app/Producer.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Producer.cpp.s
 .PHONY : src/app/Producer.cpp.s
 
+src/app/Security.o: src/app/Security.cpp.o
+.PHONY : src/app/Security.o
+
+# target to build an object file
+src/app/Security.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Security.cpp.o
+.PHONY : src/app/Security.cpp.o
+
+src/app/Security.i: src/app/Security.cpp.i
+.PHONY : src/app/Security.i
+
+# target to preprocess a source file
+src/app/Security.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Security.cpp.i
+.PHONY : src/app/Security.cpp.i
+
+src/app/Security.s: src/app/Security.cpp.s
+.PHONY : src/app/Security.s
+
+# target to generate assembly for a file
+src/app/Security.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/app/Security.cpp.s
+.PHONY : src/app/Security.cpp.s
+
 src/app/SnapshotBuffers.o: src/app/SnapshotBuffers.cpp.o
 .PHONY : src/app/SnapshotBuffers.o
 
@@ -755,6 +779,9 @@ help:
 	@echo "... src/app/Producer.o"
 	@echo "... src/app/Producer.i"
 	@echo "... src/app/Producer.s"
+	@echo "... src/app/Security.o"
+	@echo "... src/app/Security.i"
+	@echo "... src/app/Security.s"
 	@echo "... src/app/SnapshotBuffers.o"
 	@echo "... src/app/SnapshotBuffers.i"
 	@echo "... src/app/SnapshotBuffers.s"

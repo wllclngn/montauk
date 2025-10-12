@@ -21,4 +21,7 @@ auto read_file_bytes(const std::string& abs) -> std::optional<std::vector<unsign
 // List directory entries (names only). Returns empty vector on error.
 auto list_dir(const std::string& abs) -> std::vector<std::string>;
 
+// Read symlink target. Returns std::nullopt on error.
+auto read_symlink(const std::string& abs) -> std::optional<std::string>;
+
 } // namespace montauk::util

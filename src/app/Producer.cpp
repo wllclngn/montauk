@@ -78,7 +78,9 @@ void Producer::start() {
 }
 
 void Producer::stop() {
-  if (thread_.joinable()) thread_.request_stop();
+  if (!thread_.joinable()) return;
+  thread_.request_stop();
+  thread_.join();
 }
 
 Producer::~Producer() { stop(); }

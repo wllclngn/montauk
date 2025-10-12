@@ -25,6 +25,7 @@ struct ProcSample {
   uint64_t gpu_mem_kb{0};
   std::string user_name;
   std::string cmd;
+  std::string exe_path;
 };
 
 struct ProcessSnapshot {

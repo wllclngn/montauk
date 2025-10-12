@@ -1,5 +1,6 @@
 #include "app/SnapshotBuffers.hpp"
 #include "app/Producer.hpp"
+#include "app/Security.hpp"
 #include "util/Retro.hpp"
 #include "model/Snapshot.hpp"
 
@@ -1069,10 +1070,6 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
                                 << " AGE:" << s.nvml.sample_age_ms << "ms"
                                 << " MIG:" << (s.nvml.mig_enabled? "on":"off")
                                 << " PID:" << pid_status;
-      // Append versions if known
-      if (!s.nvml.driver_version.empty()) rr << " DRV:" << s.nvml.driver_version;
-      if (!s.nvml.nvml_version.empty())   rr << " NVML:" << s.nvml.nvml_version;
-      if (!s.nvml.cuda_version.empty())   rr << " CUDA:" << s.nvml.cuda_version;
       push(lr_align(iw, "NVML", rr.str()), 0);
     }
     if (s.vram.has_power) { 
@@ -1246,8 +1243,55 @@ static std::vector<std::string> render_right_column(const montauk::model::Snapsh
     
     // Churn summary (if active)
     if (s.churn.recent_2s_events > 0) {
-      std::ostringstream rr; rr << s.churn.recent_2s_events << " EVENTS [LAST 2s]";
-      push(lr_align(iw, "PROC CHURN CAUTION", rr.str()), 1);
+      std::ostringstream rr; rr << s.churn.recent_2s_events << " events [LAST 2s]";
+      push(lr_align(iw, "PROC CHURN", rr.str()), 2);
+    }
+    // Security findings summary + top offenders
+    {
+      auto findings = montauk::app::collect_security_findings(s);
+      if (findings.empty()) {
+        push(lr_align(iw, "PROC SECURITY", "OK"), 0);
+      } else {
+        int warn = 0, caution = 0;
+        for (const auto& f : findings) {
+          if (f.severity >= 2) ++warn;
+          else if (f.severity == 1) ++caution;
+        }
+        std::ostringstream summary;
+        bool wrote = false;
+        if (warn > 0) { summary << "WARN:" << warn; wrote = true; }
+        if (caution > 0) {
+          if (wrote) summary << "  ";
+          summary << "CAUTION:" << caution;
+          wrote = true;
+        }
+        if (!wrote) {
+          summary << "INFO:" << findings.size();
+        }
+        int summary_sev = warn > 0 ? 2 : (caution > 0 ? 1 : 0);
+        if (!g_ui.system_focus) {
+          if (warn > 0) {
+            const montauk::app::SecurityFinding* first_warn = nullptr;
+            for (const auto& f : findings) {
+              if (f.severity >= 2) { first_warn = &f; break; }
+            }
+            if (first_warn) {
+              push(montauk::app::format_security_line_default(*first_warn), first_warn->severity);
+            } else {
+              push(lr_align(iw, "PROC SECURITY", summary.str()), summary_sev);
+            }
+          } else {
+            push(lr_align(iw, "PROC SECURITY", summary.str()), summary_sev);
+          }
+        } else {
+          push(lr_align(iw, "PROC SECURITY", summary.str()), summary_sev);
+          int max_rows = std::min<int>((int)findings.size(), 4);
+          for (int i = 0; i < max_rows; ++i) {
+            const auto& f = findings[i];
+            push(montauk::app::format_security_line_default(f), f.severity);
+          }
+        }
+      }
     }
     // Build box then apply full-line coloring for temperature lines if needed
     auto sys_box = make_box("SYSTEM", sys, width, inner_min);

@@ -80,6 +80,12 @@ std::string ProcessCollector::read_cmdline(int32_t pid) {
   return out;
 }
 
+static std::string read_exe_path(int32_t pid) {
+  auto link = montauk::util::read_symlink(std::string("/proc/") + std::to_string(pid) + "/exe");
+  if (!link) return {};
+  return *link;
+}
+
 static std::string user_name_cached(uint32_t uid) {
   static std::unordered_map<uint32_t, std::string> cache;
   auto it = cache.find(uid);
@@ -190,6 +196,7 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     }
     montauk::model::ProcSample ps; ps.pid=pid; ps.ppid=ppid; ps.utime=ut; ps.stime=st; ps.total_time=total_proc; ps.rss_kb = (rssp>0 ? static_cast<uint64_t>(rssp)* (getpagesize()/1024) : 0);
     ps.cpu_pct = cpu_pct; ps.cmd = comm; // will enrich command/user below
+    ps.exe_path = read_exe_path(pid);
     out.processes.push_back(std::move(ps));
     // Count process states
     if (stch == 'R') out.state_running++;

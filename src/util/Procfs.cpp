@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <limits.h>
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
@@ -81,6 +82,15 @@ auto list_dir(const std::string& abs) -> std::vector<std::string> {
   }
   ::closedir(d);
   return out;
+}
+
+auto read_symlink(const std::string& abs) -> std::optional<std::string> {
+  auto path = map_proc_path(abs);
+  char buf[PATH_MAX];
+  ssize_t len = ::readlink(path.c_str(), buf, sizeof(buf) - 1);
+  if (len < 0) return std::nullopt;
+  buf[len] = '\0';
+  return std::string(buf);
 }
 
 } // namespace montauk::util
