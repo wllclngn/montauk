@@ -101,6 +101,40 @@ Notes:
 - Tracking more processes has minimal CPU overhead; enrichment (reading `/proc/[pid]/cmdline` and `/proc/[pid]/status`) is the primary cost. Consider keeping `ENRICH_TOP_N` below `MAX_PROCS` for best responsiveness.
 - Both variables accept either `MONTAUK_…` or `montauk_…` prefixes.
 
+### Theme Files
+
+Montauk can preload a color palette from a simple `.env` file before resolving any runtime configuration:
+
+1. Create `~/.config/montauk/theme.env` (or point `MONTAUK_THEME=/path/to/theme.env`).
+2. Add `KEY=VALUE` pairs, for example:
+
+   ```
+   MONTAUK_TEXT_HEX=#FFB000
+   MONTAUK_TITLE_HEX=#FFB000
+   MONTAUK_ACCENT_HEX=#FFDB6D
+   MONTAUK_CAUTION_HEX=#FFC53A
+   MONTAUK_WARNING_HEX=#FF602E
+   ```
+
+   Lines starting with `#` are treated as comments. `_HEX` values are honoured when the terminal supports truecolor; fall back to `_IDX` (0‑255) to target 16/256‑colour palettes.
+
+3. Launch `montauk` as usual. Precedence is: runtime environment variables > theme file values > built-in defaults.
+
+The build targets (`make build`, `make debug`, etc.) automatically copy the bundled template (`src/util/theme.env`) into `~/.config/montauk/theme.env` (or `$XDG_CONFIG_HOME/montauk/theme.env`) the first time. The file is only written if it does not already exist, so you can customise it freely. Point `MONTAUK_THEME` at an alternate path if you want to keep multiple variations around.
+
+Available keys cover every colourised element in the UI:
+
+- `MONTAUK_TEXT_{HEX,IDX}` — Primary text colour applied after each reset.
+- `MONTAUK_TITLE_{HEX,IDX}` — Header banner colour.
+- `MONTAUK_ACCENT_{HEX,IDX}` — Box titles, key callouts.
+- `MONTAUK_SUCCESS_{HEX,IDX}` — Healthy progress bars / positive stats.
+- `MONTAUK_INFO_{HEX,IDX}` — Neutral informational accents (e.g. unknown bars).
+- `MONTAUK_CAUTION_{HEX,IDX}` — Mid-level alerts and thresholds.
+- `MONTAUK_WARNING_{HEX,IDX}` — High-severity alerts.
+- `MONTAUK_MUTED_{HEX,IDX}` — Borders, dividers, and muted text.
+
+Add new keys as needed—anything defined in the theme file behaves exactly like its environment-variable twin.
+
 ## CPU Scale Modes
 
 **Machine-share (default):**

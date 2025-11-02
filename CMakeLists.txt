@@ -28,6 +28,13 @@ add_library(montauk_core
     src/util/Retro.cpp
     src/util/AdaptiveSort.cpp
     src/util/NvmlDyn.cpp
+    src/ui/Terminal.cpp
+    src/ui/Config.cpp
+    src/ui/Formatting.cpp
+    src/ui/Renderer.cpp
+    src/ui/Input.cpp
+    src/ui/Panels.cpp
+    src/ui/ProcessTable.cpp
     src/app/SnapshotBuffers.cpp
     src/app/GpuAttributor.cpp
     src/app/Producer.cpp

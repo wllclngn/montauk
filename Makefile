@@ -1,12 +1,14 @@
-.PHONY: all build debug run test clean distclean nvml
+.PHONY: all build debug run test clean distclean nvml install-themes
+
+CONFIG_DIR := $(if $(XDG_CONFIG_HOME),$(XDG_CONFIG_HOME)/montauk,$(HOME)/.config/montauk)
 
 all: build
 
-build:
+build: install-themes
 	@cmake -S . -B build >/dev/null || true
 	@cmake --build build -j
 
-debug:
+debug: install-themes
 	@cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug >/dev/null || true
 	@cmake --build build -j
 
@@ -23,6 +25,10 @@ distclean:
 	@rm -rf build
 
 # Build with NVML (text mode only)
-nvml:
+nvml: install-themes
 	@cmake -S . -B build >/dev/null || true
 	@cmake --build build -j
+
+install-themes:
+	@mkdir -p "$(CONFIG_DIR)"
+	@cp -n src/util/theme.env "$(CONFIG_DIR)/theme.env" 2>/dev/null || true

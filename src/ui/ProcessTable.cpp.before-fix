@@ -1,0 +1,278 @@
+#include "ui/ProcessTable.hpp"
+#include "ui/Config.hpp"
+#include "ui/Terminal.hpp"
+#include "ui/Formatting.hpp"
+#include "ui/Renderer.hpp"
+#include "util/AdaptiveSort.hpp"
+#include <algorithm>
+#include <sstream>
+#include <iomanip>
+#include <cmath>
+#include <numeric>
+
+namespace montauk::ui {
+
+// Helper to format CPU percentage field with color coding
+static std::string fmt_cpu_field(double cpu_pct, bool colorize=true) {
+  std::string digits;
+  int display_val;
+  
+  // For values < 1%, show decimal precision (0.1%, 0.2%, etc.)
+  if (cpu_pct > 0.0 && cpu_pct < 1.0) {
+    double rounded = std::round(cpu_pct * 10.0) / 10.0;
+    if (rounded < 0.1) rounded = 0.1; // minimum 0.1%
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(1) << rounded;
+    digits = oss.str();
+    display_val = 0; // for color thresholding
+  } else {
+    display_val = (int)(cpu_pct + 0.5);
+    digits = std::to_string(display_val);
+  }
+  
+  // Build the value string with %
+  std::string value_str = digits + "%";
+  int pad = 4 - (int)value_str.size(); if (pad < 0) pad = 0;
+  
+  const auto& ui = ui_config();
+  const std::string* col = nullptr;
+  if (colorize) {
+    if (display_val >= ui.warning_pct) col = &ui.warning;
+    else if (display_val >= ui.caution_pct) col = &ui.caution;
+  }
+  
+  std::string out;
+  out.reserve(4 + 3 + 16);
+  out.append(pad, ' ');
+  if (col) out += *col;
+  out += digits;
+  if (col) out += sgr_reset();
+  out += "%  ";
+  return out;
+}
+
+std::vector<std::string> render_process_table(
+    const montauk::model::Snapshot& s, 
+    int width, 
+    int target_rows
+) {
+  std::vector<std::string> all;
+  int iw = std::max(3, width - 2);
+  auto ncpu = (int)std::max<size_t>(1, s.cpu.per_core_pct.size());
+  auto scale_proc_cpu = [&](double raw)->double{
+    return (g_ui.cpu_scale==UIState::CPUScale::Total) ? (raw / (double)ncpu) : raw;
+  };
+  // Helper for human-readable KB formatting
+  auto human_kib = [](uint64_t kib){ 
+    if (kib >= (1024ull*1024ull)) { 
+      double g=kib/(1024.0*1024.0); 
+      return std::to_string((int)(g+0.5))+"G"; 
+    } 
+    if (kib>=1024ull){ 
+      double m=kib/1024.0; 
+      return std::to_string((int)(m+0.5))+"M";
+    } 
+    return std::to_string((int)kib)+"K"; 
+  };
+  // CPU and Memory panels moved to right column.
+
+  // Processes
+  std::vector<std::string> proc_lines; proc_lines.reserve(64);
+  std::vector<int> proc_sev; proc_sev.reserve(64); // 0=none,1=caution,2=warning
+  // Prepare order and sorting for process list
+  std::vector<size_t> order(s.procs.processes.size());
+  std::iota(order.begin(), order.end(), 0);
+  std::vector<double> sm(order.size(), 0.0);
+  for (size_t i = 0; i < order.size(); ++i) {
+    const auto& p = s.procs.processes[i];
+    sm[i] = montauk::ui::smooth_value(std::string("proc.cpu.") + std::to_string(p.pid), scale_proc_cpu(p.cpu_pct), 0.35);
+  }
+  montauk::util::adaptive_timsort(order.begin(), order.end(), [&](size_t a, size_t b){
+    const auto& A = s.procs.processes[a];
+    const auto& B = s.procs.processes[b];
+    switch (g_ui.sort) {
+      case SortMode::CPU:
+        if (sm[a] != sm[b]) return sm[a] > sm[b];
+        break;
+      case SortMode::MEM:
+        if (A.rss_kb != B.rss_kb) return A.rss_kb > B.rss_kb;
+        break;
+      case SortMode::PID:
+        if (A.pid != B.pid) return A.pid < B.pid;
+        break;
+      case SortMode::NAME:
+        if (A.cmd != B.cmd) return A.cmd < B.cmd;
+        break;
+      case SortMode::GPU:
+        if (A.gpu_util_pct != B.gpu_util_pct) return A.gpu_util_pct > B.gpu_util_pct;
+        break;
+      case SortMode::GMEM:
+        if (A.gpu_mem_kb != B.gpu_mem_kb) return A.gpu_mem_kb > B.gpu_mem_kb;
+        break;
+    }
+    // tiebreaker: higher CPU, then higher MEM, then lower PID
+    if (sm[a] != sm[b]) return sm[a] > sm[b];
+    if (A.rss_kb != B.rss_kb) return A.rss_kb > B.rss_kb;
+    return A.pid < B.pid;
+  });
+  // Pagination by scroll
+  const int max_rows = std::max(1, target_rows - 1); // leave 1 row for title
+  g_ui.last_proc_page_rows = max_rows;
+  const int skip = g_ui.scroll;
+  const int take = max_rows;
+  // Determine displayed rows
+  std::vector<const montauk::model::ProcSample*> displayed; displayed.reserve((size_t)take);
+  int limit = std::min((int)order.size(), skip + take);
+  for (int i = skip; i < limit; ++i) {
+    displayed.push_back(&s.procs.processes[order[i]]);
+  }
+  // Adaptive column widths (sticky with gentle shrink)
+  int min_pid_w = 5, max_pid_w = 6;
+  int min_user_w = 4, max_user_w = 12;
+  int min_gpu_digit_w = 3, max_gpu_digit_w = 4;
+  int min_mem_w = 4, max_mem_w = 6;
+  int min_gmem_w = 4, max_gmem_w = 6;
+  // Measure what we need for displayed rows
+  int need_pid_w = min_pid_w, need_user_w = min_user_w, need_gpu_digit_w = min_gpu_digit_w;
+  int need_mem_w = min_mem_w, need_gmem_w = min_gmem_w;
+  for (auto* p : displayed) {
+    need_pid_w = std::max(need_pid_w, (int)std::to_string(p->pid).size());
+    need_user_w = std::max(need_user_w, (int)p->user_name.size());
+    need_mem_w = std::max(need_mem_w, (int)human_kib(p->rss_kb).size());
+    need_gmem_w = std::max(need_gmem_w, (int)human_kib(p->gpu_mem_kb).size());
+    double display_gpu = (g_ui.gpu_scale==UIState::GPUScale::Capacity) ? p->gpu_util_pct : p->gpu_util_pct;
+    if (display_gpu > 0.0 && display_gpu < 1.0) {
+      double rounded = std::round(display_gpu * 10.0) / 10.0;
+      if (rounded < 0.1) rounded = 0.1;
+      std::ostringstream oss;
+      oss << std::fixed << std::setprecision(1) << rounded;
+      need_gpu_digit_w = std::max(need_gpu_digit_w, (int)oss.str().size());
+    } else {
+      need_gpu_digit_w = std::max(need_gpu_digit_w, (int)std::to_string((int)(display_gpu + 0.5)).size());
+    }
+  }
+  need_pid_w = std::min(need_pid_w, max_pid_w);
+  need_user_w = std::min(need_user_w, max_user_w);
+  need_gpu_digit_w = std::min(need_gpu_digit_w, max_gpu_digit_w);
+  need_mem_w = std::min(need_mem_w, max_mem_w);
+  need_gmem_w = std::min(need_gmem_w, max_gmem_w);
+  // Sticky width: grow to needed, shrink gently if current is >needed
+  auto sticky_width = [](int cur, int need, int minw, int maxw) -> int {
+    if (need > cur) return std::min(need, maxw);
+    if (cur > need) return std::max(cur - 1, std::max(need, minw));
+    return cur;
+  };
+  g_ui.col_pid_w = sticky_width(g_ui.col_pid_w, need_pid_w, min_pid_w, max_pid_w);
+  g_ui.col_user_w = sticky_width(g_ui.col_user_w, need_user_w, min_user_w, max_user_w);
+  g_ui.col_gpu_digit_w = sticky_width(g_ui.col_gpu_digit_w, need_gpu_digit_w, min_gpu_digit_w, max_gpu_digit_w);
+  g_ui.col_mem_w = sticky_width(g_ui.col_mem_w, need_mem_w, min_mem_w, max_mem_w);
+  g_ui.col_gmem_w = sticky_width(g_ui.col_gmem_w, need_gmem_w, min_gmem_w, max_gmem_w);
+  // Build header
+  std::string hdr;
+  hdr.reserve((size_t)iw + 20);
+  hdr += trunc_pad("PID", g_ui.col_pid_w);
+  hdr += " ";
+  hdr += trunc_pad("USER", g_ui.col_user_w);
+  hdr += " ";
+  hdr += trunc_pad("CPU", 4 + 2); // digits+"%  "
+  hdr += " ";
+  hdr += trunc_pad("GPU", g_ui.col_gpu_digit_w + 2); // digits+"%  "
+  if (g_ui.show_gmem) {
+    hdr += " ";
+    hdr += trunc_pad("GMEM", g_ui.col_gmem_w);
+  }
+  hdr += " ";
+  hdr += trunc_pad("MEM", g_ui.col_mem_w);
+  hdr += " ";
+  int name_start = (int)hdr.size();
+  int name_w = iw - name_start;
+  if (name_w < 3) name_w = 3;
+  hdr += trunc_pad("NAME", name_w);
+  proc_lines.push_back(hdr);
+  proc_sev.push_back(0);
+  // Process rows
+  const auto& ui = ui_config();
+  for (auto* p : displayed) {
+    double scaled_cpu = scale_proc_cpu(p->cpu_pct);
+    double smooth_cpu = montauk::ui::smooth_value(std::string("proc.cpu.") + std::to_string(p->pid), scaled_cpu, 0.35);
+    int severity = 0;
+    if ((int)(smooth_cpu + 0.5) >= ui.warning_pct) severity = 2;
+    else if ((int)(smooth_cpu + 0.5) >= ui.caution_pct) severity = 1;
+    std::string row;
+    row.reserve((size_t)iw + 20);
+    row += trunc_pad(std::to_string(p->pid), g_ui.col_pid_w);
+    row += " ";
+    row += trunc_pad(p->user_name, g_ui.col_user_w);
+    row += " ";
+    row += fmt_cpu_field(smooth_cpu, false);
+    row += " ";
+    double display_gpu = (g_ui.gpu_scale==UIState::GPUScale::Capacity) ? p->gpu_util_pct : p->gpu_util_pct;
+    std::string gpu_field;
+    {
+      std::string digits;
+      if (display_gpu > 0.0 && display_gpu < 1.0) {
+        double rounded = std::round(display_gpu * 10.0) / 10.0;
+        if (rounded < 0.1) rounded = 0.1;
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(1) << rounded;
+        digits = oss.str();
+      } else {
+        digits = std::to_string((int)(display_gpu + 0.5));
+      }
+      int pad = g_ui.col_gpu_digit_w - (int)digits.size();
+      if (pad < 0) pad = 0;
+      gpu_field.reserve((size_t)g_ui.col_gpu_digit_w + 2);
+      gpu_field.append(pad, ' ');
+      gpu_field += digits;
+      gpu_field += "%";
+    }
+    row += trunc_pad(gpu_field, g_ui.col_gpu_digit_w + 2);
+    if (g_ui.show_gmem) {
+      row += " ";
+      row += trunc_pad(human_kib(p->gpu_mem_kb), g_ui.col_gmem_w);
+    }
+    row += " ";
+    row += trunc_pad(human_kib(p->rss_kb), g_ui.col_mem_w);
+    row += " ";
+    std::string proc_name = p->cmd.empty() ? std::to_string(p->pid) : p->cmd;
+    row += trunc_pad(proc_name, name_w);
+    proc_lines.push_back(row);
+    proc_sev.push_back(severity);
+  }
+  // Box
+  std::string title = "PROCESS MONITOR";
+  if (skip > 0 || (skip + displayed.size() < s.procs.processes.size())) {
+    title += " (";
+    title += std::to_string(skip + 1);
+    title += "–";
+    title += std::to_string(skip + (int)displayed.size());
+    title += " of ";
+    title += std::to_string(s.procs.processes.size());
+    title += ")";
+  }
+  auto proc_box = make_box(title, proc_lines, width, target_rows);
+  // Colorize rows based on severity
+  {
+    const std::string& V = use_unicode() ? "│" : "|";
+    const auto& uic = ui_config();
+    for (int li = 1; li < (int)proc_box.size() - 1; ++li) {
+      if (li - 1 >= (int)proc_sev.size()) break;
+      int sev = proc_sev[li-1];
+      if (sev <= 0) continue; // skip header and non-severe rows
+      auto& line = proc_box[li];
+      size_t fpos = line.find(V);
+      size_t lpos = line.rfind(V);
+      if (fpos == std::string::npos || lpos == std::string::npos || lpos <= fpos) continue;
+      size_t start = fpos + V.size();
+      std::string pre = line.substr(0, start);
+      std::string mid = line.substr(start, lpos - start);
+      std::string suf = line.substr(lpos);
+      const std::string& col = (sev==2) ? uic.warning : uic.caution;
+      line = pre + col + mid + sgr_reset() + suf;
+    }
+  }
+  all.insert(all.end(), proc_box.begin(), proc_box.end());
+  return all;
+}
+
+} // namespace montauk::ui

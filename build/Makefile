@@ -632,6 +632,174 @@ src/tools/analyze_proc.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_analyze.dir/build.make CMakeFiles/montauk_analyze.dir/src/tools/analyze_proc.cpp.s
 .PHONY : src/tools/analyze_proc.cpp.s
 
+src/ui/Config.o: src/ui/Config.cpp.o
+.PHONY : src/ui/Config.o
+
+# target to build an object file
+src/ui/Config.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Config.cpp.o
+.PHONY : src/ui/Config.cpp.o
+
+src/ui/Config.i: src/ui/Config.cpp.i
+.PHONY : src/ui/Config.i
+
+# target to preprocess a source file
+src/ui/Config.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Config.cpp.i
+.PHONY : src/ui/Config.cpp.i
+
+src/ui/Config.s: src/ui/Config.cpp.s
+.PHONY : src/ui/Config.s
+
+# target to generate assembly for a file
+src/ui/Config.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Config.cpp.s
+.PHONY : src/ui/Config.cpp.s
+
+src/ui/Formatting.o: src/ui/Formatting.cpp.o
+.PHONY : src/ui/Formatting.o
+
+# target to build an object file
+src/ui/Formatting.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Formatting.cpp.o
+.PHONY : src/ui/Formatting.cpp.o
+
+src/ui/Formatting.i: src/ui/Formatting.cpp.i
+.PHONY : src/ui/Formatting.i
+
+# target to preprocess a source file
+src/ui/Formatting.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Formatting.cpp.i
+.PHONY : src/ui/Formatting.cpp.i
+
+src/ui/Formatting.s: src/ui/Formatting.cpp.s
+.PHONY : src/ui/Formatting.s
+
+# target to generate assembly for a file
+src/ui/Formatting.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Formatting.cpp.s
+.PHONY : src/ui/Formatting.cpp.s
+
+src/ui/Input.o: src/ui/Input.cpp.o
+.PHONY : src/ui/Input.o
+
+# target to build an object file
+src/ui/Input.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Input.cpp.o
+.PHONY : src/ui/Input.cpp.o
+
+src/ui/Input.i: src/ui/Input.cpp.i
+.PHONY : src/ui/Input.i
+
+# target to preprocess a source file
+src/ui/Input.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Input.cpp.i
+.PHONY : src/ui/Input.cpp.i
+
+src/ui/Input.s: src/ui/Input.cpp.s
+.PHONY : src/ui/Input.s
+
+# target to generate assembly for a file
+src/ui/Input.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Input.cpp.s
+.PHONY : src/ui/Input.cpp.s
+
+src/ui/Panels.o: src/ui/Panels.cpp.o
+.PHONY : src/ui/Panels.o
+
+# target to build an object file
+src/ui/Panels.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Panels.cpp.o
+.PHONY : src/ui/Panels.cpp.o
+
+src/ui/Panels.i: src/ui/Panels.cpp.i
+.PHONY : src/ui/Panels.i
+
+# target to preprocess a source file
+src/ui/Panels.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Panels.cpp.i
+.PHONY : src/ui/Panels.cpp.i
+
+src/ui/Panels.s: src/ui/Panels.cpp.s
+.PHONY : src/ui/Panels.s
+
+# target to generate assembly for a file
+src/ui/Panels.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Panels.cpp.s
+.PHONY : src/ui/Panels.cpp.s
+
+src/ui/ProcessTable.o: src/ui/ProcessTable.cpp.o
+.PHONY : src/ui/ProcessTable.o
+
+# target to build an object file
+src/ui/ProcessTable.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/ProcessTable.cpp.o
+.PHONY : src/ui/ProcessTable.cpp.o
+
+src/ui/ProcessTable.i: src/ui/ProcessTable.cpp.i
+.PHONY : src/ui/ProcessTable.i
+
+# target to preprocess a source file
+src/ui/ProcessTable.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/ProcessTable.cpp.i
+.PHONY : src/ui/ProcessTable.cpp.i
+
+src/ui/ProcessTable.s: src/ui/ProcessTable.cpp.s
+.PHONY : src/ui/ProcessTable.s
+
+# target to generate assembly for a file
+src/ui/ProcessTable.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/ProcessTable.cpp.s
+.PHONY : src/ui/ProcessTable.cpp.s
+
+src/ui/Renderer.o: src/ui/Renderer.cpp.o
+.PHONY : src/ui/Renderer.o
+
+# target to build an object file
+src/ui/Renderer.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Renderer.cpp.o
+.PHONY : src/ui/Renderer.cpp.o
+
+src/ui/Renderer.i: src/ui/Renderer.cpp.i
+.PHONY : src/ui/Renderer.i
+
+# target to preprocess a source file
+src/ui/Renderer.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Renderer.cpp.i
+.PHONY : src/ui/Renderer.cpp.i
+
+src/ui/Renderer.s: src/ui/Renderer.cpp.s
+.PHONY : src/ui/Renderer.s
+
+# target to generate assembly for a file
+src/ui/Renderer.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Renderer.cpp.s
+.PHONY : src/ui/Renderer.cpp.s
+
+src/ui/Terminal.o: src/ui/Terminal.cpp.o
+.PHONY : src/ui/Terminal.o
+
+# target to build an object file
+src/ui/Terminal.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Terminal.cpp.o
+.PHONY : src/ui/Terminal.cpp.o
+
+src/ui/Terminal.i: src/ui/Terminal.cpp.i
+.PHONY : src/ui/Terminal.i
+
+# target to preprocess a source file
+src/ui/Terminal.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Terminal.cpp.i
+.PHONY : src/ui/Terminal.cpp.i
+
+src/ui/Terminal.s: src/ui/Terminal.cpp.s
+.PHONY : src/ui/Terminal.s
+
+# target to generate assembly for a file
+src/ui/Terminal.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/montauk_core.dir/build.make CMakeFiles/montauk_core.dir/src/ui/Terminal.cpp.s
+.PHONY : src/ui/Terminal.cpp.s
+
 src/util/AdaptiveSort.o: src/util/AdaptiveSort.cpp.o
 .PHONY : src/util/AdaptiveSort.o
 
@@ -821,6 +989,27 @@ help:
 	@echo "... src/tools/analyze_proc.o"
 	@echo "... src/tools/analyze_proc.i"
 	@echo "... src/tools/analyze_proc.s"
+	@echo "... src/ui/Config.o"
+	@echo "... src/ui/Config.i"
+	@echo "... src/ui/Config.s"
+	@echo "... src/ui/Formatting.o"
+	@echo "... src/ui/Formatting.i"
+	@echo "... src/ui/Formatting.s"
+	@echo "... src/ui/Input.o"
+	@echo "... src/ui/Input.i"
+	@echo "... src/ui/Input.s"
+	@echo "... src/ui/Panels.o"
+	@echo "... src/ui/Panels.i"
+	@echo "... src/ui/Panels.s"
+	@echo "... src/ui/ProcessTable.o"
+	@echo "... src/ui/ProcessTable.i"
+	@echo "... src/ui/ProcessTable.s"
+	@echo "... src/ui/Renderer.o"
+	@echo "... src/ui/Renderer.i"
+	@echo "... src/ui/Renderer.s"
+	@echo "... src/ui/Terminal.o"
+	@echo "... src/ui/Terminal.i"
+	@echo "... src/ui/Terminal.s"
 	@echo "... src/util/AdaptiveSort.o"
 	@echo "... src/util/AdaptiveSort.i"
 	@echo "... src/util/AdaptiveSort.s"
