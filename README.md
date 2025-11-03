@@ -20,7 +20,11 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **Process Tracking**: Up to 256 processes with full command-line enrichment for accurate identification
 - **Atomic Snapshots**: Minimal CPU overhead with lock-free snapshot publication
 - **Zero Dependencies**: Builds with standard library only; NVML auto-detected and optional
-- **Churn Resilient**: Handles /proc and /sysfs transients gracefully during heavy system activity
+- **Churn Resilient**: Real-time churn detection and dynamic display during heavy system activity
+- **ANSI Color Support**: Intelligent escape sequence handling with full truecolor support
+- **Dynamic Layout**: All panels fill available vertical space automatically
+- **Security Monitoring**: Process security analysis with severity-based highlighting
+- **Dual Display Modes**: Compact default view and comprehensive SYSTEM focus mode
 
 ## Build
 
@@ -80,17 +84,17 @@ MONTAUK_COLLECTOR=traditional ./montauk  # Force traditional polling
 - `n` — Sort by Name
 
 **Display Toggles:**
-- `G` — Toggle GPU panel
-- `t` — Toggle Thermal panel
-- `d` — Toggle Disk panel
+- `d` — Toggle Disk I/O panel
 - `N` — Toggle Network panel
 - `h` — Toggle help line
 
 **Modes:**
-- `s` — Toggle System focus (right side shows only SYSTEM box)
+- `s` — Toggle SYSTEM focus mode (shows detailed system information in right column)
 - `i` — Toggle CPU scale (machine-share ↔ per-core)
 - `u` — Toggle GPU scale (reserved for future modes)
 - `+/-` — Increase/decrease refresh rate
+
+**Note:** In SYSTEM focus mode, the right column displays comprehensive system metrics including CPU, GPU, memory, disk, network, thermal, and process statistics. Default mode shows individual panels (PROCESSOR, GPU, MEMORY, DISK I/O, NETWORK, SYSTEM).
 
 ## Configuration
 
@@ -100,40 +104,6 @@ MONTAUK_COLLECTOR=traditional ./montauk  # Force traditional polling
 Notes:
 - Tracking more processes has minimal CPU overhead; enrichment (reading `/proc/[pid]/cmdline` and `/proc/[pid]/status`) is the primary cost. Consider keeping `ENRICH_TOP_N` below `MAX_PROCS` for best responsiveness.
 - Both variables accept either `MONTAUK_…` or `montauk_…` prefixes.
-
-### Theme Files
-
-Montauk can preload a color palette from a simple `.env` file before resolving any runtime configuration:
-
-1. Create `~/.config/montauk/theme.env` (or point `MONTAUK_THEME=/path/to/theme.env`).
-2. Add `KEY=VALUE` pairs, for example:
-
-   ```
-   MONTAUK_TEXT_HEX=#FFB000
-   MONTAUK_TITLE_HEX=#FFB000
-   MONTAUK_ACCENT_HEX=#FFDB6D
-   MONTAUK_CAUTION_HEX=#FFC53A
-   MONTAUK_WARNING_HEX=#FF602E
-   ```
-
-   Lines starting with `#` are treated as comments. `_HEX` values are honoured when the terminal supports truecolor; fall back to `_IDX` (0‑255) to target 16/256‑colour palettes.
-
-3. Launch `montauk` as usual. Precedence is: runtime environment variables > theme file values > built-in defaults.
-
-The build targets (`make build`, `make debug`, etc.) automatically copy the bundled template (`src/util/theme.env`) into `~/.config/montauk/theme.env` (or `$XDG_CONFIG_HOME/montauk/theme.env`) the first time. The file is only written if it does not already exist, so you can customise it freely. Point `MONTAUK_THEME` at an alternate path if you want to keep multiple variations around.
-
-Available keys cover every colourised element in the UI:
-
-- `MONTAUK_TEXT_{HEX,IDX}` — Primary text colour applied after each reset.
-- `MONTAUK_TITLE_{HEX,IDX}` — Header banner colour.
-- `MONTAUK_ACCENT_{HEX,IDX}` — Box titles, key callouts.
-- `MONTAUK_SUCCESS_{HEX,IDX}` — Healthy progress bars / positive stats.
-- `MONTAUK_INFO_{HEX,IDX}` — Neutral informational accents (e.g. unknown bars).
-- `MONTAUK_CAUTION_{HEX,IDX}` — Mid-level alerts and thresholds.
-- `MONTAUK_WARNING_{HEX,IDX}` — High-severity alerts.
-- `MONTAUK_MUTED_{HEX,IDX}` — Borders, dividers, and muted text.
-
-Add new keys as needed—anything defined in the theme file behaves exactly like its environment-variable twin.
 
 ## CPU Scale Modes
 
@@ -214,44 +184,104 @@ MONTAUK_NVML_PATH=/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1  # Override NVML l
 - Values 1% and above shown as integers
 - This ensures low-activity processes remain visible without inflating their usage
 
+**UI Layout:**
+
+**Default Mode:**
+Left column: PROCESS MONITOR (dynamically fills available height)
+Right column (top to bottom):
+- PROCESSOR (CPU utilization bar)
+- GPU (multi-metric bars: GPU util, VRAM, MEM util, ENC, DEC)
+- MEMORY (RAM utilization bar)
+- DISK I/O (throughput and device stats)
+- NETWORK (throughput and interface stats)
+- SYSTEM (detailed system information)
+
+**SYSTEM Focus Mode (press 's'):**
+Left column: PROCESS MONITOR
+Right column: Comprehensive SYSTEM box showing:
+- Host/kernel/date/time/uptime (when in SYSTEM focus)
+- CPU details (model, threads, frequency, governor, turbo, utilization breakdown)
+- Load averages
+- Context switches and interrupts per second
+- GPU info (model, utilization, NVML status, power, power limit, P-state)
+- Memory (available, used, cache/buffers)
+- Disk I/O (aggregate and per-device)
+- Network (aggregate and per-interface)
+- Filesystem usage
+- CPU and GPU temperatures with margin-to-warning calculations
+- Collector type (Event-Driven Netlink or Traditional)
+- Process counts (enriched vs total)
+- System threads statistics
+- Process states (Running, Sleeping, Zombie)
+- **PROC CHURN** (when active) or **PROC SECURITY** (when no churn)
+
+**Color Coding:**
+- Normal text: Default terminal color
+- Bars: Green (healthy) → Yellow (caution) → Red (warning) based on utilization
+- CAUTION severity: Yellow/orange highlighting (60-80% default)
+- WARNING severity: Red highlighting (80%+ default)
+- PROC CHURN: CAUTION severity (yellow/orange)
+- PROC SECURITY warnings: Severity-based coloring (INFO/CAUTION/WARNING)
+- Borders and titles: Configurable accent colors
+
 ## Churn Handling
 
-During heavy system activity (builds, installs), `/proc` and `/sys` entries can vanish between directory scans and file reads. Montauk handles this gracefully:
+During heavy system activity (builds, installs, rapid process creation), `/proc` and `/sys` entries can vanish between directory scans and file reads. Montauk handles this gracefully with dynamic visual feedback:
 
-**Per-process signal:**
-- Churned processes show `PROC CHURN DETECTED` in place of metrics
-- Colored as WARNING
+**PROC CHURN Display:**
+
+When active churn is detected, the SYSTEM box shows:
+- Summary line: `PROC CHURN  N events [LAST 2s]` (colored as CAUTION - yellow/orange)
+- Event breakdown: `PROC:X  SYSFS:Y` showing source of churn events
+- Currently affected processes with PIDs (processes may have exited by display time)
+
+**Display Behavior:**
+- PROC CHURN and PROC SECURITY are mutually exclusive
+- When churn is active: PROC CHURN replaces PROC SECURITY display
+- When churn subsides: PROC SECURITY returns automatically
+- In SYSTEM focus mode: Churn details dynamically fill available vertical space
+
+**Process Table:**
+- Churned processes may show partial metrics during read failures
 - Clears on next successful sample
+- System remains responsive throughout churn events
 
-**System summary:**
-- Sticky banner: `PROC CHURN  N events [LAST 2s]`
-- Auto-hides when churn subsides
+Example SYSTEM box during churn:
+```
+PROC CHURN                                  8 events [LAST 2s]
+PROC:8  SYSFS:0
+PID:12345 cc1plus
+PID:12346 ld
+PID:12347 as
+```
 
-Example:
-```
-  PID     USER      CPU%  GPU%  GMEM   MEM    COMMAND
-103923  mod       38.4    0     0M   350M   cc1plus -quiet...
-103981  mod       PROC CHURN DETECTED       cc1plus -quiet...  ⚠
-103931  mod       21.4    0     0M   441M   cc1plus -quiet...
-```
+The event count (8) may exceed visible PIDs (3) because some processes exit before display update.
 
 ## Configuration (Environment Variables)
 
 ### UI/Terminal
 ```bash
 MONTAUK_ALT_SCREEN=0           # Disable alt screen (default: 1)
-MONTAUK_TITLE_HEX=#FFB000      # Title color (hex)
-MONTAUK_TITLE_IDX=214          # Title color (palette index)
+MONTAUK_TITLE_HEX=#FFB000      # Title color (hex, truecolor terminals)
+MONTAUK_TITLE_IDX=214          # Title color (palette index, fallback)
+MONTAUK_ACCENT_IDX=11          # Accent color (default: 11, cyan)
+MONTAUK_CAUTION_IDX=9          # Caution color (default: 9, bright red)
+MONTAUK_WARNING_IDX=1          # Warning color (default: 1, red)
 ```
+
+**Color Configuration:**
+- `_HEX` values use truecolor (24-bit) format when terminal supports it
+- `_IDX` values use 256-color palette indices (0-255)
+- Environment variables override built-in defaults
+- Both `MONTAUK_` and `montauk_` prefixes accepted
 
 ### Colors/Thresholds
 ```bash
-MONTAUK_ACCENT_IDX=39          # Accent color
-MONTAUK_CAUTION_IDX=220        # Caution color  
-MONTAUK_WARNING_IDX=196        # Warning color
-MONTAUK_PROC_CAUTION_PCT=50    # Process caution threshold
-MONTAUK_PROC_WARNING_PCT=80    # Process warning threshold
+MONTAUK_PROC_CAUTION_PCT=60    # Process caution threshold (default: 60%)
+MONTAUK_PROC_WARNING_PCT=80    # Process warning threshold (default: 80%)
 ```
+
+Colors are configured via the UI/Terminal section above.
 
 ### Alerts
 ```bash
@@ -314,6 +344,31 @@ cmake --build build -j
 ./build/montauk --self-test-seconds 5
 ```
 
+**Stress Testing:**
+
+Montauk includes stress test scripts in the companion `stress-tests/` directory for validating monitoring accuracy and churn detection:
+
+**GPU Stress Test:**
+```bash
+cd ../stress-tests
+./stress_test 60        # 60-second GPU + CPU stress test
+```
+- Tests GPU utilization tracking (compute + memory)
+- Multi-threaded CPU load (OpenMP)
+- VRAM allocation monitoring
+- Power and thermal tracking
+
+**PROC CHURN Test:**
+```bash
+./proc_churn.sh 30 100  # 30 seconds, 100 processes/second
+```
+- Rapidly spawns and destroys processes
+- Triggers PROC CHURN detection
+- Tests /proc resilience during heavy activity
+- Validates event-driven vs traditional collector behavior
+
+Monitor with montauk while running stress tests (press 's' for SYSTEM focus to see detailed churn metrics).
+
 **Note:** Tests are disabled by default in packaging builds.
 
 ## Uninstall (CMake)
@@ -340,15 +395,34 @@ makepkg -si
 ## Architecture
 
 **Collectors:**
-- `CpuCollector` — Per-core usage, freq, model
-- `MemoryCollector` — RAM, swap, buffers, cache
+- `CpuCollector` — Per-core usage, freq, model, governor, turbo status
+- `MemoryCollector` — RAM, swap, buffers, cache, available memory
 - `ProcessCollector` — Traditional /proc scanning (fallback mode)
 - `NetlinkProcessCollector` — Event-driven process tracking via kernel connector (default when available)
-- `GpuCollector` — VRAM, temps, power (multi-vendor)
+- `GpuCollector` — VRAM, temps, power, utilization (multi-vendor)
 - `GpuAttributor` — Per-process GPU util/mem with fallback chains
-- `NetCollector` — Interface stats, throughput
-- `DiskCollector` — I/O stats, throughput  
+- `NetCollector` — Interface stats, throughput (down/up per interface)
+- `DiskCollector` — I/O stats, throughput, per-device utilization
 - `ThermalCollector` — Multi-sensor temps with vendor thresholds
+- `FsCollector` — Filesystem usage (mountpoint, used, total)
+- `FdinfoProcessCollector` — Per-process GPU metrics via /proc/*/fdinfo (DRM)
+
+**Core Components:**
+- `Security` — Process security analysis (privilege escalation, suspicious patterns)
+- `Churn` — Real-time /proc and /sysfs churn event tracking
+- `Alerts` — Process-based alerting system
+- `SnapshotBuffers` — Lock-free snapshot management
+- `Producer` — Coordinated data collection pipeline
+- `Filter` — Process filtering and sorting
+
+**UI Components:**
+- `Panels` — Right column rendering (PROCESSOR, GPU, MEMORY, DISK I/O, NETWORK, SYSTEM)
+- `ProcessTable` — Left column PROCESS MONITOR rendering with severity coloring
+- `Renderer` — Frame composition and terminal output with ANSI escape handling
+- `Terminal` — TTY detection, color support, cursor control
+- `Formatting` — Text layout, truncation with ANSI-escape-aware functions
+- `Config` — Theme loading, environment variable parsing
+- `Input` — Keyboard handling and command processing
 
 **Process Collection:**
 
@@ -390,6 +464,28 @@ Montauk uses two collection strategies:
 - **System calls:** 90%+ reduction with event-driven vs traditional polling
 - **Cmdline enrichment:** All 256 processes (full command lines for accurate GPU detection)
 - **Memory:** ~10MB resident
+
+**Technical Implementation:**
+
+**ANSI Escape Sequence Handling:**
+- Display width calculations skip escape codes (don't count as visible characters)
+- String truncation preserves embedded ANSI codes
+- Prevents double-coloring and escape sequence corruption
+- Full truecolor (24-bit) support with 256-color fallback
+
+**Dynamic Layout:**
+- All panels calculate available vertical space dynamically
+- PROCESS MONITOR fills to match terminal height
+- SYSTEM box expands to fill remaining space
+- PROC CHURN and PROC SECURITY details fill all available lines
+- No hardcoded row limits
+
+**Churn Detection:**
+- Tracks /proc and /sysfs read failures in sliding 2-second window
+- Event counts tracked separately by source (PROC vs SYSFS)
+- Per-process churn flag for processes with read failures
+- Auto-clears when churn subsides
+- Zero performance impact when no churn active
 
 ## Policy
 

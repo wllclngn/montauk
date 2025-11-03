@@ -135,7 +135,7 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
     // Always create SYSTEM box, minimum 1 line of content
     int inner_min = std::max(1, remaining - 2);
     std::vector<std::string> sys; std::vector<int> sys_sev; // 0 none, 1 caution, 2 warning
-    auto push = [&](const std::string& s, int sev=0){ sys.push_back(trunc_pad(s, iw)); sys_sev.push_back(sev); };
+    auto push = [&](const std::string& s, int sev=0){ sys.push_back(s); sys_sev.push_back(sev); };
     
     // Hostname/Date/Time/Uptime/Kernel (show in SYSTEM focus only)
     if (g_ui.system_focus) {
@@ -428,13 +428,41 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
     }
     push("", 0);
     
-    // Churn summary (if active)
+    // PROC CHURN / PROC SECURITY - mutually exclusive display
     if (s.churn.recent_2s_events > 0) {
+      // PROC CHURN active - show churn info instead of security
       std::ostringstream rr; rr << s.churn.recent_2s_events << " events [LAST 2s]";
-      push(lr_align(iw, "PROC CHURN", rr.str()), 2);
-    }
-    // Security findings summary + top offenders
-    {
+      push(lr_align(iw, "PROC CHURN", rr.str()), 1);
+      
+      // In SYSTEM focus, show additional churn detail info to fill space
+      if (g_ui.system_focus) {
+        // Show event breakdown
+        if (s.churn.recent_2s_proc > 0 || s.churn.recent_2s_sys > 0) {
+          std::ostringstream detail;
+          detail << "PROC:" << s.churn.recent_2s_proc << "  SYSFS:" << s.churn.recent_2s_sys;
+          push(detail.str(), 1);
+        }
+        
+        // Show currently churned processes if any
+        std::vector<const montauk::model::ProcSample*> churned;
+        for (const auto& p : s.procs.processes) {
+          if (p.churn) churned.push_back(&p);
+        }
+        
+        // Fill remaining space with churned process details
+        int lines_used = (int)sys.size();
+        int available = inner_min - lines_used;
+        int detail_lines = std::min(available, (int)churned.size());
+        
+        for (int i = 0; i < detail_lines; ++i) {
+          const auto& p = *churned[i];
+          std::ostringstream detail;
+          detail << "PID:" << p.pid << " " << (p.cmd.empty() ? std::to_string(p.pid) : p.cmd);
+          push(detail.str(), 1);
+        }
+      }
+    } else {
+      // No churn - show PROC SECURITY
       auto findings = montauk::app::collect_security_findings(s);
       if (findings.empty()) {
         push(lr_align(iw, "PROC SECURITY", "OK"), 0);
@@ -456,23 +484,16 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
           summary << "INFO:" << findings.size();
         }
         int summary_sev = warn > 0 ? 2 : (caution > 0 ? 1 : 0);
-        if (!g_ui.system_focus) {
-          if (warn > 0) {
-            const montauk::app::SecurityFinding* first_warn = nullptr;
-            for (const auto& f : findings) {
-              if (f.severity >= 2) { first_warn = &f; break; }
-            }
-            if (first_warn) {
-              push(montauk::app::format_security_line_default(*first_warn), first_warn->severity);
-            } else {
-              push(lr_align(iw, "PROC SECURITY", summary.str()), summary_sev);
-            }
-          } else {
-            push(lr_align(iw, "PROC SECURITY", summary.str()), summary_sev);
-          }
-        } else {
-          push(lr_align(iw, "PROC SECURITY", summary.str()), summary_sev);
-          int max_rows = std::min<int>((int)findings.size(), 4);
+        
+        // Summary line
+        push(lr_align(iw, "PROC SECURITY", summary.str()), summary_sev);
+        
+        // In SYSTEM focus, show detailed findings - fill ALL available space
+        if (g_ui.system_focus) {
+          int lines_used = (int)sys.size();
+          int available = inner_min - lines_used;
+          int max_rows = std::min(available, (int)findings.size());
+          
           for (int i = 0; i < max_rows; ++i) {
             const auto& f = findings[i];
             push(montauk::app::format_security_line_default(f), f.severity);

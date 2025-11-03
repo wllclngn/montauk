@@ -90,6 +90,9 @@ std::string colorize_line(const std::string& s) {
     std::string suf = s.substr(lpos + std::strlen(V));
     
     auto color_bar = [&](const std::string& part)->std::string{
+      // If the part already contains ANSI escape codes, don't recolor it
+      if (part.find('\x1B') != std::string::npos) return part;
+      
       size_t lb = part.find('[');
       size_t rb = (lb!=std::string::npos) ? part.find(']', lb+1) : std::string::npos;
       if (lb==std::string::npos || rb==std::string::npos || rb<=lb) return part;

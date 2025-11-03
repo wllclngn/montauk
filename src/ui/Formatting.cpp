@@ -25,6 +25,13 @@ int u8_len(unsigned char c){
 int display_cols(const std::string& s){
   int cols = 0; 
   for (size_t i=0; i<s.size();){ 
+    // Skip ANSI escape sequences
+    if (s[i] == '\x1B' && i+1 < s.size() && s[i+1] == '[') {
+      i += 2;
+      while (i < s.size() && (s[i] < '@' || s[i] > '~')) i++;
+      if (i < s.size()) i++; // skip final byte
+      continue;
+    }
     int len = u8_len((unsigned char)s[i]); 
     i += len; 
     cols += 1; 
@@ -39,6 +46,15 @@ std::string take_cols(const std::string& s, int cols){
   int seen = 0; 
   size_t i = 0;
   while (i < s.size() && seen < cols) {
+    // Copy ANSI escape sequences without counting them
+    if (s[i] == '\x1B' && i+1 < s.size() && s[i+1] == '[') {
+      size_t start = i;
+      i += 2;
+      while (i < s.size() && (s[i] < '@' || s[i] > '~')) i++;
+      if (i < s.size()) i++; // include final byte
+      out.append(s, start, i - start);
+      continue;
+    }
     int len = u8_len((unsigned char)s[i]);
     if (i + (size_t)len > s.size()) len = 1;
     out.append(s, i, len);
