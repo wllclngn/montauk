@@ -1,9 +1,0 @@
-/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles/montauk_core.dir
-/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles/montauk.dir
-/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles/montauk_analyze.dir
-/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles/edit_cache.dir
-/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles/rebuild_cache.dir
-/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles/list_install_components.dir
-/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles/install.dir
-/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles/install/local.dir
-/home/mod/personal/PROGRAMMING/SYSTEM PROGRAMS/LINUX/montauk/build/CMakeFiles/install/strip.dir
