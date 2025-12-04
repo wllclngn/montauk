@@ -53,7 +53,7 @@ cmake --install build --prefix /usr/local
 
 **Event-Driven Process Monitoring:**
 
-Montauk uses Linux Process Events Connector (netlink) for real-time process tracking when available. This provides significant performance benefits over traditional /proc polling.
+montauk uses Linux Process Events Connector (netlink) for real-time process tracking when available. This provides significant performance benefits over traditional /proc polling.
 
 To enable event-driven monitoring:
 ```bash
@@ -99,10 +99,10 @@ MONTAUK_COLLECTOR=traditional ./montauk  # Force traditional polling
 ## Configuration
 
 - `MONTAUK_MAX_PROCS` — Maximum number of processes tracked and rendered in the Process Monitor (default: `256`). Set to `1024` for deeper lists. Valid range: `32–4096`.
-- `MONTAUK_ENRICH_TOP_N` — Number of top processes to enrich with full command line and user name (default: `min(256, MONTAUK_MAX_PROCS)`). Keep at `256` for low overhead; increase to `512+` for more detail.
+- `MONTAUK_ENRICH_TOP_N` — Number of top processes to enrich with full command line and user name (default: `MONTAUK_MAX_PROCS`, up to 4096). All tracked processes are enriched by default for accurate GPU process detection.
 
 Notes:
-- Tracking more processes has minimal CPU overhead; enrichment (reading `/proc/[pid]/cmdline` and `/proc/[pid]/status`) is the primary cost. Consider keeping `ENRICH_TOP_N` below `MAX_PROCS` for best responsiveness.
+- Tracking more processes has minimal CPU overhead; enrichment (reading `/proc/[pid]/cmdline` and `/proc/[pid]/status`) is the primary cost. Default now enriches all tracked processes for maximum accuracy. Reduce `ENRICH_TOP_N` below `MAX_PROCS` if needed for lower-powered systems.
 - Both variables accept either `MONTAUK_…` or `montauk_…` prefixes.
 
 ## CPU Scale Modes
@@ -129,7 +129,7 @@ Notes:
 - PRIME render offload support
 
 **Requirements:**
-- Runtime: `nvidia-utils` (provides `libnvidia-ml.so.1`). Montauk now loads NVML dynamically and does not require dev headers.
+- Runtime: `nvidia-utils` (provides `libnvidia-ml.so.1`). montauk now loads NVML dynamically and does not require dev headers.
 - Optional build: `cuda` headers if you opt-in to static NVML linkage via CMake.
 
 **Fallback Chain** (when NVML unavailable or insufficient):
@@ -148,7 +148,7 @@ Notes:
 
 ### Browser GPU Process Detection
 
-Montauk automatically identifies browser GPU processes (Chrome, Chromium, Helium, etc.) by:
+montauk automatically identifies browser GPU processes (Chrome, Chromium, Helium, etc.) by:
 - Scanning for `--type=gpu-process` in command lines
 - Enriching up to 256 processes with full cmdline data
 - Applying intelligent fallback attribution when processes use minimal CPU
@@ -226,7 +226,7 @@ Right column: Comprehensive SYSTEM box showing:
 
 ## Churn Handling
 
-During heavy system activity (builds, installs, rapid process creation), `/proc` and `/sys` entries can vanish between directory scans and file reads. Montauk handles this gracefully with dynamic visual feedback:
+During heavy system activity (builds, installs, rapid process creation), `/proc` and `/sys` entries can vanish between directory scans and file reads. montauk handles this gracefully with dynamic visual feedback:
 
 **PROC CHURN Display:**
 
@@ -346,7 +346,7 @@ cmake --build build -j
 
 **Stress Testing:**
 
-Montauk includes stress test scripts in the companion `stress-tests/` directory for validating monitoring accuracy and churn detection:
+montauk includes stress test scripts in the companion `stress-tests/` directory for validating monitoring accuracy and churn detection:
 
 **GPU Stress Test:**
 ```bash
@@ -426,7 +426,7 @@ makepkg -si
 
 **Process Collection:**
 
-Montauk uses two collection strategies:
+montauk uses two collection strategies:
 
 **Event-Driven (Netlink) — Default when available:**
 - Subscribes to kernel process events (fork, exec, exit)

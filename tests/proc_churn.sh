@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate rapid short-lived processes so Montauk flags PROC CHURN.
+# Generate rapid short-lived processes so montauk flags PROC CHURN.
 set -euo pipefail
 
 events=${1:-64}

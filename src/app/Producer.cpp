@@ -35,7 +35,7 @@ Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
   int max_procs = getenv_int("MONTAUK_MAX_PROCS", 256);
   if (max_procs < 32) max_procs = 32;
   if (max_procs > 4096) max_procs = 4096;
-  int enrich_top = getenv_int("MONTAUK_ENRICH_TOP_N", std::min(256, max_procs));
+  int enrich_top = getenv_int("MONTAUK_ENRICH_TOP_N", max_procs);
   if (enrich_top < 0) enrich_top = 0;
   if (enrich_top > max_procs) enrich_top = max_procs;
   // Choose process collector: try netlink first, then fallback to traditional

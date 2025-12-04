@@ -6,6 +6,8 @@
 #include <clocale>
 #include <cstdlib>
 #include <ctime>
+#include <list>
+#include <mutex>
 #include <sstream>
 #include <unordered_map>
 #ifdef __linux__
@@ -95,20 +97,27 @@ std::string lr_align(int iw, const std::string& left, const std::string& right){
 
 bool prefer_12h_clock_from_locale() {
 #ifdef __linux__
-  static bool inited = false; 
-  if (!inited) { 
-    std::setlocale(LC_TIME, ""); 
-    inited = true; 
-  }
+  static std::once_flag init_flag;
+  static bool result = false;
+  
+  std::call_once(init_flag, []{
+    std::setlocale(LC_TIME, "");
+    
 #ifdef T_FMT
-  const char* tfmt = nl_langinfo(T_FMT);
-  if (tfmt && *tfmt) {
-    std::string f = tfmt;
-    if (f.find("%I") != std::string::npos || f.find("%p") != std::string::npos) return true;
-  }
+    const char* tfmt = nl_langinfo(T_FMT);
+    if (tfmt && *tfmt) {
+      std::string f = tfmt;
+      if (f.find("%I") != std::string::npos || f.find("%p") != std::string::npos) {
+        result = true;
+      }
+    }
 #endif
-#endif
+  });
+  
+  return result;
+#else
   return false;
+#endif
 }
 
 std::string format_time_now(bool prefer12h) {
@@ -241,13 +250,75 @@ CpuFreqInfo read_cpu_freq_info() {
 
 
 // EMA smoother for bar fill only
+namespace {
+  struct LRUCache {
+    static constexpr size_t MAX_SIZE = 512;
+    
+    using Item = std::pair<std::string, double>;
+    std::list<Item> items_;
+    std::unordered_map<std::string, decltype(items_)::iterator> index_;
+    
+    double* get(const std::string& key) {
+      auto it = index_.find(key);
+      if (it == index_.end()) return nullptr;
+      
+      items_.splice(items_.begin(), items_, it->second);
+      return &it->second->second;
+    }
+    
+    void put(const std::string& key, double value) {
+      auto it = index_.find(key);
+      
+      if (it != index_.end()) {
+        items_.splice(items_.begin(), items_, it->second);
+        it->second->second = value;
+      } else {
+        items_.emplace_front(key, value);
+        index_[key] = items_.begin();
+        
+        if (items_.size() > MAX_SIZE) {
+          const auto& last = items_.back();
+          index_.erase(last.first);
+          items_.pop_back();
+        }
+      }
+    }
+  };
+}
+
 double smooth_value(const std::string& key, double raw, double alpha) {
-  static std::unordered_map<std::string, double> prev;
-  auto it = prev.find(key);
-  if (it == prev.end()) { prev.emplace(key, raw); return raw; }
-  double sm = alpha * raw + (1.0 - alpha) * it->second;
-  it->second = sm;
-  return sm;
+  static LRUCache cache;
+  
+  double* prev = cache.get(key);
+  if (!prev) {
+    cache.put(key, raw);
+    return raw;
+  }
+  
+  double smoothed = alpha * raw + (1.0 - alpha) * (*prev);
+  cache.put(key, smoothed);
+  return smoothed;
+}
+
+std::string sanitize_for_display(const std::string& s, size_t max_len) {
+  std::string out;
+  out.reserve(std::min(s.size(), max_len));
+  
+  for (size_t i = 0; i < s.size() && out.size() < max_len; ++i) {
+    unsigned char c = static_cast<unsigned char>(s[i]);
+    
+    if (c >= 32 && c < 127) {
+      out += c;
+    } else if (c >= 0x80) {
+      out += c;
+    } else if (c == '\t') {
+      out += ' ';
+    } else {
+      out += '?';
+    }
+  }
+  
+  return out;
 }
 
 } // namespace montauk::ui

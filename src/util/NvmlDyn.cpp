@@ -1,9 +1,10 @@
 #include "util/NvmlDyn.hpp"
-#include <dlfcn.h>
+#include <cstdio>
 #include <cstdlib>
+#include <dlfcn.h>
 #include <string>
-#include <vector>
 #include <unordered_set>
+#include <vector>
 
 namespace montauk::util {
 
@@ -37,12 +38,35 @@ bool NvmlDyn::load_once() {
   if (const char* dis = getenv_compat("MONTAUK_DISABLE_NVML")) {
     if (dis[0]=='1' || dis[0]=='t' || dis[0]=='T' || dis[0]=='y' || dis[0]=='Y') { suppressed_ = true; return false; }
   }
+  
   std::vector<std::string> candidates;
+  
   if (const char* p = getenv_compat("MONTAUK_NVML_PATH")) {
-    candidates.emplace_back(p);
+    std::string path = p;
+    
+    static const std::vector<std::string> allowed_prefixes = {
+      "/usr/lib", "/usr/lib64", "/usr/local/lib", "/usr/local/lib64",
+      "/opt/nvidia", "/opt/cuda"
+    };
+    
+    bool valid = false;
+    for (const auto& prefix : allowed_prefixes) {
+      if (path.rfind(prefix, 0) == 0) {
+        valid = true;
+        break;
+      }
+    }
+    
+    if (valid) {
+      candidates.emplace_back(path);
+    } else {
+      std::fprintf(stderr, "Warning: MONTAUK_NVML_PATH rejected (invalid prefix): %s\n", p);
+    }
   }
+  
   candidates.emplace_back("libnvidia-ml.so.1");
   candidates.emplace_back("libnvidia-ml.so");
+  
   for (const auto& lib : candidates) {
     handle_ = ::dlopen(lib.c_str(), RTLD_LAZY | RTLD_LOCAL);
     if (handle_) break;
@@ -78,9 +102,12 @@ bool NvmlDyn::available() const { return handle_ != nullptr && !suppressed_; }
 bool NvmlDyn::read_devices(montauk::model::GpuVram& out) {
   out = {};
   if (!load_once() || !available()) return false;
-  if (p_nvmlInit_v2() != NVML_SUCCESS) return false;
+  
+  NvmlGuard guard;
+  if (!guard.ok()) return false;
+  
   unsigned int n = 0;
-  if (p_nvmlDeviceGetCount_v2(&n) != NVML_SUCCESS) { p_nvmlShutdown(); return false; }
+  if (p_nvmlDeviceGetCount_v2(&n) != NVML_SUCCESS) return false;
 
   bool any = false; uint64_t total_mb_sum = 0, used_mb_sum = 0;
   double total_power_w = 0.0; bool have_power = false;
@@ -143,8 +170,6 @@ bool NvmlDyn::read_devices(montauk::model::GpuVram& out) {
 
     out.devices.push_back(std::move(rec));
   }
-
-  p_nvmlShutdown();
 
   if (!any) return false;
   out.total_mb = total_mb_sum;

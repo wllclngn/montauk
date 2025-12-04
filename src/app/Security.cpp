@@ -8,12 +8,18 @@
 
 namespace montauk::app {
 
-static std::string to_lower_copy(std::string s) {
+static std::string to_lower_copy(std::string s, size_t max_len = 512) {
+  if (s.size() > max_len) {
+    s.resize(max_len);
+  }
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
   return s;
 }
 
-static std::string to_upper_copy(std::string s) {
+static std::string to_upper_copy(std::string s, size_t max_len = 512) {
+  if (s.size() > max_len) {
+    s.resize(max_len);
+  }
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return static_cast<char>(std::toupper(c)); });
   return s;
 }
@@ -46,6 +52,8 @@ static std::string format_rate_bytes(double bytes_per_sec) {
 std::vector<SecurityFinding> collect_security_findings(const montauk::model::Snapshot& s) {
   std::vector<SecurityFinding> findings;
   std::unordered_set<int32_t> flagged_pids;
+  
+  static constexpr size_t MAX_FINDINGS = 100;
 
   static const std::vector<std::string> writable_prefixes = {
     "/tmp/", "/var/tmp/", "/dev/shm/", "/run/user/", "/home/"
@@ -58,7 +66,9 @@ std::vector<SecurityFinding> collect_security_findings(const montauk::model::Sna
   };
 
   auto add_finding = [&](int severity, const std::string& subject, const std::string& reason){
-    findings.push_back(SecurityFinding{severity, subject, reason});
+    if (findings.size() < MAX_FINDINGS) {
+      findings.push_back(SecurityFinding{severity, subject, reason});
+    }
   };
 
   for (const auto& p : s.procs.processes) {

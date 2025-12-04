@@ -265,8 +265,72 @@ void timsort_impl(
 // ============================================================================
 // INVERSION COUNTING (For nearly-sorted detection)
 // ============================================================================
+
+// Helper: merge and count inversions in sample indices
+// Works on POSITIONS in the sample, not the actual indices
+static size_t merge_count_inversions(
+    std::vector<size_t>& positions,
+    std::vector<size_t>& temp,
+    size_t left,
+    size_t mid,
+    size_t right,
+    std::vector<size_t>::iterator first,
+    size_t stride,
+    std::function<bool(size_t, size_t)> comp
+) {
+  size_t i = left;
+  size_t j = mid + 1;
+  size_t k = left;
+  size_t inv_count = 0;
+  
+  while (i <= mid && j <= right) {
+    // Compare actual values at these sample positions
+    auto it_i = first + (positions[i] * stride);
+    auto it_j = first + (positions[j] * stride);
+    
+    if (!comp(*it_j, *it_i)) {
+      temp[k++] = positions[i++];
+    } else {
+      temp[k++] = positions[j++];
+      inv_count += (mid - i + 1);  // All remaining left elements are inverted
+    }
+  }
+  
+  while (i <= mid) temp[k++] = positions[i++];
+  while (j <= right) temp[k++] = positions[j++];
+  
+  for (i = left; i <= right; i++) {
+    positions[i] = temp[i];
+  }
+  
+  return inv_count;
+}
+
+// Recursive inversion counter (O(n log n))
+static size_t count_inversions_recursive(
+    std::vector<size_t>& positions,
+    std::vector<size_t>& temp,
+    size_t left,
+    size_t right,
+    std::vector<size_t>::iterator first,
+    size_t stride,
+    std::function<bool(size_t, size_t)> comp
+) {
+  size_t inv_count = 0;
+  
+  if (left < right) {
+    size_t mid = left + (right - left) / 2;
+    
+    inv_count += count_inversions_recursive(positions, temp, left, mid, first, stride, comp);
+    inv_count += count_inversions_recursive(positions, temp, mid + 1, right, first, stride, comp);
+    inv_count += merge_count_inversions(positions, temp, left, mid, right, first, stride, comp);
+  }
+  
+  return inv_count;
+}
+
 // Counts inversions in a sample to determine if data is nearly sorted.
-// Uses a simple O(sample²) algorithm since sample size is small.
+// Uses merge-sort based O(n log n) algorithm.
 auto count_inversions_sample(
     std::vector<size_t>::iterator first,
     std::vector<size_t>::iterator last,
@@ -279,16 +343,18 @@ auto count_inversions_sample(
   sample_size = std::min(sample_size, n);
   const size_t stride = n / sample_size;
   
-  size_t inversions = 0;
+  // Create array of sample positions [0, 1, 2, ..., sample_size-1]
+  std::vector<size_t> positions(sample_size);
   for (size_t i = 0; i < sample_size; ++i) {
-    for (size_t j = i + 1; j < sample_size; ++j) {
-      auto it_i = first + (i * stride);
-      auto it_j = first + (j * stride);
-      if (comp(*it_j, *it_i)) {
-        ++inversions;
-      }
-    }
+    positions[i] = i;
   }
+  
+  // Count inversions by merge-sorting the positions array
+  // The comparator evaluates the actual values at first + (positions[i] * stride)
+  std::vector<size_t> temp(sample_size);
+  size_t inversions = count_inversions_recursive(
+      positions, temp, 0, sample_size - 1, first, stride, comp
+  );
   
   return inversions;
 }

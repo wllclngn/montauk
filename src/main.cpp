@@ -216,11 +216,15 @@ int main(int argc, char** argv) {
         }
       }
     }
-    // Concurrency hardening: optionally copy the front snapshot at frame start
-    const montauk::model::Snapshot* s_ptr = &buffers.front();
+    // Concurrency hardening: atomic snapshot capture with sequence validation
     montauk::model::Snapshot s_copy;
-    if (env_flag("MONTAUK_COPY_FRONT", true)) { s_copy = *s_ptr; s_ptr = &s_copy; }
-    const auto& s = *s_ptr;
+    uint64_t seq_before, seq_after;
+    do {
+      seq_before = buffers.seq();
+      s_copy = buffers.front();
+      seq_after = buffers.seq();
+    } while (seq_before != seq_after);
+    const auto& s = s_copy;
     // Dynamic help with current sort/fps and optional alert banner
     // Report the active sort mode accurately in the help line
     std::string sort_name =

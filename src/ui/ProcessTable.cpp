@@ -155,13 +155,19 @@ std::vector<std::string> render_process_table(
   gpu_digit_w_meas = std::min(4, std::max(3, gpu_digit_w_meas));
   mem_w_meas = std::min(6, std::max(4, mem_w_meas));
   gmem_w_meas = std::min(6, std::max(4, gmem_w_meas));
-  // All columns: expand immediately when needed, but never shrink (sticky)
+  
+  // Sticky columns: expand immediately when needed, never shrink
   g_ui.col_pid_w = std::max(g_ui.col_pid_w, pid_w_meas);
   g_ui.col_user_w = std::max(g_ui.col_user_w, user_w_meas);
   g_ui.col_gpu_digit_w = std::max(g_ui.col_gpu_digit_w, gpu_digit_w_meas);
   g_ui.col_mem_w = std::max(g_ui.col_mem_w, mem_w_meas);
   g_ui.col_gmem_w = std::max(g_ui.col_gmem_w, gmem_w_meas);
-  int pidw = g_ui.col_pid_w, userw = g_ui.col_user_w, gpud = g_ui.col_gpu_digit_w, memw = g_ui.col_mem_w, gmemw = g_ui.col_gmem_w;
+  
+  int pidw = g_ui.col_pid_w;
+  int userw = g_ui.col_user_w;
+  int gpud = g_ui.col_gpu_digit_w;
+  int memw = g_ui.col_mem_w;
+  int gmemw = g_ui.col_gmem_w;
   // Header (align numeric headers to the right of their columns)
   {
     std::ostringstream h;
@@ -194,7 +200,7 @@ std::vector<std::string> render_process_table(
     
     std::ostringstream os;
     os << std::setw(pidw) << p->pid << "  "
-       << rpad_trunc(p->user_name, userw) << "  "
+       << rpad_trunc(sanitize_for_display(p->user_name, userw), userw) << "  "
        << fmt_cpu_field(smooth_cpu, severity == 0);
     
     // Format GPU% with right-alignment
@@ -232,7 +238,8 @@ std::vector<std::string> render_process_table(
     }
     
     // COMMAND (left-aligned)
-    std::string proc_name = p->cmd.empty() ? std::to_string(p->pid) : p->cmd;
+    std::string proc_name = p->cmd.empty() ? std::to_string(p->pid) : 
+                            sanitize_for_display(p->cmd, cmd_w + 10);
     os << trunc_pad(proc_name, cmd_w);
     proc_lines.push_back(os.str());
     proc_sev.push_back(severity);

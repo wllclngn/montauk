@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <sstream>
 #include <fstream>
+#include <mutex>
 #include <unistd.h>
 #include <charconv>
 #include "util/Churn.hpp"
@@ -87,22 +88,46 @@ static std::string read_exe_path(int32_t pid) {
 }
 
 static std::string user_name_cached(uint32_t uid) {
+  static std::mutex cache_mutex;
   static std::unordered_map<uint32_t, std::string> cache;
-  auto it = cache.find(uid);
-  if (it != cache.end()) return it->second;
-  std::ifstream pw("/etc/passwd"); std::string pl;
+  
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    auto it = cache.find(uid);
+    if (it != cache.end()) return it->second;
+  }
+  
+  std::string name;
+  std::ifstream pw("/etc/passwd"); 
+  std::string pl;
+  bool found = false;
+  
   while (std::getline(pw, pl)) {
-    auto c1 = pl.find(':'); if (c1==std::string::npos) continue;
-    auto c2 = pl.find(':', c1+1); if (c2==std::string::npos) continue;
-    auto c3 = pl.find(':', c2+1); if (c3==std::string::npos) continue;
+    auto c1 = pl.find(':'); 
+    if (c1==std::string::npos) continue;
+    auto c2 = pl.find(':', c1+1); 
+    if (c2==std::string::npos) continue;
+    auto c3 = pl.find(':', c2+1); 
+    if (c3==std::string::npos) continue;
+    
     uint32_t fuid = std::strtoul(pl.c_str()+c2+1, nullptr, 10);
     if (fuid==uid) {
-      std::string name = pl.substr(0, c1);
-      cache.emplace(uid, name);
-      return name;
+      name = pl.substr(0, c1);
+      found = true;
+      break;
     }
   }
-  return std::to_string(uid);
+  
+  if (!found) {
+    name = std::to_string(uid);
+  }
+  
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    cache.emplace(uid, name);
+  }
+  
+  return name;
 }
 
 StatusInfo ProcessCollector::info_from_status(int32_t pid) {
@@ -218,7 +243,14 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   out.enriched_count = enrich_n;
   for (size_t i=0;i<enrich_n;i++) {
     auto& ps = out.processes[i];
-    auto cmd = read_cmdline(ps.pid); if (!cmd.empty()) ps.cmd = std::move(cmd);
+    auto cmd = read_cmdline(ps.pid);
+    if (!cmd.empty()) {
+      // Truncate cmdline to 512 bytes (enough for display and security scanning)
+      if (cmd.size() > 512) {
+        cmd.resize(512);
+      }
+      ps.cmd = std::move(cmd);
+    }
     auto info = info_from_status(ps.pid);
     if (!info.user.empty()) ps.user_name = std::move(info.user);
     out.total_threads += info.thread_count;

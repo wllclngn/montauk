@@ -58,6 +58,35 @@ private:
   // Helpers
   static const char* getenv_compat(const char* name);
   bool dlsym_all();
+
+  friend class NvmlGuard;
+};
+
+class NvmlGuard {
+public:
+  NvmlGuard() {
+    auto& nvml = NvmlDyn::instance();
+    if (nvml.p_nvmlInit_v2) {
+      success_ = (nvml.p_nvmlInit_v2() == 0);
+    }
+  }
+  
+  ~NvmlGuard() {
+    if (success_) {
+      auto& nvml = NvmlDyn::instance();
+      if (nvml.p_nvmlShutdown) {
+        nvml.p_nvmlShutdown();
+      }
+    }
+  }
+  
+  bool ok() const { return success_; }
+  
+  NvmlGuard(const NvmlGuard&) = delete;
+  NvmlGuard& operator=(const NvmlGuard&) = delete;
+  
+private:
+  bool success_ = false;
 };
 
 } // namespace montauk::util

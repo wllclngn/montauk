@@ -39,4 +39,7 @@ CpuFreqInfo read_cpu_freq_info();
 // EMA smoother for UI (bar fill smoothing)
 double smooth_value(const std::string& key, double raw, double alpha = 0.25);
 
+// Security: sanitize strings for terminal display
+std::string sanitize_for_display(const std::string& s, size_t max_len = 512);
+
 } // namespace montauk::ui

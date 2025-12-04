@@ -11,11 +11,26 @@
 #include <cmath>
 #include <cstring>
 #include <iomanip>
+#include <unordered_map>
 using namespace montauk::ui;
 #include <sstream>
 #include <climits>
 
 namespace montauk::ui {
+
+namespace {
+  struct ColorCache {
+    uint64_t snapshot_seq = 0;
+    std::unordered_map<std::string, std::string> cache;
+    
+    void invalidate(uint64_t new_seq) {
+      if (new_seq != snapshot_seq) {
+        cache.clear();
+        snapshot_seq = new_seq;
+      }
+    }
+  };
+}
 
 // Forward declare helper needed by make_box
 static std::string repeat_str(const std::string& ch, int n){ 
@@ -51,7 +66,7 @@ std::vector<std::string> make_box(const std::string& title, const std::vector<st
   return out;
 }
 
-std::string colorize_line(const std::string& s) {
+static std::string colorize_line_impl(const std::string& s) {
   if (!tty_stdout()) return s;
   const auto& ui = ui_config();
   auto uni = use_unicode();
@@ -139,10 +154,29 @@ std::string colorize_line(const std::string& s) {
   return s;
 }
 
+std::string colorize_line(const std::string& s, uint64_t snapshot_seq) {
+  if (!tty_stdout()) return s;
+  
+  static ColorCache g_cache;
+  g_cache.invalidate(snapshot_seq);
+  
+  auto it = g_cache.cache.find(s);
+  if (it != g_cache.cache.end()) {
+    return it->second;
+  }
+  
+  std::string result = colorize_line_impl(s);
+  g_cache.cache.emplace(s, result);
+  
+  return result;
+}
+
 // Forward declarations for functions still in main.cpp temporarily
 extern int term_cols();
 
 void render_screen(const montauk::model::Snapshot& s, bool show_help_line, const std::string& help_text) {
+  uint64_t seq = s.seq;
+  
   int cols = term_cols();
   int gutter = 1;
   int left_w = (cols * 2) / 3; if (left_w < 40) left_w = cols - 20; if (left_w > cols-20) left_w = cols-20;
@@ -156,7 +190,7 @@ void render_screen(const montauk::model::Snapshot& s, bool show_help_line, const
   frame += "\x1B[H";
   if (show_help_line) {
     std::string hline = trunc_pad(help_text, cols);
-    frame += colorize_line(hline) + std::string("\n");
+    frame += colorize_line(hline, seq) + std::string("\n");
   }
   int header_lines = (show_help_line?1:0);
   int body_lines = std::max(0, rows - header_lines);
@@ -165,7 +199,7 @@ void render_screen(const montauk::model::Snapshot& s, bool show_help_line, const
     std::string r = (row < (int)right.size()) ? right[row] : std::string(right_w, ' ');
     if ((int)l.size() < left_w) l += std::string(left_w - (int)l.size(), ' ');
     if ((int)r.size() < right_w) r += std::string(right_w - (int)r.size(), ' ');
-    auto line = colorize_line(l) + std::string(gutter, ' ') + colorize_line(r);
+    auto line = colorize_line(l, seq) + std::string(gutter, ' ') + colorize_line(r, seq);
     if (row < body_lines - 1) line += "\n";
     frame += line;
   }
