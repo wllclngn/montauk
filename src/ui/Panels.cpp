@@ -430,35 +430,72 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
     
     // PROC CHURN / PROC SECURITY - mutually exclusive display
     if (s.churn.recent_2s_events > 0) {
-      // PROC CHURN active - show churn info instead of security
-      std::ostringstream rr; rr << s.churn.recent_2s_events << " events [LAST 2s]";
-      push(lr_align(iw, "PROC CHURN", rr.str()), 1);
-      
-      // In SYSTEM focus, show additional churn detail info to fill space
+      // Collect churned processes and categorize them
+      std::vector<const montauk::model::ProcSample*> churned;
+      int auth_churn = 0, sys_churn = 0, user_churn = 0;
+      for (const auto& p : s.procs.processes) {
+        if (p.churn_reason != montauk::model::ChurnReason::None) {
+          churned.push_back(&p);
+          std::string cmd_lower = p.cmd;
+          std::transform(cmd_lower.begin(), cmd_lower.end(), cmd_lower.begin(),
+                         [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+          if (cmd_lower.find("ssh") != std::string::npos || cmd_lower.find("sudo") != std::string::npos ||
+              cmd_lower.find("login") != std::string::npos || cmd_lower.find("pam") != std::string::npos) {
+            ++auth_churn;
+          } else if (p.user_name == "root" || p.user_name.empty()) {
+            ++sys_churn;
+          } else {
+            ++user_churn;
+          }
+        }
+      }
+
+      // Determine severity: auth churn during high activity = warning, otherwise caution
+      int churn_severity = (auth_churn > 0 && s.churn.recent_2s_events >= 3) ? 2 : 1;
+
+      // Summary line with categorized counts
+      std::ostringstream summary;
+      summary << s.churn.recent_2s_events << " events";
+      if (auth_churn > 0) summary << "  AUTH:" << auth_churn;
+      if (sys_churn > 0) summary << "  SYS:" << sys_churn;
+      if (user_churn > 0) summary << "  USER:" << user_churn;
+      push(lr_align(iw, "PROC CHURN", summary.str()), churn_severity);
+
+      // In SYSTEM focus, show detailed churn info matching security format
       if (g_ui.system_focus) {
-        // Show event breakdown
+        // Source breakdown
         if (s.churn.recent_2s_proc > 0 || s.churn.recent_2s_sys > 0) {
-          std::ostringstream detail;
-          detail << "PROC:" << s.churn.recent_2s_proc << "  SYSFS:" << s.churn.recent_2s_sys;
-          push(detail.str(), 1);
+          std::ostringstream src;
+          src << "SOURCE  /proc:" << s.churn.recent_2s_proc << "  /sys:" << s.churn.recent_2s_sys;
+          push(src.str(), 0);
         }
-        
-        // Show currently churned processes if any
-        std::vector<const montauk::model::ProcSample*> churned;
-        for (const auto& p : s.procs.processes) {
-          if (p.churn) churned.push_back(&p);
-        }
-        
-        // Fill remaining space with churned process details
+
+        // Detailed process lines (matching security finding format)
         int lines_used = (int)sys.size();
         int available = inner_min - lines_used;
         int detail_lines = std::min(available, (int)churned.size());
-        
+
         for (int i = 0; i < detail_lines; ++i) {
           const auto& p = *churned[i];
-          std::ostringstream detail;
-          detail << "PID:" << p.pid << " " << (p.cmd.empty() ? std::to_string(p.pid) : p.cmd);
-          push(detail.str(), 1);
+          std::ostringstream line;
+          // Determine per-process severity
+          std::string cmd_lower = p.cmd;
+          std::transform(cmd_lower.begin(), cmd_lower.end(), cmd_lower.begin(),
+                         [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+          bool is_auth = cmd_lower.find("ssh") != std::string::npos || cmd_lower.find("sudo") != std::string::npos ||
+                         cmd_lower.find("login") != std::string::npos || cmd_lower.find("pam") != std::string::npos;
+          int proc_sev = is_auth ? 2 : 1;
+
+          line << "PROC CHURN ";
+          if (proc_sev >= 2) line << "⚠ ";
+          else line << "▴ ";
+          line << "PID " << p.pid << ' ' << (p.user_name.empty() ? "?" : p.user_name) << ' ';
+          // Truncate cmd for display
+          std::string cmd_disp = p.cmd.empty() ? std::to_string(p.pid) : p.cmd;
+          if (cmd_disp.size() > 40) cmd_disp = cmd_disp.substr(0, 37) + "...";
+          line << cmd_disp;
+          line << " [" << (is_auth ? "AUTH" : (p.user_name == "root" ? "SYSTEM" : "READ FAILED")) << "]";
+          push(line.str(), proc_sev);
         }
       }
     } else {

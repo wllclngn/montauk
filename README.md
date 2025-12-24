@@ -26,6 +26,17 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **Security Monitoring**: Process security analysis with severity-based highlighting
 - **Dual Display Modes**: Compact default view and comprehensive SYSTEM focus mode
 
+## Screenshots
+
+### SYSTEM Interface, Large Display
+![Main](2025-12-18_10-36.png)
+
+### Main Interface
+![Main](2025-12-24_10-50.png)
+
+### System Interface, PROC SECURITY
+![Main](2025-12-24_10-50_1.png)
+
 ## Build
 
 ```bash

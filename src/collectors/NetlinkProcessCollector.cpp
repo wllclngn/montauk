@@ -183,7 +183,7 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
       montauk::model::ProcSample ps;
       ps.pid = pid;
-      ps.churn = true;
+      ps.churn_reason = montauk::model::ChurnReason::ReadFailed;
       ps.cmd = !cached_comm.empty() ? cached_comm : std::to_string(pid);
       out.processes.push_back(std::move(ps));
       continue;
@@ -194,7 +194,7 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
       montauk::model::ProcSample ps;
       ps.pid = pid;
-      ps.churn = true;
+      ps.churn_reason = montauk::model::ChurnReason::ReadFailed;
       ps.cmd = !comm.empty() ? comm : (!cached_comm.empty() ? cached_comm : std::to_string(pid));
       out.processes.push_back(std::move(ps));
       continue;

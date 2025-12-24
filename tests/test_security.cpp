@@ -14,14 +14,14 @@ static montauk::model::ProcSample make_proc(int pid,
                                             const std::string& cmd,
                                             const std::string& exe,
                                             double cpu,
-                                            bool churn = false) {
+                                            montauk::model::ChurnReason churn_reason = montauk::model::ChurnReason::None) {
   montauk::model::ProcSample p;
   p.pid = pid;
   p.user_name = user;
   p.cmd = cmd;
   p.exe_path = exe;
   p.cpu_pct = cpu;
-  p.churn = churn;
+  p.churn_reason = churn_reason;
   return p;
 }
 
@@ -80,13 +80,41 @@ TEST(security_tmp_shell_warning) {
 }
 
 TEST(security_auth_churn_warning) {
+  // Auth crashloop requires BOTH: high global churn (3+ events/2s) AND auth process with read failure
   montauk::model::Snapshot snap;
-  auto p = make_proc(5210, "root", "sshd", "/usr/sbin/sshd", 0.0, true);
+  snap.churn.recent_2s_events = 5;  // Sustained churn activity
+  snap.churn.recent_2s_proc = 5;
+  auto p = make_proc(5210, "root", "sshd", "/usr/sbin/sshd", 0.0, montauk::model::ChurnReason::ReadFailed);
   snap.procs.processes.push_back(p);
   auto findings = collect_security_findings(snap);
   ASSERT_EQ(1u, findings.size());
   ASSERT_EQ(2, findings[0].severity);
   ASSERT_TRUE(format_security_line_default(findings[0]).find("auth crashloop") != std::string::npos);
+}
+
+TEST(security_read_failed_no_false_positive) {
+  // Single ReadFailed with LOW global churn should NOT trigger auth crashloop warning.
+  // This was the original bug: single /proc read failures were misinterpreted as crashloops.
+  montauk::model::Snapshot snap;
+  snap.churn.recent_2s_events = 1;  // Below threshold (< 3)
+  auto p = make_proc(5210, "root", "sshd", "/usr/sbin/sshd", 0.0, montauk::model::ChurnReason::ReadFailed);
+  snap.procs.processes.push_back(p);
+  auto findings = collect_security_findings(snap);
+  // Should have no findings - not enough sustained churn to indicate crashloop
+  ASSERT_EQ(0u, findings.size());
+}
+
+TEST(security_high_churn_non_auth_no_warning) {
+  // High global churn but NO auth processes affected = no warning
+  montauk::model::Snapshot snap;
+  snap.churn.recent_2s_events = 10;  // High churn
+  snap.churn.recent_2s_proc = 10;
+  // Non-auth process with read failure
+  auto p = make_proc(1234, "mod", "myapp", "/usr/bin/myapp", 0.0, montauk::model::ChurnReason::ReadFailed);
+  snap.procs.processes.push_back(p);
+  auto findings = collect_security_findings(snap);
+  // No auth crashloop warning - the churning process isn't auth-related
+  ASSERT_EQ(0u, findings.size());
 }
 
 TEST(security_net_exfil_caution) {

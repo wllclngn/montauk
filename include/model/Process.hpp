@@ -5,6 +5,13 @@
 
 namespace montauk::model {
 
+// Enum to distinguish between transient read failures and actual security-relevant churn
+enum class ChurnReason {
+  None,        // No issues reading /proc for this process
+  ReadFailed,  // Transient /proc read error (not security-relevant)
+  Crashloop    // Actual repeated process crashes (security-relevant)
+};
+
 struct ProcSample {
   int32_t pid{};
   int32_t ppid{};
@@ -13,8 +20,8 @@ struct ProcSample {
   uint64_t total_time{}; // utime+stime
   uint64_t rss_kb{};
   double   cpu_pct{}; // 0..100 (overall machine)
-  // True when this row had /proc churn (could not read/parse this cycle)
-  bool     churn{false};
+  // Churn state: None = OK, ReadFailed = transient /proc error, Crashloop = security concern
+  ChurnReason churn_reason{ChurnReason::None};
   // Optional GPU metrics (per process)
   bool     has_gpu_util{false};
   double   gpu_util_pct{0.0};

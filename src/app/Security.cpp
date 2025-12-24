@@ -146,15 +146,24 @@ std::vector<SecurityFinding> collect_security_findings(const montauk::model::Sna
     }
   }
 
-  for (const auto& p : s.procs.processes) {
-    if (!p.churn) continue;
-    std::string cmd_lower = to_lower_copy(p.cmd);
-    if (cmd_lower.find("ssh") != std::string::npos || cmd_lower.find("sudo") != std::string::npos ||
-        cmd_lower.find("login") != std::string::npos) {
-      std::string reason = "auth crashloop";
-      add_finding(2, "PID " + std::to_string(p.pid) + ' ' + (p.user_name.empty()?"?":p.user_name) + ' ' + p.cmd + " churn",
-                  reason);
-      break;
+  // Auth crashloop detection: require BOTH sustained high churn AND auth processes affected.
+  // This prevents false positives from single transient read failures.
+  // Threshold: 3+ churn events in 2s indicates sustained process thrashing, not a one-off.
+  static constexpr int CHURN_THRESHOLD = 3;
+  if (s.churn.recent_2s_events >= CHURN_THRESHOLD) {
+    for (const auto& p : s.procs.processes) {
+      // Check if this auth-related process had a read failure during the churn storm
+      if (p.churn_reason == montauk::model::ChurnReason::None) continue;
+      std::string cmd_lower = to_lower_copy(p.cmd);
+      if (cmd_lower.find("ssh") != std::string::npos || cmd_lower.find("sudo") != std::string::npos ||
+          cmd_lower.find("login") != std::string::npos || cmd_lower.find("pam") != std::string::npos) {
+        std::string reason = "auth crashloop";
+        std::ostringstream subj;
+        subj << "PID " << p.pid << ' ' << (p.user_name.empty() ? "?" : p.user_name)
+             << ' ' << p.cmd << " [" << s.churn.recent_2s_events << " events/2s]";
+        add_finding(2, subj.str(), reason);
+        flagged_pids.insert(p.pid);
+      }
     }
   }
 
@@ -169,7 +178,7 @@ std::vector<SecurityFinding> collect_security_findings(const montauk::model::Sna
     size_t check = std::min<size_t>(s.procs.processes.size(), 64);
     for (size_t i=0; i<check; ++i) {
       const auto& p = s.procs.processes[i];
-      if (p.churn) continue;
+      if (p.churn_reason != montauk::model::ChurnReason::None) continue;
       if (p.cpu_pct >= 2.0) { has_owner = true; break; }
       auto lower = to_lower_copy(p.cmd);
       if (lower.find("ssh") != std::string::npos || lower.find("chrome") != std::string::npos ||

@@ -198,7 +198,7 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     if (!content_opt) {
       // Record churn and emit a placeholder row so the user sees it happened
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
-      montauk::model::ProcSample ps; ps.pid = pid; ps.ppid = 0; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn = true; ps.cmd = name;
+      montauk::model::ProcSample ps; ps.pid = pid; ps.ppid = 0; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn_reason = montauk::model::ChurnReason::ReadFailed; ps.cmd = name;
       out.processes.push_back(std::move(ps));
       continue;
     }
@@ -206,7 +206,7 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     char stch='?';
     if (!parse_stat_line(*content_opt, stch, ppid, ut, st, rssp, comm)) {
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
-      montauk::model::ProcSample ps; ps.pid = pid; ps.ppid = 0; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn = true; ps.cmd = comm.empty()? name : comm;
+      montauk::model::ProcSample ps; ps.pid = pid; ps.ppid = 0; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn_reason = montauk::model::ChurnReason::ReadFailed; ps.cmd = comm.empty()? name : comm;
       out.processes.push_back(std::move(ps));
       continue;
     }
