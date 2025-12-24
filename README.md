@@ -29,7 +29,7 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 ## Screenshots
 
 ### Main Interface
-![Main](2025-12-24_11-08)
+![Main](2025-12-24_11-08.png)
 
 ### SYSTEM Interface, Large Display
 ![Main](2025-12-18_10-36.png)
