@@ -377,11 +377,14 @@ static bool read_nvml_compiled(montauk::model::GpuVram& out) {
       rec.name = "GPU";
     }
     rec.total_mb = t_mb; rec.used_mb = u_mb;
-    // Temps (edge and memory if available)
-    unsigned int tc = 0;
-    if (nvmlDeviceGetTemperature(dev, NVML_TEMPERATURE_GPU, &tc) == NVML_SUCCESS) { rec.has_temp_edge = true; rec.temp_edge_c = (double)tc; }
+    // Temps (edge and memory if available) - use versioned API (NVML 13.0+)
+    nvmlTemperature_t temp_info = {};
+    temp_info.version = nvmlTemperature_v1;
+    temp_info.sensorType = NVML_TEMPERATURE_GPU;
+    if (nvmlDeviceGetTemperatureV(dev, &temp_info) == NVML_SUCCESS) { rec.has_temp_edge = true; rec.temp_edge_c = (double)temp_info.temperature; }
 #ifdef NVML_TEMPERATURE_MEMORY
-    if (nvmlDeviceGetTemperature(dev, NVML_TEMPERATURE_MEMORY, &tc) == NVML_SUCCESS) { rec.has_temp_mem = true; rec.temp_mem_c = (double)tc; }
+    temp_info.sensorType = NVML_TEMPERATURE_MEMORY;
+    if (nvmlDeviceGetTemperatureV(dev, &temp_info) == NVML_SUCCESS) { rec.has_temp_mem = true; rec.temp_mem_c = (double)temp_info.temperature; }
 #endif
     // Thresholds: slowdown (treat as warning)
     unsigned int tw = 0;
@@ -393,6 +396,11 @@ static bool read_nvml_compiled(montauk::model::GpuVram& out) {
       rec.has_thr_mem = true; rec.thr_mem_c = (double)tw;
     }
 #endif
+    // Fan speed (percent, first fan)
+    unsigned int fan_pct = 0;
+    if (nvmlDeviceGetFanSpeed_v2(dev, 0, &fan_pct) == NVML_SUCCESS) {
+      rec.has_fan = true; rec.fan_speed_pct = (double)fan_pct;
+    }
     // Optional power (milliwatts -> watts)
     unsigned int mw = 0;
     if (nvmlDeviceGetPowerUsage(dev, &mw) == NVML_SUCCESS && mw > 0) {

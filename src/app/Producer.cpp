@@ -9,6 +9,9 @@
 #include "util/Churn.hpp"
 #include "collectors/ProcessCollector.hpp"
 #include "collectors/NetlinkProcessCollector.hpp"
+#ifdef MONTAUK_HAVE_KERNEL
+#include "collectors/KernelProcessCollector.hpp"
+#endif
 
 using namespace std::chrono;
 
@@ -48,17 +51,39 @@ Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
 #ifdef __linux__
   if (force && std::strcmp(force, "traditional") == 0) {
     proc_ = make_traditional();
-  } else {
-    // Try netlink unless forced traditional
-    auto netlink = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::NetlinkProcessCollector((size_t)max_procs, (size_t)enrich_top));
-    if (force && std::strcmp(force, "netlink") == 0) {
-      if (!netlink->init()) {
-        std::fprintf(stderr, "Netlink collector unavailable (need CAP_NET_ADMIN?). Falling back to traditional.\n");
-        proc_ = make_traditional();
-      } else {
-        proc_ = std::move(netlink);
-      }
+#ifdef MONTAUK_HAVE_KERNEL
+  } else if (force && std::strcmp(force, "kernel") == 0) {
+    auto kpc = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::KernelProcessCollector());
+    if (kpc->init()) {
+      proc_ = std::move(kpc);
     } else {
+      std::fprintf(stderr, "Kernel module unavailable. Falling back to netlink.\n");
+      auto netlink = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::NetlinkProcessCollector((size_t)max_procs, (size_t)enrich_top));
+      if (netlink->init()) {
+        proc_ = std::move(netlink);
+      } else {
+        proc_ = make_traditional();
+      }
+    }
+#endif
+  } else if (force && std::strcmp(force, "netlink") == 0) {
+    auto netlink = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::NetlinkProcessCollector((size_t)max_procs, (size_t)enrich_top));
+    if (!netlink->init()) {
+      std::fprintf(stderr, "Netlink collector unavailable (need CAP_NET_ADMIN?). Falling back to traditional.\n");
+      proc_ = make_traditional();
+    } else {
+      proc_ = std::move(netlink);
+    }
+  } else {
+    // Auto-detect: try kernel module first (if built), then netlink, then traditional
+#ifdef MONTAUK_HAVE_KERNEL
+    auto kpc = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::KernelProcessCollector());
+    if (kpc->init()) {
+      proc_ = std::move(kpc);
+    } else
+#endif
+    {
+      auto netlink = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::NetlinkProcessCollector((size_t)max_procs, (size_t)enrich_top));
       if (netlink->init()) {
         proc_ = std::move(netlink);
       } else {

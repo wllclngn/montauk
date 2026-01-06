@@ -26,6 +26,18 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **Security Monitoring**: Process security analysis with severity-based highlighting
 - **Dual Display Modes**: Compact default view and comprehensive SYSTEM focus mode
 
+## Kernel Module (Optional)
+
+For maximum efficiency, montauk includes an optional kernel module (`montauk-kernel`) that eliminates all `/proc` parsing overhead. When loaded, montauk automatically detects and uses it.
+
+**Benefits over userspace collectors:**
+- Zero `/proc` reads as data comes directly from kernel `task_struct`
+- Zero proc_connector via Netlink traffic event stream as kprobes update the table directly
+- Single genetlink call per snapshot; subverts ~3 syscalls per process with /proc, or 1 + N events with proc_connector
+- Sub-millisecond process event detection via kprobes
+- Background CPU time refresh via kernel workqueue (1Hz)
+- ~0.1-0.2% CPU overhead via kernel utilization; ~0.5-1% via proc_connector, ~2-5% via /proc polling
+
 ## Screenshots
 
 ### Main Interface
@@ -59,22 +71,75 @@ makepkg -si   # From PKGBUILD in pkg/ directory
 cmake --install build --prefix /usr/local
 ```
 
-**Event-Driven Process Monitoring:**
+**Process Collection Modes:**
 
-montauk uses Linux Process Events Connector (netlink) for real-time process tracking when available. This provides significant performance benefits over traditional /proc polling.
+montauk supports three collection backends (auto-detected in this priority):
 
-To enable event-driven monitoring:
+1. **Kernel Module** — Best. Zero /proc reads, zero proc_connector traffic. Requires `montauk.ko` loaded.
+2. **Netlink proc_connector** — Good. Receives fork/exec/exit events from kernel, but still reads `/proc/[pid]/*` for process details. Requires `CAP_NET_ADMIN`.
+3. **Traditional /proc polling** — Fallback. Scans `/proc` directory each cycle.
+
+To enable netlink proc_connector (when kernel module isn't loaded):
 ```bash
 sudo setcap cap_net_admin=ep /usr/local/bin/montauk
 ```
 
-Without this capability, montauk automatically falls back to traditional /proc scanning with no functional difference to the user.
+Without this capability (and without the kernel module), montauk falls back to traditional /proc scanning.
 
 **Force collector mode** (for testing):
 ```bash
+MONTAUK_COLLECTOR=kernel ./montauk      # Force kernel module (requires montauk.ko)
 MONTAUK_COLLECTOR=netlink ./montauk     # Force event-driven (requires capability)
 MONTAUK_COLLECTOR=traditional ./montauk  # Force traditional polling
 ```
+
+**Quick Start:**
+```bash
+# Build the module
+cd montauk-kernel
+make
+
+# Load (temporary, until reboot)
+sudo insmod montauk.ko
+
+# Verify
+dmesg | grep montauk
+lsmod | grep montauk
+```
+
+**Persistent Installation:**
+```bash
+# Install to /lib/modules
+sudo make install
+sudo depmod -a
+
+# Auto-load at boot
+echo "montauk" | sudo tee /etc/modules-load.d/montauk.conf
+
+# Load now
+sudo modprobe montauk
+```
+
+**Module Parameters:**
+```bash
+# Custom settings
+sudo modprobe montauk max_procs=4096 debug=1
+
+# Persistent config
+echo "options montauk max_procs=4096" | sudo tee /etc/modprobe.d/montauk.conf
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_procs` | 8192 | Maximum processes to track |
+| `debug` | false | Enable verbose kernel logging |
+
+**Unload:**
+```bash
+sudo rmmod montauk
+```
+
+See `montauk-kernel/README.md` for full documentation including architecture, protocol specification, and troubleshooting.
 
 ## UI Controls
 
@@ -110,7 +175,7 @@ MONTAUK_COLLECTOR=traditional ./montauk  # Force traditional polling
 - `MONTAUK_ENRICH_TOP_N` — Number of top processes to enrich with full command line and user name (default: `MONTAUK_MAX_PROCS`, up to 4096). All tracked processes are enriched by default for accurate GPU process detection.
 
 Notes:
-- Tracking more processes has minimal CPU overhead; enrichment (reading `/proc/[pid]/cmdline` and `/proc/[pid]/status`) is the primary cost. Default now enriches all tracked processes for maximum accuracy. Reduce `ENRICH_TOP_N` below `MAX_PROCS` if needed for lower-powered systems.
+- With the kernel module, enrichment has zero /proc overhead (cmdline comes from kernel). With userspace collectors, enrichment reads `/proc/[pid]/cmdline` and `/proc/[pid]/status` which is the primary cost. Reduce `ENRICH_TOP_N` below `MAX_PROCS` if needed for lower-powered systems without the kernel module.
 - Both variables accept either `MONTAUK_…` or `montauk_…` prefixes.
 
 ## CPU Scale Modes
@@ -217,7 +282,7 @@ Right column: Comprehensive SYSTEM box showing:
 - Network (aggregate and per-interface)
 - Filesystem usage
 - CPU and GPU temperatures with margin-to-warning calculations
-- Collector type (Event-Driven Netlink or Traditional)
+- Collector type (Kernel Module, Netlink proc_connector, or Traditional)
 - Process counts (enriched vs total)
 - System threads statistics
 - Process states (Running, Sleeping, Zombie)
@@ -234,7 +299,9 @@ Right column: Comprehensive SYSTEM box showing:
 
 ## Churn Handling
 
-During heavy system activity (builds, installs, rapid process creation), `/proc` and `/sys` entries can vanish between directory scans and file reads. montauk handles this gracefully with dynamic visual feedback:
+During heavy system activity (builds, installs, rapid process creation), `/proc` and `/sys` entries can vanish between directory scans and file reads. This affects userspace collectors (netlink proc_connector and traditional /proc polling). The kernel module is immune to /proc churn since it reads `task_struct` directly.
+
+montauk handles churn gracefully with dynamic visual feedback:
 
 **PROC CHURN Display:**
 
@@ -332,10 +399,11 @@ MONTAUK_SHOW_TEMP_WARN=1          # Show warning temps on thermal lines
 
 ### Testing/Development
 ```bash
-MONTAUK_PROC_ROOT=/custom/proc    # Remap /proc paths
+MONTAUK_PROC_ROOT=/custom/proc    # Remap /proc paths (userspace collectors only)
 MONTAUK_SYS_ROOT=/custom/sys      # Remap /sys paths
+MONTAUK_COLLECTOR=kernel          # Force kernel module (fails if montauk.ko not loaded)
+MONTAUK_COLLECTOR=netlink         # Force netlink proc_connector (fails if no CAP_NET_ADMIN)
 MONTAUK_COLLECTOR=traditional     # Force traditional /proc polling
-MONTAUK_COLLECTOR=netlink         # Force event-driven collection (fails if unavailable)
 ```
 
 ## Testing
@@ -371,9 +439,9 @@ cd ../stress-tests
 ./proc_churn.sh 30 100  # 30 seconds, 100 processes/second
 ```
 - Rapidly spawns and destroys processes
-- Triggers PROC CHURN detection
+- Triggers PROC CHURN detection (userspace collectors only; kernel module is immune)
 - Tests /proc resilience during heavy activity
-- Validates event-driven vs traditional collector behavior
+- Validates collector behavior differences
 
 Monitor with montauk while running stress tests (press 's' for SYSTEM focus to see detailed churn metrics).
 
@@ -405,8 +473,9 @@ makepkg -si
 **Collectors:**
 - `CpuCollector` — Per-core usage, freq, model, governor, turbo status
 - `MemoryCollector` — RAM, swap, buffers, cache, available memory
-- `ProcessCollector` — Traditional /proc scanning (fallback mode)
-- `NetlinkProcessCollector` — Event-driven process tracking via kernel connector (default when available)
+- `KernelProcessCollector` — Kernel module backend via genetlink (preferred)
+- `NetlinkProcessCollector` — Event-driven via proc_connector + /proc reads (fallback 1)
+- `ProcessCollector` — Traditional /proc scanning (fallback 2)
 - `GpuCollector` — VRAM, temps, power, utilization (multi-vendor)
 - `GpuAttributor` — Per-process GPU util/mem with fallback chains
 - `NetCollector` — Interface stats, throughput (down/up per interface)
@@ -422,6 +491,7 @@ makepkg -si
 - `SnapshotBuffers` — Lock-free snapshot management
 - `Producer` — Coordinated data collection pipeline
 - `Filter` — Process filtering and sorting
+- `AdaptiveSort` — Adaptive TimSort with O(n) pattern detection
 
 **UI Components:**
 - `Panels` — Right column rendering (PROCESSOR, GPU, MEMORY, DISK I/O, NETWORK, SYSTEM)
@@ -434,20 +504,25 @@ makepkg -si
 
 **Process Collection:**
 
-montauk uses two collection strategies:
+montauk supports three collection backends (auto-selected by availability):
 
-**Event-Driven (Netlink) — Default when available:**
-- Subscribes to kernel process events (fork, exec, exit)
-- Initial /proc scan to populate existing processes
-- Real-time updates via kernel notifications
-- Sub-millisecond latency for new process detection
-- 90%+ reduction in system calls vs polling
-- Requires CAP_NET_ADMIN capability
+**Kernel Module — Preferred:**
+- All data from kernel `task_struct` via genetlink
+- Kprobes hook fork/exec/exit directly
+- Background workqueue refreshes CPU times at 1Hz
+- Zero /proc reads, zero proc_connector overhead
+- Requires `montauk.ko` loaded
 
-**Traditional (/proc polling) — Fallback:**
-- Scans /proc directory every sample interval
-- Maintains compatibility on systems without netlink access
-- Identical functionality and UI to event-driven mode
+**Netlink proc_connector — Fallback 1:**
+- Subscribes to kernel process events (fork, exec, exit) via proc_connector
+- Still reads `/proc/[pid]/stat`, `/proc/[pid]/cmdline`, etc. for process details
+- Sub-millisecond event detection, but /proc reads add overhead
+- Requires `CAP_NET_ADMIN` capability
+
+**Traditional /proc polling — Fallback 2:**
+- Scans `/proc` directory every sample interval
+- Maintains compatibility when neither kernel module nor netlink available
+- Identical functionality and UI to other modes
 
 **Snapshot Pipeline:**
 1. Collectors sample independently
@@ -465,12 +540,12 @@ montauk uses two collection strategies:
 
 ## Performance
 
-- **Overhead:** <0.5% CPU with event-driven monitoring, <1% with traditional polling
+- **Overhead:** ~0.1-0.2% CPU with kernel module, ~0.5-1% with netlink proc_connector, ~2-5% with /proc polling
 - **Sampling:** 500ms default (adjustable with +/-)
-- **Process limit:** 256 (top by CPU usage)
-- **Process detection:** Sub-millisecond with event-driven, 1-second with traditional
-- **System calls:** 90%+ reduction with event-driven vs traditional polling
-- **Cmdline enrichment:** All 256 processes (full command lines for accurate GPU detection)
+- **Process limit:** 256 default, configurable up to 4096 (top by CPU usage)
+- **Process detection:** Sub-millisecond with kernel module or netlink, ~1 second with /proc polling
+- **System calls:** 1 per snapshot (kernel module), ~1 + N events (netlink), ~3 per process (/proc polling)
+- **Cmdline enrichment:** All tracked processes up to 4096 (full command lines for accurate GPU detection)
 - **Memory:** ~10MB resident
 
 **Technical Implementation:**
@@ -494,6 +569,27 @@ montauk uses two collection strategies:
 - Per-process churn flag for processes with read failures
 - Auto-clears when churn subsides
 - Zero performance impact when no churn active
+
+**Adaptive TimSort:**
+
+Process table sorting uses a C++23 adaptive TimSort implementation (`src/util/AdaptiveSort.cpp`) inspired by Tim Peters' Python TimSort with additional pattern detection:
+
+- **O(n) Pattern Detection:** Single-pass analysis identifies data characteristics before sorting:
+  - `AlreadySorted` — Instant return, no work needed
+  - `Reversed` — O(n) in-place reversal
+  - `NearlySorted` — Delegates to `std::stable_sort` (< 5% inversions)
+  - `Random` — Full TimSort with run detection and galloping merges
+
+- **TimSort Core:**
+  - Natural run detection exploits existing order in process lists
+  - Minimum run length of 32 (Tim Peters' proven optimal)
+  - Binary insertion sort for small arrays and run extension
+  - Galloping merge (exponential search) with MIN_GALLOP=7 threshold
+  - Stack-based merge strategy maintaining balanced invariants
+
+- **Performance:** Keeps up to 4096 tracked processes deterministically ordered in <1ms; analytically provisioned to handle 100K+ entries at O(n log n)
+
+- **Stability Guarantee:** Maintains relative order of equal elements (critical for consistent UI when processes have identical CPU%)
 
 ## Policy
 

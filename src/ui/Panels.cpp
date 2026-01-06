@@ -380,6 +380,27 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
           push(lr_align(iw, label, rr.str()), dev_sev);
         }
       }
+      // Fan speeds (SYSTEM focus only)
+      if (g_ui.system_focus) {
+        // CPU fan speed (hwmon)
+        if (s.thermal.has_fan) {
+          std::ostringstream rr; rr << (int)(s.thermal.fan_rpm + 0.5) << " RPM";
+          push(lr_align(iw, "CPU FAN", rr.str()), 0);
+        } else {
+          push(lr_align(iw, "CPU FAN", "UNDETECTED"), 0);
+        }
+        // GPU fan speed (per device)
+        for (size_t i = 0; i < s.vram.devices.size(); ++i) {
+          const auto& d = s.vram.devices[i];
+          std::string label = (s.vram.devices.size() > 1) ? (std::string("GPU") + std::to_string(i) + " FAN") : std::string("GPU FAN");
+          if (d.has_fan) {
+            std::ostringstream rr; rr << (int)(d.fan_speed_pct + 0.5) << "%";
+            push(lr_align(iw, label, rr.str()), 0);
+          } else {
+            push(lr_align(iw, label, "UNDETECTED"), 0);
+          }
+        }
+      }
       // Margin temps summary line (SYSTEM focus): CPU Δ.., GPU Δ..
       if (g_ui.system_focus) {
         int cpu_delta = 0; int gpu_delta = 0; bool have_gpu=false;

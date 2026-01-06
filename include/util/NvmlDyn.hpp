@@ -54,6 +54,7 @@ private:
   nvmlReturn_t (*p_nvmlDeviceGetPowerUsage)(nvmlDevice_t device, unsigned int* milliwatts);
   nvmlReturn_t (*p_nvmlDeviceGetPowerManagementLimit)(nvmlDevice_t device, unsigned int* milliwatts);
   nvmlReturn_t (*p_nvmlDeviceGetPerformanceState)(nvmlDevice_t device, unsigned int* pstate);
+  nvmlReturn_t (*p_nvmlDeviceGetFanSpeed_v2)(nvmlDevice_t device, unsigned int fan, unsigned int* speed);
 
   // Helpers
   static const char* getenv_compat(const char* name);

@@ -21,6 +21,7 @@ endif()
 
 # Build options
 option(MONTAUK_BUILD_TESTS "Build unit tests" OFF)
+option(MONTAUK_KERNEL "Build with kernel module collector support (requires montauk-kernel loaded)" OFF)
 
 add_library(montauk_core
     src/util/Procfs.cpp
@@ -66,6 +67,13 @@ if(NVML_INCLUDE_DIR AND NVML_LIBRARY)
   message(STATUS "NVML detected: enabling per-process and device GPU metrics")
 else()
   message(STATUS "NVML not found: building without NVML (device VRAM/util via sysfs if available)")
+endif()
+
+# Kernel module collector support (opt-in)
+if(MONTAUK_KERNEL)
+  target_compile_definitions(montauk_core PUBLIC MONTAUK_HAVE_KERNEL=1)
+  target_sources(montauk_core PRIVATE src/collectors/KernelProcessCollector.cpp)
+  message(STATUS "Kernel module support enabled: MONTAUK_COLLECTOR=kernel available")
 endif()
 
 add_executable(montauk src/main.cpp)

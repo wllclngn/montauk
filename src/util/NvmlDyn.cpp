@@ -93,6 +93,7 @@ bool NvmlDyn::dlsym_all() {
   p_nvmlDeviceGetPowerUsage = (nvmlReturn_t (*)(nvmlDevice_t, unsigned int*))L("nvmlDeviceGetPowerUsage");
   p_nvmlDeviceGetPowerManagementLimit = (nvmlReturn_t (*)(nvmlDevice_t, unsigned int*))L("nvmlDeviceGetPowerManagementLimit");
   p_nvmlDeviceGetPerformanceState = (nvmlReturn_t (*)(nvmlDevice_t, unsigned int*))L("nvmlDeviceGetPerformanceState");
+  p_nvmlDeviceGetFanSpeed_v2 = (nvmlReturn_t (*)(nvmlDevice_t, unsigned int, unsigned int*))L("nvmlDeviceGetFanSpeed_v2");
   // Core must-haves
   return p_nvmlInit_v2 && p_nvmlShutdown && p_nvmlDeviceGetCount_v2 && p_nvmlDeviceGetHandleByIndex_v2 && p_nvmlDeviceGetMemoryInfo;
 }
@@ -144,6 +145,14 @@ bool NvmlDyn::read_devices(montauk::model::GpuVram& out) {
       unsigned int tc = 0;
       if (p_nvmlDeviceGetTemperature(dev, NVML_TEMPERATURE_GPU, &tc) == NVML_SUCCESS) {
         rec.has_temp_edge = true; rec.temp_edge_c = (double)tc;
+      }
+    }
+
+    // Fan speed (percent, first fan)
+    if (p_nvmlDeviceGetFanSpeed_v2) {
+      unsigned int pct = 0;
+      if (p_nvmlDeviceGetFanSpeed_v2(dev, 0, &pct) == NVML_SUCCESS) {
+        rec.has_fan = true; rec.fan_speed_pct = (double)pct;
       }
     }
 

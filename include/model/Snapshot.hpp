@@ -40,6 +40,9 @@ struct GpuVramDevice {
   double thr_hotspot_c{0.0};
   bool   has_thr_mem{false};
   double thr_mem_c{0.0};
+  // Optional fan speed per device
+  bool   has_fan{false};
+  double fan_speed_pct{0.0}; // 0..100%
 };
 
 struct GpuVram {

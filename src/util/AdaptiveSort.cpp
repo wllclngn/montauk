@@ -58,6 +58,7 @@ void binary_insertion_sort(
     std::vector<size_t>::iterator last,
     std::function<bool(size_t, size_t)> comp
 ) {
+  if (std::distance(first, last) < 2) return;
   for (auto it = first + 1; it != last; ++it) {
     auto value = *it;
     

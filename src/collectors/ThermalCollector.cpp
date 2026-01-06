@@ -39,16 +39,29 @@ static ReadResult read_number_file(const fs::path& p, long& out) {
 // Read from hwmon first; fallback to thermal_zone
 bool ThermalCollector::sample(montauk::model::Thermal& out) {
   out.has_temp = false; out.cpu_max_c = 0.0; out.has_warn = false; out.warn_c = 0.0;
-  
+  out.has_fan = false; out.fan_rpm = 0.0;
+
   try {
     fs::path hw(montauk::util::map_sys_path("/sys/class/hwmon"));
     if (fs::exists(hw)) {
       double min_warn_c = 0.0; bool have_any_warn = false;
-      
-      for (auto& e : fs::recursive_directory_iterator(hw, 
+
+      for (auto& e : fs::recursive_directory_iterator(hw,
            fs::directory_options::skip_permission_denied)) {
         try {
           auto name = e.path().filename().string();
+          // Fan speed (RPM)
+          if (name.rfind("fan",0)==0 && name.find("_input")!=std::string::npos) {
+            long rpm = 0;
+            ReadResult res = read_number_file(e.path(), rpm);
+            if (res == ReadResult::Success && rpm > 0) {
+              if (!out.has_fan || rpm > out.fan_rpm) {
+                out.has_fan = true;
+                out.fan_rpm = (double)rpm;
+              }
+            }
+          }
+          // Temperature
           if (name.rfind("temp",0)==0 && name.find("_input")!=std::string::npos) {
             long mdeg = 0; 
             ReadResult res = read_number_file(e.path(), mdeg);
