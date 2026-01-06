@@ -16,6 +16,10 @@
 #include <linux/mm.h>
 #include <linux/pid.h>
 #include <linux/time64.h>
+#include <linux/fs.h>
+#include <linux/file.h>
+#include <linux/dcache.h>
+#include <linux/slab.h>
 #include <asm/param.h>
 
 #include "montauk.h"
@@ -61,6 +65,9 @@ static void montauk_refresh_proc_times(struct montauk_proc *proc)
     struct task_struct *task;
     struct pid *pid_struct;
     struct mm_struct *mm;
+    struct file *exe_file;
+    char *path_buf;
+    char *path;
 
     pid_struct = find_get_pid(proc->pid);
     if (!pid_struct)
@@ -105,6 +112,61 @@ static void montauk_refresh_proc_times(struct montauk_proc *proc)
     if (mm) {
         proc->rss_pages = get_mm_rss(mm);
         mmput(mm);
+    }
+
+    /* Populate exe_path if empty (new processes from fork) */
+    if (proc->exe_path[0] == '\0') {
+        mm = get_task_mm(task);
+        if (mm) {
+            rcu_read_lock();
+            exe_file = get_file_rcu(&mm->exe_file);
+            if (exe_file) {
+                path_buf = kmalloc(PATH_MAX, GFP_KERNEL);
+                if (path_buf) {
+                    path = d_path(&exe_file->f_path, path_buf, PATH_MAX);
+                    if (!IS_ERR(path))
+                        strscpy(proc->exe_path, path, MONTAUK_EXE_PATH_LEN);
+                    kfree(path_buf);
+                }
+                fput(exe_file);
+            }
+            rcu_read_unlock();
+            mmput(mm);
+        }
+    }
+
+    /* Populate cmdline if empty (new processes from fork) */
+    if (proc->cmdline[0] == '\0') {
+        mm = get_task_mm(task);
+        if (mm) {
+            unsigned long arg_start = mm->arg_start;
+            unsigned long arg_end = mm->arg_end;
+            unsigned long len = arg_end - arg_start;
+
+            if (len > 0 && len < MONTAUK_CMDLINE_LEN) {
+                int ret = access_process_vm(task, arg_start, proc->cmdline, len, 0);
+                if (ret > 0) {
+                    int i;
+                    for (i = 0; i < ret - 1; i++) {
+                        if (proc->cmdline[i] == '\0')
+                            proc->cmdline[i] = ' ';
+                    }
+                    proc->cmdline[ret - 1] = '\0';
+                }
+            } else if (len >= MONTAUK_CMDLINE_LEN) {
+                int ret = access_process_vm(task, arg_start, proc->cmdline,
+                                            MONTAUK_CMDLINE_LEN - 1, 0);
+                if (ret > 0) {
+                    int i;
+                    for (i = 0; i < ret - 1; i++) {
+                        if (proc->cmdline[i] == '\0')
+                            proc->cmdline[i] = ' ';
+                    }
+                    proc->cmdline[ret - 1] = '\0';
+                }
+            }
+            mmput(mm);
+        }
     }
 
     put_task_struct(task);
