@@ -46,29 +46,42 @@ For maximum efficiency, montauk includes an optional kernel module (`montauk-ker
 ### SYSTEM Interface, Large Display
 ![Main](2025-12-18_10-36.png)
 
-## Build
-
-```bash
-make build    # Release build
-make debug    # Debug build with symbols
-make clean    # Clean build artifacts
-```
-
 ## Installation
 
-**Local build:**
+### Simple Install
+
 ```bash
-./build/montauk
+./install.py
 ```
 
-**System install (Arch Linux):**
+### Advanced Install (CMake)
+
+```bash
+# Configure
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+# Build
+cmake --build build -j$(nproc)
+
+# Install (optional)
+sudo cmake --install build
+```
+
+### Other Commands
+
+```bash
+./install.py build      # Build only, don't install
+./install.py clean      # Clean build directory
+./install.py uninstall  # Remove installed binary
+./install.py test       # Run tests
+./install.py --kernel   # Build with kernel module support
+./install.py --debug    # Debug build
+```
+
+### Arch Linux Package
+
 ```bash
 makepkg -si   # From PKGBUILD in pkg/ directory
-```
-
-**CMake install:**
-```bash
-cmake --install build --prefix /usr/local
 ```
 
 **Process Collection Modes:**
@@ -95,29 +108,16 @@ MONTAUK_COLLECTOR=traditional ./montauk  # Force traditional polling
 
 **Quick Start:**
 ```bash
-# Build the module
 cd montauk-kernel
-make
-
-# Load (temporary, until reboot)
-sudo insmod montauk.ko
-
-# Verify
-dmesg | grep montauk
-lsmod | grep montauk
+./install.py
 ```
 
-**Persistent Installation:**
+This builds the kernel module, installs it, sets up auto-load at boot, and rebuilds montauk with kernel support.
+
+**Verify:**
 ```bash
-# Install to /lib/modules
-sudo make install
-sudo depmod -a
-
-# Auto-load at boot
-echo "montauk" | sudo tee /etc/modules-load.d/montauk.conf
-
-# Load now
-sudo modprobe montauk
+lsmod | grep montauk
+sudo dmesg | grep montauk
 ```
 
 **Module Parameters:**
