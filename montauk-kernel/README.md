@@ -113,67 +113,72 @@ montauk-kernel solves these by:
 
 ## Installation
 
+### Simple Install
+
+```bash
+./install.py
+```
+
+This handles everything:
+1. Checks for kernel headers (prompts to install if missing)
+2. Builds the kernel module
+3. Verifies kernel version compatibility
+4. Installs to `/lib/modules/$(uname -r)/extra/`
+5. Sets up auto-load at boot (`/etc/modules-load.d/montauk.conf`)
+6. Loads the module immediately
+7. Rebuilds montauk userspace with kernel support (`-DMONTAUK_KERNEL=ON`)
+8. Installs updated montauk binary to `/usr/local/bin`
+
+**Important:** Re-run `./install.py` after kernel upgrades to rebuild the module.
+
 ### Prerequisites
 
-- Linux kernel 5.10 or later (tested up to 6.12)
+- Linux kernel 5.10 or later (tested up to 6.18)
 - Kernel headers for your running kernel
-- Build essentials (gcc, make)
-- Optional: DKMS for automatic rebuilds on kernel upgrades
-
-### Option A: DKMS (Recommended)
-
-DKMS automatically rebuilds the module when you upgrade your kernel.
+- CMake 3.16+ (for userspace rebuild)
+- Python 3.6+
 
 **Arch Linux:**
 ```bash
-yay -S montauk-kernel-dkms
-sudo systemctl enable montauk-kernel
-sudo systemctl start montauk-kernel
+sudo pacman -S linux-headers cmake
 ```
 
 **Debian/Ubuntu:**
 ```bash
-sudo apt install montauk-kernel-dkms
-sudo modprobe montauk
-echo "montauk" | sudo tee /etc/modules-load.d/montauk.conf
+sudo apt install linux-headers-$(uname -r) cmake
 ```
 
 **Fedora:**
 ```bash
-sudo dnf install montauk-kernel-dkms
-sudo modprobe montauk
+sudo dnf install kernel-devel cmake
 ```
 
-### Option B: Manual Build
+### Advanced Install (CMake)
+
+If you prefer manual control:
 
 ```bash
-# Clone the repository
-git clone https://github.com/wllclngn/montauk-kernel
-cd montauk-kernel
-
 # Build against running kernel
-make
+make -C /lib/modules/$(uname -r)/build M=$(pwd) modules
 
-# Load the module (temporary, until reboot)
+# Load temporarily
 sudo insmod montauk.ko
 
-# Or install persistently
-sudo make install
+# Install persistently
+sudo cp montauk.ko /lib/modules/$(uname -r)/extra/
 sudo depmod -a
-sudo modprobe montauk
-
-# Auto-load at boot
 echo "montauk" | sudo tee /etc/modules-load.d/montauk.conf
+sudo modprobe montauk
 ```
 
-### Option C: Building for a Specific Kernel
+### Building for a Specific Kernel
 
 ```bash
 # Build for a different kernel version
-make KDIR=/lib/modules/6.12.0-arch1-1/build
+make -C /lib/modules/6.12.0-arch1-1/build M=$(pwd) modules
 
 # Cross-compile for another architecture
-make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KDIR=/path/to/kernel
+make -C /path/to/kernel M=$(pwd) ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules
 ```
 
 ### Verifying Installation
