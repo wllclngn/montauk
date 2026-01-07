@@ -1,0 +1,347 @@
+.TH MONTAUK 1 "January 2026" "montauk 1.0" "User Commands"
+.SH NAME
+montauk \- high-performance Linux system monitor with kernel module support
+.SH SYNOPSIS
+.B montauk
+.RB [ \-\-self\-test ]
+.RB [ \-\-self\-test\-seconds
+.IR N ]
+.RB [ \-\-iterations
+.IR N ]
+.RB [ \-\-sleep\-ms
+.IR N ]
+.SH DESCRIPTION
+.B montauk
+is a C++23 system monitor for Linux terminals featuring a custom kernel module
+for zero-overhead process telemetry, multi-vendor GPU attribution, and
+production-grade sorting algorithms.
+.PP
+Key features:
+.IP \(bu 2
+Custom Linux kernel module (kprobes) with genetlink interface for zero /proc overhead
+.IP \(bu 2
+Three-tier process collection: Kernel Module > Netlink proc_connector > /proc polling
+.IP \(bu 2
+Lock-free snapshot pipeline with churn detection (PROC CHURN alerts)
+.IP \(bu 2
+C++23 TimSort keeping 4K+ processes deterministically ordered in <1ms
+.IP \(bu 2
+GPU attribution across NVIDIA (NVML/nvidia-smi), AMD, and Intel via DRM fdinfo
+.IP \(bu 2
+Multi-sensor thermal instrumentation with vendor-specific thresholds
+.IP \(bu 2
+Zero external dependencies, Python/CMake build automation
+.SH OPTIONS
+.TP
+.B \-\-self\-test
+Run in self-test mode: exercise all collectors and exit with status.
+.TP
+.BI \-\-self\-test\-seconds " N"
+Duration for self-test mode in seconds.
+.TP
+.BI \-\-iterations " N"
+Run for N iterations then exit (useful for benchmarking).
+.TP
+.BI \-\-sleep\-ms " N"
+Sleep N milliseconds between iterations (default: 1000).
+.SH PROCESS COLLECTION MODES
+montauk supports three collection backends, auto-detected in priority order:
+.SS Kernel Module (Best)
+.IP \(bu 2
+Zero /proc reads \- data from task_struct directly
+.IP \(bu 2
+Zero proc_connector traffic \- kprobes update table directly
+.IP \(bu 2
+Single genetlink call per snapshot
+.IP \(bu 2
+Sub-millisecond fork/exec/exit detection via kprobes
+.IP \(bu 2
+~0.1-0.2% CPU overhead
+.IP \(bu 2
+Requires: montauk.ko loaded, built with \-DMONTAUK_KERNEL=ON
+.SS Netlink proc_connector (Good)
+.IP \(bu 2
+Receives fork/exec/exit events from kernel
+.IP \(bu 2
+Still reads /proc/[pid]/* for process details
+.IP \(bu 2
+~0.5-1% CPU overhead
+.IP \(bu 2
+Requires: CAP_NET_ADMIN or root
+.SS Traditional /proc Polling (Fallback)
+.IP \(bu 2
+Scans /proc for PID directories
+.IP \(bu 2
+Reads /proc/[pid]/stat, status, cmdline
+.IP \(bu 2
+~2-5% CPU overhead
+.IP \(bu 2
+May miss short-lived processes
+.PP
+Force a specific collector via environment:
+.nf
+.RS
+MONTAUK_COLLECTOR=kernel montauk
+MONTAUK_COLLECTOR=netlink montauk
+MONTAUK_COLLECTOR=traditional montauk
+.RE
+.fi
+.SH KERNEL MODULE
+.SS Installation
+.nf
+.RS
+cd montauk-kernel
+\&./install.py
+.RE
+.fi
+.PP
+This builds the module, installs it, sets up auto-load at boot, and rebuilds
+montauk with kernel support.
+.SS Verification
+.nf
+.RS
+lsmod | grep montauk
+sudo dmesg | grep montauk
+.RE
+.fi
+.SS Module Parameters
+.TP
+.B max_procs
+Maximum processes to track (default: 8192)
+.TP
+.B debug
+Enable verbose debug logging to dmesg (default: false)
+.PP
+Configure via modprobe:
+.nf
+.RS
+sudo modprobe montauk max_procs=4096 debug=1
+echo "options montauk max_procs=4096" | sudo tee /etc/modprobe.d/montauk.conf
+.RE
+.fi
+.PP
+.B Important:
+Re-run install.py after kernel upgrades to rebuild the module.
+.SH KEYBINDINGS
+.TP
+.B q
+Quit
+.TP
+.B j / k
+Scroll process list down/up
+.TP
+.B g / G
+Go to top/bottom of process list
+.TP
+.B s
+Toggle system focus (condensed view)
+.TP
+.B c
+Toggle CPU scale (per-core vs total)
+.TP
+.B ?
+Toggle help
+.SH ENVIRONMENT
+All environment variables accept both MONTAUK_ and montauk_ prefixes.
+.SS General
+.TP
+.B MONTAUK_COLLECTOR
+Force collector: "kernel", "netlink", or "traditional"
+.TP
+.B MONTAUK_MAX_PROCS
+Maximum processes to track (default: 256)
+.TP
+.B MONTAUK_ENRICH_TOP_N
+Number of top processes to enrich with full details (default: MONTAUK_MAX_PROCS)
+.TP
+.B MONTAUK_ALT_SCREEN
+Use alternate screen buffer (default: 1). Set to 0 to disable.
+.TP
+.B MONTAUK_SYSTEM_FOCUS
+Start in system focus mode (default: 0)
+.TP
+.B MONTAUK_TIME_FORMAT
+Time display format
+.SS Process Display
+.TP
+.B MONTAUK_PROC_CPU_SCALE
+CPU percentage scale: "total" or "core"
+.TP
+.B MONTAUK_PROC_CAUTION_PCT
+CPU percentage for caution color (default: 60)
+.TP
+.B MONTAUK_PROC_WARNING_PCT
+CPU percentage for warning color (default: 80)
+.TP
+.B MONTAUK_TOPPROC_ALERT_FRAMES
+Consecutive frames over threshold before PROC CHURN alert (default: 5)
+.SS Colors
+.TP
+.B MONTAUK_ACCENT_IDX
+256-color index for accent (default: 11)
+.TP
+.B MONTAUK_CAUTION_IDX
+256-color index for caution (default: 9)
+.TP
+.B MONTAUK_WARNING_IDX
+256-color index for warning (default: 1)
+.TP
+.B MONTAUK_TITLE_IDX
+256-color index for title (default: 31)
+.TP
+.B MONTAUK_TITLE_HEX
+Truecolor hex for title (e.g., "ff5500")
+.SS Thermal
+.TP
+.B MONTAUK_CPU_TEMP_WARNING_C
+CPU temperature warning threshold in Celsius (default: 90, or vendor-reported)
+.TP
+.B MONTAUK_CPU_TEMP_CAUTION_C
+CPU temperature caution threshold in Celsius
+.TP
+.B MONTAUK_GPU_TEMP_WARNING_C
+GPU temperature warning threshold in Celsius (default: 90)
+.TP
+.B MONTAUK_TEMP_CAUTION_DELTA_C
+Delta below warning for caution threshold (default: 10)
+.SS NVIDIA GPU
+.TP
+.B MONTAUK_DISABLE_NVML
+Disable NVML library loading (default: 0)
+.TP
+.B MONTAUK_NVML_PATH
+Custom path to libnvidia-ml.so
+.TP
+.B MONTAUK_LOG_NVML
+Log NVML API calls for debugging (default: 0)
+.TP
+.B MONTAUK_NVIDIA_SMI_PATH
+Custom path to nvidia-smi binary
+.TP
+.B MONTAUK_NVIDIA_PMON
+Enable nvidia-smi pmon for process GPU usage (default: 1)
+.TP
+.B MONTAUK_NVIDIA_MEM
+Enable nvidia-smi memory queries (default: 1)
+.TP
+.B MONTAUK_NVIDIA_SMI_DEV
+Enable nvidia-smi device queries (default: 1)
+.TP
+.B MONTAUK_SMI_MIN_INTERVAL_MS
+Minimum interval between nvidia-smi calls in milliseconds
+.TP
+.B MONTAUK_GPU_DEBUG
+Enable GPU subsystem debug output (default: 0)
+.SS Testing
+.TP
+.B MONTAUK_PROC_ROOT
+Override /proc path (for testing)
+.TP
+.B MONTAUK_SYS_ROOT
+Override /sys path (for testing)
+.SH FILES
+.TP
+.I /lib/modules/$(uname \-r)/extra/montauk.ko
+Kernel module (when installed)
+.TP
+.I /etc/modules\-load.d/montauk.conf
+Auto-load configuration for kernel module
+.TP
+.I /etc/modprobe.d/montauk.conf
+Module parameter configuration
+.SH PERFORMANCE
+Real-world benchmarks on typical desktop hardware:
+.TP
+.B Kernel Module mode
+~0.1-0.2% CPU, <1ms snapshot latency, zero /proc reads
+.TP
+.B Netlink mode
+~0.5-1% CPU, <1ms event detection, /proc reads for details
+.TP
+.B Traditional mode
+~2-5% CPU, 250-1000ms polling interval, race-prone
+.TP
+.B TimSort (4K processes)
+<1ms deterministic ordering
+.TP
+.B GPU attribution
+<5ms per snapshot with NVML, <50ms with nvidia-smi fallback
+.SH ARCHITECTURE
+.SS Collectors
+.TP
+.B KernelProcessCollector
+Communicates with montauk.ko via genetlink. Receives complete process table
+in single syscall.
+.TP
+.B NetlinkProcessCollector
+Subscribes to proc_connector for fork/exec/exit events. Enriches with /proc reads.
+.TP
+.B ProcessCollector
+Traditional /proc scanner. Fallback when others unavailable.
+.SS GPU Attribution Stack
+.IP 1. 3
+NVML runtime loading (libnvidia-ml.so)
+.IP 2. 3
+nvidia-smi parsing (pmon, device queries)
+.IP 3. 3
+DRM /proc/[pid]/fdinfo stats (AMD, Intel, NVIDIA)
+.PP
+Automatically identifies MIG partitions, containers, and browser GPU processes.
+.SS Sorting
+C++23 TimSort implementation with O(n) best case on pre-sorted data,
+galloping merge optimization, and stable ordering guarantee.
+.SH TROUBLESHOOTING
+.SS Kernel Module Not Detected
+.nf
+.RS
+# Check if loaded
+lsmod | grep montauk
+
+# Check genetlink family
+cat /proc/net/genetlink | grep MONTAUK
+
+# Force kernel collector to see error
+MONTAUK_COLLECTOR=kernel montauk
+.RE
+.fi
+.SS "Event-Driven Netlink" Instead of "Kernel Module"
+Binary may not be built with kernel support. Rebuild:
+.nf
+.RS
+cd montauk-kernel && ./install.py
+.RE
+.fi
+.SS NVML Not Loading
+.nf
+.RS
+# Check library exists
+ls -la /usr/lib*/libnvidia-ml.so*
+
+# Enable debug logging
+MONTAUK_LOG_NVML=1 montauk
+.RE
+.fi
+.SS High CPU Usage
+.IP \(bu 2
+Consider kernel module for lowest overhead
+.IP \(bu 2
+Reduce MONTAUK_MAX_PROCS if tracking too many processes
+.IP \(bu 2
+Increase --sleep-ms for longer intervals
+.SH SEE ALSO
+.BR htop (1),
+.BR btop (1),
+.BR top (1),
+.BR nvidia\-smi (1),
+.BR modprobe (8),
+.BR insmod (8)
+.SH AUTHORS
+Written in C++23 for Linux systems programmers.
+.SH BUGS
+Report issues at: https://github.com/wllclngn/montauk/issues
+.SH COPYRIGHT
+MIT License. See LICENSE file in repository.
+.SH VERSION
+montauk 1.0
+.br
+January 2026
