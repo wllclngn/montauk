@@ -150,7 +150,7 @@ std::vector<std::string> render_process_table(
     if ((int)hg.size() > gmem_w_meas) gmem_w_meas = (int)hg.size();
   }
   // Clamp
-  pid_w_meas = std::min(6, std::max(5, pid_w_meas));
+  pid_w_meas = std::min(8, std::max(5, pid_w_meas));
   user_w_meas = std::min(12, std::max(4, user_w_meas));
   gpu_digit_w_meas = std::min(4, std::max(3, gpu_digit_w_meas));
   mem_w_meas = std::min(6, std::max(4, mem_w_meas));
