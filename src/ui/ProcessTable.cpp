@@ -122,7 +122,8 @@ std::vector<std::string> render_process_table(
   int proc_inner_min = std::max(14, remaining_for_proc - 2);  // minus borders
   int desired_rows = std::max(1, proc_inner_min - 1);  // minus header row
   g_ui.last_proc_page_rows = desired_rows;
-  
+  g_ui.last_proc_total = (int)order.size();
+
   // Pagination by scroll
   const int skip = g_ui.scroll;
   const int take = desired_rows;

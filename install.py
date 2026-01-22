@@ -99,7 +99,11 @@ def cmd_build(args, source_dir):
     jobs = multiprocessing.cpu_count()
 
     print(f"Building (using {jobs} jobs)...")
-    ret, _, stderr = run(["cmake", "--build", str(build_dir), f"-j{jobs}"], capture=True)
+    # Use --clean-first for install to ensure fresh binaries
+    build_cmd = ["cmake", "--build", str(build_dir), f"-j{jobs}"]
+    if args.command == "install":
+        build_cmd.insert(3, "--clean-first")
+    ret, _, stderr = run(build_cmd, capture=True)
     if ret != 0:
         print(f"ERROR: Build failed!")
         print(stderr)

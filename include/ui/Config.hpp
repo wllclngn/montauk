@@ -28,6 +28,7 @@ struct UIState {
   bool show_thermal{true};
   bool show_gpumon{true};
   int last_proc_page_rows{14};
+  int last_proc_total{0};  // Total process count for scroll clamping
   enum class CPUScale { Total, Core } cpu_scale{CPUScale::Total};
   enum class GPUScale { Capacity, Utilization } gpu_scale{GPUScale::Utilization};
   bool system_focus{false};

@@ -229,11 +229,11 @@ def main():
         print(stderr)
         sys.exit(1)
 
-    # Build
+    # Build (--clean-first ensures fresh binaries)
     import multiprocessing
     jobs = multiprocessing.cpu_count()
     ret, stdout, stderr = run(
-        ["cmake", "--build", str(build_dir), f"-j{jobs}"],
+        ["cmake", "--build", str(build_dir), "--clean-first", f"-j{jobs}"],
         capture=True
     )
     if ret != 0:

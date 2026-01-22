@@ -200,15 +200,17 @@ int main(int argc, char** argv) {
             if (a == '[') {
               if (k < (size_t)n) b = buf[k++]; else break;
               if (b >= 'A' && b <= 'D') {
-                // arrows: A up, B down
+                // arrows: A up, B down (clamped to process list bounds)
+                int max_scroll = std::max(0, g_ui.last_proc_total - g_ui.last_proc_page_rows);
                 if (b=='A') { if (g_ui.scroll > 0) g_ui.scroll--; }
-                else if (b=='B') { g_ui.scroll++; }
+                else if (b=='B') { g_ui.scroll = std::min(g_ui.scroll + 1, max_scroll); }
               } else if (b=='5' || b=='6') { // PgUp/PgDn expect '~'
                 if (k < (size_t)n) d = buf[k++];
                 if (d=='~') {
                   int page = std::max(1, g_ui.last_proc_page_rows - 2);
+                  int max_scroll = std::max(0, g_ui.last_proc_total - g_ui.last_proc_page_rows);
                   if (b=='5') { g_ui.scroll = std::max(0, g_ui.scroll - page); }
-                  else { g_ui.scroll += page; }
+                  else { g_ui.scroll = std::min(g_ui.scroll + page, max_scroll); }
                 }
               }
             }
