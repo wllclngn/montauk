@@ -43,15 +43,14 @@ static std::string repeat_str(const std::string& ch, int n){
 std::vector<std::string> make_box(const std::string& title, const std::vector<std::string>& lines, int width, int min_height) {
   int iw = std::max(3, width - 2);
   std::vector<std::string> out;
-  const bool uni = use_unicode();
-  const std::string TL = uni? "╭" : "+";
-  const std::string TR = uni? "╮" : "+";
-  const std::string BL = uni? "╰" : "+";
-  const std::string BR = uni? "╯" : "+";
-  const std::string H  = uni? "─" : "-";
-  const std::string V  = uni? "│" : "|";
+  const std::string TL = "┌";
+  const std::string TR = "┐";
+  const std::string BL = "└";
+  const std::string BR = "┘";
+  const std::string H  = "─";
+  const std::string V  = "│";
   auto top = [&]{
-    std::string t = "[ " + title + " ]";
+    std::string t = " " + title + " ";
     int fill = std::max(0, iw - (int)t.size());
     int left = fill / 2; int right = fill - left;
     return TL + repeat_str(H, left) + t + repeat_str(H, right) + TR;
@@ -69,27 +68,24 @@ std::vector<std::string> make_box(const std::string& title, const std::vector<st
 static std::string colorize_line_impl(const std::string& s) {
   if (!tty_stdout()) return s;
   const auto& ui = ui_config();
-  auto uni = use_unicode();
-  const char* V = uni ? "│" : "|";
-  
+  const char* V = "│";
+
   auto is_border = [&](const std::string& str){
     if (str.empty()) return false;
-    if (str.find(uni ? "│" : "|") != std::string::npos) return false;
-    if (uni) {
-      if (str.rfind("╭",0)==0 || str.rfind("╮",0)==0 || str.rfind("╰",0)==0 || str.rfind("╯",0)==0 || str.rfind("─",0)==0)
-        return true;
-      return false;
-    }
-    return str.rfind("+",0)==0 || str.rfind("-",0)==0;
+    if (str.find("│") != std::string::npos) return false;
+    if (str.rfind("┌",0)==0 || str.rfind("┐",0)==0 || str.rfind("└",0)==0 || str.rfind("┘",0)==0 || str.rfind("─",0)==0)
+      return true;
+    return false;
   };
   
   if (is_border(s)) {
-    size_t lb = s.find('[');
-    size_t rb = (lb!=std::string::npos) ? s.find(']', lb+1) : std::string::npos;
-    if (lb != std::string::npos && rb != std::string::npos && rb > lb) {
-      std::string pre = s.substr(0, lb);
-      std::string mid = s.substr(lb, rb - lb + 1);
-      std::string suf = s.substr(rb + 1);
+    // Find title by locating text between ─ characters (format: ┌───── TITLE ─────┐)
+    size_t first_space = s.find(' ');
+    size_t last_space = s.rfind(' ');
+    if (first_space != std::string::npos && last_space != std::string::npos && last_space > first_space) {
+      std::string pre = s.substr(0, first_space);
+      std::string mid = s.substr(first_space, last_space - first_space + 1);
+      std::string suf = s.substr(last_space + 1);
       return sgr_fg_grey() + pre + ui.accent + mid + sgr_fg_grey() + suf + sgr_reset();
     }
     return sgr_fg_grey() + s + sgr_reset();

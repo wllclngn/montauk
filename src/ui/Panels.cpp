@@ -563,7 +563,7 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
     // Build box then apply full-line coloring for temperature lines if needed
     auto sys_box = make_box("SYSTEM", sys, width, inner_min);
     if (!sys_box.empty()) {
-      const bool uni = use_unicode(); const std::string V = uni? "│" : "|"; const auto& uic = ui_config();
+      const std::string V = "│"; const auto& uic = ui_config();
       for (size_t li=1; li+1<sys_box.size() && (li-1)<sys_sev.size(); ++li) {
         int sv = sys_sev[li-1]; if (sv <= 0) continue;
         auto& line = sys_box[li]; size_t fpos = line.find(V); size_t lpos = line.rfind(V);

@@ -250,7 +250,7 @@ std::vector<std::string> render_process_table(
   auto proc_box = make_box(title, proc_lines, width, proc_inner_min);
   // Colorize rows based on severity
   {
-    const std::string& V = use_unicode() ? "│" : "|";
+    const std::string& V = "│";
     const auto& uic = ui_config();
     for (int li = 1; li < (int)proc_box.size() - 1; ++li) {
       if (li - 1 >= (int)proc_sev.size()) break;

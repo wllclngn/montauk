@@ -4,8 +4,7 @@
 
 namespace montauk::ui {
 
-// UTF-8 text width utilities
-int u8_len(unsigned char c);
+// UTF-8 text width utilities (uses wcwidth for proper wide char support)
 int display_cols(const std::string& s);
 std::string take_cols(const std::string& s, int cols);
 

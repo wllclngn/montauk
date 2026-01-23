@@ -73,6 +73,7 @@ static bool env_flag(const char* name, bool defv=true){ const char* v=getenv_com
 
 // Format a colored CPU% field with fixed visible width (aligned to match 4-char "CPU%" header).
 int main(int argc, char** argv) {
+  std::setlocale(LC_ALL, "");  // Required for wcwidth() to work correctly
   std::signal(SIGINT, on_sigint);
   // Text-only UI is the default and only mode. Ctrl+C to exit.
   // Default: run indefinitely with 250ms refresh (no flags needed).

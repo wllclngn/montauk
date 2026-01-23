@@ -17,7 +17,6 @@ void on_atexit_restore();
 // Terminal capability detection
 bool tty_stdout();
 bool truecolor_capable();
-bool use_unicode();
 int term_cols();
 int term_rows();
 

@@ -64,19 +64,6 @@ bool truecolor_capable() {
   return false;
 }
 
-bool use_unicode() {
-#ifdef __linux__
-  const char* lc = std::getenv("LANG");
-  if (!lc || !*lc) lc = std::getenv("LC_ALL");
-  if (!lc || !*lc) return false;
-  std::string s = lc; 
-  for (auto& c : s) c = std::tolower((unsigned char)c);
-  return s.find("utf") != std::string::npos || s.find("utf8") != std::string::npos || s.find("utf-8") != std::string::npos;
-#else
-  return false;
-#endif
-}
-
 int term_cols() {
   struct winsize ws{};
   if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)

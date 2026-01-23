@@ -41,10 +41,10 @@ For maximum efficiency, montauk includes an optional kernel module (`montauk-ker
 ## Screenshots
 
 ### Main Interface
-![Main](2025-12-24_11-08.png)
+![Main](2026-01-23_08-24.png)
 
 ### SYSTEM Interface, Large Display
-![Main](2025-12-18_10-36.png)
+![Main](2026-01-23_08-25.png)
 
 ## Installation
 

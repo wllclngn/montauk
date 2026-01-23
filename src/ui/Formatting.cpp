@@ -6,6 +6,7 @@
 #include <clocale>
 #include <cstdlib>
 #include <ctime>
+#include <cwchar>
 #include <list>
 #include <mutex>
 #include <sstream>
@@ -16,36 +17,63 @@
 
 namespace montauk::ui {
 
-int u8_len(unsigned char c){
-  if (c < 0x80) return 1;
-  if ((c >> 5) == 0x6) return 2;
-  if ((c >> 4) == 0xE) return 3;
-  if ((c >> 3) == 0x1E) return 4;
-  return 1;
+// Helper: decode UTF-8 character to wchar_t, return bytes consumed (0 on error)
+static int utf8_to_wchar(const char* s, size_t len, wchar_t* out) {
+  if (len == 0 || !s) return 0;
+  unsigned char c = s[0];
+
+  if ((c & 0x80) == 0) {
+    // ASCII
+    *out = c;
+    return 1;
+  } else if ((c & 0xE0) == 0xC0 && len >= 2) {
+    // 2-byte
+    *out = ((c & 0x1F) << 6) | (s[1] & 0x3F);
+    return 2;
+  } else if ((c & 0xF0) == 0xE0 && len >= 3) {
+    // 3-byte (includes CJK)
+    *out = ((c & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+    return 3;
+  } else if ((c & 0xF8) == 0xF0 && len >= 4) {
+    // 4-byte
+    *out = ((c & 0x07) << 18) | ((s[1] & 0x3F) << 12) |
+           ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
+    return 4;
+  }
+  return 0;  // Invalid
 }
 
-int display_cols(const std::string& s){
-  int cols = 0; 
-  for (size_t i=0; i<s.size();){ 
-    // Skip ANSI escape sequences
+int display_cols(const std::string& s) {
+  int cols = 0;
+  for (size_t i = 0; i < s.size(); ) {
+    // Skip ANSI escape sequences (CSI: \x1B[...m)
     if (s[i] == '\x1B' && i+1 < s.size() && s[i+1] == '[') {
       i += 2;
       while (i < s.size() && (s[i] < '@' || s[i] > '~')) i++;
       if (i < s.size()) i++; // skip final byte
       continue;
     }
-    int len = u8_len((unsigned char)s[i]); 
-    i += len; 
-    cols += 1; 
-  } 
+    // Decode UTF-8 and use wcwidth for proper display width
+    wchar_t wc;
+    int len = utf8_to_wchar(s.c_str() + i, s.size() - i, &wc);
+    if (len > 0) {
+      int w = wcwidth(wc);
+      cols += (w > 0) ? w : 1;  // wcwidth returns -1 for non-printable, use 1
+      i += len;
+    } else {
+      // Invalid UTF-8, skip byte
+      cols++;
+      i++;
+    }
+  }
   return cols;
 }
 
-std::string take_cols(const std::string& s, int cols){
+std::string take_cols(const std::string& s, int cols) {
   if (cols <= 0) return std::string();
-  std::string out; 
+  std::string out;
   out.reserve(s.size());
-  int seen = 0; 
+  int seen = 0;
   size_t i = 0;
   while (i < s.size() && seen < cols) {
     // Copy ANSI escape sequences without counting them
@@ -57,11 +85,23 @@ std::string take_cols(const std::string& s, int cols){
       out.append(s, start, i - start);
       continue;
     }
-    int len = u8_len((unsigned char)s[i]);
-    if (i + (size_t)len > s.size()) len = 1;
-    out.append(s, i, len);
-    i += len; 
-    seen += 1;
+    // Decode UTF-8 and check display width
+    wchar_t wc;
+    int len = utf8_to_wchar(s.c_str() + i, s.size() - i, &wc);
+    if (len > 0) {
+      int w = wcwidth(wc);
+      if (w < 0) w = 1;  // Non-printable, assume 1
+      // Don't exceed requested columns (important for wide chars)
+      if (seen + w > cols) break;
+      out.append(s, i, len);
+      i += len;
+      seen += w;
+    } else {
+      // Invalid UTF-8, skip byte
+      out += s[i];
+      i++;
+      seen++;
+    }
   }
   return out;
 }
@@ -72,7 +112,7 @@ std::string trunc_pad(const std::string& s, int w) {
   if (cols == w) return s;
   if (cols < w) return s + std::string(w - cols, ' ');
   if (w <= 1) return take_cols(s, w);
-  return take_cols(s, w - 1) + (use_unicode()? "…" : ".");
+  return take_cols(s, w - 1) + "…";
 }
 
 std::string rpad_trunc(const std::string& s, int w) {
