@@ -34,6 +34,17 @@ def run(cmd, check=True, capture=False, sudo=False, cwd=None):
         result = subprocess.run(cmd, cwd=cwd)
         return result.returncode, None, None
 
+def find_kmod_tool(name):
+    """Find a kmod tool (modinfo, modprobe, etc.) accounting for Debian's /usr/sbin PATH."""
+    path = shutil.which(name)
+    if path:
+        return path
+    for sbin in ["/usr/sbin", "/sbin"]:
+        candidate = os.path.join(sbin, name)
+        if os.path.isfile(candidate):
+            return candidate
+    return name  # fallback to bare name, let subprocess raise
+
 def get_kernel_version():
     """Get running kernel version."""
     return os.uname().release
@@ -51,7 +62,7 @@ def check_cmake():
 
 def get_module_vermagic(ko_path):
     """Extract vermagic from a .ko file to check kernel version compatibility."""
-    ret, stdout, _ = run(["modinfo", str(ko_path)], capture=True)
+    ret, stdout, _ = run([find_kmod_tool("modinfo"), str(ko_path)], capture=True)
     if ret != 0:
         return None
     for line in stdout.splitlines():
@@ -170,7 +181,7 @@ def main():
         print("ERROR: Failed to copy module (need sudo?)")
         sys.exit(1)
 
-    ret, _, _ = run(["depmod", "-a"], sudo=True)
+    ret, _, _ = run([find_kmod_tool("depmod"), "-a"], sudo=True)
     if ret != 0:
         print("ERROR: depmod failed!")
         sys.exit(1)
@@ -196,18 +207,18 @@ def main():
     print("[8/9] Loading kernel module...")
 
     # Unload if already loaded
-    ret, stdout, _ = run(["lsmod"], capture=True)
+    ret, stdout, _ = run([find_kmod_tool("lsmod")], capture=True)
     if "montauk" in stdout:
         print("  Unloading existing module...")
-        run(["rmmod", "montauk"], sudo=True, check=False)
+        run([find_kmod_tool("rmmod"), "montauk"], sudo=True, check=False)
 
-    ret, _, stderr = run(["modprobe", "montauk"], sudo=True, capture=True)
+    ret, _, stderr = run([find_kmod_tool("modprobe"), "montauk"], sudo=True, capture=True)
     if ret != 0:
         print(f"ERROR: Failed to load module: {stderr}")
         sys.exit(1)
 
     # Verify
-    ret, stdout, _ = run(["lsmod"], capture=True)
+    ret, stdout, _ = run([find_kmod_tool("lsmod")], capture=True)
     if "montauk" not in stdout:
         print("ERROR: Module not showing in lsmod!")
         sys.exit(1)
