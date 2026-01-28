@@ -40,10 +40,10 @@ For maximum efficiency, montauk includes an optional kernel module (`montauk-ker
 
 ## Screenshots
 
-### Main Interface
+### Main Interface, Arch Linux
 ![Main](2026-01-23_08-24.png)
 
-### SYSTEM Interface, Large Display
+### SYSTEM Interface, Debian Linux
 ![Main](2026-01-23_08-25.png)
 
 ## Installation
