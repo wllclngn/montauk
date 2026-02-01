@@ -20,21 +20,64 @@ import os
 import sys
 import shutil
 import subprocess
-import re
+import multiprocessing
 from pathlib import Path
+from datetime import datetime
 
-def run(cmd, check=True, capture=False, sudo=False, cwd=None):
-    """Run a command, optionally with sudo."""
-    if sudo:
-        cmd = ["sudo"] + cmd
-    if capture:
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
-        return result.returncode, result.stdout, result.stderr
-    else:
-        result = subprocess.run(cmd, cwd=cwd)
-        return result.returncode, None, None
 
-def find_kmod_tool(name):
+# =============================================================================
+# LOGGING
+# =============================================================================
+
+def _timestamp() -> str:
+    """Get current timestamp in [HH:MM:SS] format."""
+    return datetime.now().strftime("[%H:%M:%S]")
+
+
+def log_info(msg: str) -> None:
+    print(f"{_timestamp()} [INFO]   {msg}")
+
+
+def log_warn(msg: str) -> None:
+    print(f"{_timestamp()} [WARN]   {msg}")
+
+
+def log_error(msg: str) -> None:
+    print(f"{_timestamp()} [ERROR]  {msg}")
+
+
+# =============================================================================
+# COMMAND EXECUTION
+# =============================================================================
+
+def run_cmd(cmd: list, cwd: Path | None = None) -> int:
+    """Run a command with real-time output. Returns exit code."""
+    print(f">>> {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=cwd)
+    return result.returncode
+
+
+def run_cmd_capture(cmd: list, cwd: Path | None = None) -> tuple[int, str, str]:
+    """Run a command and capture output."""
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+    return result.returncode, result.stdout, result.stderr
+
+
+def run_cmd_sudo(cmd: list, cwd: Path | None = None) -> int:
+    """Run a command with sudo."""
+    return run_cmd(["sudo"] + cmd, cwd=cwd)
+
+
+def run_cmd_sudo_capture(cmd: list, cwd: Path | None = None) -> tuple[int, str, str]:
+    """Run a command with sudo and capture output."""
+    return run_cmd_capture(["sudo"] + cmd, cwd=cwd)
+
+
+# =============================================================================
+# KMOD UTILITIES
+# =============================================================================
+
+def find_kmod_tool(name: str) -> str:
     """Find a kmod tool (modinfo, modprobe, etc.) accounting for Debian's /usr/sbin PATH."""
     path = shutil.which(name)
     if path:
@@ -43,154 +86,157 @@ def find_kmod_tool(name):
         candidate = os.path.join(sbin, name)
         if os.path.isfile(candidate):
             return candidate
-    return name  # fallback to bare name, let subprocess raise
+    return name
 
-def get_kernel_version():
+
+def get_kernel_version() -> str:
     """Get running kernel version."""
     return os.uname().release
 
-def check_kernel_headers():
-    """Check if kernel headers are installed."""
-    kver = get_kernel_version()
-    build_dir = Path(f"/lib/modules/{kver}/build")
-    return build_dir.exists()
 
-def check_cmake():
-    """Check if cmake is available."""
-    ret, _, _ = run(["which", "cmake"], capture=True)
-    return ret == 0
-
-def get_module_vermagic(ko_path):
+def get_module_vermagic(ko_path: Path) -> str | None:
     """Extract vermagic from a .ko file to check kernel version compatibility."""
-    ret, stdout, _ = run([find_kmod_tool("modinfo"), str(ko_path)], capture=True)
+    ret, stdout, _ = run_cmd_capture([find_kmod_tool("modinfo"), str(ko_path)])
     if ret != 0:
         return None
     for line in stdout.splitlines():
         if line.startswith("vermagic:"):
-            # vermagic: 6.18.3-arch1-1 SMP preempt mod_unload
             parts = line.split()
             if len(parts) >= 2:
-                return parts[1]  # kernel version
+                return parts[1]
     return None
 
-def verify_module_version(ko_path, expected_kver):
-    """Verify the module was built for the expected kernel version."""
-    module_kver = get_module_vermagic(ko_path)
-    if module_kver is None:
-        return False, "Could not read module vermagic"
-    if module_kver != expected_kver:
-        return False, f"Module built for {module_kver}, but running {expected_kver}"
-    return True, module_kver
 
-def main():
+# =============================================================================
+# DEPENDENCY CHECKS
+# =============================================================================
+
+def check_kernel_headers(kver: str) -> bool:
+    """Check if kernel headers are installed."""
+    build_dir = Path(f"/lib/modules/{kver}/build")
+    return build_dir.exists()
+
+
+def check_cmake() -> bool:
+    """Check if cmake is available."""
+    ret, _, _ = run_cmd_capture(["which", "cmake"])
+    return ret == 0
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def main() -> int:
     script_dir = Path(__file__).parent.resolve()
-    montauk_root = script_dir.parent  # Parent of montauk-kernel is montauk root
+    montauk_root = script_dir.parent
     kver = get_kernel_version()
     tmp_build = Path("/tmp/montauk-kernel")
 
-    print("montauk-kernel installer")
-    print("========================")
-    print(f"Kernel version: {kver}")
-    print(f"Kernel module source: {script_dir}")
-    print(f"Montauk root: {montauk_root}")
+    print()
+    log_info("montauk-kernel installer")
+    log_info(f"Kernel version: {kver}")
+    log_info(f"Kernel module source: {script_dir}")
+    log_info(f"Montauk root: {montauk_root}")
     print()
 
-    # Step 1: Check kernel headers
-    print("[1/9] Checking kernel headers...")
-    if not check_kernel_headers():
-        print()
-        print("ERROR: Kernel headers not found!")
-        print()
-        print("Install them first:")
-        print("  Arch Linux:    sudo pacman -S linux-headers")
-        print("  Debian/Ubuntu: sudo apt install linux-headers-$(uname -r)")
-        print("  Fedora:        sudo dnf install kernel-devel")
-        print()
-        sys.exit(1)
-    print(f"  OK: Headers found at /lib/modules/{kver}/build")
+    # Check dependencies
+    log_info("CHECKING DEPENDENCIES")
 
-    # Step 2: Check cmake
-    print("[2/9] Checking build tools...")
+    if not check_kernel_headers(kver):
+        log_error("Kernel headers not found!")
+        print()
+        log_info("Install them first:")
+        print("         Arch Linux:    sudo pacman -S linux-headers")
+        print("         Debian/Ubuntu: sudo apt install linux-headers-$(uname -r)")
+        print("         Fedora:        sudo dnf install kernel-devel")
+        print()
+        return 1
+    log_info(f"Kernel headers found at /lib/modules/{kver}/build")
+
     if not check_cmake():
+        log_error("cmake not found!")
         print()
-        print("ERROR: cmake not found!")
+        log_info("Install it first:")
+        print("         Arch Linux:    sudo pacman -S cmake")
+        print("         Debian/Ubuntu: sudo apt install cmake")
+        print("         Fedora:        sudo dnf install cmake")
         print()
-        print("Install it first:")
-        print("  Arch Linux:    sudo pacman -S cmake")
-        print("  Debian/Ubuntu: sudo apt install cmake")
-        print("  Fedora:        sudo dnf install cmake")
-        print()
-        sys.exit(1)
-    print("  OK: cmake found")
+        return 1
+    log_info("cmake found")
+    print()
 
-    # Step 3: Copy to /tmp (avoid spaces in path)
-    print("[3/9] Preparing kernel module build directory...")
+    # Prepare build directory
+    log_info("PREPARING BUILD DIRECTORY")
+
     if " " in str(script_dir):
-        print(f"  Source path has spaces, copying to {tmp_build}")
+        log_info(f"Source path has spaces, copying to {tmp_build}")
         if tmp_build.exists():
             shutil.rmtree(tmp_build)
-        # Copy only the kernel module files, not the whole tree
         shutil.copytree(script_dir, tmp_build,
                        ignore=shutil.ignore_patterns('*.pyc', '__pycache__', '*.ko', '*.o', '*.mod*', '.tmp*', 'Module.symvers', 'modules.order'))
     else:
         tmp_build = script_dir
-    print(f"  OK: Building in {tmp_build}")
+    log_info(f"Building in {tmp_build}")
+    print()
 
-    # Step 4: Build kernel module
-    print("[4/9] Building kernel module...")
+    # Build kernel module
+    log_info("BUILDING KERNEL MODULE")
+
     kdir = f"/lib/modules/{kver}/build"
 
     # Clean first
-    ret, _, _ = run(["make", "-C", kdir, f"M={tmp_build}", "clean"])
+    run_cmd_capture(["make", "-C", kdir, f"M={tmp_build}", "clean"])
 
     # Build
-    ret, stdout, stderr = run(["make", "-C", kdir, f"M={tmp_build}", "modules"], capture=True)
+    ret, stdout, stderr = run_cmd_capture(["make", "-C", kdir, f"M={tmp_build}", "modules"])
     if ret != 0:
-        print(f"ERROR: Build failed!")
+        log_error("Build failed!")
         print(stderr)
-        sys.exit(1)
+        return 1
 
     ko_file = tmp_build / "montauk.ko"
     if not ko_file.exists():
-        print("ERROR: montauk.ko not found after build!")
-        sys.exit(1)
-    print(f"  OK: Built {ko_file}")
+        log_error("montauk.ko not found after build!")
+        return 1
+    log_info(f"Built {ko_file}")
 
-    # Step 5: Verify module version matches running kernel
-    print("[5/9] Verifying module/kernel version match...")
-    ok, msg = verify_module_version(ko_file, kver)
-    if not ok:
-        print(f"ERROR: {msg}")
+    # Verify module version
+    module_kver = get_module_vermagic(ko_file)
+    if module_kver is None:
+        log_error("Could not read module vermagic")
+        return 1
+    if module_kver != kver:
+        log_error(f"Module built for {module_kver}, but running {kver}")
         print()
-        print("The module was built for a different kernel version.")
-        print("Make sure you have the correct kernel headers installed:")
-        print(f"  Running kernel: {kver}")
-        print(f"  Headers should be at: /lib/modules/{kver}/build")
+        log_info("Make sure you have the correct kernel headers installed:")
+        print(f"         Running kernel: {kver}")
+        print(f"         Headers should be at: /lib/modules/{kver}/build")
         print()
-        sys.exit(1)
-    print(f"  OK: Module vermagic matches running kernel ({msg})")
+        return 1
+    log_info(f"Module vermagic matches running kernel ({module_kver})")
+    print()
 
-    # Step 6: Install kernel module (needs root)
-    print("[6/9] Installing kernel module...")
+    # Install kernel module
+    log_info("INSTALLING KERNEL MODULE")
+
     dest_dir = Path(f"/lib/modules/{kver}/extra")
     dest_file = dest_dir / "montauk.ko"
 
-    ret, _, _ = run(["mkdir", "-p", str(dest_dir)], sudo=True)
-    ret, _, _ = run(["cp", str(ko_file), str(dest_file)], sudo=True)
+    run_cmd_sudo(["mkdir", "-p", str(dest_dir)])
+    ret = run_cmd_sudo(["cp", str(ko_file), str(dest_file)])
     if ret != 0:
-        print("ERROR: Failed to copy module (need sudo?)")
-        sys.exit(1)
+        log_error("Failed to copy module (need sudo?)")
+        return 1
 
-    ret, _, _ = run([find_kmod_tool("depmod"), "-a"], sudo=True)
+    ret = run_cmd_sudo([find_kmod_tool("depmod"), "-a"])
     if ret != 0:
-        print("ERROR: depmod failed!")
-        sys.exit(1)
-    print(f"  OK: Installed to {dest_file}")
+        log_error("depmod failed!")
+        return 1
+    log_info(f"Installed to {dest_file}")
 
-    # Step 7: Setup auto-load (with version safety note)
-    print("[7/9] Setting up auto-load at boot...")
+    # Setup auto-load
     modules_conf = Path("/etc/modules-load.d/montauk.conf")
-
     proc = subprocess.Popen(
         ["sudo", "tee", str(modules_conf)],
         stdin=subprocess.PIPE,
@@ -199,114 +245,106 @@ def main():
     proc.communicate(input=b"montauk\n")
 
     if proc.returncode != 0:
-        print("  WARNING: Could not set up auto-load")
+        log_warn("Could not set up auto-load")
     else:
-        print(f"  OK: Created {modules_conf}")
+        log_info(f"Created {modules_conf}")
+    print()
 
-    # Step 8: Load kernel module now
-    print("[8/9] Loading kernel module...")
+    # Load kernel module
+    log_info("LOADING KERNEL MODULE")
 
-    # Unload if already loaded
-    ret, stdout, _ = run([find_kmod_tool("lsmod")], capture=True)
+    ret, stdout, _ = run_cmd_capture([find_kmod_tool("lsmod")])
     if "montauk" in stdout:
-        print("  Unloading existing module...")
-        run([find_kmod_tool("rmmod"), "montauk"], sudo=True, check=False)
+        log_info("Unloading existing module...")
+        run_cmd_sudo([find_kmod_tool("rmmod"), "montauk"])
 
-    ret, _, stderr = run([find_kmod_tool("modprobe"), "montauk"], sudo=True, capture=True)
+    ret, _, stderr = run_cmd_sudo_capture([find_kmod_tool("modprobe"), "montauk"])
     if ret != 0:
-        print(f"ERROR: Failed to load module: {stderr}")
-        sys.exit(1)
+        log_error(f"Failed to load module: {stderr}")
+        return 1
 
-    # Verify
-    ret, stdout, _ = run([find_kmod_tool("lsmod")], capture=True)
+    ret, stdout, _ = run_cmd_capture([find_kmod_tool("lsmod")])
     if "montauk" not in stdout:
-        print("ERROR: Module not showing in lsmod!")
-        sys.exit(1)
-    print("  OK: Module loaded")
+        log_error("Module not showing in lsmod!")
+        return 1
+    log_info("Module loaded")
+    print()
 
-    # Step 9: Rebuild montauk userspace with kernel support and install
-    print("[9/9] Rebuilding montauk with kernel collector support...")
+    # Rebuild montauk userspace
+    log_info("REBUILDING MONTAUK WITH KERNEL SUPPORT")
 
     build_dir = montauk_root / "build"
-
-    # Configure with MONTAUK_KERNEL=ON
-    ret, stdout, stderr = run(
-        ["cmake", "-B", str(build_dir), "-DMONTAUK_KERNEL=ON"],
-        cwd=str(montauk_root),
-        capture=True
-    )
-    if ret != 0:
-        print(f"ERROR: cmake configure failed!")
-        print(stderr)
-        sys.exit(1)
-
-    # Build (--clean-first ensures fresh binaries)
-    import multiprocessing
     jobs = multiprocessing.cpu_count()
-    ret, stdout, stderr = run(
-        ["cmake", "--build", str(build_dir), "--clean-first", f"-j{jobs}"],
-        capture=True
+
+    ret, stdout, stderr = run_cmd_capture(
+        ["cmake", "-B", str(build_dir), "-DMONTAUK_KERNEL=ON"],
+        cwd=montauk_root
     )
     if ret != 0:
-        print(f"ERROR: cmake build failed!")
+        log_error("cmake configure failed!")
         print(stderr)
-        sys.exit(1)
+        return 1
+    log_info("Configuration complete")
+
+    ret, stdout, stderr = run_cmd_capture(
+        ["cmake", "--build", str(build_dir), "--clean-first", f"-j{jobs}"]
+    )
+    if ret != 0:
+        log_error("cmake build failed!")
+        print(stderr)
+        return 1
 
     montauk_bin = build_dir / "montauk"
     if not montauk_bin.exists():
-        print("ERROR: montauk binary not found after build!")
-        sys.exit(1)
-    print(f"  OK: Built {montauk_bin}")
+        log_error("montauk binary not found after build!")
+        return 1
 
-    # Install to /usr/local/bin
-    print("  Installing to /usr/local/bin...")
-    ret, _, stderr = run(["cp", str(montauk_bin), "/usr/local/bin/montauk"], sudo=True, capture=True)
+    size = montauk_bin.stat().st_size
+    log_info(f"Built {montauk_bin} ({size} bytes)")
+
+    # Install binary
+    log_info("Installing to /usr/local/bin...")
+    ret, _, stderr = run_cmd_sudo_capture(["cp", str(montauk_bin), "/usr/local/bin/montauk"])
     if ret != 0:
-        print(f"  ERROR: Could not install to /usr/local/bin: {stderr}")
-        sys.exit(1)
+        log_error(f"Could not install to /usr/local/bin: {stderr}")
+        return 1
+    log_info(f"Installed /usr/local/bin/montauk ({size} bytes)")
 
-    # Verify the install worked
-    ret, stdout, _ = run(["ls", "-la", "/usr/local/bin/montauk"], capture=True)
-    installed_size = montauk_bin.stat().st_size
-    print(f"  OK: Installed to /usr/local/bin/montauk ({installed_size} bytes)")
-
-    # Verify the installed binary has kernel support
-    ret, stdout, _ = run(["strings", "/usr/local/bin/montauk"], capture=True)
+    ret, stdout, _ = run_cmd_capture(["strings", "/usr/local/bin/montauk"])
     if "KernelProcessCollector" not in stdout:
-        print("  WARNING: Installed binary may not have kernel support compiled in!")
+        log_warn("Installed binary may not have kernel support compiled in!")
     else:
-        print("  OK: Kernel collector verified in installed binary")
+        log_info("Kernel collector verified in installed binary")
+    print()
 
+    # Done
+    log_info("SUCCESS. montauk-kernel is fully installed.")
+    log_info(f"Kernel version: {kver}")
+    log_info("The kernel module is loaded and will auto-load on boot.")
     print()
-    print("=" * 60)
-    print("SUCCESS! montauk-kernel is fully installed.")
-    print("=" * 60)
+    log_info("RUN COMMAND: montauk")
+    log_info("You should see 'Kernel Module' as the collector type in the UI.")
     print()
-    print(f"Kernel version: {kver}")
-    print("The kernel module is loaded and will auto-load on boot.")
+    log_info("Verify kernel module:")
+    print("         lsmod | grep montauk")
+    print("         sudo dmesg | grep montauk")
     print()
-    print("Run:")
-    print("  montauk")
-    print()
-    print("You should see 'Kernel Module' as the collector type in the UI.")
-    print()
-    print("Verify kernel module:")
-    print("  lsmod | grep montauk")
-    print("  sudo dmesg | grep montauk")
-    print()
-    print("*" * 60)
-    print("WARNING: If you update your system kernel, you MUST re-run")
-    print("         this installer to rebuild the module!")
-    print()
+    log_warn("If you update your system kernel, you MUST re-run this installer!")
     print(f"         cd {script_dir}")
     print("         ./install.py")
-    print("*" * 60)
     print()
-    print("To uninstall:")
-    print("  sudo rmmod montauk")
-    print(f"  sudo rm /lib/modules/{kver}/extra/montauk.ko")
-    print("  sudo rm /etc/modules-load.d/montauk.conf")
-    print("  sudo depmod -a")
+    log_info("To uninstall:")
+    print("         sudo rmmod montauk")
+    print(f"         sudo rm /lib/modules/{kver}/extra/montauk.ko")
+    print("         sudo rm /etc/modules-load.d/montauk.conf")
+    print("         sudo depmod -a")
+
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\nInterrupted by user.")
+        sys.exit(130)
