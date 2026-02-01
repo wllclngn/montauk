@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 2.1.2 LANGUAGES CXX)
+project(montauk VERSION 3.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,7 +27,7 @@ add_library(montauk_core
     src/util/Procfs.cpp
     src/util/Churn.cpp
     src/util/Retro.cpp
-    src/util/AdaptiveSort.cpp
+    src/util/TimSort.cpp
     src/util/NvmlDyn.cpp
     src/ui/Terminal.cpp
     src/ui/Config.cpp
@@ -108,6 +108,7 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_alerts.cpp
     tests/test_thermal.cpp
     tests/test_netlink_smoke.cpp
+    tests/test_timsort.cpp
   )
   target_include_directories(montauk_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(montauk_tests PRIVATE montauk_core)

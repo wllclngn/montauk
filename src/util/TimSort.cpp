@@ -1,4 +1,4 @@
-#include "util/AdaptiveSort.hpp"
+#include "util/TimSort.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -26,7 +26,6 @@ constexpr size_t INITIAL_GALLOP = 7;   // Initial gallop threshold
 struct Run {
   size_t base;      // Starting index of the run
   size_t length;    // Length of the run
-  bool descending;  // True if run is descending (needs reversal)
 };
 
 // ============================================================================
@@ -109,52 +108,345 @@ auto count_run_and_make_ascending(
 }
 
 // ============================================================================
-// GALLOPING MERGE (Exponential search optimization for uneven runs)
+// GALLOP LEFT (Find leftmost insertion point via exponential search)
 // ============================================================================
-// When one run is consistently "winning", use galloping (exponential search)
-// to skip over large chunks quickly. Switches back to linear merge if
-// galloping isn't paying off.
-void merge_at(
+// Find position in [base, base+len) where key should insert (leftmost).
+// Returns k such that base[k-1] < key <= base[k].
+// Starts near 'hint', gallops outward exponentially, then binary searches.
+auto gallop_left(
+    size_t key,
+    std::vector<size_t>::iterator base,
+    size_t len,
+    size_t hint,
+    std::function<bool(size_t, size_t)>& comp
+) -> size_t {
+  size_t last_ofs = 0;
+  size_t ofs = 1;
+
+  if (comp(*(base + hint), key)) {
+    // key > base[hint], search right
+    size_t max_ofs = len - hint;
+    while (ofs < max_ofs && comp(*(base + hint + ofs), key)) {
+      last_ofs = ofs;
+      ofs = (ofs << 1) + 1;
+      if (ofs <= last_ofs) ofs = max_ofs; // overflow
+    }
+    if (ofs > max_ofs) ofs = max_ofs;
+
+    // Now base[hint + last_ofs] < key <= base[hint + ofs]
+    last_ofs += hint;
+    ofs += hint;
+  } else {
+    // key <= base[hint], search left
+    size_t max_ofs = hint + 1;
+    while (ofs < max_ofs && !comp(*(base + hint - ofs), key)) {
+      last_ofs = ofs;
+      ofs = (ofs << 1) + 1;
+      if (ofs <= last_ofs) ofs = max_ofs;
+    }
+    if (ofs > max_ofs) ofs = max_ofs;
+
+    // Now base[hint - ofs] < key <= base[hint - last_ofs]
+    size_t tmp = last_ofs;
+    last_ofs = hint - ofs;
+    ofs = hint - tmp;
+  }
+
+  // Binary search in [last_ofs, ofs)
+  while (last_ofs < ofs) {
+    size_t mid = last_ofs + ((ofs - last_ofs) >> 1);
+    if (comp(*(base + mid), key)) {
+      last_ofs = mid + 1;
+    } else {
+      ofs = mid;
+    }
+  }
+
+  return ofs;
+}
+
+// ============================================================================
+// GALLOP RIGHT (Find rightmost insertion point via exponential search)
+// ============================================================================
+// Find position in [base, base+len) where key should insert (rightmost).
+// Returns k such that base[k-1] <= key < base[k].
+auto gallop_right(
+    size_t key,
+    std::vector<size_t>::iterator base,
+    size_t len,
+    size_t hint,
+    std::function<bool(size_t, size_t)>& comp
+) -> size_t {
+  size_t last_ofs = 0;
+  size_t ofs = 1;
+
+  if (comp(key, *(base + hint))) {
+    // key < base[hint], search left
+    size_t max_ofs = hint + 1;
+    while (ofs < max_ofs && comp(key, *(base + hint - ofs))) {
+      last_ofs = ofs;
+      ofs = (ofs << 1) + 1;
+      if (ofs <= last_ofs) ofs = max_ofs;
+    }
+    if (ofs > max_ofs) ofs = max_ofs;
+
+    size_t tmp = last_ofs;
+    last_ofs = hint - ofs;
+    ofs = hint - tmp;
+  } else {
+    // key >= base[hint], search right
+    size_t max_ofs = len - hint;
+    while (ofs < max_ofs && !comp(key, *(base + hint + ofs))) {
+      last_ofs = ofs;
+      ofs = (ofs << 1) + 1;
+      if (ofs <= last_ofs) ofs = max_ofs;
+    }
+    if (ofs > max_ofs) ofs = max_ofs;
+
+    last_ofs += hint;
+    ofs += hint;
+  }
+
+  // Binary search in [last_ofs, ofs)
+  while (last_ofs < ofs) {
+    size_t mid = last_ofs + ((ofs - last_ofs) >> 1);
+    if (comp(key, *(base + mid))) {
+      ofs = mid;
+    } else {
+      last_ofs = mid + 1;
+    }
+  }
+
+  return ofs;
+}
+
+// ============================================================================
+// MERGE LO (Left run smaller - copy left to temp, merge left-to-right)
+// ============================================================================
+void merge_lo(
+    std::vector<size_t>::iterator base,
+    size_t left_len,
+    size_t right_len,
+    std::function<bool(size_t, size_t)>& comp,
+    std::vector<size_t>& tmp,
+    size_t& min_gallop
+) {
+  // Copy left run to temp
+  tmp.resize(left_len);
+  std::move(base, base + left_len, tmp.begin());
+
+  auto cursor1 = tmp.begin();
+  auto cursor2 = base + left_len;
+  auto dest = base;
+
+  size_t left_remaining = left_len;
+  size_t right_remaining = right_len;
+
+  // Main merge loop
+  while (left_remaining > 0 && right_remaining > 0) {
+    size_t count1 = 0;
+    size_t count2 = 0;
+
+    // One-at-a-time mode
+    do {
+      if (comp(*cursor2, *cursor1)) {
+        *dest++ = std::move(*cursor2++);
+        --right_remaining;
+        ++count2;
+        count1 = 0;
+        if (right_remaining == 0) goto epilogue;
+      } else {
+        *dest++ = std::move(*cursor1++);
+        --left_remaining;
+        ++count1;
+        count2 = 0;
+        if (left_remaining == 0) goto epilogue;
+      }
+    } while ((count1 | count2) < min_gallop);
+
+    // Gallop mode
+    do {
+      // Gallop in left run (find where right[0] goes)
+      count1 = gallop_right(*cursor2, cursor1, left_remaining, 0, comp);
+      if (count1 > 0) {
+        std::move(cursor1, cursor1 + count1, dest);
+        dest += count1;
+        cursor1 += count1;
+        left_remaining -= count1;
+        if (left_remaining == 0) goto epilogue;
+      }
+      *dest++ = std::move(*cursor2++);
+      --right_remaining;
+      if (right_remaining == 0) goto epilogue;
+
+      // Gallop in right run (find where left[0] goes)
+      count2 = gallop_left(*cursor1, cursor2, right_remaining, 0, comp);
+      if (count2 > 0) {
+        std::move(cursor2, cursor2 + count2, dest);
+        dest += count2;
+        cursor2 += count2;
+        right_remaining -= count2;
+        if (right_remaining == 0) goto epilogue;
+      }
+      *dest++ = std::move(*cursor1++);
+      --left_remaining;
+      if (left_remaining == 0) goto epilogue;
+
+      // Adjust threshold
+      if (count1 >= MIN_GALLOP || count2 >= MIN_GALLOP) {
+        if (min_gallop > 1) --min_gallop;
+      } else {
+        ++min_gallop;
+      }
+    } while (count1 >= MIN_GALLOP || count2 >= MIN_GALLOP);
+
+    ++min_gallop; // Penalty for leaving gallop mode
+  }
+
+epilogue:
+  if (left_remaining > 0) {
+    std::move(cursor1, cursor1 + left_remaining, dest);
+  }
+}
+
+// ============================================================================
+// MERGE HI (Right run smaller - copy right to temp, merge right-to-left)
+// ============================================================================
+void merge_hi(
+    std::vector<size_t>::iterator base,
+    size_t left_len,
+    size_t right_len,
+    std::function<bool(size_t, size_t)>& comp,
+    std::vector<size_t>& tmp,
+    size_t& min_gallop
+) {
+  // Copy right run to temp
+  tmp.resize(right_len);
+  std::move(base + left_len, base + left_len + right_len, tmp.begin());
+
+  auto cursor1 = base + left_len - 1;        // Last element of left run
+  auto cursor2 = tmp.begin() + right_len - 1; // Last element of temp
+  auto dest = base + left_len + right_len - 1; // Last output position
+
+  size_t left_remaining = left_len;
+  size_t right_remaining = right_len;
+
+  // Main merge loop (reversed direction)
+  while (left_remaining > 0 && right_remaining > 0) {
+    size_t count1 = 0;
+    size_t count2 = 0;
+
+    // One-at-a-time mode
+    do {
+      if (comp(*cursor2, *cursor1)) {
+        *dest-- = std::move(*cursor1--);
+        --left_remaining;
+        ++count1;
+        count2 = 0;
+        if (left_remaining == 0) goto epilogue;
+      } else {
+        *dest-- = std::move(*cursor2--);
+        --right_remaining;
+        ++count2;
+        count1 = 0;
+        if (right_remaining == 0) goto epilogue;
+      }
+    } while ((count1 | count2) < min_gallop);
+
+    // Gallop mode (reversed)
+    do {
+      // Find where right's last goes in left (from end)
+      count1 = left_remaining - gallop_right(*cursor2, base, left_remaining, left_remaining - 1, comp);
+      if (count1 > 0) {
+        dest -= count1;
+        cursor1 -= count1;
+        left_remaining -= count1;
+        std::move(cursor1 + 1, cursor1 + 1 + count1, dest + 1);
+        if (left_remaining == 0) goto epilogue;
+      }
+      *dest-- = std::move(*cursor2--);
+      --right_remaining;
+      if (right_remaining == 0) goto epilogue;
+
+      // Find where left's last goes in right (from end)
+      count2 = right_remaining - gallop_left(*cursor1, tmp.begin(), right_remaining, right_remaining - 1, comp);
+      if (count2 > 0) {
+        dest -= count2;
+        cursor2 -= count2;
+        right_remaining -= count2;
+        std::move(cursor2 + 1, cursor2 + 1 + count2, dest + 1);
+        if (right_remaining == 0) goto epilogue;
+      }
+      *dest-- = std::move(*cursor1--);
+      --left_remaining;
+      if (left_remaining == 0) goto epilogue;
+
+      // Adjust threshold
+      if (count1 >= MIN_GALLOP || count2 >= MIN_GALLOP) {
+        if (min_gallop > 1) --min_gallop;
+      } else {
+        ++min_gallop;
+      }
+    } while (count1 >= MIN_GALLOP || count2 >= MIN_GALLOP);
+
+    ++min_gallop;
+  }
+
+epilogue:
+  if (right_remaining > 0) {
+    std::move(tmp.begin(), tmp.begin() + right_remaining, dest - right_remaining + 1);
+  }
+}
+
+// ============================================================================
+// MERGE WITH GALLOP (Entry point with pre-merge trimming)
+// ============================================================================
+void merge_with_gallop(
     std::vector<size_t>::iterator first,
     std::vector<Run>& runs,
     size_t i,
-    std::function<bool(size_t, size_t)> comp,
-    std::vector<size_t>& tmp
+    std::function<bool(size_t, size_t)>& comp,
+    std::vector<size_t>& tmp,
+    size_t& min_gallop
 ) {
-  const auto& run1 = runs[i];
-  const auto& run2 = runs[i + 1];
-  
-  auto base1 = first + run1.base;
-  auto len1 = run1.length;
-  auto base2 = first + run2.base;
-  auto len2 = run2.length;
-  
-  // Copy first run to temporary array
-  tmp.resize(len1);
-  std::copy(base1, base1 + len1, tmp.begin());
-  
-  // Merge
-  auto cursor1 = tmp.begin();
-  auto cursor2 = base2;
-  auto dest = base1;
-  auto end1 = tmp.end();
-  auto end2 = base2 + len2;
-  
-  while (cursor1 != end1 && cursor2 != end2) {
-    if (comp(*cursor2, *cursor1)) {
-      *dest++ = *cursor2++;
-    } else {
-      *dest++ = *cursor1++;
-    }
+  auto base1 = first + runs[i].base;
+  size_t len1 = runs[i].length;
+  auto base2 = first + runs[i + 1].base;
+  size_t len2 = runs[i + 1].length;
+
+  // Pre-merge trimming: skip elements already in position
+
+  // Skip left elements smaller than right[0]
+  size_t k = gallop_right(*base2, base1, len1, 0, comp);
+  base1 += k;
+  len1 -= k;
+
+  if (len1 == 0) {
+    // Left run entirely precedes right; no merge needed
+    runs[i].length += runs[i + 1].length;
+    runs.erase(runs.begin() + i + 1);
+    return;
   }
-  
-  // Copy remaining elements from tmp
-  if (cursor1 != end1) {
-    std::copy(cursor1, end1, dest);
+
+  // Skip right elements larger than left[last]
+  len2 = gallop_left(*(base1 + len1 - 1), base2, len2, len2 - 1, comp);
+
+  if (len2 == 0) {
+    // Right run entirely follows left; no merge needed
+    runs[i].length += runs[i + 1].length;
+    runs.erase(runs.begin() + i + 1);
+    return;
   }
-  
+
+  // Merge the trimmed ranges
+  if (len1 <= len2) {
+    merge_lo(base1, len1, len2, comp, tmp, min_gallop);
+  } else {
+    merge_hi(base1, len1, len2, comp, tmp, min_gallop);
+  }
+
   // Update run info
-  runs[i].length = len1 + len2;
+  runs[i].length += runs[i + 1].length;
   runs.erase(runs.begin() + i + 1);
 }
 
@@ -168,20 +460,21 @@ void merge_at(
 void merge_collapse(
     std::vector<size_t>::iterator first,
     std::vector<Run>& runs,
-    std::function<bool(size_t, size_t)> comp,
-    std::vector<size_t>& tmp
+    std::function<bool(size_t, size_t)>& comp,
+    std::vector<size_t>& tmp,
+    size_t& min_gallop
 ) {
   while (runs.size() > 1) {
     size_t n = runs.size() - 2;
-    
+
     if (n > 0 && runs[n - 1].length <= runs[n].length + runs[n + 1].length) {
       // Merge the smaller of the two adjacent runs
       if (runs[n - 1].length < runs[n + 1].length) {
         --n;
       }
-      merge_at(first, runs, n, comp, tmp);
+      merge_with_gallop(first, runs, n, comp, tmp, min_gallop);
     } else if (runs[n].length <= runs[n + 1].length) {
-      merge_at(first, runs, n, comp, tmp);
+      merge_with_gallop(first, runs, n, comp, tmp, min_gallop);
     } else {
       break; // Invariants satisfied
     }
@@ -194,16 +487,17 @@ void merge_collapse(
 void merge_force_collapse(
     std::vector<size_t>::iterator first,
     std::vector<Run>& runs,
-    std::function<bool(size_t, size_t)> comp,
-    std::vector<size_t>& tmp
+    std::function<bool(size_t, size_t)>& comp,
+    std::vector<size_t>& tmp,
+    size_t& min_gallop
 ) {
   while (runs.size() > 1) {
     size_t n = runs.size() - 2;
-    
+
     if (n > 0 && runs[n - 1].length < runs[n + 1].length) {
       --n;
     }
-    merge_at(first, runs, n, comp, tmp);
+    merge_with_gallop(first, runs, n, comp, tmp, min_gallop);
   }
 }
 
@@ -213,54 +507,56 @@ void merge_force_collapse(
 void timsort_impl(
     std::vector<size_t>::iterator first,
     std::vector<size_t>::iterator last,
-    std::function<bool(size_t, size_t)> comp
+    std::function<bool(size_t, size_t)>& comp
 ) {
   const size_t n = std::distance(first, last);
   if (n < 2) return;
-  
+
   // Small arrays: use binary insertion sort
   if (n < MIN_MERGE) {
     binary_insertion_sort(first, last, comp);
     return;
   }
-  
+
   const size_t min_run = compute_min_run_length(n);
   std::vector<Run> runs;
   runs.reserve(40); // Typical max stack depth
   std::vector<size_t> tmp;
   tmp.reserve(n / 2); // Typical max temporary space needed
-  
+
+  // Adaptive gallop threshold (per-sort state)
+  size_t min_gallop = INITIAL_GALLOP;
+
   size_t nRemaining = n;
   auto cur = first;
-  
+
   // Build runs
   while (nRemaining > 0) {
     // Count natural run
     auto [runLen, wasDescending] = count_run_and_make_ascending(cur, last, comp);
-    
+
     // If run is too short, extend it with binary insertion sort
     if (runLen < min_run) {
       size_t force = std::min(nRemaining, min_run);
       binary_insertion_sort(cur, cur + force, comp);
       runLen = force;
     }
-    
+
     // Push run onto stack
     runs.push_back({
       static_cast<size_t>(std::distance(first, cur)),
-      runLen,
-      wasDescending
+      runLen
     });
-    
+
     // Maintain stack invariants
-    merge_collapse(first, runs, comp, tmp);
-    
+    merge_collapse(first, runs, comp, tmp, min_gallop);
+
     cur += runLen;
     nRemaining -= runLen;
   }
-  
+
   // Final merge of all runs
-  merge_force_collapse(first, runs, comp, tmp);
+  merge_force_collapse(first, runs, comp, tmp, min_gallop);
 }
 
 // ============================================================================
@@ -402,24 +698,24 @@ auto detect_sort_pattern(
 }
 
 // ============================================================================
-// ADAPTIVE TIMSORT (Main entry point)
+// TIMSORT (Main entry point)
 // ============================================================================
-void adaptive_timsort(
+void timsort(
     std::vector<size_t>::iterator first,
     std::vector<size_t>::iterator last,
     std::function<bool(size_t, size_t)> comp
 ) {
   const size_t n = std::distance(first, last);
-  
+
 #ifdef MONTAUK_SORT_STATS
   auto start = std::chrono::high_resolution_clock::now();
   SortPattern pattern_used = SortPattern::Random;
 #endif
-  
+
   // Tiny arrays: use insertion sort directly
   if (n < detail::MIN_MERGE) {
     detail::binary_insertion_sort(first, last, comp);
-    
+
 #ifdef MONTAUK_SORT_STATS
     auto end = std::chrono::high_resolution_clock::now();
     static SortStats stats;
@@ -429,35 +725,35 @@ void adaptive_timsort(
 #endif
     return;
   }
-  
+
   // Pattern detection
   const SortPattern pattern = detect_sort_pattern(first, last, comp);
-  
+
 #ifdef MONTAUK_SORT_STATS
   pattern_used = pattern;
 #endif
-  
+
   switch (pattern) {
     case SortPattern::AlreadySorted:
-      // INSTANT - no work needed!
+      // No work needed
       break;
-      
+
     case SortPattern::Reversed:
       // O(n) in-place reversal
       std::reverse(first, last);
       break;
-      
+
     case SortPattern::NearlySorted:
       // Delegate to highly optimized standard library
       std::stable_sort(first, last, comp);
       break;
-      
+
     case SortPattern::Random:
       // Full TimSort with run detection and galloping
       detail::timsort_impl(first, last, comp);
       break;
   }
-  
+
 #ifdef MONTAUK_SORT_STATS
   auto end = std::chrono::high_resolution_clock::now();
   static SortStats stats;

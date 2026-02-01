@@ -15,21 +15,20 @@ enum class SortPattern : uint8_t {
   Random          // Full adaptive TimSort with run detection & galloping
 };
 
-// Adaptive TimSort: intelligently selects optimal sorting strategy
-// based on real-time pattern detection in O(n) preprocessing pass.
+// TimSort with pattern detection and galloping mode.
 //
 // Performance characteristics:
-//   - Already sorted:  O(n) detection, O(1) operation (instant)
+//   - Already sorted:  O(n) detection, O(1) operation
 //   - Reversed:        O(n) detection, O(n) reverse
 //   - Nearly sorted:   O(n) detection, O(n log n) via std::stable_sort
-//   - Random/complex:  O(n log n) via full TimSort with galloping
+//   - Random/complex:  O(n log n) via TimSort with galloping
+//
+// Galloping mode uses exponential search to skip large chunks when one
+// run dominates during merging - ideal for clustered data (sequential
+// PIDs, blocks of idle processes).
 //
 // Stability guarantee: maintains relative order of equal elements.
-//
-// Inspired by Tim Peters' TimSort (Python) with adaptive pattern detection
-// enhancement based on empirical performance analysis showing 1.49x speedup
-// on random data and instant processing for sorted/reversed inputs.
-void adaptive_timsort(
+void timsort(
     std::vector<size_t>::iterator first,
     std::vector<size_t>::iterator last,
     std::function<bool(size_t, size_t)> comp

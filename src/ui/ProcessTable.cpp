@@ -3,7 +3,7 @@
 #include "ui/Terminal.hpp"
 #include "ui/Formatting.hpp"
 #include "ui/Renderer.hpp"
-#include "util/AdaptiveSort.hpp"
+#include "util/TimSort.hpp"
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
@@ -87,7 +87,7 @@ std::vector<std::string> render_process_table(
     const auto& p = s.procs.processes[i];
     sm[i] = montauk::ui::smooth_value(std::string("proc.cpu.") + std::to_string(p.pid), scale_proc_cpu(p.cpu_pct), 0.35);
   }
-  montauk::util::adaptive_timsort(order.begin(), order.end(), [&](size_t a, size_t b){
+  montauk::util::timsort(order.begin(), order.end(), [&](size_t a, size_t b){
     const auto& A = s.procs.processes[a];
     const auto& B = s.procs.processes[b];
     switch (g_ui.sort) {

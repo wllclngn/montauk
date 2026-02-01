@@ -491,7 +491,7 @@ makepkg -si
 - `SnapshotBuffers` — Lock-free snapshot management
 - `Producer` — Coordinated data collection pipeline
 - `Filter` — Process filtering and sorting
-- `AdaptiveSort` — Adaptive TimSort with O(n) pattern detection
+- `TimSort` — TimSort with pattern detection and galloping mode
 
 **UI Components:**
 - `Panels` — Right column rendering (PROCESSOR, GPU, MEMORY, DISK I/O, NETWORK, SYSTEM)
@@ -500,7 +500,6 @@ makepkg -si
 - `Terminal` — TTY detection, color support, cursor control
 - `Formatting` — Text layout, truncation with ANSI-escape-aware functions
 - `Config` — Theme loading, environment variable parsing
-- `Input` — Keyboard handling and command processing
 
 **Process Collection:**
 
@@ -570,24 +569,27 @@ montauk supports three collection backends (auto-selected by availability):
 - Auto-clears when churn subsides
 - Zero performance impact when no churn active
 
-**Adaptive TimSort:**
+**TimSort with Galloping Mode:**
 
-Process table sorting uses a C++23 adaptive TimSort implementation (`src/util/AdaptiveSort.cpp`) inspired by Tim Peters' Python TimSort with additional pattern detection:
+Process table sorting uses a C++23 TimSort implementation (`src/util/TimSort.cpp`) with pattern detection and galloping mode:
 
-- **O(n) Pattern Detection:** Single-pass analysis identifies data characteristics before sorting:
+- **O(n) Pattern Detection:** Single-pass analysis before sorting:
   - `AlreadySorted` — Instant return, no work needed
   - `Reversed` — O(n) in-place reversal
   - `NearlySorted` — Delegates to `std::stable_sort` (< 5% inversions)
   - `Random` — Full TimSort with run detection and galloping merges
 
-- **TimSort Core:**
-  - Natural run detection exploits existing order in process lists
-  - Minimum run length of 32 (Tim Peters' proven optimal)
-  - Binary insertion sort for small arrays and run extension
-  - Galloping merge (exponential search) with MIN_GALLOP=7 threshold
-  - Stack-based merge strategy maintaining balanced invariants
+- **Galloping Mode:** Exponential search optimization for clustered data:
+  - `gallop_left` / `gallop_right` — Find insertion points in O(log k) where k is distance from hint
+  - Pre-merge trimming eliminates entire merges when blocks don't overlap
+  - Adaptive threshold (MIN_GALLOP=7) — Backs off when galloping doesn't pay off
+  - Ideal for process data: sequential PIDs, idle/active CPU clusters
 
-- **Performance:** Keeps up to 4096 tracked processes deterministically ordered in <1ms; analytically provisioned to handle 100K+ entries at O(n log n)
+- **Verified Performance (1M elements):**
+  - Disjoint PID blocks: 90% fewer comparisons vs std::stable_sort (925K vs 9.2M)
+  - CPU%-sorted data: 73% fewer comparisons (2.8M vs 10.5M)
+  - Random baseline: No regression, graceful fallback
+  - Time: 2ms for 1M clustered elements, 6ms for partially clustered
 
 - **Stability Guarantee:** Maintains relative order of equal elements (critical for consistent UI when processes have identical CPU%)
 
