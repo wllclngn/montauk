@@ -103,23 +103,42 @@ static std::string colorize_line_impl(const std::string& s) {
     auto color_bar = [&](const std::string& part)->std::string{
       // If the part already contains ANSI escape codes, don't recolor it
       if (part.find('\x1B') != std::string::npos) return part;
-      
-      size_t lb = part.find('[');
-      size_t rb = (lb!=std::string::npos) ? part.find(']', lb+1) : std::string::npos;
-      if (lb==std::string::npos || rb==std::string::npos || rb<=lb) return part;
-      
+
+      // Find bar by locating block characters (█ or ░)
+      const std::string full = "█";
+      const std::string empty = "░";
+      size_t bar_start = part.find(full);
+      if (bar_start == std::string::npos) bar_start = part.find(empty);
+      if (bar_start == std::string::npos) return part;
+
+      // Find end of bar (last block character)
+      size_t bar_end = bar_start;
+      size_t pos = bar_start;
+      while (pos < part.size()) {
+        size_t f = part.find(full, pos);
+        size_t e = part.find(empty, pos);
+        size_t next = std::string::npos;
+        if (f != std::string::npos && e != std::string::npos) next = std::min(f, e);
+        else if (f != std::string::npos) next = f;
+        else if (e != std::string::npos) next = e;
+        if (next == std::string::npos || next > bar_end + 4) break; // gap means end of bar
+        bar_end = next + ((part.compare(next, full.size(), full) == 0) ? full.size() : empty.size());
+        pos = bar_end;
+      }
+      if (bar_end <= bar_start) return part;
+
       double pct = -1.0; {
         size_t p = part.rfind('%');
         if (p != std::string::npos) {
-          size_t st = p; 
+          size_t st = p;
           while (st>0 && (std::isdigit((unsigned char)part[st-1]) || part[st-1]=='.')) --st;
           try { pct = std::stod(part.substr(st, p-st)); } catch (...) { pct = -1.0; }
         }
       }
-      
-      std::string pre2 = part.substr(0, lb+1);
-      std::string bar = part.substr(lb+1, rb - (lb+1));
-      std::string suf2 = part.substr(rb);
+
+      std::string pre2 = part.substr(0, bar_start);
+      std::string bar = part.substr(bar_start, bar_end - bar_start);
+      std::string suf2 = part.substr(bar_end);
       
       if (pct < 0.0) {
         int total = display_cols(bar);

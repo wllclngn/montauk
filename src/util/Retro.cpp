@@ -10,11 +10,11 @@ auto retro_bar(double pct, int width, const std::string& fill, const std::string
   if (filled > width) filled = width;
   std::string s;
   s.reserve(width + 10);
-  s.push_back('[');
+  s.push_back(' ');
   for (int i = 0; i < width; ++i) {
     if (i < filled) s += fill; else s += track;
   }
-  s.push_back(']');
+  s.push_back(' ');
   return s;
 }
 

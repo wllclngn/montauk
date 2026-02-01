@@ -160,7 +160,7 @@ std::vector<SecurityFinding> collect_security_findings(const montauk::model::Sna
         std::string reason = "auth crashloop";
         std::ostringstream subj;
         subj << "PID " << p.pid << ' ' << (p.user_name.empty() ? "?" : p.user_name)
-             << ' ' << p.cmd << " [" << s.churn.recent_2s_events << " events/2s]";
+             << ' ' << p.cmd << " • " << s.churn.recent_2s_events << " events/2s";
         add_finding(2, subj.str(), reason);
         flagged_pids.insert(p.pid);
       }

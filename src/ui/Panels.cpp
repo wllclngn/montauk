@@ -272,7 +272,7 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
           if (utilp > 100) utilp = 100;
         }
         std::ostringstream rr; 
-        rr << "[" << utilp << "% UTIL] " << (int)(s.vram.power_limit_w+0.5) << "W";
+        rr << utilp << "% UTIL • " << (int)(s.vram.power_limit_w+0.5) << "W";
         push(lr_align(iw, "PLIMIT", rr.str()), 0);
       }
       if (s.vram.has_pstate) {
@@ -290,8 +290,8 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
       if (g_ui.system_focus && s.mem.available_kb > 0) {
         rr << "AVAILABLE:" << std::fixed << std::setprecision(0) << mem_avail_gb << "GB  ";
       }
-      rr << std::fixed << std::setprecision(1) << s.mem.used_pct << "% ["
-         << std::setprecision(2) << mem_used_gb << "GB/" << mem_tot_gb << "GB]";
+      rr << std::fixed << std::setprecision(1) << s.mem.used_pct << "% • "
+         << std::setprecision(2) << mem_used_gb << "GB/" << mem_tot_gb << "GB";
       push(lr_align(iw, "MEM", rr.str()), 0);
     }
     if (g_ui.system_focus) {
@@ -324,8 +324,8 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
       size_t lim = std::min<size_t>(s.fs.mounts.size(), 3);
       for (size_t i=0;i<lim;i++) {
         const auto& m = s.fs.mounts[i];
-        std::ostringstream right; right << (int)(m.used_pct+0.5) << "% ["
-                                        << human_bytes(m.used_bytes) << "/" << human_bytes(m.total_bytes) << "]";
+        std::ostringstream right; right << (int)(m.used_pct+0.5) << "% • "
+                                        << human_bytes(m.used_bytes) << "/" << human_bytes(m.total_bytes);
         std::string left = m.device.empty() ? m.fstype : m.device;
         push(lr_align(iw, left, right.str()), 0);
       }
