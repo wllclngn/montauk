@@ -1,11 +1,34 @@
 #include "minitest.hpp"
 #include "util/TimSort.hpp"
 #include <algorithm>
+#include <cassert>
 #include <numeric>
 #include <random>
 #include <vector>
+#include <sys/random.h>
 
 using namespace montauk::util;
+
+// ============================================================================
+// TRACING INFRASTRUCTURE
+// ============================================================================
+// Use getrandom() for cryptographically random test data
+static void shuffle_random(std::vector<size_t>& v) {
+  for (size_t i = v.size() - 1; i > 0; --i) {
+    size_t j;
+    getrandom(&j, sizeof(j), 0);
+    j %= (i + 1);
+    std::swap(v[i], v[j]);
+  }
+}
+
+// Verify sort invariants with assert() - fails fast on corruption
+static void assert_sorted(const std::vector<size_t>& data, const char* ctx) {
+  for (size_t i = 1; i < data.size(); ++i) {
+    assert(data[i] >= data[i-1] && "sort invariant violated");
+  }
+  (void)ctx; // Used in error messages if assert had printf
+}
 
 // Verify correctness on random data
 TEST(timsort_correctness_random) {
@@ -334,4 +357,75 @@ TEST(timsort_gallop_100k_realistic_churn) {
   // O(n log n) for 100K ≈ 1.7M comparisons
   // Heavy shuffling destroys runs, so expect ~1.3M (still under O(n log n))
   ASSERT_TRUE(timsort_cmp < 1500000);
+}
+
+// ============================================================================
+// STRESS TESTS WITH GETRANDOM (True randomness, assert-based validation)
+// ============================================================================
+
+// 500K random elements - exercises merge_hi overlap edge cases
+TEST(timsort_stress_500k_random) {
+  std::vector<size_t> data(500000);
+  std::iota(data.begin(), data.end(), 0);
+  shuffle_random(data);
+
+  timsort(data.begin(), data.end(), [](size_t a, size_t b) { return a < b; });
+
+  // Use assert for fast failure on corruption
+  assert_sorted(data, "500k_random");
+  ASSERT_TRUE(std::is_sorted(data.begin(), data.end()));
+}
+
+// 1M random elements - full-scale stress test
+TEST(timsort_stress_1m_random) {
+  std::vector<size_t> data(1000000);
+  std::iota(data.begin(), data.end(), 0);
+  shuffle_random(data);
+
+  timsort(data.begin(), data.end(), [](size_t a, size_t b) { return a < b; });
+
+  assert_sorted(data, "1m_random");
+  ASSERT_TRUE(std::is_sorted(data.begin(), data.end()));
+}
+
+// 10M disjoint blocks - proves galloping at scale
+TEST(timsort_stress_10m_disjoint) {
+  std::vector<size_t> data;
+  data.reserve(10000000);
+
+  // Block 1: 100K kernel threads (reversed)
+  for (int i = 100000; i >= 1; --i) data.push_back(i);
+  // Block 2: 5M user processes (reversed)
+  for (int i = 5500000; i >= 500000; --i) data.push_back(i);
+  // Block 3: 4.4M high PIDs (ascending)
+  for (size_t i = 6000000; i < 10400000; ++i) data.push_back(i);
+
+  size_t cmp = 0;
+  timsort(data.begin(), data.end(), [&](size_t a, size_t b) {
+    ++cmp;
+    return a < b;
+  });
+
+  assert_sorted(data, "10m_disjoint");
+  ASSERT_TRUE(std::is_sorted(data.begin(), data.end()));
+
+  // Galloping should achieve massive comparison reduction
+  // Without galloping: ~230M comparisons (n log n)
+  // With galloping on disjoint data: <15M comparisons
+  ASSERT_TRUE(cmp < 15000000);
+}
+
+// ============================================================================
+// 10M RANDOM BENCHMARK - Ultimate stress test
+// ============================================================================
+TEST(timsort_stress_10m_random) {
+  std::vector<size_t> data(10000000);
+  std::iota(data.begin(), data.end(), 0);
+  shuffle_random(data);
+
+  timsort(data.begin(), data.end(), [](size_t a, size_t b) { return a < b; });
+
+  // Assert-based validation for fast failure
+  assert_sorted(data, "10m_random");
+  ASSERT_TRUE(std::is_sorted(data.begin(), data.end()));
 }

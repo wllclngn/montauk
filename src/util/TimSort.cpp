@@ -243,7 +243,7 @@ void merge_lo(
   size_t right_remaining = right_len;
 
   // Main merge loop
-  while (left_remaining > 0 && right_remaining > 0) {
+  while (left_remaining > 1 && right_remaining > 0) {
     size_t count1 = 0;
     size_t count2 = 0;
 
@@ -260,7 +260,7 @@ void merge_lo(
         --left_remaining;
         ++count1;
         count2 = 0;
-        if (left_remaining == 0) goto epilogue;
+        if (left_remaining == 1) goto epilogue;
       }
     } while ((count1 | count2) < min_gallop);
 
@@ -273,7 +273,7 @@ void merge_lo(
         dest += count1;
         cursor1 += count1;
         left_remaining -= count1;
-        if (left_remaining == 0) goto epilogue;
+        if (left_remaining <= 1) goto epilogue;
       }
       *dest++ = std::move(*cursor2++);
       --right_remaining;
@@ -290,7 +290,7 @@ void merge_lo(
       }
       *dest++ = std::move(*cursor1++);
       --left_remaining;
-      if (left_remaining == 0) goto epilogue;
+      if (left_remaining == 1) goto epilogue;
 
       // Adjust threshold
       if (count1 >= MIN_GALLOP || count2 >= MIN_GALLOP) {
@@ -304,7 +304,11 @@ void merge_lo(
   }
 
 epilogue:
-  if (left_remaining > 0) {
+  if (left_remaining == 1) {
+    // Copy remaining right elements, then place the single left element
+    std::move(cursor2, cursor2 + right_remaining, dest);
+    *(dest + right_remaining) = std::move(*cursor1);
+  } else if (left_remaining > 0) {
     std::move(cursor1, cursor1 + left_remaining, dest);
   }
 }
@@ -332,7 +336,7 @@ void merge_hi(
   size_t right_remaining = right_len;
 
   // Main merge loop (reversed direction)
-  while (left_remaining > 0 && right_remaining > 0) {
+  while (left_remaining > 0 && right_remaining > 1) {
     size_t count1 = 0;
     size_t count2 = 0;
 
@@ -349,7 +353,7 @@ void merge_hi(
         --right_remaining;
         ++count2;
         count1 = 0;
-        if (right_remaining == 0) goto epilogue;
+        if (right_remaining == 1) goto epilogue;
       }
     } while ((count1 | count2) < min_gallop);
 
@@ -361,12 +365,13 @@ void merge_hi(
         dest -= count1;
         cursor1 -= count1;
         left_remaining -= count1;
-        std::move(cursor1 + 1, cursor1 + 1 + count1, dest + 1);
+        // Use move_backward: dest+1 > cursor1+1, ranges may overlap
+        std::move_backward(cursor1 + 1, cursor1 + 1 + count1, dest + 1 + count1);
         if (left_remaining == 0) goto epilogue;
       }
       *dest-- = std::move(*cursor2--);
       --right_remaining;
-      if (right_remaining == 0) goto epilogue;
+      if (right_remaining == 1) goto epilogue;
 
       // Find where left's last goes in right (from end)
       count2 = right_remaining - gallop_left(*cursor1, tmp.begin(), right_remaining, right_remaining - 1, comp);
@@ -375,7 +380,7 @@ void merge_hi(
         cursor2 -= count2;
         right_remaining -= count2;
         std::move(cursor2 + 1, cursor2 + 1 + count2, dest + 1);
-        if (right_remaining == 0) goto epilogue;
+        if (right_remaining <= 1) goto epilogue;
       }
       *dest-- = std::move(*cursor1--);
       --left_remaining;
@@ -393,7 +398,13 @@ void merge_hi(
   }
 
 epilogue:
-  if (right_remaining > 0) {
+  if (right_remaining == 1) {
+    // Move all remaining left elements, then place the single right element
+    dest -= left_remaining;
+    cursor1 -= left_remaining;
+    std::move_backward(cursor1 + 1, cursor1 + 1 + left_remaining, dest + 1 + left_remaining);
+    *dest = std::move(*cursor2);
+  } else if (right_remaining > 0) {
     std::move(tmp.begin(), tmp.begin() + right_remaining, dest - right_remaining + 1);
   }
 }

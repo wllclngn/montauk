@@ -585,11 +585,11 @@ Process table sorting uses a C++23 TimSort implementation (`src/util/TimSort.cpp
   - Adaptive threshold (MIN_GALLOP=7) — Backs off when galloping doesn't pay off
   - Ideal for process data: sequential PIDs, idle/active CPU clusters
 
-- **Verified Performance (1M elements):**
-  - Disjoint PID blocks: 90% fewer comparisons vs std::stable_sort (925K vs 9.2M)
-  - CPU%-sorted data: 73% fewer comparisons (2.8M vs 10.5M)
-  - Random baseline: No regression, graceful fallback
-  - Time: 2ms for 1M clustered elements, 6ms for partially clustered
+- **Verified to Kernel Limits:**
+  - Tested with 10M elements; scales to any process count the kernel allows (`pid_max` caps at 4M)
+  - Disjoint PID blocks: 90% fewer comparisons vs std::stable_sort
+  - CPU%-sorted data: 73% fewer comparisons
+  - Random data: Tested with `getrandom()` syscall for cryptographic randomness; no regression vs std::stable_sort
 
 - **Stability Guarantee:** Maintains relative order of equal elements (critical for consistent UI when processes have identical CPU%)
 
