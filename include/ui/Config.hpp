@@ -22,8 +22,6 @@ struct UIState {
   int scroll{0};
   bool show_disk{true};
   bool show_net{true};
-  bool show_gpuinfo{true};
-  bool show_vram{true};
   bool show_thermal{true};
   bool show_gpumon{true};
   int last_proc_page_rows{14};

@@ -190,7 +190,6 @@ int main(int argc, char** argv) {
             }
           }
           else if (c == 'R') { reset_ui_defaults(); }
-          // 'o' previously toggled Ops UI; now Ops-style SYSTEM is default and 'o' is unused
           else if (c == 't' || c == 'T') { g_ui.show_thermal = !g_ui.show_thermal; }
           else if (c == 'd' || c == 'D') { g_ui.show_disk = !g_ui.show_disk; }
           else if (c == 'N') { g_ui.show_net = !g_ui.show_net; }

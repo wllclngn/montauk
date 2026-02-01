@@ -42,3 +42,6 @@ core
 .vscode/
 .cache/
 .clangd/
+
+# Development test scripts
+tests/show_colors.py

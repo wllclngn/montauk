@@ -12,26 +12,6 @@
 
 namespace montauk::ui {
 
-std::vector<std::string> render_gpu_panel(const montauk::model::Snapshot& /*s*/, int /*width*/) {
-  return {};
-}
-
-std::vector<std::string> render_memory_panel(const montauk::model::Snapshot& /*s*/, int /*width*/) {
-  return {};
-}
-
-std::vector<std::string> render_disk_panel(const montauk::model::Snapshot& /*s*/, int /*width*/) {
-  return {};
-}
-
-std::vector<std::string> render_network_panel(const montauk::model::Snapshot& /*s*/, int /*width*/) {
-  return {};
-}
-
-std::vector<std::string> render_system_panel(const montauk::model::Snapshot& /*s*/, int /*width*/, int /*target_rows*/) {
-  return {};
-}
-
 std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, int width, int target_rows) {
   std::vector<std::string> out;
   int iw = std::max(3, width - 2);
@@ -168,7 +148,7 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
     int ncpu = (int)std::max<size_t>(1, s.cpu.per_core_pct.size());
     double topc = 0.0; for (double v : s.cpu.per_core_pct) if (v > topc) topc = v;
     {
-      std::ostringstream rr; rr << "COUNT:" << ncpu << "  TOP: " << (int)(topc+0.5) << "%  AVG: " << (int)(s.cpu.usage_pct+0.5) << "%";
+      std::ostringstream rr; rr << "AVG:" << (int)(s.cpu.usage_pct+0.5) << "%  TOP:" << (int)(topc+0.5) << "%  COUNT:" << ncpu;
       push(lr_align(iw, "THREADS", rr.str()), 0);
     }
     // CPU freq/governor/turbo
@@ -250,13 +230,12 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
         if (dev_util > 0 && s.nvml.running_pids > 0) return std::string("share");
         return std::string("none");
       }();
-      std::ostringstream rr; rr << (s.nvml.available? "OK" : "OFF")
+      std::ostringstream rr; rr << "PID:" << pid_status
                                 << " DEV:" << s.nvml.devices
                                 << " RUN:" << s.nvml.running_pids
                                 << " SAMP:" << s.nvml.sampled_pids
                                 << " AGE:" << s.nvml.sample_age_ms << "ms"
-                                << " MIG:" << (s.nvml.mig_enabled? "on":"off")
-                                << " PID:" << pid_status;
+                                << " MIG:" << (s.nvml.mig_enabled? "on":"off");
       push(lr_align(iw, "NVML", rr.str()), 0);
     }
     if (s.vram.has_power) { 
@@ -429,18 +408,6 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
       std::ostringstream rr; 
       rr << "ENRICHED:" << s.procs.enriched_count << "  TOTAL:" << s.procs.total_processes;
       push(lr_align(iw, "PROCESSES", rr.str()), 0);
-    }
-    // System threads (System focus only)
-    if (g_ui.system_focus && s.procs.total_threads > 0) {
-      std::ostringstream rr;
-      double avg_per_proc = (s.procs.total_processes > 0) ? 
-        (double)s.procs.total_threads / (double)s.procs.total_processes : 0.0;
-      double pct = (s.procs.threads_max > 0) ? 
-        (100.0 * (double)s.procs.total_threads / (double)s.procs.threads_max) : 0.0;
-      rr << "AVG:" << std::fixed << std::setprecision(1) << avg_per_proc << "/process [" 
-         << std::setprecision(1) << pct << "%] " 
-         << s.procs.total_threads << "/" << s.procs.threads_max;
-      push(lr_align(iw, "SYSTEM THREADS", rr.str()), 0);
     }
     // States breakdown (System focus only)
     if (g_ui.system_focus) {

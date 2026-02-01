@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 2.1.0 LANGUAGES CXX)
+project(montauk VERSION 2.1.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,7 +33,6 @@ add_library(montauk_core
     src/ui/Config.cpp
     src/ui/Formatting.cpp
     src/ui/Renderer.cpp
-    src/ui/Input.cpp
     src/ui/Panels.cpp
     src/ui/ProcessTable.cpp
     src/app/SnapshotBuffers.cpp
