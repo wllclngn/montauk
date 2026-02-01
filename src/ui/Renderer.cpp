@@ -118,7 +118,7 @@ static std::string colorize_line_impl(const std::string& s) {
         if (bullet_pos != std::string::npos) {
           std::string before = part.substr(0, bullet_pos);
           std::string after = part.substr(bullet_pos + bullet.size());
-          return before + sgr_fg_grey() + bullet + sgr_reset() + ui.accent + after + sgr_reset();
+          return before + sgr_fg_grey() + bullet + sgr_reset() + sgr_fg_grn() + after + sgr_reset();
         }
         return part;
       }
