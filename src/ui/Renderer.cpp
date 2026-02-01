@@ -104,12 +104,24 @@ static std::string colorize_line_impl(const std::string& s) {
       // If the part already contains ANSI escape codes, don't recolor it
       if (part.find('\x1B') != std::string::npos) return part;
 
-      // Find bar by locating block characters (█ or ░)
+      const std::string bullet = "•";
       const std::string full = "█";
       const std::string empty = "░";
+
+      // Find bar by locating block characters (█ or ░)
       size_t bar_start = part.find(full);
       if (bar_start == std::string::npos) bar_start = part.find(empty);
-      if (bar_start == std::string::npos) return part;
+
+      // No bar - but if there's a bullet, color content after it with accent
+      if (bar_start == std::string::npos) {
+        size_t bullet_pos = part.find(bullet);
+        if (bullet_pos != std::string::npos) {
+          std::string before = part.substr(0, bullet_pos);
+          std::string after = part.substr(bullet_pos + bullet.size());
+          return before + sgr_fg_grey() + bullet + sgr_reset() + ui.accent + after + sgr_reset();
+        }
+        return part;
+      }
 
       // Find end of bar (last block character)
       size_t bar_end = bar_start;
@@ -153,19 +165,54 @@ static std::string colorize_line_impl(const std::string& s) {
         if (total > 0) pct = 100.0 * (double)filled / (double)total;
       }
       
-      const std::string bar_color = (pct < 0.0) ? sgr_fg_cyan() : 
+      const std::string bar_color = (pct < 0.0) ? sgr_fg_cyan() :
         (pct <= 60.0 ? sgr_fg_grn() :
         (pct <= 80.0 ? sgr_fg_yel() : sgr_fg_red()));
+
+      // Also color content after bullet separator with same severity color
+      size_t bullet_pos = suf2.find(bullet);
+      if (bullet_pos != std::string::npos) {
+        std::string before_bullet = suf2.substr(0, bullet_pos);
+        std::string after_bullet = suf2.substr(bullet_pos + bullet.size());
+        return pre2 + bar_color + bar + sgr_reset() + before_bullet +
+               sgr_fg_grey() + bullet + sgr_reset() + bar_color + after_bullet + sgr_reset();
+      }
       return pre2 + bar_color + bar + sgr_reset() + suf2;
     };
     
     std::string mid2 = color_bar(mid);
-    return pre + sgr_fg_grey() + leftb + sgr_reset() + mid2 + sgr_fg_grey() + rightb + sgr_reset() + suf;
+    std::string result = pre + sgr_fg_grey() + leftb + sgr_reset() + mid2 + sgr_fg_grey() + rightb + sgr_reset() + suf;
+
+    // Colorize bullet separators
+    const std::string bullet = "•";
+    const std::string grey_bullet = sgr_fg_grey() + bullet + sgr_reset();
+    size_t pos = 0;
+    while ((pos = result.find(bullet, pos)) != std::string::npos) {
+      // Skip if already inside an escape sequence
+      if (pos > 0 && result[pos-1] == '[') { pos += bullet.size(); continue; }
+      result.replace(pos, bullet.size(), grey_bullet);
+      pos += grey_bullet.size();
+    }
+    return result;
   }
-  
+
   if (s.find("SYSTEM MONITOR") != std::string::npos) {
     return sgr_bold() + s + sgr_reset();
   }
+
+  // Colorize bullet separators in non-box lines (like status bar)
+  if (s.find("•") != std::string::npos) {
+    std::string result = s;
+    const std::string bullet = "•";
+    const std::string grey_bullet = sgr_fg_grey() + bullet + sgr_reset();
+    size_t pos = 0;
+    while ((pos = result.find(bullet, pos)) != std::string::npos) {
+      result.replace(pos, bullet.size(), grey_bullet);
+      pos += grey_bullet.size();
+    }
+    return result;
+  }
+
   return s;
 }
 

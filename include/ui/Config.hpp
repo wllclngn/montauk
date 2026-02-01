@@ -11,7 +11,6 @@ struct UIConfig {
   std::string accent;
   std::string caution;
   std::string warning;
-  std::string title;
   int caution_pct;
   int warning_pct;
 };

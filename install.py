@@ -20,39 +20,87 @@ import sys
 import shutil
 import subprocess
 from pathlib import Path
+from datetime import datetime
 
-def run(cmd, check=True, capture=False, sudo=False, cwd=None):
-    """Run a command, optionally with sudo."""
-    if sudo:
-        cmd = ["sudo"] + cmd
-    if capture:
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
-        return result.returncode, result.stdout, result.stderr
-    else:
-        result = subprocess.run(cmd, cwd=cwd)
-        return result.returncode, None, None
 
-def check_cmake():
+# =============================================================================
+# LOGGING
+# =============================================================================
+
+def _timestamp() -> str:
+    """Get current timestamp in [HH:MM:SS] format."""
+    return datetime.now().strftime("[%H:%M:%S]")
+
+
+def log_info(msg: str) -> None:
+    print(f"{_timestamp()} [INFO]   {msg}")
+
+
+def log_warn(msg: str) -> None:
+    print(f"{_timestamp()} [WARN]   {msg}")
+
+
+def log_error(msg: str) -> None:
+    print(f"{_timestamp()} [ERROR]  {msg}")
+
+
+# =============================================================================
+# COMMAND EXECUTION
+# =============================================================================
+
+def run_cmd(cmd: list, cwd: Path | None = None) -> int:
+    """
+    Run a command with real-time output to terminal.
+    Returns the exit code.
+    """
+    print(f">>> {' '.join(cmd)}")
+    result = subprocess.run(cmd, cwd=cwd)
+    return result.returncode
+
+
+def run_cmd_capture(cmd: list, cwd: Path | None = None) -> tuple[int, str, str]:
+    """Run a command and capture output."""
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+    return result.returncode, result.stdout, result.stderr
+
+
+def run_cmd_sudo(cmd: list, cwd: Path | None = None) -> int:
+    """Run a command with sudo."""
+    return run_cmd(["sudo"] + cmd, cwd=cwd)
+
+
+# =============================================================================
+# DEPENDENCY CHECKS
+# =============================================================================
+
+def check_cmake() -> bool:
     """Check if cmake is available."""
-    ret, _, _ = run(["which", "cmake"], capture=True)
+    ret, _, _ = run_cmd_capture(["which", "cmake"])
     return ret == 0
 
-def check_compiler():
+
+def check_compiler() -> bool:
     """Check if a C++ compiler is available."""
     for compiler in ["g++", "clang++"]:
-        ret, _, _ = run(["which", compiler], capture=True)
+        ret, _, _ = run_cmd_capture(["which", compiler])
         if ret == 0:
             return True
     return False
 
-def get_config_dir():
+
+# =============================================================================
+# THEME INSTALLATION
+# =============================================================================
+
+def get_config_dir() -> Path:
     """Get the user's config directory."""
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
         return Path(xdg) / "montauk"
     return Path.home() / ".config" / "montauk"
 
-def install_themes(source_dir):
+
+def install_themes(source_dir: Path) -> bool:
     """Install theme files to user config directory."""
     config_dir = get_config_dir()
     theme_src = source_dir / "src" / "util" / "theme.env"
@@ -69,60 +117,73 @@ def install_themes(source_dir):
         return True
     return False
 
-def cmd_build(args, source_dir):
+
+# =============================================================================
+# COMMANDS
+# =============================================================================
+
+def cmd_build(args, source_dir: Path) -> bool:
     """Build montauk."""
     build_dir = source_dir / "build"
 
-    # Configure
+    log_info("CONFIGURING BUILD")
+
     cmake_args = ["cmake", "-S", str(source_dir), "-B", str(build_dir)]
 
     if args.debug:
         cmake_args.append("-DCMAKE_BUILD_TYPE=Debug")
+        log_info("Build type: Debug")
     else:
         cmake_args.append("-DCMAKE_BUILD_TYPE=Release")
+        log_info("Build type: Release")
 
     if args.kernel:
         cmake_args.append("-DMONTAUK_KERNEL=ON")
+        log_info("Kernel collector: enabled")
 
     if args.prefix:
         cmake_args.append(f"-DCMAKE_INSTALL_PREFIX={args.prefix}")
+        log_info(f"Install prefix: {args.prefix}")
 
-    print("Configuring...")
-    ret, _, stderr = run(cmake_args, capture=True)
+    ret = run_cmd(cmake_args)
     if ret != 0:
-        print(f"ERROR: cmake configure failed!")
-        print(stderr)
+        log_error("cmake configure failed!")
         return False
+    log_info("Configuration complete")
 
     # Build
     import multiprocessing
     jobs = multiprocessing.cpu_count()
 
-    print(f"Building (using {jobs} jobs)...")
-    # Use --clean-first for install to ensure fresh binaries
+    log_info("BUILDING")
+    log_info(f"Using {jobs} parallel jobs")
+
     build_cmd = ["cmake", "--build", str(build_dir), f"-j{jobs}"]
     if args.command == "install":
         build_cmd.insert(3, "--clean-first")
-    ret, _, stderr = run(build_cmd, capture=True)
+        log_info("Clean build enabled")
+
+    ret = run_cmd(build_cmd)
     if ret != 0:
-        print(f"ERROR: Build failed!")
-        print(stderr)
+        log_error("Build failed!")
         return False
 
     binary = build_dir / "montauk"
     if not binary.exists():
-        print("ERROR: montauk binary not found after build!")
+        log_error("montauk binary not found after build!")
         return False
 
-    print(f"  OK: Built {binary}")
+    size = binary.stat().st_size
+    log_info(f"Built {binary} ({size} bytes)")
 
     # Install themes
     if install_themes(source_dir):
-        print(f"  OK: Installed theme to {get_config_dir()}/theme.env")
+        log_info(f"Installed theme to {get_config_dir()}/theme.env")
 
     return True
 
-def cmd_install(args, source_dir):
+
+def cmd_install(args, source_dir: Path) -> bool:
     """Build and install montauk."""
     if not cmd_build(args, source_dir):
         return False
@@ -132,102 +193,113 @@ def cmd_install(args, source_dir):
     prefix = Path(args.prefix) if args.prefix else Path("/usr/local")
     install_path = prefix / "bin" / "montauk"
 
-    print(f"Installing to {install_path}...")
+    log_info("INSTALLING")
+    log_info(f"Destination: {install_path}")
 
     # Create bin directory if needed
-    ret, _, _ = run(["mkdir", "-p", str(prefix / "bin")], sudo=True)
+    run_cmd_sudo(["mkdir", "-p", str(prefix / "bin")])
 
     # Copy binary
-    ret, _, stderr = run(["cp", str(binary), str(install_path)], sudo=True, capture=True)
+    ret = run_cmd_sudo(["cp", str(binary), str(install_path)])
     if ret != 0:
-        print(f"ERROR: Failed to install: {stderr}")
+        log_error("Failed to install binary!")
         return False
 
-    print(f"  OK: Installed to {install_path}")
-
-    # Verify
-    ret, stdout, _ = run(["ls", "-la", str(install_path)], capture=True)
     size = binary.stat().st_size
-    print(f"  OK: {size} bytes")
+    log_info(f"Installed {install_path} ({size} bytes)")
 
     if args.kernel:
-        ret, stdout, _ = run(["strings", str(install_path)], capture=True)
+        ret, stdout, _ = run_cmd_capture(["strings", str(install_path)])
         if "KernelProcessCollector" in stdout:
-            print("  OK: Kernel collector support enabled")
+            log_info("Kernel collector support verified")
         else:
-            print("  WARNING: Kernel collector may not be compiled in")
+            log_warn("Kernel collector may not be compiled in")
 
     print()
-    print("=" * 50)
-    print("SUCCESS!")
-    print("=" * 50)
-    print()
-    print("Run:")
-    print("  montauk")
-    print()
+    log_info("SUCCESS. Installation complete.")
+    log_info("RUN COMMAND: montauk")
 
     if args.kernel:
-        print("NOTE: For kernel module support, also run:")
-        print("  cd montauk-kernel && ./install.py")
-        print()
+        log_info("For kernel module support: cd montauk-kernel && ./install.py")
 
     return True
 
-def cmd_clean(args, source_dir):
+
+def cmd_clean(args, source_dir: Path) -> bool:
     """Clean build directory."""
     build_dir = source_dir / "build"
 
+    log_info("CLEANING")
+
     if build_dir.exists():
-        print(f"Removing {build_dir}...")
+        log_info(f"Removing {build_dir}")
         shutil.rmtree(build_dir)
-        print("  OK: Cleaned")
+        log_info("Clean complete")
     else:
-        print("Nothing to clean")
+        log_info("Nothing to clean")
 
     return True
 
-def cmd_uninstall(args, source_dir):
+
+def cmd_uninstall(args, source_dir: Path) -> bool:
     """Remove installed files."""
     prefix = Path(args.prefix) if args.prefix else Path("/usr/local")
     install_path = prefix / "bin" / "montauk"
 
+    log_info("UNINSTALLING")
+
     if install_path.exists():
-        print(f"Removing {install_path}...")
-        ret, _, _ = run(["rm", str(install_path)], sudo=True)
+        log_info(f"Removing {install_path}")
+        ret = run_cmd_sudo(["rm", str(install_path)])
         if ret == 0:
-            print("  OK: Removed")
+            log_info("Uninstall complete")
         else:
-            print("  ERROR: Failed to remove")
+            log_error("Failed to remove binary")
             return False
     else:
-        print(f"{install_path} not found")
+        log_warn(f"{install_path} not found")
 
     return True
 
-def cmd_test(args, source_dir):
+
+def cmd_test(args, source_dir: Path) -> bool:
     """Run tests."""
     build_dir = source_dir / "build"
     test_binary = build_dir / "montauk_tests"
 
+    log_info("RUNNING TESTS")
+
     if not test_binary.exists():
-        print("Tests not built. Building with tests enabled...")
+        log_info("Tests not built, building with tests enabled...")
+
         cmake_args = ["cmake", "-S", str(source_dir), "-B", str(build_dir), "-DMONTAUK_BUILD_TESTS=ON"]
-        ret, _, _ = run(cmake_args, capture=True)
+        ret = run_cmd(cmake_args)
         if ret != 0:
-            print("ERROR: Configure failed")
+            log_error("Configure failed")
             return False
 
         import multiprocessing
-        ret, _, _ = run(["cmake", "--build", str(build_dir), f"-j{multiprocessing.cpu_count()}"], capture=True)
+        ret = run_cmd(["cmake", "--build", str(build_dir), f"-j{multiprocessing.cpu_count()}"])
         if ret != 0:
-            print("ERROR: Build failed")
+            log_error("Build failed")
             return False
 
-    print("Running tests...")
-    ret, _, _ = run([str(test_binary)])
+    log_info(f"Executing {test_binary}")
+    ret = run_cmd([str(test_binary)])
+
+    if ret == 0:
+        log_info("All tests passed")
+    else:
+        log_error("Some tests failed")
+
     return ret == 0
 
-def main():
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def main() -> int:
     parser = argparse.ArgumentParser(
         description="Build and install montauk system monitor",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -262,38 +334,36 @@ Examples:
 
     source_dir = Path(__file__).parent.resolve()
 
-    print("montauk installer")
-    print("=================")
-    print(f"Source: {source_dir}")
+    print()
+    log_info("montauk installer")
+    log_info(f"Source: {source_dir}")
     print()
 
     # Check dependencies
     if args.command in ["install", "build", "test"]:
-        print("Checking dependencies...")
+        log_info("CHECKING DEPENDENCIES")
 
         if not check_cmake():
+            log_error("cmake not found!")
             print()
-            print("ERROR: cmake not found!")
+            log_info("Install it first:")
+            print("         Arch Linux:    sudo pacman -S cmake")
+            print("         Debian/Ubuntu: sudo apt install cmake build-essential")
+            print("         Fedora:        sudo dnf install cmake gcc-c++")
             print()
-            print("Install it first:")
-            print("  Arch Linux:    sudo pacman -S cmake")
-            print("  Debian/Ubuntu: sudo apt install cmake build-essential")
-            print("  Fedora:        sudo dnf install cmake gcc-c++")
-            print()
-            sys.exit(1)
-        print("  OK: cmake found")
+            return 1
+        log_info("cmake found")
 
         if not check_compiler():
+            log_error("C++ compiler not found!")
             print()
-            print("ERROR: C++ compiler not found!")
+            log_info("Install it first:")
+            print("         Arch Linux:    sudo pacman -S gcc")
+            print("         Debian/Ubuntu: sudo apt install build-essential")
+            print("         Fedora:        sudo dnf install gcc-c++")
             print()
-            print("Install it first:")
-            print("  Arch Linux:    sudo pacman -S gcc")
-            print("  Debian/Ubuntu: sudo apt install build-essential")
-            print("  Fedora:        sudo dnf install gcc-c++")
-            print()
-            sys.exit(1)
-        print("  OK: C++ compiler found")
+            return 1
+        log_info("C++ compiler found")
         print()
 
     # Run command
@@ -306,7 +376,12 @@ Examples:
     }
 
     success = commands[args.command](args, source_dir)
-    sys.exit(0 if success else 1)
+    return 0 if success else 1
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\nInterrupted by user.")
+        sys.exit(130)

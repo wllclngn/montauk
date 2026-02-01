@@ -60,28 +60,16 @@ UIState::CPUScale getenv_cpu_scale(const char* name, UIState::CPUScale defv){
 const UIConfig& ui_config() {
   static UIConfig cfg = []{
     UIConfig c{};
-    // Defaults: accent=11(#00FFA6), caution=9(#FFF6A7), warning=1(#EA1717)
-    int acc_idx = getenv_int("MONTAUK_ACCENT_IDX", 11);
-    int cau_idx = getenv_int("MONTAUK_CAUTION_IDX", 9);
-    int war_idx = getenv_int("MONTAUK_WARNING_IDX", 1);
-    // Title: classic amber CRT; default to color31 (~#FFBF00)
-    int ttl_idx = getenv_int("MONTAUK_TITLE_IDX", 31);
-    
+    // Defaults use terminal's 16-color palette (respects user's theme)
+    // Standard terminals: 11=bright yellow, 9=bright red, 1=red
+    // User can override via MONTAUK_*_IDX env vars
+    int acc_idx = getenv_int("MONTAUK_ACCENT_IDX", 11);  // bright yellow (or user's color11)
+    int cau_idx = getenv_int("MONTAUK_CAUTION_IDX", 9);  // bright red (or user's color9)
+    int war_idx = getenv_int("MONTAUK_WARNING_IDX", 1);  // red (or user's color1)
     c.accent  = sgr_palette_idx(acc_idx);
     c.caution = sgr_palette_idx(cau_idx);
     c.warning = sgr_palette_idx(war_idx);
-    
-    // Prefer truecolor MONTAUK_TITLE_HEX if provided
-    const char* th = getenv_compat("MONTAUK_TITLE_HEX");
-    if (th && truecolor_capable()) {
-      int r=0,g=0,b=0; 
-      if (parse_hex_rgb(th, r,g,b)) c.title = sgr_truecolor(r,g,b);
-    }
-    // Default truecolor amber: #FFB000
-    if (c.title.empty()) {
-      c.title = truecolor_capable()? sgr_truecolor(255,176,0) : sgr_palette_idx(ttl_idx);
-    }
-    
+
     c.caution_pct = getenv_int("MONTAUK_PROC_CAUTION_PCT", 60);
     c.warning_pct = getenv_int("MONTAUK_PROC_WARNING_PCT", 80);
     
