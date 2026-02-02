@@ -1,5 +1,6 @@
 #pragma once
 #include <chrono>
+#include <memory>
 #include <thread>
 #include <stop_token>
 #include <unordered_map>
@@ -52,7 +53,7 @@ private:
   // Rolling cache of per-process GPU util with a short TTL to avoid flicker between NVML sample windows (test helper)
   std::unordered_map<int, std::pair<int, std::chrono::steady_clock::time_point>> last_proc_gpu_;
   // Unified GPU attributor (NVML + fdinfo)
-  montauk::app::GpuAttributor* gpu_attr_{nullptr};
+  std::unique_ptr<montauk::app::GpuAttributor> gpu_attr_;
 };
 
 #ifdef MONTAUK_TESTING

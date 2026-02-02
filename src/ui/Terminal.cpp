@@ -3,10 +3,12 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <fcntl.h>
+#include <cerrno>
 #include <cstring>
 #include <cctype>
 #include <algorithm>
 #include <cstdlib>
+#include <format>
 #include <string>
 
 // Forward declaration for ui_config (will be in Config module)
@@ -24,8 +26,16 @@ std::atomic<bool> g_stop{false};
 std::atomic<bool> g_alt_in_use{false};
 
 void best_effort_write(int fd, const char* buf, size_t len) {
-  if (len == 0) return;
-  if (::write(fd, buf, len) < 0) { /* ignore */ }
+  while (len > 0) {
+    ssize_t n = ::write(fd, buf, len);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      return;
+    }
+    if (n == 0) return;
+    buf += n;
+    len -= n;
+  }
 }
 
 void restore_terminal_minimal() {
@@ -111,7 +121,7 @@ std::string sgr_fg_grn() {
 
 std::string sgr_code_int(int code) {
   if (!tty_stdout()) return {};
-  return std::string("\x1B[") + std::to_string(code) + "m";
+  return std::format("\x1B[{}m", code);
 }
 
 std::string sgr_palette_idx(int idx) {
@@ -120,13 +130,13 @@ std::string sgr_palette_idx(int idx) {
   if (idx <= 7) return sgr_code_int(30 + idx);
   if (idx <= 15) return sgr_code_int(90 + (idx - 8));
   // 256-color fallback
-  return std::string("\x1B[38;5;") + std::to_string(idx) + "m";
+  return std::format("\x1B[38;5;{}m", idx);
 }
 
 std::string sgr_truecolor(int r, int g, int b) {
   if (!tty_stdout()) return {};
   r = std::clamp(r,0,255); g = std::clamp(g,0,255); b = std::clamp(b,0,255);
-  return std::string("\x1B[38;2;") + std::to_string(r) + ";" + std::to_string(g) + ";" + std::to_string(b) + "m";
+  return std::format("\x1B[38;2;{};{};{}m", r, g, b);
 }
 int term_rows() {
   struct winsize ws{};

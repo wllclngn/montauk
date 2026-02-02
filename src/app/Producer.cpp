@@ -143,19 +143,21 @@ void Producer::run(std::stop_token st) {
   // Throttle heavy NVML per-process sampling to ~1s to keep UI snappy
   auto next_nvml = steady_clock::now();
   const auto nvml_interval = 1000ms;
-  if (!gpu_attr_) gpu_attr_ = new montauk::app::GpuAttributor();
+  if (!gpu_attr_) gpu_attr_ = std::make_unique<montauk::app::GpuAttributor>();
 
   // HOT start warm-up: take fast pre-samples so first publish has real deltas
   {
     auto& s = buffers_.back();
-    // Seed with an initial read for all
+    // Seed with an initial read for all.
+    // Return values intentionally ignored: collectors may fail transiently
+    // (e.g., /proc unavailable), but we continue with stale data for resilience.
     if (proc_) { s.collector_name = proc_->name(); }
     cpu_.sample(s.cpu);
     mem_.sample(s.mem);
     gpu_.sample(s.vram);
     net_.sample(s.net);
     disk_.sample(s.disk);
-    fs_.sample(s.fs);  // Sample filesystem once at startup (changes slowly)
+    fs_.sample(s.fs);
     if (proc_) proc_->sample(s.procs);
     thermal_.sample(s.thermal);
 
@@ -200,7 +202,7 @@ void Producer::run(std::stop_token st) {
     buffers_.publish();
   }
 
-  (void)0; // no-op placeholder; keep code structure
+  // Main collection loop. Sample return values intentionally ignored for resilience.
   while (!st.stop_requested()) {
     auto now = steady_clock::now();
     bool ran = false;
@@ -247,8 +249,7 @@ void Producer::run(std::stop_token st) {
     }
     std::this_thread::sleep_for(sleep_for);
   }
-  // Cleanup after loop
-  if (gpu_attr_) { delete gpu_attr_; gpu_attr_ = nullptr; }
+  // gpu_attr_ cleanup handled by unique_ptr destructor
 }
 
 // test_apply_gpu_samples is defined inline in Producer.hpp under MONTAUK_TESTING

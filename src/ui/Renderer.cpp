@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <format>
 #include <iomanip>
 #include <unordered_map>
 using namespace montauk::ui;
@@ -265,7 +266,7 @@ void render_screen(const montauk::model::Snapshot& s, bool show_help_line, const
     if (row < body_lines - 1) line += "\n";
     frame += line;
   }
-  frame += "\x1B[" + std::to_string(rows) + ";" + std::to_string(cols) + "H";
+  frame += std::format("\x1B[{};{}H", rows, cols);
   best_effort_write(STDOUT_FILENO, frame.data(), frame.size());
 }
 
