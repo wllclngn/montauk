@@ -1,5 +1,6 @@
 #include "collectors/GpuCollector.hpp"
 #include "util/Procfs.hpp"
+#include "ui/Config.hpp"
 
 #include <filesystem>
 #include <chrono>
@@ -17,31 +18,15 @@ namespace fs = std::filesystem;
 
 namespace montauk::collectors {
 
-static const char* getenv_compat(const char* name) {
-  const char* vv = std::getenv(name);
-  if (vv && *vv) return vv;
-  std::string n(name);
-  if (n.rfind("MONTAUK_",0)==0) {
-    std::string alt = std::string("montauk_") + n.substr(8);
-    vv = std::getenv(alt.c_str());
-    if (vv && *vv) return vv;
-  } else if (n.rfind("montauk_",0)==0) {
-    std::string alt = std::string("MONTAUK_") + n.substr(8);
-    vv = std::getenv(alt.c_str());
-    if (vv && *vv) return vv;
-  }
-  return nullptr;
-}
-
 static bool env_true(const char* name, bool defv=true) {
-  if (const char* v = getenv_compat(name)) {
+  if (const char* v = montauk::ui::getenv_compat(name)) {
     return !(v[0]=='0'||v[0]=='f'||v[0]=='F');
   }
   return defv;
 }
 
 static std::string find_nvidia_smi_path() {
-  if (const char* p = getenv_compat("MONTAUK_NVIDIA_SMI_PATH")) {
+  if (const char* p = montauk::ui::getenv_compat("MONTAUK_NVIDIA_SMI_PATH")) {
     return std::string(p);
   }
   // Try PATH
@@ -78,7 +63,7 @@ static bool read_nvidia_smi_device(montauk::model::GpuVram& out) {
   static bool have_cache = false;
   static int min_interval_ms = -1;
   if (min_interval_ms < 0) {
-    if (const char* v = getenv_compat("MONTAUK_SMI_MIN_INTERVAL_MS")) {
+    if (const char* v = montauk::ui::getenv_compat("MONTAUK_SMI_MIN_INTERVAL_MS")) {
       try { min_interval_ms = std::max(0, std::stoi(v)); } catch(...) { min_interval_ms = 1000; }
     } else { min_interval_ms = 1000; }
   }
@@ -338,15 +323,7 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out) {
 #include <nvml.h>
 static bool read_nvml_compiled(montauk::model::GpuVram& out) {
   if (nvmlInit_v2() != NVML_SUCCESS) {
-    auto getenv_compat = [](const char* name)->const char*{
-      const char* vv = std::getenv(name);
-      if (vv && *vv) return vv;
-      std::string n(name);
-      if (n.rfind("MONTAUK_",0)==0) { std::string alt = std::string("montauk_") + n.substr(8); vv = std::getenv(alt.c_str()); if (vv&&*vv) return vv; }
-      else if (n.rfind("montauk_",0)==0) { std::string alt = std::string("MONTAUK_") + n.substr(8); vv = std::getenv(alt.c_str()); if (vv&&*vv) return vv; }
-      return nullptr;
-    };
-    if (const char* v = getenv_compat("MONTAUK_LOG_NVML"); v && (v[0]=='1'||v[0]=='t'||v[0]=='T'||v[0]=='y'||v[0]=='Y')) {
+    if (const char* v = montauk::ui::getenv_compat("MONTAUK_LOG_NVML"); v && (v[0]=='1'||v[0]=='t'||v[0]=='T'||v[0]=='y'||v[0]=='Y')) {
       ::fprintf(stderr, "NVML: init failed in collector (device-level metrics disabled)\n");
     }
     return false;
@@ -477,19 +454,10 @@ static bool read_nvml_dyn(montauk::model::GpuVram& out) {
   return nv.read_devices(out);
 }
 
-static const char* getenv_compat_gpu(const char* name) {
-  const char* vv = std::getenv(name);
-  if (vv && *vv) return vv;
-  std::string n(name);
-  if (n.rfind("MONTAUK_",0)==0) { std::string alt = std::string("montauk_") + n.substr(8); vv = std::getenv(alt.c_str()); if (vv&&*vv) return vv; }
-  else if (n.rfind("montauk_",0)==0) { std::string alt = std::string("MONTAUK_") + n.substr(8); vv = std::getenv(alt.c_str()); if (vv&&*vv) return vv; }
-  return nullptr;
-}
-
 static void log_backend_once(const char* tag) {
   static bool done = false;
   if (done) return;
-  if (const char* v = getenv_compat_gpu("MONTAUK_GPU_DEBUG"); v && !(v[0]=='0'||v[0]=='f'||v[0]=='F')) {
+  if (const char* v = montauk::ui::getenv_compat("MONTAUK_GPU_DEBUG"); v && !(v[0]=='0'||v[0]=='f'||v[0]=='F')) {
     ::fprintf(stderr, "GPU backend: %s\n", tag);
     done = true;
   }

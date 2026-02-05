@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include "ui/Config.hpp"
 
 namespace montauk::util {
 
@@ -17,19 +18,7 @@ NvmlDyn& NvmlDyn::instance() {
 }
 
 const char* NvmlDyn::getenv_compat(const char* name) {
-  const char* vv = std::getenv(name);
-  if (vv && *vv) return vv;
-  std::string n(name);
-  if (n.rfind("MONTAUK_",0)==0) {
-    std::string alt = std::string("montauk_") + n.substr(8);
-    vv = std::getenv(alt.c_str());
-    if (vv && *vv) return vv;
-  } else if (n.rfind("montauk_",0)==0) {
-    std::string alt = std::string("MONTAUK_") + n.substr(8);
-    vv = std::getenv(alt.c_str());
-    if (vv && *vv) return vv;
-  }
-  return nullptr;
+  return montauk::ui::getenv_compat(name);
 }
 
 bool NvmlDyn::load_once() {

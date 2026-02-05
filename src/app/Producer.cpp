@@ -6,6 +6,7 @@
 #include <unordered_set>
 #include <vector>
 #include "app/GpuAttributor.hpp"
+#include "ui/Config.hpp"
 #include "util/Churn.hpp"
 #include "collectors/ProcessCollector.hpp"
 #include "collectors/NetlinkProcessCollector.hpp"
@@ -19,26 +20,10 @@ namespace montauk::app {
 
 Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
   // Resolve configurable limits
-  auto getenv_compat = [](const char* name)->const char*{
-    const char* v = std::getenv(name);
-    if (v && *v) return v;
-    std::string n(name);
-    if (n.rfind("MONTAUK_", 0) == 0) {
-      std::string alt = std::string("montauk_") + n.substr(8);
-      v = std::getenv(alt.c_str());
-      if (v && *v) return v;
-    } else if (n.rfind("montauk_", 0) == 0) {
-      std::string alt = std::string("MONTAUK_") + n.substr(8);
-      v = std::getenv(alt.c_str());
-      if (v && *v) return v;
-    }
-    return nullptr;
-  };
-  auto getenv_int = [&](const char* name, int defv){ const char* v = getenv_compat(name); if(!v||!*v) return defv; try { return std::stoi(v); } catch(...) { return defv; } };
-  int max_procs = getenv_int("MONTAUK_MAX_PROCS", 256);
+  int max_procs = montauk::ui::getenv_int("MONTAUK_MAX_PROCS", 256);
   if (max_procs < 32) max_procs = 32;
   if (max_procs > 4096) max_procs = 4096;
-  int enrich_top = getenv_int("MONTAUK_ENRICH_TOP_N", max_procs);
+  int enrich_top = montauk::ui::getenv_int("MONTAUK_ENRICH_TOP_N", max_procs);
   if (enrich_top < 0) enrich_top = 0;
   if (enrich_top > max_procs) enrich_top = max_procs;
   // Choose process collector: try netlink first, then fallback to traditional
@@ -152,14 +137,14 @@ void Producer::run(std::stop_token st) {
     // Return values intentionally ignored: collectors may fail transiently
     // (e.g., /proc unavailable), but we continue with stale data for resilience.
     if (proc_) { s.collector_name = proc_->name(); }
-    cpu_.sample(s.cpu);
-    mem_.sample(s.mem);
-    gpu_.sample(s.vram);
-    net_.sample(s.net);
-    disk_.sample(s.disk);
-    fs_.sample(s.fs);
-    if (proc_) proc_->sample(s.procs);
-    thermal_.sample(s.thermal);
+    (void)cpu_.sample(s.cpu);
+    (void)mem_.sample(s.mem);
+    (void)gpu_.sample(s.vram);
+    (void)net_.sample(s.net);
+    (void)disk_.sample(s.disk);
+    (void)fs_.sample(s.fs);
+    if (proc_) (void)proc_->sample(s.procs);
+    (void)thermal_.sample(s.thermal);
 
     // Time budget for warm-up (~180ms max)
     auto warm_start = steady_clock::now();
@@ -171,8 +156,8 @@ void Producer::run(std::stop_token st) {
       auto rem = duration_cast<milliseconds>(warm_deadline - now);
       auto nap = milliseconds(std::min<int>(tick_ms, static_cast<int>(rem.count())));
       if (nap.count() > 0) std::this_thread::sleep_for(nap);
-      cpu_.sample(s.cpu);
-      if (proc_) proc_->sample(s.procs);
+      (void)cpu_.sample(s.cpu);
+      if (proc_) (void)proc_->sample(s.procs);
     }
 
     // Net + Disk: short spaced reads for non-zero bps/util
@@ -181,14 +166,14 @@ void Producer::run(std::stop_token st) {
       auto rem = duration_cast<milliseconds>(warm_deadline - now);
       auto nap = milliseconds(std::min<int>(60, std::max<int>(10, static_cast<int>(rem.count()))));
       if (nap.count() > 0) std::this_thread::sleep_for(nap);
-      net_.sample(s.net);
-      disk_.sample(s.disk);
+      (void)net_.sample(s.net);
+      (void)disk_.sample(s.disk);
     }
 
     // Re-sample memory/thermal/gpu once (non-rate or slow-changing)
-    mem_.sample(s.mem);
-    thermal_.sample(s.thermal);
-    gpu_.sample(s.vram);
+    (void)mem_.sample(s.mem);
+    (void)thermal_.sample(s.thermal);
+    (void)gpu_.sample(s.vram);
     
     // Enrich GPU attribution once at startup for stable NVML display
     if (gpu_attr_) gpu_attr_->enrich(s);
@@ -207,14 +192,14 @@ void Producer::run(std::stop_token st) {
     auto now = steady_clock::now();
     bool ran = false;
     auto& s = buffers_.back();
-    if (now >= next_cpu) { cpu_.sample(s.cpu); next_cpu = now + cpu_interval; ran = true; }
-    if (now >= next_mem) { mem_.sample(s.mem); next_mem = now + mem_interval; ran = true; }
-    if (now >= next_gpu) { gpu_.sample(s.vram); next_gpu = now + gpu_interval; ran = true; }
-    if (now >= next_net) { net_.sample(s.net); next_net = now + net_interval; ran = true; }
-    if (now >= next_disk){ disk_.sample(s.disk); next_disk = now + disk_interval; ran = true; }
-    if (now >= next_fs)  { fs_.sample(s.fs);     next_fs  = now + fs_interval; ran = true; }
-    if (now >= next_proc){ if (proc_) proc_->sample(s.procs); next_proc = now + proc_interval; ran = true; }
-    if (now >= next_therm){ thermal_.sample(s.thermal); next_therm = now + therm_interval; ran = true; }
+    if (now >= next_cpu) { (void)cpu_.sample(s.cpu); next_cpu = now + cpu_interval; ran = true; }
+    if (now >= next_mem) { (void)mem_.sample(s.mem); next_mem = now + mem_interval; ran = true; }
+    if (now >= next_gpu) { (void)gpu_.sample(s.vram); next_gpu = now + gpu_interval; ran = true; }
+    if (now >= next_net) { (void)net_.sample(s.net); next_net = now + net_interval; ran = true; }
+    if (now >= next_disk){ (void)disk_.sample(s.disk); next_disk = now + disk_interval; ran = true; }
+    if (now >= next_fs)  { (void)fs_.sample(s.fs);     next_fs  = now + fs_interval; ran = true; }
+    if (now >= next_proc){ if (proc_) (void)proc_->sample(s.procs); next_proc = now + proc_interval; ran = true; }
+    if (now >= next_therm){ (void)thermal_.sample(s.thermal); next_therm = now + therm_interval; ran = true; }
     bool time_to_publish = false;
     if (now >= next_pub) { time_to_publish = true; next_pub = now + pub_interval; }
     bool nvml_ran = false;

@@ -156,12 +156,12 @@ static std::string colorize_line_impl(const std::string& s) {
       if (pct < 0.0) {
         int total = display_cols(bar);
         int filled = 0;
-        size_t pos = 0;
-        const std::string full = "█";
+        size_t bpos = 0;
+        const std::string full_blk = "█";
         while (true) {
-          size_t f = bar.find(full, pos);
+          size_t f = bar.find(full_blk, bpos);
           if (f == std::string::npos) break;
-          filled += 1; pos = f + full.size();
+          filled += 1; bpos = f + full_blk.size();
         }
         if (total > 0) pct = 100.0 * (double)filled / (double)total;
       }

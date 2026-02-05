@@ -15,23 +15,23 @@ void on_sigint(int);
 void on_atexit_restore();
 
 // Terminal capability detection
-bool tty_stdout();
-bool truecolor_capable();
-int term_cols();
-int term_rows();
+[[nodiscard]] bool tty_stdout();
+[[nodiscard]] bool truecolor_capable();
+[[nodiscard]] int term_cols();
+[[nodiscard]] int term_rows();
 
 // SGR code generation
-std::string sgr(const char* code);
-std::string sgr_reset();
-std::string sgr_bold();
-std::string sgr_fg_grey();
-std::string sgr_fg_cyan();
-std::string sgr_fg_red();
-std::string sgr_fg_yel();
-std::string sgr_fg_grn();
-std::string sgr_code_int(int code);
-std::string sgr_palette_idx(int idx);
-std::string sgr_truecolor(int r, int g, int b);
+[[nodiscard]] std::string sgr(const char* code);
+[[nodiscard]] std::string sgr_reset();
+[[nodiscard]] std::string sgr_bold();
+[[nodiscard]] std::string sgr_fg_grey();
+[[nodiscard]] std::string sgr_fg_cyan();
+[[nodiscard]] std::string sgr_fg_red();
+[[nodiscard]] std::string sgr_fg_yel();
+[[nodiscard]] std::string sgr_fg_grn();
+[[nodiscard]] std::string sgr_code_int(int code);
+[[nodiscard]] std::string sgr_palette_idx(int idx);
+[[nodiscard]] std::string sgr_truecolor(int r, int g, int b);
 
 // Best-effort terminal write (async-signal-safe)
 void best_effort_write(int fd, const char* buf, size_t len);

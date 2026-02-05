@@ -22,7 +22,7 @@ class AlertEngine {
 public:
   explicit AlertEngine(AlertRules rules = {});
   // Evaluate snapshot; may return empty if healthy
-  std::vector<Alert> evaluate(const montauk::model::Snapshot& s);
+  [[nodiscard]] std::vector<Alert> evaluate(const montauk::model::Snapshot& s);
 private:
   AlertRules rules_;
   std::chrono::steady_clock::time_point cpu_high_since_{};

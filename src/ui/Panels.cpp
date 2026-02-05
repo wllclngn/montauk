@@ -115,7 +115,7 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
     // Always create SYSTEM box, minimum 1 line of content
     int inner_min = std::max(1, remaining - 2);
     std::vector<std::string> sys; std::vector<int> sys_sev; // 0 none, 1 caution, 2 warning
-    auto push = [&](const std::string& s, int sev=0){ sys.push_back(s); sys_sev.push_back(sev); };
+    auto push = [&](const std::string& line, int sev=0){ sys.push_back(line); sys_sev.push_back(sev); };
     
     // Hostname/Date/Time/Uptime/Kernel (show in SYSTEM focus only)
     if (g_ui.system_focus) {
@@ -127,7 +127,7 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
       
       bool prefer12 = [](){
         const char* v = getenv_compat("MONTAUK_TIME_FORMAT");
-        if (v && *v) { std::string s=v; for (auto& c: s) c=std::tolower((unsigned char)c); if (s.find("12")!=std::string::npos) return true; if (s.find("24")!=std::string::npos) return false; }
+        if (v && *v) { std::string fmt=v; for (auto& c: fmt) c=std::tolower((unsigned char)c); if (fmt.find("12")!=std::string::npos) return true; if (fmt.find("24")!=std::string::npos) return false; }
         return prefer_12h_clock_from_locale();
       }();
       std::string dates = format_date_now_locale();
@@ -188,14 +188,14 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
         if (rate >= 1000.0) {
           std::ostringstream os; os.setf(std::ios::fixed);
           os << std::setprecision(0) << rate;
-          std::string s = os.str();
+          std::string num_str = os.str();
           // Add thousand separators
-          int insertPosition = (int)s.length() - 3;
+          int insertPosition = (int)num_str.length() - 3;
           while (insertPosition > 0) {
-            s.insert(insertPosition, ",");
+            num_str.insert(insertPosition, ",");
             insertPosition -= 3;
           }
-          return s;
+          return num_str;
         } else {
           std::ostringstream os; os.setf(std::ios::fixed);
           os << std::setprecision(0) << rate;

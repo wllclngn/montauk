@@ -147,8 +147,9 @@ auto gallop_left(
     if (ofs > max_ofs) ofs = max_ofs;
 
     // Now base[hint - ofs] < key <= base[hint - last_ofs]
+    // Guard against underflow when ofs > hint (searched to beginning)
     size_t tmp = last_ofs;
-    last_ofs = hint - ofs;
+    last_ofs = (ofs > hint) ? 0 : hint - ofs;
     ofs = hint - tmp;
   }
 
@@ -190,8 +191,9 @@ auto gallop_right(
     }
     if (ofs > max_ofs) ofs = max_ofs;
 
+    // Guard against underflow when ofs > hint (searched to beginning)
     size_t tmp = last_ofs;
-    last_ofs = hint - ofs;
+    last_ofs = (ofs > hint) ? 0 : hint - ofs;
     ofs = hint - tmp;
   } else {
     // key >= base[hint], search right

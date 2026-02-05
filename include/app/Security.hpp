@@ -12,11 +12,11 @@ struct SecurityFinding {
   std::string reason;          // e.g., "root exec in /tmp"
 };
 
-auto collect_security_findings(const montauk::model::Snapshot& s)
+[[nodiscard]] auto collect_security_findings(const montauk::model::Snapshot& s)
     -> std::vector<SecurityFinding>;
 
-auto format_security_line_default(const SecurityFinding& f) -> std::string;
-auto format_security_line_system(const SecurityFinding& f) -> std::string;
+[[nodiscard]] auto format_security_line_default(const SecurityFinding& f) -> std::string;
+[[nodiscard]] auto format_security_line_system(const SecurityFinding& f) -> std::string;
 
 } // namespace montauk::app
 

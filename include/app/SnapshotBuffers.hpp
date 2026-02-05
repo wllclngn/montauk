@@ -13,11 +13,11 @@ public:
   SnapshotBuffers(const SnapshotBuffers&) = delete;
   SnapshotBuffers& operator=(const SnapshotBuffers&) = delete;
 
-  montauk::model::Snapshot& back();
+  [[nodiscard]] montauk::model::Snapshot& back();
   void publish(); // atomic swap front/back
 
-  const montauk::model::Snapshot& front() const;
-  uint64_t seq() const { return front().seq; }
+  [[nodiscard]] const montauk::model::Snapshot& front() const;
+  [[nodiscard]] uint64_t seq() const { return front().seq; }
 
 private:
   alignas(64) montauk::model::Snapshot a_{};
@@ -25,6 +25,9 @@ private:
   std::atomic<montauk::model::Snapshot*> front_{&a_};
   montauk::model::Snapshot* back_{&b_};
 };
+
+static_assert(alignof(SnapshotBuffers) >= 64,
+              "SnapshotBuffers must be cache-line aligned for lock-free publishing");
 
 } // namespace montauk::app
 

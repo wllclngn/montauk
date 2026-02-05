@@ -41,13 +41,13 @@ struct UIState {
 extern UIState g_ui;
 
 // Configuration functions
-const UIConfig& ui_config();
+[[nodiscard]] const UIConfig& ui_config();
 void reset_ui_defaults();
 
 // Environment variable helpers
-const char* getenv_compat(const char* name);
-int getenv_int(const char* name, int defv);
-UIState::CPUScale getenv_cpu_scale(const char* name, UIState::CPUScale defv);
-bool parse_hex_rgb(const std::string& hex, int& r, int& g, int& b);
+[[nodiscard]] const char* getenv_compat(const char* name);
+[[nodiscard]] int getenv_int(const char* name, int defv);
+[[nodiscard]] UIState::CPUScale getenv_cpu_scale(const char* name, UIState::CPUScale defv);
+[[nodiscard]] bool parse_hex_rgb(const std::string& hex, int& r, int& g, int& b);
 
 } // namespace montauk::ui

@@ -7,9 +7,11 @@ namespace montauk::model {
 
 struct CpuTimes {
   uint64_t user{}, nice{}, system{}, idle{}, iowait{}, irq{}, softirq{}, steal{};
-  uint64_t total() const { return user + nice + system + idle + iowait + irq + softirq + steal; }
-  uint64_t work()  const { return user + nice + system + irq + softirq + steal; }
+  [[nodiscard]] uint64_t total() const { return user + nice + system + idle + iowait + irq + softirq + steal; }
+  [[nodiscard]] uint64_t work()  const { return user + nice + system + irq + softirq + steal; }
 };
+
+static_assert(sizeof(CpuTimes) >= 64, "CpuTimes must hold 8 uint64_t fields");
 
 struct CpuSnapshot {
   CpuTimes total_times{};

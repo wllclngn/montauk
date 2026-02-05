@@ -22,8 +22,8 @@ namespace montauk::ui {
 
 namespace montauk::ui {
 
-std::atomic<bool> g_stop{false};
-std::atomic<bool> g_alt_in_use{false};
+constinit std::atomic<bool> g_stop{false};
+constinit std::atomic<bool> g_alt_in_use{false};
 
 void best_effort_write(int fd, const char* buf, size_t len) {
   while (len > 0) {

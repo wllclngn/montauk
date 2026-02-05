@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 3.1.3 LANGUAGES CXX)
+project(montauk VERSION 3.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -53,7 +53,7 @@ add_library(montauk_core
     src/collectors/ThermalCollector.cpp
 )
 target_include_directories(montauk_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_compile_options(montauk_core PRIVATE -Wall -Wextra -Werror)
+target_compile_options(montauk_core PRIVATE -Wall -Wextra -Werror -Wshadow)
 
 # Always attempt NVML (NVIDIA) support by default; if not found, build continues without it.
 # Try common locations for NVML headers. On Arch/others, CUDA installs nvml.h under /opt/cuda/include.
@@ -77,7 +77,7 @@ endif()
 
 add_executable(montauk src/main.cpp)
 target_link_libraries(montauk PRIVATE montauk_core)
-target_compile_options(montauk PRIVATE -Wall -Wextra -Werror)
+target_compile_options(montauk PRIVATE -Wall -Wextra -Werror -Wshadow)
 set_target_properties(montauk PROPERTIES OUTPUT_NAME montauk)
 
 
@@ -87,7 +87,7 @@ install(TARGETS montauk RUNTIME DESTINATION bin)
 add_executable(montauk_analyze src/tools/analyze_proc.cpp)
 target_include_directories(montauk_analyze PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(montauk_analyze PRIVATE montauk_core)
-target_compile_options(montauk_analyze PRIVATE -Wall -Wextra -Werror)
+target_compile_options(montauk_analyze PRIVATE -Wall -Wextra -Werror -Wshadow)
 set_target_properties(montauk_analyze PROPERTIES OUTPUT_NAME montauk_analyze)
 
 if(MONTAUK_BUILD_TESTS)
@@ -112,7 +112,7 @@ if(MONTAUK_BUILD_TESTS)
   )
   target_include_directories(montauk_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(montauk_tests PRIVATE montauk_core)
-  target_compile_options(montauk_tests PRIVATE -Wall -Wextra -Werror)
+  target_compile_options(montauk_tests PRIVATE -Wall -Wextra -Werror -Wshadow)
   target_compile_definitions(montauk_tests PRIVATE MONTAUK_TESTING=1)
 
   add_custom_target(check COMMAND montauk_tests DEPENDS montauk_tests)

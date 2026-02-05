@@ -7,7 +7,7 @@
 namespace montauk::ui {
 
 // Process table rendering
-std::vector<std::string> render_process_table(
+[[nodiscard]] std::vector<std::string> render_process_table(
     const montauk::model::Snapshot& s, 
     int width, 
     int target_rows

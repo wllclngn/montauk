@@ -7,7 +7,7 @@ namespace montauk::collectors {
 class CpuCollector {
 public:
   CpuCollector() = default;
-  bool sample(montauk::model::CpuSnapshot& out);
+  [[nodiscard]] bool sample(montauk::model::CpuSnapshot& out);
 private:
   montauk::model::CpuTimes last_total_{};
   std::vector<montauk::model::CpuTimes> last_per_{};

@@ -22,7 +22,7 @@ public:
 
   // Populate per-PID GPU% and optional GPU memory (KB). running_pids is filled with
   // PIDs that have DRM fdinfo entries this cycle. Returns true if any data observed.
-  bool sample(std::unordered_map<int,int>& pid_to_gpu,
+  [[nodiscard]] bool sample(std::unordered_map<int,int>& pid_to_gpu,
               std::unordered_map<int, uint64_t>& pid_to_gpu_mem_kb,
               std::unordered_set<int>& running_pids);
 

@@ -7,7 +7,7 @@
 namespace montauk::ui {
 
 // Box drawing
-std::vector<std::string> make_box(
+[[nodiscard]] std::vector<std::string> make_box(
     const std::string& title, 
     const std::vector<std::string>& lines, 
     int width, 
@@ -15,7 +15,7 @@ std::vector<std::string> make_box(
 );
 
 // Line colorization
-std::string colorize_line(const std::string& s, uint64_t snapshot_seq = 0);
+[[nodiscard]] std::string colorize_line(const std::string& s, uint64_t snapshot_seq = 0);
 
 // Frame rendering
 void render_screen(const montauk::model::Snapshot& s, bool show_help_line, const std::string& help_text);

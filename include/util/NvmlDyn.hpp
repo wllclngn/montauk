@@ -17,13 +17,13 @@ public:
   // Attempt to load libnvidia-ml once (idempotent). Respects env:
   //   MONTAUK_DISABLE_NVML=1  -> do not load
   //   MONTAUK_NVML_PATH=/path/to/libnvidia-ml.so.1
-  bool load_once();
+  [[nodiscard]] bool load_once();
 
   // True if library is loaded and core symbols are present.
-  bool available() const;
+  [[nodiscard]] bool available() const;
 
   // Populate device-level GPU metrics via NVML. Returns true if any data found.
-  bool read_devices(montauk::model::GpuVram& out);
+  [[nodiscard]] bool read_devices(montauk::model::GpuVram& out);
 
 private:
   NvmlDyn() = default;
@@ -81,7 +81,7 @@ public:
     }
   }
   
-  bool ok() const { return success_; }
+  [[nodiscard]] bool ok() const { return success_; }
   
   NvmlGuard(const NvmlGuard&) = delete;
   NvmlGuard& operator=(const NvmlGuard&) = delete;

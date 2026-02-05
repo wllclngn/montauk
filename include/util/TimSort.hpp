@@ -15,6 +15,8 @@ enum class SortPattern : uint8_t {
   Random          // Full adaptive TimSort with run detection & galloping
 };
 
+static_assert(sizeof(SortPattern) == 1, "SortPattern must fit in a single byte");
+
 // TimSort with pattern detection and galloping mode.
 //
 // Performance characteristics:
@@ -35,7 +37,7 @@ void timsort(
 );
 
 // Optional: pattern detection for external use (testing, diagnostics)
-auto detect_sort_pattern(
+[[nodiscard]] auto detect_sort_pattern(
     std::vector<size_t>::iterator first,
     std::vector<size_t>::iterator last,
     std::function<bool(size_t, size_t)> comp

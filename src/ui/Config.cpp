@@ -7,7 +7,7 @@
 
 namespace montauk::ui {
 
-UIState g_ui{};
+constinit UIState g_ui{};
 
 bool parse_hex_rgb(const std::string& hex, int& r, int& g, int& b) {
   if (hex.size()!=7 || hex[0] != '#') return false;

@@ -5,7 +5,7 @@ namespace montauk::collectors {
 
 class ThermalCollector {
 public:
-  bool sample(montauk::model::Thermal& out);
+  [[nodiscard]] bool sample(montauk::model::Thermal& out);
 };
 
 } // namespace montauk::collectors
