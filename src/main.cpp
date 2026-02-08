@@ -2,6 +2,7 @@
 #include "app/Producer.hpp"
 #include "app/Security.hpp"
 #include "app/MetricsServer.hpp"
+#include "app/LogWriter.hpp"
 #include "util/Retro.hpp"
 #include "model/Snapshot.hpp"
 #include "ui/Terminal.hpp"
@@ -82,6 +83,8 @@ int main(int argc, char** argv) {
   int sleep_ms = 250;
   int self_test_secs = 0; // if >0, run self-test and print stats
   uint16_t metrics_port = 0; // >0 enables Prometheus metrics endpoint
+  std::filesystem::path log_dir; // non-empty enables LogWriter
+  int log_interval_ms = 1000;    // default 1s write interval
   bool headless = false;     // --headless: skip TUI, daemon mode
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -89,18 +92,22 @@ int main(int argc, char** argv) {
     else if (a == "--sleep-ms" && i + 1 < argc) sleep_ms = std::stoi(argv[++i]);
     else if (a == "--self-test-seconds" && i + 1 < argc) self_test_secs = std::stoi(argv[++i]);
     else if (a == "--metrics" && i + 1 < argc) metrics_port = static_cast<uint16_t>(std::stoi(argv[++i]));
+    else if (a == "--log" && i + 1 < argc) log_dir = argv[++i];
+    else if (a == "--log-interval-ms" && i + 1 < argc) log_interval_ms = std::stoi(argv[++i]);
     else if (a == "--headless") headless = true;
     else if (a == "-h" || a == "--help") {
       std::cout << "Usage: montauk [--self-test-seconds S] [--iterations N] [--sleep-ms MS]\n";
-      std::cout << "               [--metrics PORT] [--headless]\n";
+      std::cout << "               [--metrics PORT] [--log DIR] [--log-interval-ms MS] [--headless]\n";
       std::cout << "Notes: Text UI runs until Ctrl+C by default.\n";
-      std::cout << "       --metrics PORT  Enable Prometheus endpoint on PORT\n";
-      std::cout << "       --headless      Daemon mode (no TUI, requires --metrics)\n";
+      std::cout << "       --metrics PORT        Enable Prometheus endpoint on PORT\n";
+      std::cout << "       --log DIR             Write timestamped snapshots to DIR\n";
+      std::cout << "       --log-interval-ms MS  Write interval in ms (default: 1000)\n";
+      std::cout << "       --headless            Daemon mode (no TUI, requires --metrics or --log)\n";
       return 0;
     }
   }
-  if (headless && metrics_port == 0) {
-    std::cerr << "Error: --headless requires --metrics PORT\n";
+  if (headless && metrics_port == 0 && log_dir.empty()) {
+    std::cerr << "Error: --headless requires --metrics PORT or --log DIR\n";
     return 1;
   }
 
@@ -115,11 +122,19 @@ int main(int argc, char** argv) {
       metrics->start();
     }
 
-    // Headless mode: no TUI, just run Producer + MetricsServer until Ctrl+C
+    std::unique_ptr<montauk::app::LogWriter> log_writer;
+    if (!log_dir.empty()) {
+      log_writer = std::make_unique<montauk::app::LogWriter>(
+          buffers, log_dir, std::chrono::milliseconds(log_interval_ms));
+      log_writer->start();
+    }
+
+    // Headless mode: no TUI, just run Producer + outputs until Ctrl+C
     if (headless) {
       while (!g_stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
       }
+      if (log_writer) log_writer->stop();
       if (metrics) metrics->stop();
       producer.stop();
       return 0;
@@ -309,6 +324,7 @@ int main(int argc, char** argv) {
     std::string dyn_help = alert + "SORT:" + sort_name + " • FOCUS:" + (g_ui.system_focus? "SYSTEM":"DEFAULT") + " • FPS:" + std::to_string(fps) + "  " + help_text;
     montauk::ui::render_screen(s, show_help, dyn_help);
   }
+  if (log_writer) log_writer->stop();
   if (metrics) metrics->stop();
   producer.stop();
   return 0;

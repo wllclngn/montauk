@@ -1,5 +1,3 @@
-#ifdef MONTAUK_HAVE_URING
-
 #include "app/MetricsServer.hpp"
 #include <charconv>
 #include <cstdio>
@@ -370,5 +368,3 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
 }
 
 } // namespace montauk::app
-
-#endif // MONTAUK_HAVE_URING

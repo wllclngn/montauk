@@ -163,7 +163,7 @@ void MetricsServer::handle_client(int fd) {
 
   if (request_line.contains("GET /metrics")) {
     // Serve Prometheus metrics
-    MetricsSnapshot ms = read_metrics_snapshot();
+    MetricsSnapshot ms = read_metrics_snapshot(buffers_);
     body = snapshot_to_prometheus(ms);
 
     headers = "HTTP/1.1 200 OK\r\n"
@@ -201,32 +201,6 @@ void MetricsServer::handle_client(int fd) {
   msg.msg_iov = iov;
   msg.msg_iovlen = 2;
   (void)::sendmsg(fd, &msg, MSG_NOSIGNAL);
-}
-
-MetricsSnapshot MetricsServer::read_metrics_snapshot() {
-  MetricsSnapshot ms{};
-  uint64_t seq_before, seq_after;
-  do {
-    seq_before = buffers_.seq();
-    const auto& s = buffers_.front();
-    ms.cpu = s.cpu;
-    ms.mem = s.mem;
-    ms.vram = s.vram;
-    ms.net = s.net;
-    ms.disk = s.disk;
-    ms.fs = s.fs;
-    ms.thermal = s.thermal;
-    ms.total_processes = s.procs.total_processes;
-    ms.running_processes = s.procs.running_processes;
-    ms.state_sleeping = s.procs.state_sleeping;
-    ms.state_zombie = s.procs.state_zombie;
-    ms.total_threads = s.procs.total_threads;
-    int n = std::min(static_cast<int>(s.procs.processes.size()), MetricsSnapshot::MAX_TOP_PROCS);
-    std::copy_n(s.procs.processes.begin(), n, ms.top_procs.begin());
-    ms.top_procs_count = n;
-    seq_after = buffers_.seq();
-  } while (seq_before != seq_after);
-  return ms;
 }
 
 } // namespace montauk::app

@@ -1,5 +1,3 @@
-#ifdef MONTAUK_HAVE_URING
-
 #include "minitest.hpp"
 #include "app/MetricsServer.hpp"
 #include <string>
@@ -64,5 +62,3 @@ TEST(prometheus_serializer_empty) {
   ASSERT_TRUE(out.find("montauk_cpu_usage_percent") != std::string::npos);
   ASSERT_TRUE(out.find("montauk_processes_total") != std::string::npos);
 }
-
-#endif // MONTAUK_HAVE_URING

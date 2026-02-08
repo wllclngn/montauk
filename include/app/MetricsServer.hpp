@@ -1,14 +1,10 @@
 #pragma once
 
 #include <cstdint>
-#include "app/SnapshotBuffers.hpp"
-
-#ifdef MONTAUK_HAVE_URING
-
-#include <thread>
-#include <stop_token>
 #include <array>
 #include <string>
+#include <algorithm>
+#include "app/SnapshotBuffers.hpp"
 #include "model/Snapshot.hpp"
 
 namespace montauk::app {
@@ -33,6 +29,42 @@ struct MetricsSnapshot {
 // Serialize a MetricsSnapshot into Prometheus text exposition format (version 0.0.4).
 [[nodiscard]] std::string snapshot_to_prometheus(const MetricsSnapshot& snap);
 
+// Read a bounded MetricsSnapshot from SnapshotBuffers via seqlock.
+[[nodiscard]] inline MetricsSnapshot read_metrics_snapshot(const SnapshotBuffers& buffers) {
+  MetricsSnapshot ms{};
+  uint64_t seq_before, seq_after;
+  do {
+    seq_before = buffers.seq();
+    const auto& s = buffers.front();
+    ms.cpu = s.cpu;
+    ms.mem = s.mem;
+    ms.vram = s.vram;
+    ms.net = s.net;
+    ms.disk = s.disk;
+    ms.fs = s.fs;
+    ms.thermal = s.thermal;
+    ms.total_processes = s.procs.total_processes;
+    ms.running_processes = s.procs.running_processes;
+    ms.state_sleeping = s.procs.state_sleeping;
+    ms.state_zombie = s.procs.state_zombie;
+    ms.total_threads = s.procs.total_threads;
+    int n = std::min(static_cast<int>(s.procs.processes.size()), MetricsSnapshot::MAX_TOP_PROCS);
+    std::copy_n(s.procs.processes.begin(), n, ms.top_procs.begin());
+    ms.top_procs_count = n;
+    seq_after = buffers.seq();
+  } while (seq_before != seq_after);
+  return ms;
+}
+
+} // namespace montauk::app
+
+#ifdef MONTAUK_HAVE_URING
+
+#include <thread>
+#include <stop_token>
+
+namespace montauk::app {
+
 class MetricsServer {
 public:
   MetricsServer(const SnapshotBuffers& buffers, uint16_t port);
@@ -46,7 +78,6 @@ public:
 private:
   void run(std::stop_token st);
   void handle_client(int client_fd);
-  [[nodiscard]] MetricsSnapshot read_metrics_snapshot();
 
   const SnapshotBuffers& buffers_;
   uint16_t port_;

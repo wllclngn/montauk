@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 4.0.0 LANGUAGES CXX)
+project(montauk VERSION 4.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,6 +43,7 @@ add_library(montauk_core
     src/app/Filter.cpp
     src/app/MetricsServer.cpp
     src/app/PrometheusSerializer.cpp
+    src/app/LogWriter.cpp
     src/collectors/MemoryCollector.cpp
     src/collectors/GpuCollector.cpp
     src/collectors/FdinfoProcessCollector.cpp
@@ -122,6 +123,7 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_netlink_smoke.cpp
     tests/test_timsort.cpp
     tests/test_prometheus.cpp
+    tests/test_logwriter.cpp
   )
   target_include_directories(montauk_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(montauk_tests PRIVATE montauk_core)
