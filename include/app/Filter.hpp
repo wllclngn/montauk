@@ -1,5 +1,6 @@
 #pragma once
 #include "model/Snapshot.hpp"
+#include "util/BoyerMoore.hpp"
 #include <regex>
 #include <optional>
 
@@ -21,6 +22,7 @@ public:
 private:
   ProcessFilterSpec spec_;
   std::optional<std::regex> compiled_;
+  std::optional<montauk::util::BoyerMooreSearch> bmh_;
 };
 
 } // namespace montauk::app

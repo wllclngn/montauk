@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 4.1.0 LANGUAGES CXX)
+project(montauk VERSION 4.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,6 +28,7 @@ add_library(montauk_core
     src/util/Churn.cpp
     src/util/Retro.cpp
     src/util/TimSort.cpp
+    src/util/BoyerMoore.cpp
     src/util/NvmlDyn.cpp
     src/ui/Terminal.cpp
     src/ui/Config.cpp

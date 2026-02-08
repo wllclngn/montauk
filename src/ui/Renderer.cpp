@@ -74,7 +74,7 @@ static std::string colorize_line_impl(const std::string& s) {
   auto is_border = [&](const std::string& str){
     if (str.empty()) return false;
     if (str.find("│") != std::string::npos) return false;
-    if (str.rfind("┌",0)==0 || str.rfind("┐",0)==0 || str.rfind("└",0)==0 || str.rfind("┘",0)==0 || str.rfind("─",0)==0)
+    if (str.rfind("┌",0)==0 || str.rfind("┐",0)==0 || str.rfind("└",0)==0 || str.rfind("┘",0)==0 || str.rfind("├",0)==0 || str.rfind("─",0)==0)
       return true;
     return false;
   };

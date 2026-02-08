@@ -130,7 +130,8 @@ std::vector<std::string> render_process_table(
   // This must match the box height calculation later
   int used_fixed = 0;  // Process table is rendered first, so nothing used yet
   int remaining_for_proc = std::max(5, target_rows - used_fixed);
-  int proc_inner_min = std::max(14, remaining_for_proc - 2);  // minus borders
+  int search_rows = g_ui.search_mode ? 2 : 0; // search bar adds 2 rows below box
+  int proc_inner_min = std::max(14, remaining_for_proc - 2 - search_rows);  // minus borders and search
   int desired_rows = std::max(1, proc_inner_min - 1);  // minus header row
   g_ui.last_proc_page_rows = desired_rows;
   g_ui.last_proc_total = (int)order.size();
@@ -259,16 +260,11 @@ std::vector<std::string> render_process_table(
     proc_lines.push_back(os.str());
     proc_sev.push_back(severity);
   }
-  // Search input line: replace last row with search prompt when active
-  if (g_ui.search_mode && !proc_lines.empty()) {
-    std::string prompt = "/" + g_ui.filter_query + "\xE2\x96\x88"; // █ cursor
-    proc_lines.back() = prompt;
-    proc_sev.back() = -1; // sentinel for accent colorization
-  }
   // Box - use the same proc_inner_min calculated above
   std::string title = "PROCESS MONITOR";
   if (!g_ui.filter_query.empty()) {
-    title = "PROCESS MONITOR [" + std::to_string(order.size()) + " matches]";
+    std::string suffix = (order.size() == 1) ? " RESULT" : " RESULTS";
+    title = "PROCESS MONITOR: " + std::to_string(order.size()) + suffix;
   }
   auto proc_box = make_box(title, proc_lines, width, proc_inner_min);
   // Colorize rows based on severity
@@ -278,20 +274,6 @@ std::vector<std::string> render_process_table(
     for (int li = 1; li < (int)proc_box.size() - 1; ++li) {
       if (li - 1 >= (int)proc_sev.size()) break;
       int sev = proc_sev[li-1];
-      if (sev == -1) {
-        // Search input line: accent color
-        auto& line = proc_box[li];
-        size_t fpos = line.find(V);
-        size_t lpos = line.rfind(V);
-        if (fpos != std::string::npos && lpos != std::string::npos && lpos > fpos) {
-          size_t start = fpos + V.size();
-          std::string pre = line.substr(0, start);
-          std::string mid = line.substr(start, lpos - start);
-          std::string suf = line.substr(lpos);
-          line = pre + uic.accent + mid + sgr_reset() + suf;
-        }
-        continue;
-      }
       if (sev <= 0) continue; // skip header and non-severe rows
       auto& line = proc_box[li];
       size_t fpos = line.find(V);
@@ -304,6 +286,26 @@ std::vector<std::string> render_process_table(
       const std::string& col = (sev==2) ? uic.warning : uic.caution;
       line = pre + col + mid + sgr_reset() + suf;
     }
+  }
+  // Search bar: append below process box when search mode is active
+  if (g_ui.search_mode) {
+    auto hrule = [](int n) { std::string r; for (int i = 0; i < n; i++) r += "─"; return r; };
+    const auto& uic = ui_config();
+    // Replace bottom border with ├───┤ divider
+    if (!proc_box.empty()) {
+      proc_box.back() = "├" + hrule(iw) + "┤";
+    }
+    // Search input row: │ SEARCH/FILTER: query█                │
+    // Build visible text, pad to iw with trunc_pad (handles UTF-8 display width),
+    // then wrap with ANSI color codes
+    std::string label = " SEARCH/FILTER: ";
+    std::string input = g_ui.filter_query + "\xE2\x96\x88";
+    int input_pad = std::max(0, iw - (int)label.size() - (int)g_ui.filter_query.size() - 1);
+    proc_box.push_back("│" + uic.accent + label + sgr_reset() + input + std::string(input_pad, ' ') + "│");
+    // Bottom border with hint right-aligned: └───...── Press ESC to exit. ─┘
+    std::string hint = " Press ESC to exit. ";
+    int fill = std::max(0, iw - (int)hint.size() - 1); // -1 for trailing ─
+    proc_box.push_back("└" + hrule(fill) + hint + "─" + "┘");
   }
   all.insert(all.end(), proc_box.begin(), proc_box.end());
   return all;
