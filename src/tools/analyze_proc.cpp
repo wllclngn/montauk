@@ -3,6 +3,7 @@
 // (renderer, gpu-process, utility) and highlights hot threads.
 
 #include "util/Procfs.hpp"
+#include "util/AsciiLower.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -70,7 +71,7 @@ static std::string read_cmdline(int32_t pid) {
   return out;
 }
 
-static std::string to_lower(std::string s){ for (auto& c : s) c = (char)std::tolower((unsigned char)c); return s; }
+static std::string to_lower(std::string s){ for (auto& c : s) c = (char)montauk::util::ascii_lower((unsigned char)c); return s; }
 
 struct ThreadKey { int32_t pid; int32_t tid; };
 struct ThreadStats { uint64_t last=0, delta=0; std::string name; };

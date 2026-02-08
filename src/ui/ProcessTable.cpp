@@ -221,7 +221,8 @@ std::vector<std::string> render_process_table(
     
     // Format GPU% with right-alignment
     {
-      double display_gpu = (g_ui.gpu_scale==UIState::GPUScale::Capacity) ? p->gpu_util_pct : p->gpu_util_pct;
+      int ngpu = std::max(1, s.nvml.devices);
+      double display_gpu = (g_ui.gpu_scale==UIState::GPUScale::Capacity) ? p->gpu_util_pct / (double)ngpu : p->gpu_util_pct;
       std::string digits;
       if (display_gpu > 0.0 && display_gpu < 1.0) {
         double rounded = std::round(display_gpu * 10.0) / 10.0;

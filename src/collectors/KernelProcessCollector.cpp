@@ -239,7 +239,6 @@ bool KernelProcessCollector::recv_snapshot(montauk::model::ProcessSnapshot& out)
                     ps.pid = *(uint32_t*)data;
                     break;
                 case MONTAUK_ATTR_PPID:
-                    ps.ppid = *(uint32_t*)data;
                     break;
                 case MONTAUK_ATTR_COMM:
                     ps.cmd = std::string(data);

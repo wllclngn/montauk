@@ -2,6 +2,7 @@
 #include "ui/Terminal.hpp"
 #include <algorithm>
 #include <cctype>
+#include "util/AsciiLower.hpp"
 #include <cstdlib>
 #include <string>
 
@@ -51,7 +52,7 @@ UIState::CPUScale getenv_cpu_scale(const char* name, UIState::CPUScale defv){
   const char* v = getenv_compat(name);
   if (!v || !*v) return defv;
   std::string s = v; 
-  for (auto& c : s) c = std::tolower((unsigned char)c);
+  for (auto& c : s) c = montauk::util::ascii_lower((unsigned char)c);
   if (s=="core"||s=="percore"||s=="irix") return UIState::CPUScale::Core;
   if (s=="total"||s=="machine"||s=="share") return UIState::CPUScale::Total;
   return defv;

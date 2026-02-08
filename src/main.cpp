@@ -37,9 +37,7 @@
 #include <fstream>
 #include <filesystem>
 #include <iterator>
-#ifdef __linux__
 #include <langinfo.h>
-#endif
 #include "util/Procfs.hpp"
 
 using namespace std::chrono_literals;
@@ -159,14 +157,9 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  // Wait briefly for the initial warm snapshot publish to reduce startup flicker
-  {
-    uint64_t s0 = buffers.seq();
-    auto t0 = std::chrono::steady_clock::now();
-    auto deadline = t0 + std::chrono::milliseconds(250);
-    while (buffers.seq() == s0 && std::chrono::steady_clock::now() < deadline) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
+  // Wait for Producer's warm-up to complete (~200ms) so first frame has real deltas
+  while (buffers.seq() == 0 && !g_stop.load()) {
+    std::this_thread::sleep_for(std::chrono::microseconds(500));
   }
 
   // Text mode (default, continuous until Ctrl+C) with keyboard interactivity
@@ -193,7 +186,7 @@ int main(int argc, char** argv) {
     if (use_alt && !did_first_clear) { best_effort_write(STDOUT_FILENO, "\x1B[2J\x1B[H", 7); did_first_clear = true; }
     // Non-blocking input with poll
     struct pollfd pfd{.fd=STDIN_FILENO,.events=POLLIN,.revents=0};
-    int to = sleep_ms; if (to < 10) to = 10; if (to > 1000) to = 1000;
+    int to = (i == 0) ? 0 : sleep_ms; if (to < 10 && i > 0) to = 10; if (to > 1000) to = 1000;
     int rv = ::poll(&pfd, 1, to);
     if (rv > 0 && (pfd.revents & POLLIN)) {
       unsigned char buf[8]; ssize_t n = ::read(STDIN_FILENO, buf, sizeof(buf));

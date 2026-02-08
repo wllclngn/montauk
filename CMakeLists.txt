@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 4.2.0 LANGUAGES CXX)
+project(montauk VERSION 4.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -42,7 +42,6 @@ add_library(montauk_core
     src/app/Security.cpp
     src/app/Alerts.cpp
     src/app/Filter.cpp
-    src/app/MetricsServer.cpp
     src/app/PrometheusSerializer.cpp
     src/app/LogWriter.cpp
     src/collectors/MemoryCollector.cpp
@@ -57,6 +56,7 @@ add_library(montauk_core
     src/collectors/ThermalCollector.cpp
 )
 target_include_directories(montauk_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(montauk_core PUBLIC _GNU_SOURCE)
 target_compile_options(montauk_core PRIVATE -Wall -Wextra -Werror -Wshadow)
 
 # Always attempt NVML (NVIDIA) support by default; if not found, build continues without it.
@@ -75,10 +75,12 @@ endif()
 # io_uring support (Prometheus metrics endpoint)
 find_library(URING_LIBRARY uring)
 if(URING_LIBRARY)
+  target_sources(montauk_core PRIVATE src/app/MetricsServer.cpp)
   target_link_libraries(montauk_core PUBLIC ${URING_LIBRARY})
   target_compile_definitions(montauk_core PUBLIC MONTAUK_HAVE_URING=1)
   message(STATUS "liburing detected: enabling Prometheus metrics endpoint")
 else()
+  target_sources(montauk_core PRIVATE src/app/MetricsServerStub.cpp)
   message(STATUS "liburing not found: building without metrics endpoint")
 endif()
 
@@ -125,6 +127,8 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_timsort.cpp
     tests/test_prometheus.cpp
     tests/test_logwriter.cpp
+    tests/test_security.cpp
+    tests/test_gpu_smi_device.cpp
   )
   target_include_directories(montauk_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(montauk_tests PRIVATE montauk_core)

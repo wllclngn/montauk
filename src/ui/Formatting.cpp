@@ -11,9 +11,7 @@
 #include <mutex>
 #include <sstream>
 #include <unordered_map>
-#ifdef __linux__
 #include <langinfo.h>
-#endif
 
 namespace montauk::ui {
 
@@ -136,13 +134,12 @@ std::string lr_align(int iw, const std::string& left, const std::string& right){
 }
 
 bool prefer_12h_clock_from_locale() {
-#ifdef __linux__
   static std::once_flag init_flag;
   static bool result = false;
-  
+
   std::call_once(init_flag, []{
     std::setlocale(LC_TIME, "");
-    
+
 #ifdef T_FMT
     const char* tfmt = nl_langinfo(T_FMT);
     if (tfmt && *tfmt) {
@@ -153,21 +150,14 @@ bool prefer_12h_clock_from_locale() {
     }
 #endif
   });
-  
+
   return result;
-#else
-  return false;
-#endif
 }
 
 std::string format_time_now(bool prefer12h) {
   std::time_t t = std::time(nullptr);
   std::tm lt{};
-#ifdef _GNU_SOURCE
   localtime_r(&t, &lt);
-#else
-  lt = *std::localtime(&t);
-#endif
   char buf[64];
   const char* fmt = prefer12h ? "%I:%M:%S %p %Z" : "%H:%M:%S %Z";
   if (std::strftime(buf, sizeof(buf), fmt, &lt) == 0) return std::string();
@@ -180,11 +170,7 @@ std::string format_time_now(bool prefer12h) {
 std::string format_date_now_locale() {
   std::time_t t = std::time(nullptr);
   std::tm lt{};
-#ifdef _GNU_SOURCE
   localtime_r(&t, &lt);
-#else
-  lt = *std::localtime(&t);
-#endif
   char buf[64];
   const char* fmt = "%x";
   if (std::strftime(buf, sizeof(buf), fmt, &lt) == 0) return std::string();

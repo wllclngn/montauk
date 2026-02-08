@@ -1,5 +1,3 @@
-#ifdef MONTAUK_HAVE_URING
-
 #include "app/MetricsServer.hpp"
 #include <liburing.h>
 #include <sys/socket.h>
@@ -204,5 +202,3 @@ void MetricsServer::handle_client(int fd) {
 }
 
 } // namespace montauk::app
-
-#endif // MONTAUK_HAVE_URING

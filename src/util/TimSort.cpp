@@ -3,10 +3,6 @@
 #include <cmath>
 #include <cstdint>
 
-#ifdef MONTAUK_SORT_STATS
-#include <chrono>
-#endif
-
 namespace montauk::util {
 
 namespace detail {
@@ -720,31 +716,14 @@ void timsort(
 ) {
   const size_t n = std::distance(first, last);
 
-#ifdef MONTAUK_SORT_STATS
-  auto start = std::chrono::high_resolution_clock::now();
-  SortPattern pattern_used = SortPattern::Random;
-#endif
-
   // Tiny arrays: use insertion sort directly
   if (n < detail::MIN_MERGE) {
     detail::binary_insertion_sort(first, last, comp);
-
-#ifdef MONTAUK_SORT_STATS
-    auto end = std::chrono::high_resolution_clock::now();
-    static SortStats stats;
-    stats.pattern = pattern_used;
-    stats.n = n;
-    stats.time_us = std::chrono::duration<double, std::micro>(end - start).count();
-#endif
     return;
   }
 
   // Pattern detection
   const SortPattern pattern = detect_sort_pattern(first, last, comp);
-
-#ifdef MONTAUK_SORT_STATS
-  pattern_used = pattern;
-#endif
 
   switch (pattern) {
     case SortPattern::AlreadySorted:
@@ -766,21 +745,6 @@ void timsort(
       detail::timsort_impl(first, last, comp);
       break;
   }
-
-#ifdef MONTAUK_SORT_STATS
-  auto end = std::chrono::high_resolution_clock::now();
-  static SortStats stats;
-  stats.pattern = pattern_used;
-  stats.n = n;
-  stats.time_us = std::chrono::duration<double, std::micro>(end - start).count();
-#endif
 }
-
-#ifdef MONTAUK_SORT_STATS
-auto get_last_sort_stats() -> const SortStats& {
-  static SortStats stats{SortPattern::Random, 0, 0.0};
-  return stats;
-}
-#endif
 
 } // namespace montauk::util

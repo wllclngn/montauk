@@ -4,6 +4,7 @@
 #include <array>
 #include <string>
 #include <algorithm>
+#include <thread>
 #include "app/SnapshotBuffers.hpp"
 #include "model/Snapshot.hpp"
 
@@ -56,15 +57,6 @@ struct MetricsSnapshot {
   return ms;
 }
 
-} // namespace montauk::app
-
-#ifdef MONTAUK_HAVE_URING
-
-#include <thread>
-#include <stop_token>
-
-namespace montauk::app {
-
 class MetricsServer {
 public:
   MetricsServer(const SnapshotBuffers& buffers, uint16_t port);
@@ -87,21 +79,3 @@ private:
 };
 
 } // namespace montauk::app
-
-#else // !MONTAUK_HAVE_URING -- stub: always-valid no-op interface
-
-namespace montauk::app {
-
-class MetricsServer {
-public:
-  MetricsServer(const SnapshotBuffers&, uint16_t) {}
-  ~MetricsServer() = default;
-  MetricsServer(const MetricsServer&) = delete;
-  MetricsServer& operator=(const MetricsServer&) = delete;
-  void start() {}
-  void stop() {}
-};
-
-} // namespace montauk::app
-
-#endif // MONTAUK_HAVE_URING

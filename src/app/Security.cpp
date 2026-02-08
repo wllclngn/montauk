@@ -1,7 +1,7 @@
 #include "app/Security.hpp"
 
+#include "util/AsciiLower.hpp"
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <sstream>
 #include <unordered_set>
@@ -12,7 +12,7 @@ static std::string to_lower_copy(std::string s, size_t max_len = 512) {
   if (s.size() > max_len) {
     s.resize(max_len);
   }
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return static_cast<char>(montauk::util::ascii_lower(c)); });
   return s;
 }
 

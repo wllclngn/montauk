@@ -10,12 +10,10 @@
 #include <sstream>
 #include <unistd.h>
 
-#ifdef __linux__
 #include <sys/socket.h>
 #include <linux/netlink.h>
 #include <linux/connector.h>
 #include <linux/cn_proc.h>
-#endif
 
 namespace montauk::collectors {
 
@@ -34,7 +32,6 @@ NetlinkProcessCollector::NetlinkProcessCollector(size_t max_procs, size_t enrich
 NetlinkProcessCollector::~NetlinkProcessCollector() { shutdown(); }
 
 bool NetlinkProcessCollector::init() {
-#ifdef __linux__
   // Create netlink socket
   nl_sock_ = ::socket(PF_NETLINK, SOCK_DGRAM, NETLINK_CONNECTOR);
   if (nl_sock_ == -1) {
@@ -68,13 +65,9 @@ bool NetlinkProcessCollector::init() {
   running_ = true;
   event_thread_ = std::thread([this]{ this->event_loop(); });
   return true;
-#else
-  return false;
-#endif
 }
 
 void NetlinkProcessCollector::shutdown() {
-#ifdef __linux__
   if (running_) {
     running_ = false;
     
@@ -92,7 +85,6 @@ void NetlinkProcessCollector::shutdown() {
     // Now thread should wake up and exit
     if (event_thread_.joinable()) event_thread_.join();
   }
-#endif
 }
 
 bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
@@ -114,13 +106,7 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   if (ncpu_ == 0) ncpu_ = read_cpu_count();
 
   out.processes.clear(); out.total_processes = 0; out.running_processes = 0; out.state_running=0; out.state_sleeping=0; out.state_zombie=0;
-  out.total_threads=0; out.threads_max=0;
-  
-  // Read system thread limit
-  auto threads_max_opt = montauk::util::read_file_string("/proc/sys/kernel/threads-max");
-  if (threads_max_opt) {
-    try { out.threads_max = std::stoull(*threads_max_opt); } catch(...) {}
-  }
+  out.total_threads=0;
 
   std::unordered_map<int32_t, uint64_t> last_snapshot;
   uint64_t last_cpu_total_snapshot = 0;
@@ -210,7 +196,7 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
       if (dt > 0) cpu_pct = (100.0 * static_cast<double>(dp) / static_cast<double>(dt)) * static_cast<double>(ncpu_);
     }
 
-    montauk::model::ProcSample ps; ps.pid = pid; ps.ppid = ppid;
+    montauk::model::ProcSample ps; ps.pid = pid;
     ps.utime = ut; ps.stime = st; ps.total_time = total_proc;
     ps.rss_kb = (rssp > 0 ? static_cast<uint64_t>(rssp) * (getpagesize()/1024) : 0);
     ps.cpu_pct = cpu_pct; ps.cmd = comm;
@@ -281,8 +267,6 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   }
   return true;
 }
-
-#ifdef __linux__
 
 void NetlinkProcessCollector::event_loop() {
   char buf[4096] __attribute__((aligned(NLMSG_ALIGNTO)));
@@ -376,8 +360,6 @@ void NetlinkProcessCollector::send_control_message(int op) {
 
   (void)::send(nl_sock_, &msg, sizeof(msg), 0);
 }
-
-#endif // __linux__
 
 // ===== Helpers replicated from traditional collector (kept local to avoid refactoring now) =====
 

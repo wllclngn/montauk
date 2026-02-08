@@ -11,7 +11,6 @@
 #include <thread>
 
 static bool has_cap_net_admin() {
-#ifdef __linux__
   // Root is sufficient for tests
   if (::geteuid() == 0) return true;
   std::ifstream f("/proc/self/status");
@@ -27,9 +26,6 @@ static bool has_cap_net_admin() {
     }
   }
   return false;
-#else
-  return false;
-#endif
 }
 
 TEST(netlink_init_and_shutdown_smoke) {

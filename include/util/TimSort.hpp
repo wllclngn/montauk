@@ -43,16 +43,4 @@ void timsort(
     std::function<bool(size_t, size_t)> comp
 ) -> SortPattern;
 
-#ifdef MONTAUK_SORT_STATS
-// Performance statistics for sort operations (enabled with -DMONTAUK_SORT_STATS)
-struct SortStats {
-  SortPattern pattern;
-  size_t n;
-  double time_us;
-};
-
-// Retrieve statistics from the most recent sort operation
-auto get_last_sort_stats() -> const SortStats&;
-#endif
-
 } // namespace montauk::util

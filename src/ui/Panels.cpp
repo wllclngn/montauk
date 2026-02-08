@@ -6,6 +6,7 @@
 #include "util/Retro.hpp"
 #include "app/Security.hpp"
 #include "util/Churn.hpp"
+#include "util/AsciiLower.hpp"
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -127,7 +128,7 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
       
       bool prefer12 = [](){
         const char* v = getenv_compat("MONTAUK_TIME_FORMAT");
-        if (v && *v) { std::string fmt=v; for (auto& c: fmt) c=std::tolower((unsigned char)c); if (fmt.find("12")!=std::string::npos) return true; if (fmt.find("24")!=std::string::npos) return false; }
+        if (v && *v) { std::string fmt=v; for (auto& c: fmt) c=montauk::util::ascii_lower((unsigned char)c); if (fmt.find("12")!=std::string::npos) return true; if (fmt.find("24")!=std::string::npos) return false; }
         return prefer_12h_clock_from_locale();
       }();
       std::string dates = format_date_now_locale();
@@ -426,7 +427,7 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
           churned.push_back(&p);
           std::string cmd_lower = p.cmd;
           std::transform(cmd_lower.begin(), cmd_lower.end(), cmd_lower.begin(),
-                         [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                         [](unsigned char c){ return static_cast<char>(montauk::util::ascii_lower(c)); });
           if (cmd_lower.find("ssh") != std::string::npos || cmd_lower.find("sudo") != std::string::npos ||
               cmd_lower.find("login") != std::string::npos || cmd_lower.find("pam") != std::string::npos) {
             ++auth_churn;
@@ -469,7 +470,7 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
           // Determine per-process severity
           std::string cmd_lower = p.cmd;
           std::transform(cmd_lower.begin(), cmd_lower.end(), cmd_lower.begin(),
-                         [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                         [](unsigned char c){ return static_cast<char>(montauk::util::ascii_lower(c)); });
           bool is_auth = cmd_lower.find("ssh") != std::string::npos || cmd_lower.find("sudo") != std::string::npos ||
                          cmd_lower.find("login") != std::string::npos || cmd_lower.find("pam") != std::string::npos;
           int proc_sev = is_auth ? 2 : 1;

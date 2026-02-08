@@ -33,7 +33,6 @@ Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
     return std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::ProcessCollector(100, (size_t)max_procs, (size_t)enrich_top));
   };
 
-#ifdef __linux__
   if (force && std::strcmp(force, "traditional") == 0) {
     proc_ = make_traditional();
 #ifdef MONTAUK_HAVE_KERNEL
@@ -76,10 +75,6 @@ Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
       }
     }
   }
-#else
-  (void)force;
-  proc_ = make_traditional();
-#endif
 }
 
 void Producer::start() {

@@ -18,7 +18,8 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **Sophisticated Attribution**: Multiple fallback mechanisms for GPU metrics when vendor APIs are unavailable
 - **Prometheus Metrics Endpoint**: Optional HTTP `/metrics` endpoint serving Prometheus exposition format over io_uring, enabling integration with Prometheus, Grafana, and Kubernetes monitoring stacks
 - **Headless Daemon Mode**: Run without TUI as a pure metrics exporter (`--headless --metrics PORT`)
-- **Live Process Search**: Case-insensitive substring filtering with `/` or `Ctrl+F`
+- **Structured Logging**: Timestamped Prometheus exposition snapshots to disk (`--log DIR`)
+- **Live Process Search**: Boyer-Moore-Horspool substring search with branchless ASCII lowercasing via `/` or `Ctrl+F`
 - **Thermal Monitoring**: Multi-sensor temperature tracking (edge, hotspot, memory) with vendor-specific thresholds
 - **Process Tracking**: Up to 256 processes with full command-line enrichment for accurate identification
 - **Atomic Snapshots**: Minimal CPU overhead with lock-free snapshot publication
@@ -151,10 +152,14 @@ See `montauk-kernel/README.md` for full documentation including architecture, pr
 montauk supports three operating modes via composable CLI flags:
 
 ```bash
-montauk                                # TUI only (default, unchanged)
+montauk                                # TUI only (default)
 montauk --metrics 9101                 # TUI + Prometheus endpoint on :9101
+montauk --log /var/log/montauk         # TUI + Prometheus-format log files
+montauk --log /var/log/montauk --log-interval-ms 5000  # Custom write interval (default: 1000ms)
 montauk --headless --metrics 9101      # Daemon mode: Prometheus only, no TUI
-montauk --headless                     # Error: "nothing to do"
+montauk --headless --log /var/log/montauk              # Daemon mode: logging only
+montauk --headless --metrics 9101 --log /var/log/montauk  # Daemon mode: both
+montauk --headless                     # Error: requires --metrics or --log
 ```
 
 **Prometheus Metrics Endpoint:**
@@ -172,6 +177,12 @@ Exported metric families (~55 gauges, all prefixed `montauk_`):
 - GPU: per-device VRAM, temperatures, fan speed; aggregate VRAM, utilization, encoder/decoder, power
 
 Requires liburing at build time. Without liburing, montauk compiles normally with the metrics endpoint disabled.
+
+**Log Writer:**
+
+When `--log DIR` is specified, montauk writes timestamped Prometheus exposition snapshots to disk. Files rotate hourly with the naming convention `montauk_YYYY-MM-DD_HH.prom`. Each block is prefixed with a `# montauk_scrape_timestamp_ms` comment for replay and analysis. The LogWriter reads from the same SnapshotBuffers as the TUI and metrics endpoint.
+
+No additional dependencies required. Works independently of or alongside `--metrics`.
 
 ## UI Controls
 
@@ -408,7 +419,6 @@ MONTAUK_TOPPROC_ALERT_FRAMES=5  # Frames before top-proc alert (default: 5)
 ### Process Display
 ```bash
 MONTAUK_PROC_CPU_SCALE=total   # Default CPU scale: total|core
-MONTAUK_COPY_FRONT=1           # Snapshot copy for concurrency safety (default: 1)
 ```
 
 ### Thermal Thresholds
@@ -434,8 +444,6 @@ MONTAUK_GPU_TEMP_HOT_CAUTION_C=85
 MONTAUK_GPU_TEMP_MEM_WARNING_C=95
 MONTAUK_GPU_TEMP_MEM_CAUTION_C=85
 
-# Display thresholds inline
-MONTAUK_SHOW_TEMP_WARN=1          # Show warning temps on thermal lines
 ```
 
 ### Testing/Development
@@ -490,6 +498,27 @@ Monitor with montauk while running stress tests (press 's' for SYSTEM focus to s
 
 **Note:** Tests are disabled by default in packaging builds.
 
+## Process Analyzer
+
+montauk includes a standalone on-box process analyzer (`montauk_analyze`) for targeted CPU attribution. It matches processes by command-line substring, tracks per-thread CPU usage over a sampling window, and reports hot threads with Chromium process type classification.
+
+```bash
+montauk_analyze <pattern> [seconds] [interval_ms]
+
+# Examples:
+montauk_analyze helium 10 100    # Analyze "helium" processes for 10s at 100ms intervals
+montauk_analyze firefox 30       # Analyze Firefox for 30s (default 100ms interval)
+montauk_analyze chrome 5 50      # Quick 5s analysis at 50ms resolution
+```
+
+Output includes:
+- Total CPU% across matched processes
+- CPU% breakdown by Chromium process type (renderer, gpu-process, utility, etc.)
+- Top PIDs by aggregate CPU%
+- Hot threads by individual thread CPU% with thread names
+
+No external dependencies. Built alongside montauk as `montauk_analyze`.
+
 ## Uninstall (CMake)
 
 ```bash
@@ -535,7 +564,10 @@ makepkg -si
 - `SnapshotBuffers` — Lock-free snapshot management
 - `Producer` — Coordinated data collection pipeline
 - `Filter` — Process filtering and sorting
+- `BoyerMoore` — Boyer-Moore-Horspool substring search with 256-byte bad character table
+- `AsciiLower` — Constexpr 256-byte ASCII lowercase lookup table (branchless, no locale)
 - `TimSort` — TimSort with pattern detection and galloping mode
+- `LogWriter` — Prometheus exposition snapshot logging with hourly file rotation
 - `MetricsServer` — io_uring HTTP server for Prometheus endpoint (optional, requires liburing)
 - `PrometheusSerializer` — Serializes MetricsSnapshot to Prometheus text exposition format via `std::to_chars()`
 
@@ -575,6 +607,7 @@ montauk supports three collection backends (auto-selected by availability):
 3. GpuAttributor enriches with per-process GPU data
 4. TUI renders from stable snapshot (seqlock copy for concurrency)
 5. MetricsServer reads from the same SnapshotBuffers via selective seqlock (bounded, fixed-size copy)
+6. LogWriter reads via seqlock and writes Prometheus exposition snapshots to disk
 
 **GPU Attribution Logic:**
 1. NVML per-process queries (preferred)
@@ -587,7 +620,7 @@ montauk supports three collection backends (auto-selected by availability):
 ## Performance
 
 - **Overhead:** ~0.1-0.2% CPU with kernel module, ~0.5-1% with netlink proc_connector, ~2-5% with /proc polling
-- **Sampling:** 500ms default (adjustable with +/-)
+- **Sampling:** 250ms default (adjustable with +/-)
 - **Process limit:** 256 default, configurable up to 4096 (top by CPU usage)
 - **Process detection:** Sub-millisecond with kernel module or netlink, ~1 second with /proc polling
 - **System calls:** 1 per snapshot (kernel module), ~1 + N events (netlink), ~3 per process (/proc polling)

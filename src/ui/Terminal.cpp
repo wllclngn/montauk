@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <cstring>
 #include <cctype>
+#include "util/AsciiLower.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <format>
@@ -68,7 +69,7 @@ bool truecolor_capable() {
   const char* ct = std::getenv("COLORTERM");
   if (ct) {
     std::string s = ct; 
-    for (auto& c : s) c = std::tolower((unsigned char)c);
+    for (auto& c : s) c = montauk::util::ascii_lower((unsigned char)c);
     if (s.find("truecolor") != std::string::npos || s.find("24bit") != std::string::npos) return true;
   }
   return false;

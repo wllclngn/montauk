@@ -13,6 +13,7 @@
 #include <unordered_set>
 #include "util/Churn.hpp"
 #include "util/NvmlDyn.hpp"
+#include "util/AsciiLower.hpp"
 
 namespace fs = std::filesystem;
 
@@ -283,7 +284,7 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out) {
                 long thr = 0; std::ifstream tf(hm.path() / (base + suff));
                 if (tf) { tf >> thr; if (tf) { warn_tc = thr / 1000.0; have_warn = true; break; } }
               }
-              std::string lab = label; for (auto& ch : lab) ch = std::tolower((unsigned char)ch);
+              std::string lab = label; for (auto& ch : lab) ch = montauk::util::ascii_lower((unsigned char)ch);
               if (lab.find("edge")!=std::string::npos || (label.empty() && !rec.has_temp_edge)) { rec.has_temp_edge = true; rec.temp_edge_c = c; }
               else if (lab.find("junction")!=std::string::npos || lab.find("hotspot")!=std::string::npos) { rec.has_temp_hotspot = true; rec.temp_hotspot_c = c; }
               else if (lab.find("mem")!=std::string::npos || lab.find("hbm")!=std::string::npos) { rec.has_temp_mem = true; rec.temp_mem_c = c; }

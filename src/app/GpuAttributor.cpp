@@ -424,7 +424,6 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
   const auto decay = std::chrono::milliseconds(3000);
   const auto exit_decay = std::chrono::milliseconds(500);
   for (auto& p : s.procs.processes) {
-    auto itraw = pid_to_gpu.find(p.pid); p.has_gpu_util_raw = (itraw != pid_to_gpu.end()); p.gpu_util_pct_raw = p.has_gpu_util_raw ? (double)itraw->second : 0.0;
     double disp = 0.0; auto itst = gpu_smooth_.find(p.pid);
     if (itst != gpu_smooth_.end() && itst->second.last_sample.time_since_epoch().count() > 0) {
       auto age = now_tp - itst->second.last_sample; bool running = running_pids.count(p.pid) > 0;

@@ -180,13 +180,7 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   uint64_t cpu_total = read_cpu_total();
   if (ncpu_ == 0) ncpu_ = read_cpu_count();
   out.processes.clear(); out.total_processes=0; out.running_processes=0; out.state_running=0; out.state_sleeping=0; out.state_zombie=0;
-  out.total_threads=0; out.threads_max=0;
-  
-  // Read system thread limit
-  auto threads_max_opt = montauk::util::read_file_string("/proc/sys/kernel/threads-max");
-  if (threads_max_opt) {
-    try { out.threads_max = std::stoull(*threads_max_opt); } catch(...) {}
-  }
+  out.total_threads=0;
   
   for (auto& name : montauk::util::list_dir("/proc")) {
     if (name.empty() || name[0]<'0' || name[0]>'9') continue; // numeric
@@ -198,7 +192,7 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     if (!content_opt) {
       // Record churn and emit a placeholder row so the user sees it happened
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
-      montauk::model::ProcSample ps; ps.pid = pid; ps.ppid = 0; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn_reason = montauk::model::ChurnReason::ReadFailed; ps.cmd = name;
+      montauk::model::ProcSample ps; ps.pid = pid; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn_reason = montauk::model::ChurnReason::ReadFailed; ps.cmd = name;
       out.processes.push_back(std::move(ps));
       continue;
     }
@@ -206,7 +200,7 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     char stch='?';
     if (!parse_stat_line(*content_opt, stch, ppid, ut, st, rssp, comm)) {
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
-      montauk::model::ProcSample ps; ps.pid = pid; ps.ppid = 0; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn_reason = montauk::model::ChurnReason::ReadFailed; ps.cmd = comm.empty()? name : comm;
+      montauk::model::ProcSample ps; ps.pid = pid; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn_reason = montauk::model::ChurnReason::ReadFailed; ps.cmd = comm.empty()? name : comm;
       out.processes.push_back(std::move(ps));
       continue;
     }
@@ -219,7 +213,7 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
       uint64_t dt = (cpu_total > last_cpu_total_) ? (cpu_total - last_cpu_total_) : 0;
       if (dt>0) cpu_pct = (100.0 * static_cast<double>(dp) / static_cast<double>(dt)) * static_cast<double>(ncpu_);
     }
-    montauk::model::ProcSample ps; ps.pid=pid; ps.ppid=ppid; ps.utime=ut; ps.stime=st; ps.total_time=total_proc; ps.rss_kb = (rssp>0 ? static_cast<uint64_t>(rssp)* (getpagesize()/1024) : 0);
+    montauk::model::ProcSample ps; ps.pid=pid; ps.utime=ut; ps.stime=st; ps.total_time=total_proc; ps.rss_kb = (rssp>0 ? static_cast<uint64_t>(rssp)* (getpagesize()/1024) : 0);
     ps.cpu_pct = cpu_pct; ps.cmd = comm; // will enrich command/user below
     ps.exe_path = read_exe_path(pid);
     out.processes.push_back(std::move(ps));
