@@ -87,6 +87,8 @@ void reset_ui_defaults() {
   g_ui.show_gpumon = true;
   g_ui.cpu_scale = UIState::CPUScale::Total;
   g_ui.gpu_scale = UIState::GPUScale::Utilization;
+  g_ui.filter_query.clear();
+  g_ui.search_mode = false;
 }
 
 } // namespace montauk::ui

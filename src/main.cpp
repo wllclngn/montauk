@@ -1,6 +1,7 @@
 #include "app/SnapshotBuffers.hpp"
 #include "app/Producer.hpp"
 #include "app/Security.hpp"
+#include "app/MetricsServer.hpp"
 #include "util/Retro.hpp"
 #include "model/Snapshot.hpp"
 #include "ui/Terminal.hpp"
@@ -79,26 +80,50 @@ int main(int argc, char** argv) {
   // Default: run indefinitely with 250ms refresh (no flags needed).
   int iterations = 0; // 0 or less => run until Ctrl+C
   int sleep_ms = 250;
-  // JSON stream is removed; no runtime JSON output from the application
   int self_test_secs = 0; // if >0, run self-test and print stats
+  uint16_t metrics_port = 0; // >0 enables Prometheus metrics endpoint
+  bool headless = false;     // --headless: skip TUI, daemon mode
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--iterations" && i + 1 < argc) iterations = std::stoi(argv[++i]);
     else if (a == "--sleep-ms" && i + 1 < argc) sleep_ms = std::stoi(argv[++i]);
-    // --json-stream-ms and --duration-seconds intentionally unsupported (removed)
     else if (a == "--self-test-seconds" && i + 1 < argc) self_test_secs = std::stoi(argv[++i]);
-    // --tui/--no-tui removed: text UI is the only mode
+    else if (a == "--metrics" && i + 1 < argc) metrics_port = static_cast<uint16_t>(std::stoi(argv[++i]));
+    else if (a == "--headless") headless = true;
     else if (a == "-h" || a == "--help") {
       std::cout << "Usage: montauk [--self-test-seconds S] [--iterations N] [--sleep-ms MS]\n";
+      std::cout << "               [--metrics PORT] [--headless]\n";
       std::cout << "Notes: Text UI runs until Ctrl+C by default.\n";
+      std::cout << "       --metrics PORT  Enable Prometheus endpoint on PORT\n";
+      std::cout << "       --headless      Daemon mode (no TUI, requires --metrics)\n";
       return 0;
     }
+  }
+  if (headless && metrics_port == 0) {
+    std::cerr << "Error: --headless requires --metrics PORT\n";
+    return 1;
   }
 
   try {
     montauk::app::SnapshotBuffers buffers;
     montauk::app::Producer producer(buffers);
     producer.start();
+
+    std::unique_ptr<montauk::app::MetricsServer> metrics;
+    if (metrics_port > 0) {
+      metrics = std::make_unique<montauk::app::MetricsServer>(buffers, metrics_port);
+      metrics->start();
+    }
+
+    // Headless mode: no TUI, just run Producer + MetricsServer until Ctrl+C
+    if (headless) {
+      while (!g_stop.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      }
+      if (metrics) metrics->stop();
+      producer.stop();
+      return 0;
+    }
 
   // No JSON stream output path
 
@@ -146,7 +171,7 @@ int main(int argc, char** argv) {
   g_ui.show_net = true;
   if (iterations <= 0) iterations = INT32_MAX; // effectively run until Ctrl+C
   bool show_help = false;
-  auto help_text = std::string("Keys: q quit  c/m/p/n sort  g GPU sort  v GMEM sort  G toggle GPU  +/- fps  arrows/PgUp/PgDn scroll  t Thermal  d Disk  N Net  i CPU scale  u GPU scale  s System focus  R reset UI  h help");
+  auto help_text = std::string("Keys: q quit  / search  c/m/p/n sort  g GPU sort  v GMEM sort  G toggle GPU  +/- fps  arrows/PgUp/PgDn scroll  t Thermal  d Disk  N Net  i CPU scale  u GPU scale  s System focus  R reset UI  h help");
   int alert_frames = 0; int alert_needed = getenv_int("MONTAUK_TOPPROC_ALERT_FRAMES", 5); // consecutive frames over threshold
   bool did_first_clear = false;
   for (int i = 0; (iterations <= 0 || i < iterations) && !g_stop.load(); ++i) {
@@ -158,6 +183,30 @@ int main(int argc, char** argv) {
     if (rv > 0 && (pfd.revents & POLLIN)) {
       unsigned char buf[8]; ssize_t n = ::read(STDIN_FILENO, buf, sizeof(buf));
       if (n > 0) {
+        // Search mode: capture keystrokes for filter query
+        if (g_ui.search_mode) {
+          for (ssize_t ki = 0; ki < n; ++ki) {
+            unsigned char c = buf[ki];
+            if (c == 0x1B) { // Esc
+              g_ui.search_mode = false;
+              if (g_ui.filter_query.empty()) { /* already clear */ }
+            } else if (c == '\r' || c == '\n') { // Enter
+              g_ui.search_mode = false;
+              g_ui.scroll = 0;
+            } else if (c == 127 || c == 0x08) { // Backspace
+              if (!g_ui.filter_query.empty()) {
+                g_ui.filter_query.pop_back();
+                g_ui.scroll = 0;
+              } else {
+                g_ui.search_mode = false;
+              }
+            } else if (std::isprint(c)) {
+              g_ui.filter_query += static_cast<char>(c);
+              g_ui.scroll = 0;
+            }
+            // All other keys (arrows, etc.) swallowed
+          }
+        } else {
         // Very small decoder: handle ESC [ sequences and plain keys
         size_t k = 0;
         while (k < (size_t)n) {
@@ -193,10 +242,19 @@ int main(int argc, char** argv) {
           else if (c == 't' || c == 'T') { g_ui.show_thermal = !g_ui.show_thermal; }
           else if (c == 'd' || c == 'D') { g_ui.show_disk = !g_ui.show_disk; }
           else if (c == 'N') { g_ui.show_net = !g_ui.show_net; }
+          else if (c == '/' || c == 0x06) { // '/' or Ctrl+F: enter search mode
+            g_ui.search_mode = true;
+            g_ui.filter_query.clear();
+            g_ui.scroll = 0;
+          }
           else if (c == 0x1B) {
             // Try to parse ESC [ A/B/C/D or PgUp/PgDn (~)
             unsigned char a=0,b=0, d=0;
-            if (k < (size_t)n) a = buf[k++]; else break;
+            if (k < (size_t)n) a = buf[k++]; else {
+              // Bare Esc (no following bytes): clear active filter
+              if (!g_ui.filter_query.empty()) { g_ui.filter_query.clear(); g_ui.scroll = 0; }
+              break;
+            }
             if (a == '[') {
               if (k < (size_t)n) b = buf[k++]; else break;
               if (b >= 'A' && b <= 'D') {
@@ -216,6 +274,7 @@ int main(int argc, char** argv) {
             }
           }
         }
+      } // end else (normal mode)
       }
     }
     // Concurrency hardening: atomic snapshot capture with sequence validation
@@ -250,6 +309,7 @@ int main(int argc, char** argv) {
     std::string dyn_help = alert + "SORT:" + sort_name + " • FOCUS:" + (g_ui.system_focus? "SYSTEM":"DEFAULT") + " • FPS:" + std::to_string(fps) + "  " + help_text;
     montauk::ui::render_screen(s, show_help, dyn_help);
   }
+  if (metrics) metrics->stop();
   producer.stop();
   return 0;
 

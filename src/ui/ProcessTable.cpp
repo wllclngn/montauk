@@ -4,11 +4,13 @@
 #include "ui/Formatting.hpp"
 #include "ui/Renderer.hpp"
 #include "util/TimSort.hpp"
+#include "app/Filter.hpp"
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
 #include <cmath>
 #include <numeric>
+#include <unordered_set>
 
 namespace montauk::ui {
 
@@ -115,6 +117,15 @@ std::vector<std::string> render_process_table(
     if (A.rss_kb != B.rss_kb) return A.rss_kb > B.rss_kb;
     return A.pid < B.pid;
   });
+  // Apply search filter if active
+  if (!g_ui.filter_query.empty()) {
+    montauk::app::ProcessFilterSpec fspec{};
+    fspec.name_contains = g_ui.filter_query;
+    montauk::app::ProcessFilter filt(fspec);
+    auto matched = filt.apply(s.procs);
+    std::unordered_set<size_t> match_set(matched.begin(), matched.end());
+    std::erase_if(order, [&](size_t idx){ return !match_set.contains(idx); });
+  }
   // Calculate how many process rows fit in available space
   // This must match the box height calculation later
   int used_fixed = 0;  // Process table is rendered first, so nothing used yet
@@ -123,6 +134,9 @@ std::vector<std::string> render_process_table(
   int desired_rows = std::max(1, proc_inner_min - 1);  // minus header row
   g_ui.last_proc_page_rows = desired_rows;
   g_ui.last_proc_total = (int)order.size();
+  // Clamp scroll to filtered results
+  int max_scroll = std::max(0, (int)order.size() - desired_rows);
+  if (g_ui.scroll > max_scroll) g_ui.scroll = max_scroll;
 
   // Pagination by scroll
   const int skip = g_ui.scroll;
@@ -245,8 +259,17 @@ std::vector<std::string> render_process_table(
     proc_lines.push_back(os.str());
     proc_sev.push_back(severity);
   }
+  // Search input line: replace last row with search prompt when active
+  if (g_ui.search_mode && !proc_lines.empty()) {
+    std::string prompt = "/" + g_ui.filter_query + "\xE2\x96\x88"; // █ cursor
+    proc_lines.back() = prompt;
+    proc_sev.back() = -1; // sentinel for accent colorization
+  }
   // Box - use the same proc_inner_min calculated above
   std::string title = "PROCESS MONITOR";
+  if (!g_ui.filter_query.empty()) {
+    title = "PROCESS MONITOR [" + std::to_string(order.size()) + " matches]";
+  }
   auto proc_box = make_box(title, proc_lines, width, proc_inner_min);
   // Colorize rows based on severity
   {
@@ -255,6 +278,20 @@ std::vector<std::string> render_process_table(
     for (int li = 1; li < (int)proc_box.size() - 1; ++li) {
       if (li - 1 >= (int)proc_sev.size()) break;
       int sev = proc_sev[li-1];
+      if (sev == -1) {
+        // Search input line: accent color
+        auto& line = proc_box[li];
+        size_t fpos = line.find(V);
+        size_t lpos = line.rfind(V);
+        if (fpos != std::string::npos && lpos != std::string::npos && lpos > fpos) {
+          size_t start = fpos + V.size();
+          std::string pre = line.substr(0, start);
+          std::string mid = line.substr(start, lpos - start);
+          std::string suf = line.substr(lpos);
+          line = pre + uic.accent + mid + sgr_reset() + suf;
+        }
+        continue;
+      }
       if (sev <= 0) continue; // skip header and non-severe rows
       auto& line = proc_box[li];
       size_t fpos = line.find(V);

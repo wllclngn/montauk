@@ -35,6 +35,8 @@ struct UIState {
   int col_mem_w{5};
   bool show_gmem{true};
   int col_gmem_w{5};
+  std::string filter_query;   // Active search filter (empty = no filter)
+  bool search_mode{false};    // True when search input is focused
 };
 
 // Global UI state

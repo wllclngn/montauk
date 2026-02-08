@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 3.2.0 LANGUAGES CXX)
+project(montauk VERSION 4.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -41,6 +41,8 @@ add_library(montauk_core
     src/app/Security.cpp
     src/app/Alerts.cpp
     src/app/Filter.cpp
+    src/app/MetricsServer.cpp
+    src/app/PrometheusSerializer.cpp
     src/collectors/MemoryCollector.cpp
     src/collectors/GpuCollector.cpp
     src/collectors/FdinfoProcessCollector.cpp
@@ -66,6 +68,16 @@ if(NVML_INCLUDE_DIR AND NVML_LIBRARY)
   message(STATUS "NVML detected: enabling per-process and device GPU metrics")
 else()
   message(STATUS "NVML not found: building without NVML (device VRAM/util via sysfs if available)")
+endif()
+
+# io_uring support (Prometheus metrics endpoint)
+find_library(URING_LIBRARY uring)
+if(URING_LIBRARY)
+  target_link_libraries(montauk_core PUBLIC ${URING_LIBRARY})
+  target_compile_definitions(montauk_core PUBLIC MONTAUK_HAVE_URING=1)
+  message(STATUS "liburing detected: enabling Prometheus metrics endpoint")
+else()
+  message(STATUS "liburing not found: building without metrics endpoint")
 endif()
 
 # Kernel module collector support (opt-in)
@@ -109,6 +121,7 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_thermal.cpp
     tests/test_netlink_smoke.cpp
     tests/test_timsort.cpp
+    tests/test_prometheus.cpp
   )
   target_include_directories(montauk_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(montauk_tests PRIVATE montauk_core)

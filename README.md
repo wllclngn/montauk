@@ -9,17 +9,20 @@
 
 ## Overview
 
-A standalone, offline-friendly C++23 system monitor for Linux with comprehensive GPU support and event-driven process monitoring. No external dependencies required for the default build.
+A standalone, offline-friendly C++23 system monitor for Linux with comprehensive GPU support, event-driven process monitoring, and Prometheus metrics export. No external dependencies required for the default build.
 
 **Key Features:**
 - **Event-Driven Monitoring**: Kernel-based process event tracking with 90%+ reduction in system overhead
 - **Deep GPU Integration**: Per-process GPU utilization and memory tracking with intelligent attribution
 - **Multi-vendor Support**: NVIDIA (NVML + fallbacks), AMD (sysfs), Intel (fdinfo)
 - **Sophisticated Attribution**: Multiple fallback mechanisms for GPU metrics when vendor APIs are unavailable
+- **Prometheus Metrics Endpoint**: Optional HTTP `/metrics` endpoint serving Prometheus exposition format over io_uring, enabling integration with Prometheus, Grafana, and Kubernetes monitoring stacks
+- **Headless Daemon Mode**: Run without TUI as a pure metrics exporter (`--headless --metrics PORT`)
+- **Live Process Search**: Case-insensitive substring filtering with `/` or `Ctrl+F`
 - **Thermal Monitoring**: Multi-sensor temperature tracking (edge, hotspot, memory) with vendor-specific thresholds
 - **Process Tracking**: Up to 256 processes with full command-line enrichment for accurate identification
 - **Atomic Snapshots**: Minimal CPU overhead with lock-free snapshot publication
-- **Zero Dependencies**: Builds with standard library only; NVML auto-detected and optional
+- **Zero Dependencies**: Builds with standard library only; NVML and liburing auto-detected and optional
 - **Churn Resilient**: Real-time churn detection and dynamic display during heavy system activity
 - **ANSI Color Support**: Intelligent escape sequence handling with full truecolor support
 - **Dynamic Layout**: All panels fill available vertical space automatically
@@ -66,6 +69,8 @@ cmake --build build -j$(nproc)
 # Install (optional)
 sudo cmake --install build
 ```
+
+liburing is auto-detected at configure time. If present, the Prometheus metrics endpoint is enabled. If absent, montauk builds without it (no functional impact on the TUI).
 
 ### Other Commands
 
@@ -141,12 +146,45 @@ sudo rmmod montauk
 
 See `montauk-kernel/README.md` for full documentation including architecture, protocol specification, and troubleshooting.
 
+## Operating Modes
+
+montauk supports three operating modes via composable CLI flags:
+
+```bash
+montauk                                # TUI only (default, unchanged)
+montauk --metrics 9101                 # TUI + Prometheus endpoint on :9101
+montauk --headless --metrics 9101      # Daemon mode: Prometheus only, no TUI
+montauk --headless                     # Error: "nothing to do"
+```
+
+**Prometheus Metrics Endpoint:**
+
+When `--metrics PORT` is specified, montauk serves Prometheus exposition format (text/plain; version=0.0.4) at `http://localhost:PORT/metrics`. The endpoint reads from the same lock-free SnapshotBuffers the TUI uses -- no mutexes, no additional overhead. All socket I/O is driven by io_uring.
+
+Exported metric families (~55 gauges, all prefixed `montauk_`):
+- CPU: aggregate, per-core, user/system/iowait/irq/steal breakdown, context switches, interrupts
+- Memory: total/used/available/cached/buffers/swap (bytes), utilization percent
+- Network: per-interface and aggregate rx/tx bytes/sec
+- Disk: per-device read/write bytes/sec, utilization percent, aggregate totals
+- Filesystem: per-mount total/used/available bytes, utilization percent
+- Processes: total/running/sleeping/zombie counts, thread count
+- Per-process top-N: CPU%, resident memory, GPU utilization, GPU memory (labeled by PID and command)
+- GPU: per-device VRAM, temperatures, fan speed; aggregate VRAM, utilization, encoder/decoder, power
+
+Requires liburing at build time. Without liburing, montauk compiles normally with the metrics endpoint disabled.
+
 ## UI Controls
 
 **Navigation:**
 - `q` — Quit
 - `↑/↓` — Scroll process list
 - `PgUp/PgDn` — Page up/down
+
+**Search/Filter:**
+- `/` or `Ctrl+F` — Enter search mode (live case-insensitive substring filter)
+- `Enter` — Confirm filter and return to normal mode
+- `Esc` — Exit search mode (or clear active filter from normal mode)
+- `Backspace` — Delete last character (empty backspace exits search mode)
 
 **Sorting:**
 - `c` — Sort by CPU%
@@ -157,6 +195,8 @@ See `montauk-kernel/README.md` for full documentation including architecture, pr
 - `n` — Sort by Name
 
 **Display Toggles:**
+- `G` — Toggle GPU panel
+- `t` — Toggle Thermal panel
 - `d` — Toggle Disk I/O panel
 - `N` — Toggle Network panel
 - `h` — Toggle help line
@@ -164,7 +204,8 @@ See `montauk-kernel/README.md` for full documentation including architecture, pr
 **Modes:**
 - `s` — Toggle SYSTEM focus mode (shows detailed system information in right column)
 - `i` — Toggle CPU scale (machine-share ↔ per-core)
-- `u` — Toggle GPU scale (reserved for future modes)
+- `u` — Toggle GPU scale (capacity ↔ utilization)
+- `R` — Reset UI to defaults
 - `+/-` — Increase/decrease refresh rate
 
 **Note:** In SYSTEM focus mode, the right column displays comprehensive system metrics including CPU, GPU, memory, disk, network, thermal, and process statistics. Default mode shows individual panels (PROCESSOR, GPU, MEMORY, DISK I/O, NETWORK, SYSTEM).
@@ -415,6 +456,8 @@ cmake --build build -j
 ./build/montauk_tests
 ```
 
+When built with liburing, this includes Prometheus serializer tests (CPU gauge, memory byte conversion, per-core labels, top-N process output, empty snapshot safety).
+
 **Self-test mode:**
 ```bash
 ./build/montauk --self-test-seconds 5
@@ -458,6 +501,7 @@ sudo xargs rm -v < build/install_manifest.txt
 - PKGBUILD provided in `pkg/` directory
 - NVML auto-detected at build time
 - Build deps: `cmake`, `gcc`, `make`
+- Optional build: `liburing` (enables Prometheus metrics endpoint)
 - Optional runtime: `nvidia-utils`
 - Tests disabled by default: `MONTAUK_BUILD_TESTS=OFF`
 
@@ -492,6 +536,8 @@ makepkg -si
 - `Producer` — Coordinated data collection pipeline
 - `Filter` — Process filtering and sorting
 - `TimSort` — TimSort with pattern detection and galloping mode
+- `MetricsServer` — io_uring HTTP server for Prometheus endpoint (optional, requires liburing)
+- `PrometheusSerializer` — Serializes MetricsSnapshot to Prometheus text exposition format via `std::to_chars()`
 
 **UI Components:**
 - `Panels` — Right column rendering (PROCESSOR, GPU, MEMORY, DISK I/O, NETWORK, SYSTEM)
@@ -525,9 +571,10 @@ montauk supports three collection backends (auto-selected by availability):
 
 **Snapshot Pipeline:**
 1. Collectors sample independently
-2. Atomic snapshot publication
+2. Atomic snapshot publication via lock-free double buffer
 3. GpuAttributor enriches with per-process GPU data
-4. UI renders from stable snapshot (optional copy for concurrency)
+4. TUI renders from stable snapshot (seqlock copy for concurrency)
+5. MetricsServer reads from the same SnapshotBuffers via selective seqlock (bounded, fixed-size copy)
 
 **GPU Attribution Logic:**
 1. NVML per-process queries (preferred)
@@ -595,7 +642,7 @@ Process table sorting uses a C++23 TimSort implementation (`src/util/TimSort.cpp
 
 ## Policy
 
-**No external dependencies** for default build. NVML is auto-detected and gracefully disabled when unavailable. No vendoring, no FetchContent, no ExternalProject.
+**No external dependencies** for default build. NVML and liburing are auto-detected and gracefully disabled when unavailable. No vendoring, no FetchContent, no ExternalProject.
 
 ## License
 
