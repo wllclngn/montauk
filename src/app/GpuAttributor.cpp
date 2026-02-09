@@ -29,10 +29,7 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
 #ifdef MONTAUK_HAVE_NVML
   // NVML path (NVIDIA)
   ensure_nvml_init();
-  const bool log_nvml = []{
-    const char* v = montauk::ui::getenv_compat("MONTAUK_LOG_NVML");
-    return v && (v[0]=='1'||v[0]=='t'||v[0]=='T'||v[0]=='y'||v[0]=='Y');
-  }();
+  const bool log_nvml = montauk::ui::config().nvidia.log_nvml;
   if (nvml_ok_) {
     unsigned int ndev=0; if (nvmlDeviceGetCount_v2(&ndev)==NVML_SUCCESS) {
       if (nvml_last_proc_ts_per_dev_.size() != ndev) nvml_last_proc_ts_per_dev_.assign(ndev, 0ull);
@@ -141,17 +138,20 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
   }
 #endif
 
+  // Shared nvidia-smi path resolver using config
+  auto find_smi = [&]() -> std::string {
+    const auto& sp = montauk::ui::config().nvidia.smi_path;
+    if (sp != "auto" && !sp.empty()) return sp;
+    if (const char* path = std::getenv("PATH")) {
+      std::string p(path); size_t start=0; while (start<=p.size()) { size_t end=p.find(':',start); std::string dir=p.substr(start,end==std::string::npos?std::string::npos:end-start); if(!dir.empty()){ std::string cand=dir+"/nvidia-smi"; std::error_code ec; if(std::filesystem::exists(cand,ec)) return cand; } if(end==std::string::npos) break; start=end+1; }
+    }
+    const char* candidates[]={"/usr/bin/nvidia-smi","/usr/local/bin/nvidia-smi","/opt/nvidia/sbin/nvidia-smi","/bin/nvidia-smi"};
+    for (const char* c: candidates) { std::error_code ec; if (std::filesystem::exists(c,ec)) return std::string(c); }
+    return {};
+  };
+
   // Detect MIG mode via nvidia-smi when NVML path did not set it
   if (!s.nvml.mig_enabled) {
-    auto find_smi = [&](){
-      if (const char* p = montauk::ui::getenv_compat("MONTAUK_NVIDIA_SMI_PATH")) return std::string(p);
-      if (const char* path = std::getenv("PATH")) {
-        std::string p(path); size_t start=0; while (start<=p.size()) { size_t end=p.find(':',start); std::string dir=p.substr(start,end==std::string::npos?std::string::npos:end-start); if(!dir.empty()){ std::string cand=dir+"/nvidia-smi"; std::error_code ec; if(std::filesystem::exists(cand,ec)) return cand; } if(end==std::string::npos) break; start=end+1; }
-      }
-      const char* candidates[]={"/usr/bin/nvidia-smi","/usr/local/bin/nvidia-smi","/opt/nvidia/sbin/nvidia-smi","/bin/nvidia-smi"};
-      for (const char* c: candidates) { std::error_code ec; if (std::filesystem::exists(c,ec)) return std::string(c); }
-      return std::string();
-    };
     std::string smi = find_smi();
     if (!smi.empty()) {
       std::string cmd = smi + " --query-gpu=mig.mode.current --format=csv,noheader 2>/dev/null";
@@ -173,15 +173,6 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
 
   // Populate version strings via nvidia-smi when NVML did not fill them
   if (s.nvml.driver_version.empty() || s.nvml.cuda_version.empty()) {
-    auto find_smi = [&](){
-      if (const char* p = montauk::ui::getenv_compat("MONTAUK_NVIDIA_SMI_PATH")) return std::string(p);
-      if (const char* path = std::getenv("PATH")) {
-        std::string p(path); size_t start=0; while (start<=p.size()) { size_t end=p.find(':',start); std::string dir=p.substr(start,end==std::string::npos?std::string::npos:end-start); if(!dir.empty()){ std::string cand=dir+"/nvidia-smi"; std::error_code ec; if(std::filesystem::exists(cand,ec)) return cand; } if(end==std::string::npos) break; start=end+1; }
-      }
-      const char* candidates[]={"/usr/bin/nvidia-smi","/usr/local/bin/nvidia-smi","/opt/nvidia/sbin/nvidia-smi","/bin/nvidia-smi"};
-      for (const char* c: candidates) { std::error_code ec; if (std::filesystem::exists(c,ec)) return std::string(c); }
-      return std::string();
-    };
     std::string smi = find_smi();
     if (!smi.empty()) {
       std::string cmd = smi + " --query-gpu=driver_version,cuda_version --format=csv,noheader 2>/dev/null";
@@ -213,22 +204,9 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
     }
   }
 
-  // Optional NVIDIA PMON fallback (off by default): parse `nvidia-smi pmon` for per-process sm/enc/dec
-  // Default-on PMON unless explicitly disabled (MONTAUK_NVIDIA_PMON=0 or montauk_NVIDIA_PMON=0)
-  auto env_true = [](const char* name, bool defv=true){
-    const char* v = montauk::ui::getenv_compat(name);
-    if (!v) return defv;
-    return !(v[0]=='0'||v[0]=='f'||v[0]=='F');
-  };
-  if (pid_to_gpu.empty() && env_true("MONTAUK_NVIDIA_PMON", true) && !s.nvml.mig_enabled) {
-    // Find nvidia-smi
-    std::string smi;
-    if (const char* ep = montauk::ui::getenv_compat("MONTAUK_NVIDIA_SMI_PATH")) smi = ep; else {
-      if (const char* path = std::getenv("PATH")) {
-        std::string pathstr(path); size_t start=0; while (start<=pathstr.size()) { size_t end=pathstr.find(':',start); std::string dir=pathstr.substr(start,end==std::string::npos?std::string::npos:end-start); if(!dir.empty()){ std::string cand=dir+"/nvidia-smi"; std::error_code ec; if(std::filesystem::exists(cand,ec)) { smi=cand; break; } } if(end==std::string::npos) break; start=end+1; }
-      }
-      if (smi.empty()) { const char* candidates[]={"/usr/bin/nvidia-smi","/usr/local/bin/nvidia-smi","/opt/nvidia/sbin/nvidia-smi","/bin/nvidia-smi"}; for (const char* c: candidates){ std::error_code ec; if(std::filesystem::exists(c,ec)){ smi=c; break; } } }
-    }
+  // Optional NVIDIA PMON fallback: parse `nvidia-smi pmon` for per-process sm/enc/dec
+  if (pid_to_gpu.empty() && montauk::ui::config().nvidia.pmon && !s.nvml.mig_enabled) {
+    std::string smi = find_smi();
     std::string cmd = (!smi.empty()? smi : std::string("nvidia-smi")) + " pmon -c 1 -s u 2>/dev/null";
     FILE* fp = ::popen(cmd.c_str(), "r");
     if (fp) {
@@ -297,14 +275,8 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
   };
 
   // Optional NVIDIA memory query via nvidia-smi (compute contexts)
-  if (pid_to_gpu_mem_kb.empty() && env_true("MONTAUK_NVIDIA_MEM", true) && !s.nvml.mig_enabled) {
-    std::string smi;
-    if (const char* ep = montauk::ui::getenv_compat("MONTAUK_NVIDIA_SMI_PATH")) smi = ep; else {
-      if (const char* path = std::getenv("PATH")) {
-        std::string pathstr(path); size_t start=0; while (start<=pathstr.size()) { size_t end=pathstr.find(':',start); std::string dir=pathstr.substr(start,end==std::string::npos?std::string::npos:end-start); if(!dir.empty()){ std::string cand=dir+"/nvidia-smi"; std::error_code ec; if(std::filesystem::exists(cand,ec)) { smi=cand; break; } } if(end==std::string::npos) break; start=end+1; }
-      }
-      if (smi.empty()) { const char* candidates[]={"/usr/bin/nvidia-smi","/usr/local/bin/nvidia-smi","/opt/nvidia/sbin/nvidia-smi","/bin/nvidia-smi"}; for (const char* c: candidates){ std::error_code ec; if(std::filesystem::exists(c,ec)){ smi=c; break; } } }
-    }
+  if (pid_to_gpu_mem_kb.empty() && montauk::ui::config().nvidia.mem && !s.nvml.mig_enabled) {
+    std::string smi = find_smi();
     std::string cmd = (!smi.empty()? smi : std::string("nvidia-smi")) + " --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null";
     FILE* fp = ::popen(cmd.c_str(), "r");
     if (fp) {

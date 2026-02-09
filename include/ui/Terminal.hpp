@@ -2,6 +2,7 @@
 
 #include <string>
 #include <atomic>
+#include <vector>
 #include <termios.h>
 
 namespace montauk::ui {
@@ -30,6 +31,10 @@ void on_atexit_restore();
 // Unified color helpers (source thresholds and colors from UIConfig)
 [[nodiscard]] std::string bar_color(double pct);
 [[nodiscard]] std::string grey_bullet();
+
+// OSC 4 palette detection (one-time, for --init-theme)
+[[nodiscard]] std::string query_palette_color(int idx);
+[[nodiscard]] std::vector<std::string> detect_palette();
 
 // Best-effort terminal write (async-signal-safe)
 void best_effort_write(int fd, const char* buf, size_t len);

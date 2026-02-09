@@ -9,6 +9,7 @@
 #include "ui/Formatting.hpp"
 #include "ui/Renderer.hpp"
 #include "ui/Config.hpp"
+#include "util/TomlReader.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -53,25 +54,19 @@ using montauk::ui::tty_stdout;
 using montauk::ui::sgr_reset;
 
 // Import from Config module
+using montauk::ui::Config;
 using montauk::ui::SortMode;
 using montauk::ui::UIState;
 using montauk::ui::g_ui;
+using montauk::ui::config;
 using montauk::ui::ui_config;
 using montauk::ui::reset_ui_defaults;
-using montauk::ui::getenv_compat;
-using montauk::ui::getenv_int;
-using montauk::ui::getenv_cpu_scale;
 
 // -------- System info helpers (best-effort, lightweight) --------
 struct CpuFreqInfo { bool has_cur{false}; bool has_max{false}; double cur_ghz{0.0}; double max_ghz{0.0}; std::string governor; std::string turbo; };
 
  
 
-// Simple EMA smoother for bar fill only; numbers remain exact.
-
-static bool env_flag(const char* name, bool defv=true){ const char* v=getenv_compat(name); if(!v) return defv; if(v[0]=='0'||v[0]=='f'||v[0]=='F') return false; return true; }
-
-// Format a colored CPU% field with fixed visible width (aligned to match 4-char "CPU%" header).
 int main(int argc, char** argv) {
   std::setlocale(LC_ALL, "");  // Required for wcwidth() to work correctly
   std::signal(SIGINT, on_sigint);
@@ -93,14 +88,80 @@ int main(int argc, char** argv) {
     else if (a == "--log" && i + 1 < argc) log_dir = argv[++i];
     else if (a == "--log-interval-ms" && i + 1 < argc) log_interval_ms = std::stoi(argv[++i]);
     else if (a == "--headless") headless = true;
+    else if (a == "--init-theme") {
+      auto colors = montauk::ui::detect_palette();
+      montauk::util::TomlReader toml;
+      auto cfg_path = montauk::ui::config_file_path();
+      if (cfg_path.empty()) { std::cerr << "Error: cannot determine config path (no HOME)\n"; return 1; }
+      // Load existing config if present (preserve user edits)
+      (void)toml.load(cfg_path);
+      // Write detected palette
+      for (int ci = 0; ci < 16; ++ci) {
+        if (!colors[ci].empty())
+          toml.set("palette", "color" + std::to_string(ci), colors[ci]);
+      }
+      // Write default roles if not already set
+      auto set_role_default = [&](const char* name, const std::string& val) {
+        if (!toml.has("roles", name)) toml.set("roles", name, val);
+      };
+      set_role_default("accent",  "11");
+      set_role_default("caution", "9");
+      set_role_default("warning", "1");
+      set_role_default("normal",  "2");
+      set_role_default("muted",   "#787878");
+      set_role_default("border",  "#383838");
+      set_role_default("binary",  "#8F00FF");
+      // Write default thresholds if not already set
+      auto set_int_default = [&](const char* sec, const char* key, int val) {
+        if (!toml.has(sec, key)) toml.set(sec, key, val);
+      };
+      set_int_default("thresholds", "proc_caution_pct", 60);
+      set_int_default("thresholds", "proc_warning_pct", 80);
+      set_int_default("thresholds", "cpu_temp_warning_c", 90);
+      set_int_default("thresholds", "temp_caution_delta_c", 10);
+      set_int_default("thresholds", "gpu_temp_warning_c", 90);
+      set_int_default("thresholds", "alert_frames", 5);
+      // Write default ui if not already set
+      auto set_bool_default = [&](const char* sec, const char* key, bool val) {
+        if (!toml.has(sec, key)) toml.set(sec, key, val);
+      };
+      auto set_str_default = [&](const char* sec, const char* key, const std::string& val) {
+        if (!toml.has(sec, key)) toml.set(sec, key, val);
+      };
+      set_bool_default("ui", "alt_screen", true);
+      set_bool_default("ui", "system_focus", false);
+      set_str_default("ui", "cpu_scale", "total");
+      set_str_default("ui", "gpu_scale", "utilization");
+      // Write default process settings
+      set_int_default("process", "max_procs", 256);
+      set_int_default("process", "enrich_top_n", 256);
+      set_str_default("process", "collector", "auto");
+      // Write default nvidia settings
+      set_str_default("nvidia", "smi_path", "auto");
+      set_bool_default("nvidia", "smi_dev", true);
+      set_bool_default("nvidia", "pmon", true);
+      set_bool_default("nvidia", "mem", true);
+      set_bool_default("nvidia", "disable_nvml", false);
+      // Ensure directory exists
+      auto last_slash = cfg_path.rfind('/');
+      if (last_slash != std::string::npos)
+        std::filesystem::create_directories(cfg_path.substr(0, last_slash));
+      if (toml.save(cfg_path))
+        std::cout << "Wrote " << cfg_path << "\n";
+      else
+        std::cerr << "Error: failed to write " << cfg_path << "\n";
+      return 0;
+    }
     else if (a == "-h" || a == "--help") {
       std::cout << "Usage: montauk [--self-test-seconds S] [--iterations N] [--sleep-ms MS]\n";
       std::cout << "               [--metrics PORT] [--log DIR] [--log-interval-ms MS] [--headless]\n";
+      std::cout << "               [--init-theme]\n";
       std::cout << "Notes: Text UI runs until Ctrl+C by default.\n";
       std::cout << "       --metrics PORT        Enable Prometheus endpoint on PORT\n";
       std::cout << "       --log DIR             Write timestamped snapshots to DIR\n";
       std::cout << "       --log-interval-ms MS  Write interval in ms (default: 1000)\n";
       std::cout << "       --headless            Daemon mode (no TUI, requires --metrics or --log)\n";
+      std::cout << "       --init-theme          Detect terminal palette and write config.toml\n";
       return 0;
     }
   }
@@ -163,24 +224,24 @@ int main(int argc, char** argv) {
   }
 
   // Text mode (default, continuous until Ctrl+C) with keyboard interactivity
-  bool use_alt = env_flag("MONTAUK_ALT_SCREEN", true) && tty_stdout();
+  const auto& cfg = config();
+  bool use_alt = cfg.ui.alt_screen && tty_stdout();
   montauk::ui::RawTermGuard raw{}; montauk::ui::CursorGuard curs{}; montauk::ui::AltScreenGuard alt{use_alt};
   std::atexit(&on_atexit_restore);
-  // Ensure a known-good default UI on startup (no sticky focus/panels)
-  // This prevents launching in System focus (same effect as pressing 's').
   reset_ui_defaults();
-  // Initialize CPU scale from env (default: total/machine share)
-  g_ui.cpu_scale = getenv_cpu_scale("MONTAUK_PROC_CPU_SCALE", UIState::CPUScale::Total);
-  // Hard-enable the default right-side panels to match the documented default layout.
-  // Allow override via env: MONTAUK_SYSTEM_FOCUS=1 to start condensed.
-  g_ui.system_focus = env_flag("MONTAUK_SYSTEM_FOCUS", false);
+  // Apply config defaults
+  auto scale_str = cfg.ui.cpu_scale;
+  for (auto& ch : scale_str) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  g_ui.cpu_scale = (scale_str == "core" || scale_str == "percore" || scale_str == "irix")
+                     ? UIState::CPUScale::Core : UIState::CPUScale::Total;
+  g_ui.system_focus = cfg.ui.system_focus;
   g_ui.show_gpumon = true;
   g_ui.show_disk = true;
   g_ui.show_net = true;
-  if (iterations <= 0) iterations = INT32_MAX; // effectively run until Ctrl+C
+  if (iterations <= 0) iterations = INT32_MAX;
   bool show_help = false;
   auto help_text = std::string("Keys: q quit  / search  c/m/p/n sort  g GPU sort  v GMEM sort  G toggle GPU  +/- fps  arrows/PgUp/PgDn scroll  t Thermal  d Disk  N Net  i CPU scale  u GPU scale  s System focus  R reset UI  h help");
-  int alert_frames = 0; int alert_needed = getenv_int("MONTAUK_TOPPROC_ALERT_FRAMES", 5); // consecutive frames over threshold
+  int alert_frames = 0; int alert_needed = cfg.thresholds.alert_frames;
   bool did_first_clear = false;
   for (int i = 0; (iterations <= 0 || i < iterations) && !g_stop.load(); ++i) {
     if (use_alt && !did_first_clear) { best_effort_write(STDOUT_FILENO, "\x1B[2J\x1B[H", 7); did_first_clear = true; }
@@ -215,72 +276,65 @@ int main(int argc, char** argv) {
             // All other keys (arrows, etc.) swallowed
           }
         } else {
-        // Very small decoder: handle ESC [ sequences and plain keys
+        // Keybind-driven input handler
         size_t k = 0;
         while (k < (size_t)n) {
           unsigned char c = buf[k++];
-          if (c == 'q' || c == 'Q') { g_stop.store(true); break; }
-          else if (c == 'h' || c == 'H') { show_help = !show_help; }
-          else if (c == '+') { sleep_ms = std::max(33, sleep_ms - 10); }
-          else if (c == '-') { sleep_ms = std::min(1000, sleep_ms + 10); }
-          else if (c == 'c' || c == 'C') { g_ui.sort = SortMode::CPU; }
-          else if (c == 'm' || c == 'M') { g_ui.sort = SortMode::MEM; }
-          else if (c == 'p' || c == 'P') { g_ui.sort = SortMode::PID; }
-          else if (c == 'n' || c == 'N') { g_ui.sort = SortMode::NAME; }
-          else if (c == 'G') { g_ui.show_gpumon = !g_ui.show_gpumon; }
-          else if (c == 'v' || c == 'V') { g_ui.sort = SortMode::GMEM; }
-          else if (c == 'g') { g_ui.sort = SortMode::GPU; }
-          else if (c == 'i' || c == 'I') { g_ui.cpu_scale = (g_ui.cpu_scale==UIState::CPUScale::Total? UIState::CPUScale::Core : UIState::CPUScale::Total); }
-          else if (c == 'u' || c == 'U') { g_ui.gpu_scale = (g_ui.gpu_scale==UIState::GPUScale::Capacity? UIState::GPUScale::Utilization : UIState::GPUScale::Capacity); }
-          else if (c == 's' || c == 'S') {
-            g_ui.system_focus = !g_ui.system_focus;
-            // Entering SYSTEM focus: hide other right-side panels
-            if (g_ui.system_focus) {
-              g_ui.show_gpumon = false;
-              g_ui.show_disk = false;
-              g_ui.show_net = false;
-            } else {
-              // Leaving SYSTEM focus: restore default panels
-              g_ui.show_gpumon = true;
-              g_ui.show_disk = true;
-              g_ui.show_net = true;
-            }
-          }
-          else if (c == 'R') { reset_ui_defaults(); }
-          else if (c == 't' || c == 'T') { g_ui.show_thermal = !g_ui.show_thermal; }
-          else if (c == 'd' || c == 'D') { g_ui.show_disk = !g_ui.show_disk; }
-          else if (c == 'N') { g_ui.show_net = !g_ui.show_net; }
-          else if (c == '/' || c == 0x06) { // '/' or Ctrl+F: enter search mode
-            g_ui.search_mode = true;
-            g_ui.filter_query.clear();
-            g_ui.scroll = 0;
-          }
-          else if (c == 0x1B) {
-            // Try to parse ESC [ A/B/C/D or PgUp/PgDn (~)
-            unsigned char a=0,b=0, d=0;
-            if (k < (size_t)n) a = buf[k++]; else {
-              // Bare Esc (no following bytes): clear active filter
-              if (!g_ui.filter_query.empty()) { g_ui.filter_query.clear(); g_ui.scroll = 0; }
+          auto action = cfg.lookup_key(static_cast<char>(c));
+          switch (action) {
+            case Config::Action::QUIT: g_stop.store(true); break;
+            case Config::Action::HELP: show_help = !show_help; break;
+            case Config::Action::FPS_UP: sleep_ms = std::max(33, sleep_ms - 10); break;
+            case Config::Action::FPS_DOWN: sleep_ms = std::min(1000, sleep_ms + 10); break;
+            case Config::Action::SORT_CPU: g_ui.sort = SortMode::CPU; break;
+            case Config::Action::SORT_MEM: g_ui.sort = SortMode::MEM; break;
+            case Config::Action::SORT_PID: g_ui.sort = SortMode::PID; break;
+            case Config::Action::SORT_NAME: g_ui.sort = SortMode::NAME; break;
+            case Config::Action::SORT_GPU: g_ui.sort = SortMode::GPU; break;
+            case Config::Action::SORT_GMEM: g_ui.sort = SortMode::GMEM; break;
+            case Config::Action::TOGGLE_GPU: g_ui.show_gpumon = !g_ui.show_gpumon; break;
+            case Config::Action::TOGGLE_THERMAL: g_ui.show_thermal = !g_ui.show_thermal; break;
+            case Config::Action::TOGGLE_DISK: g_ui.show_disk = !g_ui.show_disk; break;
+            case Config::Action::TOGGLE_NET: g_ui.show_net = !g_ui.show_net; break;
+            case Config::Action::TOGGLE_CPU_SCALE:
+              g_ui.cpu_scale = (g_ui.cpu_scale==UIState::CPUScale::Total? UIState::CPUScale::Core : UIState::CPUScale::Total); break;
+            case Config::Action::TOGGLE_GPU_SCALE:
+              g_ui.gpu_scale = (g_ui.gpu_scale==UIState::GPUScale::Capacity? UIState::GPUScale::Utilization : UIState::GPUScale::Capacity); break;
+            case Config::Action::TOGGLE_SYSTEM_FOCUS:
+              g_ui.system_focus = !g_ui.system_focus;
+              if (g_ui.system_focus) { g_ui.show_gpumon = false; g_ui.show_disk = false; g_ui.show_net = false; }
+              else { g_ui.show_gpumon = true; g_ui.show_disk = true; g_ui.show_net = true; }
               break;
-            }
-            if (a == '[') {
-              if (k < (size_t)n) b = buf[k++]; else break;
-              if (b >= 'A' && b <= 'D') {
-                // arrows: A up, B down (clamped to process list bounds)
-                int max_scroll = std::max(0, g_ui.last_proc_total - g_ui.last_proc_page_rows);
-                if (b=='A') { if (g_ui.scroll > 0) g_ui.scroll--; }
-                else if (b=='B') { g_ui.scroll = std::min(g_ui.scroll + 1, max_scroll); }
-              } else if (b=='5' || b=='6') { // PgUp/PgDn expect '~'
-                if (k < (size_t)n) d = buf[k++];
-                if (d=='~') {
-                  int page = std::max(1, g_ui.last_proc_page_rows - 2);
-                  int max_scroll = std::max(0, g_ui.last_proc_total - g_ui.last_proc_page_rows);
-                  if (b=='5') { g_ui.scroll = std::max(0, g_ui.scroll - page); }
-                  else { g_ui.scroll = std::min(g_ui.scroll + page, max_scroll); }
+            case Config::Action::RESET_UI: reset_ui_defaults(); break;
+            case Config::Action::SEARCH:
+              g_ui.search_mode = true; g_ui.filter_query.clear(); g_ui.scroll = 0; break;
+            case Config::Action::NONE:
+              if (c == 0x1B) {
+                unsigned char a=0,b=0, d=0;
+                if (k < (size_t)n) a = buf[k++]; else {
+                  if (!g_ui.filter_query.empty()) { g_ui.filter_query.clear(); g_ui.scroll = 0; }
+                  break;
+                }
+                if (a == '[') {
+                  if (k < (size_t)n) b = buf[k++]; else break;
+                  if (b >= 'A' && b <= 'D') {
+                    int max_scroll = std::max(0, g_ui.last_proc_total - g_ui.last_proc_page_rows);
+                    if (b=='A') { if (g_ui.scroll > 0) g_ui.scroll--; }
+                    else if (b=='B') { g_ui.scroll = std::min(g_ui.scroll + 1, max_scroll); }
+                  } else if (b=='5' || b=='6') {
+                    if (k < (size_t)n) d = buf[k++];
+                    if (d=='~') {
+                      int page = std::max(1, g_ui.last_proc_page_rows - 2);
+                      int max_scroll = std::max(0, g_ui.last_proc_total - g_ui.last_proc_page_rows);
+                      if (b=='5') { g_ui.scroll = std::max(0, g_ui.scroll - page); }
+                      else { g_ui.scroll = std::min(g_ui.scroll + page, max_scroll); }
+                    }
+                  }
                 }
               }
-            }
-          }
+              break;
+          } // switch
+          if (action == Config::Action::QUIT) break;
         }
       } // end else (normal mode)
       }

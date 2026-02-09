@@ -9,8 +9,11 @@
 #include "util/AsciiLower.hpp"
 #include <algorithm>
 #include <cstdlib>
+#include <cstdio>
 #include <format>
+#include <poll.h>
 #include <string>
+#include <vector>
 
 #include "ui/Config.hpp"
 
@@ -131,6 +134,84 @@ int term_rows() {
   return 40;
 }
 
+
+// OSC 4 palette detection -- queries terminal for ANSI color at index.
+// Sends: ESC ] 4 ; {idx} ; ? BEL
+// Expects: ESC ] 4 ; {idx} ; rgb:RRRR/GGGG/BBBB ST (or BEL)
+// Returns "#RRGGBB" or empty string on timeout/failure.
+std::string query_palette_color(int idx) {
+  if (!::isatty(STDIN_FILENO) || !::isatty(STDOUT_FILENO)) return {};
+
+  // Enter raw mode for reading response
+  termios old;
+  if (tcgetattr(STDIN_FILENO, &old) != 0) return {};
+  termios raw = old;
+  raw.c_lflag &= ~(ICANON | ECHO);
+  raw.c_cc[VMIN] = 0;
+  raw.c_cc[VTIME] = 0;
+  tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+  int old_fl = fcntl(STDIN_FILENO, F_GETFL, 0);
+  fcntl(STDIN_FILENO, F_SETFL, old_fl | O_NONBLOCK);
+
+  // Flush any pending input
+  char discard[256];
+  while (::read(STDIN_FILENO, discard, sizeof(discard)) > 0) {}
+
+  // Send OSC 4 query
+  auto query = std::format("\033]4;{};?\007", idx);
+  best_effort_write(STDOUT_FILENO, query.c_str(), query.size());
+
+  // Read response with timeout
+  char buf[128];
+  size_t pos = 0;
+  struct pollfd pfd{.fd = STDIN_FILENO, .events = POLLIN, .revents = 0};
+  auto deadline = 100; // ms
+  while (pos < sizeof(buf) - 1) {
+    int rv = ::poll(&pfd, 1, deadline);
+    if (rv <= 0) break;
+    ssize_t n = ::read(STDIN_FILENO, buf + pos, sizeof(buf) - 1 - pos);
+    if (n <= 0) break;
+    pos += n;
+    // Check for terminator: BEL (0x07) or ST (ESC \)
+    for (size_t i = 0; i < pos; ++i) {
+      if (buf[i] == '\007' || (i > 0 && buf[i-1] == '\033' && buf[i] == '\\')) {
+        pos = i;
+        goto done;
+      }
+    }
+    deadline = 50; // shorter timeout for subsequent reads
+  }
+done:
+  buf[pos] = '\0';
+
+  // Restore terminal
+  tcsetattr(STDIN_FILENO, TCSANOW, &old);
+  fcntl(STDIN_FILENO, F_SETFL, old_fl);
+
+  // Parse response: look for "rgb:RRRR/GGGG/BBBB"
+  std::string resp(buf, pos);
+  auto rgb_pos = resp.find("rgb:");
+  if (rgb_pos == std::string::npos) return {};
+
+  auto rgb = resp.substr(rgb_pos + 4);
+  // Parse RRRR/GGGG/BBBB (16-bit per channel)
+  unsigned int r16 = 0, g16 = 0, b16 = 0;
+  if (std::sscanf(rgb.c_str(), "%x/%x/%x", &r16, &g16, &b16) != 3) return {};
+
+  // Scale 16-bit to 8-bit
+  int r8 = static_cast<int>(r16 >> 8);
+  int g8 = static_cast<int>(g16 >> 8);
+  int b8 = static_cast<int>(b16 >> 8);
+
+  return std::format("#{:02X}{:02X}{:02X}", r8, g8, b8);
+}
+
+std::vector<std::string> detect_palette() {
+  std::vector<std::string> colors(16);
+  for (int i = 0; i < 16; ++i)
+    colors[i] = query_palette_color(i);
+  return colors;
+}
 
 // RAII guards for terminal state
 RawTermGuard::RawTermGuard() {

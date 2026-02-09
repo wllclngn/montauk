@@ -151,8 +151,13 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
       push(lr_align(iw, "KERNEL", kernel), 0);
       
       bool prefer12 = [](){
-        const char* v = getenv_compat("MONTAUK_TIME_FORMAT");
-        if (v && *v) { std::string fmt=v; for (auto& c: fmt) c=montauk::util::ascii_lower((unsigned char)c); if (fmt.find("12")!=std::string::npos) return true; if (fmt.find("24")!=std::string::npos) return false; }
+        const auto& tf = montauk::ui::config().ui.time_format;
+        if (!tf.empty()) {
+          std::string fmt = tf;
+          for (auto& ch : fmt) ch = montauk::util::ascii_lower((unsigned char)ch);
+          if (fmt.find("12") != std::string::npos) return true;
+          if (fmt.find("24") != std::string::npos) return false;
+        }
         return prefer_12h_clock_from_locale();
       }();
       std::string dates = format_date_now_locale();
@@ -353,17 +358,17 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
     
     // === TEMPERATURE SECTION ===
     if (show_thermal) {
-      auto thr_from = [&](bool has_thr, double thr_c, const char* env_warn, const char* env_warn_fallback){
-        int def_warn = getenv_int(env_warn_fallback, 90);
-        int warn = has_thr ? (int)(thr_c + 0.5) : getenv_int(env_warn, def_warn);
-        int caution = getenv_int((std::string(env_warn).substr(0, std::string(env_warn).find_last_of('_')) + "_CAUTION_C").c_str(),
-                                 getenv_int("MONTAUK_GPU_TEMP_CAUTION_C", std::max(0, warn - getenv_int("MONTAUK_TEMP_CAUTION_DELTA_C", 10))));
-        return std::pair<int,int>{caution,warn};
+      const auto& thr = montauk::ui::config().thresholds;
+      auto thr_from = [&](bool has_thr, double thr_c, int cfg_warn){
+        int fallback_warn = cfg_warn > 0 ? cfg_warn : thr.gpu_temp_warning_c;
+        int warn = has_thr ? (int)(thr_c + 0.5) : fallback_warn;
+        int gpu_cau = thr.gpu_temp_caution_c > 0 ? thr.gpu_temp_caution_c : std::max(0, warn - thr.temp_caution_delta_c);
+        return std::pair<int,int>{gpu_cau, warn};
       };
       // CPU temp
       if (s.thermal.has_temp) {
-        int warn = s.thermal.has_warn ? (int)(s.thermal.warn_c + 0.5) : getenv_int("MONTAUK_CPU_TEMP_WARNING_C", 90);
-        int caution = getenv_int("MONTAUK_CPU_TEMP_CAUTION_C", std::max(0, warn - getenv_int("MONTAUK_TEMP_CAUTION_DELTA_C", 10)));
+        int warn = s.thermal.has_warn ? (int)(s.thermal.warn_c + 0.5) : thr.cpu_temp_warning_c;
+        int caution = thr.cpu_temp_caution_c > 0 ? thr.cpu_temp_caution_c : std::max(0, warn - thr.temp_caution_delta_c);
         int val = (int)(s.thermal.cpu_max_c + 0.5);
         int sev = (val>=warn)?2:((val>=caution)?1:0);
         std::ostringstream rr; rr << val << "°C";
@@ -376,9 +381,9 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
         std::ostringstream rr;
         bool first=false;
         int dev_sev = 0;
-        if (d.has_temp_edge) { auto [cau,warn] = thr_from(d.has_thr_edge, d.thr_edge_c, "MONTAUK_GPU_TEMP_EDGE_WARNING_C", "MONTAUK_GPU_TEMP_WARNING_C"); int v=(int)(d.temp_edge_c+0.5); dev_sev=std::max(dev_sev,(v>=warn)?2:((v>=cau)?1:0)); rr << "E:" << v << "°C"; first=true; }
-        if (d.has_temp_hotspot) { auto [cau,warn] = thr_from(d.has_thr_hotspot, d.thr_hotspot_c, "MONTAUK_GPU_TEMP_HOT_WARNING_C", "MONTAUK_GPU_TEMP_WARNING_C"); int v=(int)(d.temp_hotspot_c+0.5); dev_sev=std::max(dev_sev,(v>=warn)?2:((v>=cau)?1:0)); rr << (first?"  ":"") << "H:" << v << "°C"; first=true; }
-        if (d.has_temp_mem) { auto [cau,warn] = thr_from(d.has_thr_mem, d.thr_mem_c, "MONTAUK_GPU_TEMP_MEM_WARNING_C", "MONTAUK_GPU_TEMP_WARNING_C"); int v=(int)(d.temp_mem_c+0.5); dev_sev=std::max(dev_sev,(v>=warn)?2:((v>=cau)?1:0)); rr << (first?"  ":"") << "M:" << v << "°C"; }
+        if (d.has_temp_edge) { auto [cau,warn] = thr_from(d.has_thr_edge, d.thr_edge_c, thr.gpu_temp_edge_warning_c); int v=(int)(d.temp_edge_c+0.5); dev_sev=std::max(dev_sev,(v>=warn)?2:((v>=cau)?1:0)); rr << "E:" << v << "°C"; first=true; }
+        if (d.has_temp_hotspot) { auto [cau,warn] = thr_from(d.has_thr_hotspot, d.thr_hotspot_c, thr.gpu_temp_hot_warning_c); int v=(int)(d.temp_hotspot_c+0.5); dev_sev=std::max(dev_sev,(v>=warn)?2:((v>=cau)?1:0)); rr << (first?"  ":"") << "H:" << v << "°C"; first=true; }
+        if (d.has_temp_mem) { auto [cau,warn] = thr_from(d.has_thr_mem, d.thr_mem_c, thr.gpu_temp_mem_warning_c); int v=(int)(d.temp_mem_c+0.5); dev_sev=std::max(dev_sev,(v>=warn)?2:((v>=cau)?1:0)); rr << (first?"  ":"") << "M:" << v << "°C"; }
         {
           std::string label = (s.vram.devices.size()>1) ? (std::string("GPU") + std::to_string(i) + " TEMP") : std::string("GPU TEMP");
           push(lr_align(iw, label, rr.str()), dev_sev);
@@ -409,14 +414,14 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
       if (g_ui.system_focus) {
         int cpu_delta = 0; int gpu_delta = 0; bool have_gpu=false;
         if (s.thermal.has_temp) {
-          int warn = s.thermal.has_warn ? (int)(s.thermal.warn_c + 0.5) : getenv_int("MONTAUK_CPU_TEMP_WARNING_C", 90);
+          int warn = s.thermal.has_warn ? (int)(s.thermal.warn_c + 0.5) : thr.cpu_temp_warning_c;
           int val = (int)(s.thermal.cpu_max_c + 0.5); cpu_delta = std::max(0, warn - val);
         }
         for (const auto& d : s.vram.devices) {
           int best = INT_MAX; bool any=false;
-          if (d.has_temp_edge) { int warn = d.has_thr_edge? (int)(d.thr_edge_c+0.5) : getenv_int("MONTAUK_GPU_TEMP_WARNING_C", 90); int v=(int)(d.temp_edge_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
-          if (d.has_temp_hotspot) { int warn = d.has_thr_hotspot? (int)(d.thr_hotspot_c+0.5) : getenv_int("MONTAUK_GPU_TEMP_WARNING_C", 90); int v=(int)(d.temp_hotspot_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
-          if (d.has_temp_mem) { int warn = d.has_thr_mem? (int)(d.thr_mem_c+0.5) : getenv_int("MONTAUK_GPU_TEMP_WARNING_C", 90); int v=(int)(d.temp_mem_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
+          if (d.has_temp_edge) { int warn = d.has_thr_edge? (int)(d.thr_edge_c+0.5) : thr.gpu_temp_warning_c; int v=(int)(d.temp_edge_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
+          if (d.has_temp_hotspot) { int warn = d.has_thr_hotspot? (int)(d.thr_hotspot_c+0.5) : thr.gpu_temp_warning_c; int v=(int)(d.temp_hotspot_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
+          if (d.has_temp_mem) { int warn = d.has_thr_mem? (int)(d.thr_mem_c+0.5) : thr.gpu_temp_warning_c; int v=(int)(d.temp_mem_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
           if (any) { if (!have_gpu) { gpu_delta = best; have_gpu=true; } else { gpu_delta = std::min(gpu_delta, best); } }
         }
         std::ostringstream rr; rr << "CPU \xCE\x94" << cpu_delta << "°C"; if (have_gpu) rr << "  GPU \xCE\x94" << gpu_delta << "°C";

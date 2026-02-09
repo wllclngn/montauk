@@ -57,7 +57,6 @@ private:
   nvmlReturn_t (*p_nvmlDeviceGetFanSpeed_v2)(nvmlDevice_t device, unsigned int fan, unsigned int* speed);
 
   // Helpers
-  static const char* getenv_compat(const char* name);
   bool dlsym_all();
 
   friend class NvmlGuard;

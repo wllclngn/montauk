@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 4.4.0 LANGUAGES CXX)
+project(montauk VERSION 4.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -131,6 +131,7 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_security.cpp
     tests/test_gpu_smi_device.cpp
     tests/test_thompson_nfa.cpp
+    tests/test_toml_reader.cpp
   )
   target_include_directories(montauk_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(montauk_tests PRIVATE montauk_core)

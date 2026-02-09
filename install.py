@@ -100,22 +100,14 @@ def get_config_dir() -> Path:
     return Path.home() / ".config" / "montauk"
 
 
-def install_themes(source_dir: Path) -> bool:
-    """Install theme files to user config directory."""
-    config_dir = get_config_dir()
-    theme_src = source_dir / "src" / "util" / "theme.env"
-
-    if not theme_src.exists():
+def init_theme(install_path: Path) -> bool:
+    """Run --init-theme to detect terminal palette and write config.toml."""
+    config_file = get_config_dir() / "config.toml"
+    if config_file.exists():
         return False
-
-    config_dir.mkdir(parents=True, exist_ok=True)
-    theme_dst = config_dir / "theme.env"
-
-    # Don't overwrite existing theme
-    if not theme_dst.exists():
-        shutil.copy(theme_src, theme_dst)
-        return True
-    return False
+    log_info("Detecting terminal palette...")
+    ret = run_cmd([str(install_path), "--init-theme"])
+    return ret == 0
 
 
 # =============================================================================
@@ -176,10 +168,6 @@ def cmd_build(args, source_dir: Path) -> bool:
     size = binary.stat().st_size
     log_info(f"Built {binary} ({size} bytes)")
 
-    # Install themes
-    if install_themes(source_dir):
-        log_info(f"Installed theme to {get_config_dir()}/theme.env")
-
     return True
 
 
@@ -207,6 +195,10 @@ def cmd_install(args, source_dir: Path) -> bool:
 
     size = binary.stat().st_size
     log_info(f"Installed {install_path} ({size} bytes)")
+
+    # Detect terminal palette and write config.toml on first install
+    if init_theme(install_path):
+        log_info(f"Wrote config to {get_config_dir()}/config.toml")
 
     if args.kernel:
         ret, stdout, _ = run_cmd_capture(["strings", str(install_path)])

@@ -17,20 +17,17 @@ NvmlDyn& NvmlDyn::instance() {
   return inst;
 }
 
-const char* NvmlDyn::getenv_compat(const char* name) {
-  return montauk::ui::getenv_compat(name);
-}
 
 bool NvmlDyn::load_once() {
   if (loaded_) return handle_ != nullptr;
   loaded_ = true;
-  if (const char* dis = getenv_compat("MONTAUK_DISABLE_NVML")) {
-    if (dis[0]=='1' || dis[0]=='t' || dis[0]=='T' || dis[0]=='y' || dis[0]=='Y') { suppressed_ = true; return false; }
-  }
-  
+  const auto& nvcfg = montauk::ui::config().nvidia;
+  if (nvcfg.disable_nvml) { suppressed_ = true; return false; }
+
   std::vector<std::string> candidates;
-  
-  if (const char* p = getenv_compat("MONTAUK_NVML_PATH")) {
+
+  if (!nvcfg.nvml_path.empty()) {
+    const char* p = nvcfg.nvml_path.c_str();
     std::string path = p;
     
     static const std::vector<std::string> allowed_prefixes = {

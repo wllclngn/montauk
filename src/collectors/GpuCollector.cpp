@@ -19,17 +19,9 @@ namespace fs = std::filesystem;
 
 namespace montauk::collectors {
 
-static bool env_true(const char* name, bool defv=true) {
-  if (const char* v = montauk::ui::getenv_compat(name)) {
-    return !(v[0]=='0'||v[0]=='f'||v[0]=='F');
-  }
-  return defv;
-}
-
 static std::string find_nvidia_smi_path() {
-  if (const char* p = montauk::ui::getenv_compat("MONTAUK_NVIDIA_SMI_PATH")) {
-    return std::string(p);
-  }
+  const auto& smi = montauk::ui::config().nvidia.smi_path;
+  if (smi != "auto" && !smi.empty()) return smi;
   // Try PATH
   if (const char* path = std::getenv("PATH")) {
     std::string p(path);
@@ -58,15 +50,14 @@ static std::string find_nvidia_smi_path() {
 }
 
 static bool read_nvidia_smi_device(montauk::model::GpuVram& out) {
-  if (!env_true("MONTAUK_NVIDIA_SMI_DEV", true)) return false;
+  if (!montauk::ui::config().nvidia.smi_dev) return false;
   static auto last_call = std::chrono::steady_clock::time_point{};
   static montauk::model::GpuVram cached{};
   static bool have_cache = false;
   static int min_interval_ms = -1;
   if (min_interval_ms < 0) {
-    if (const char* v = montauk::ui::getenv_compat("MONTAUK_SMI_MIN_INTERVAL_MS")) {
-      try { min_interval_ms = std::max(0, std::stoi(v)); } catch(...) { min_interval_ms = 1000; }
-    } else { min_interval_ms = 1000; }
+    int v = montauk::ui::config().nvidia.smi_min_interval_ms;
+    min_interval_ms = (v > 0) ? v : 1000;
   }
   auto now = std::chrono::steady_clock::now();
   if (have_cache && min_interval_ms > 0 && last_call.time_since_epoch().count() > 0) {
@@ -324,7 +315,7 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out) {
 #include <nvml.h>
 static bool read_nvml_compiled(montauk::model::GpuVram& out) {
   if (nvmlInit_v2() != NVML_SUCCESS) {
-    if (const char* v = montauk::ui::getenv_compat("MONTAUK_LOG_NVML"); v && (v[0]=='1'||v[0]=='t'||v[0]=='T'||v[0]=='y'||v[0]=='Y')) {
+    if (montauk::ui::config().nvidia.log_nvml) {
       ::fprintf(stderr, "NVML: init failed in collector (device-level metrics disabled)\n");
     }
     return false;
@@ -458,7 +449,7 @@ static bool read_nvml_dyn(montauk::model::GpuVram& out) {
 static void log_backend_once(const char* tag) {
   static bool done = false;
   if (done) return;
-  if (const char* v = montauk::ui::getenv_compat("MONTAUK_GPU_DEBUG"); v && !(v[0]=='0'||v[0]=='f'||v[0]=='F')) {
+  if (montauk::ui::config().nvidia.gpu_debug) {
     ::fprintf(stderr, "GPU backend: %s\n", tag);
     done = true;
   }

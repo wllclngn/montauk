@@ -20,12 +20,14 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **Headless Daemon Mode**: Run without TUI as a pure metrics exporter (`--headless --metrics PORT`)
 - **Structured Logging**: Timestamped Prometheus exposition snapshots to disk (`--log DIR`)
 - **Live Process Search**: Boyer-Moore-Horspool substring search with branchless ASCII lowercasing via `/` or `Ctrl+F`
+- **Thompson NFA Regex Engine**: RE2-style regex with UTF-8 byte lowering for pattern-based process classification
 - **Thermal Monitoring**: Multi-sensor temperature tracking (edge, hotspot, memory) with vendor-specific thresholds
 - **Process Tracking**: Up to 256 processes with full command-line enrichment for accurate identification
 - **Atomic Snapshots**: Minimal CPU overhead with lock-free snapshot publication
 - **Zero Dependencies**: Builds with standard library only; NVML and liburing auto-detected and optional
 - **Churn Resilient**: Real-time churn detection and dynamic display during heavy system activity
 - **ANSI Color Support**: Intelligent escape sequence handling with full truecolor support
+- **TOML Configuration**: Unified `~/.config/montauk/config.toml` with palette detection, configurable keybindings, and env var fallback
 - **Dynamic Layout**: All panels fill available vertical space automatically
 - **Security Monitoring**: Process security analysis with severity-based highlighting
 - **Dual Display Modes**: Compact default view and comprehensive SYSTEM focus mode
@@ -160,6 +162,7 @@ montauk --headless --metrics 9101      # Daemon mode: Prometheus only, no TUI
 montauk --headless --log /var/log/montauk              # Daemon mode: logging only
 montauk --headless --metrics 9101 --log /var/log/montauk  # Daemon mode: both
 montauk --headless                     # Error: requires --metrics or --log
+montauk --init-theme                   # Detect terminal palette, write config.toml
 ```
 
 **Prometheus Metrics Endpoint:**
@@ -223,12 +226,99 @@ No additional dependencies required. Works independently of or alongside `--metr
 
 ## Configuration
 
-- `MONTAUK_MAX_PROCS` — Maximum number of processes tracked and rendered in the Process Monitor (default: `256`). Set to `1024` for deeper lists. Valid range: `32–4096`.
-- `MONTAUK_ENRICH_TOP_N` — Number of top processes to enrich with full command line and user name (default: `MONTAUK_MAX_PROCS`, up to 4096). All tracked processes are enriched by default for accurate GPU process detection.
+montauk uses a unified TOML configuration file at `~/.config/montauk/config.toml`. Every value follows a three-tier resolution chain: **TOML -> environment variable -> compiled default**. If no config file exists, compiled defaults apply with zero overhead.
 
-Notes:
-- With the kernel module, enrichment has zero /proc overhead (cmdline comes from kernel). With userspace collectors, enrichment reads `/proc/[pid]/cmdline` and `/proc/[pid]/status` which is the primary cost. Reduce `ENRICH_TOP_N` below `MAX_PROCS` if needed for lower-powered systems without the kernel module.
-- Both variables accept either `MONTAUK_…` or `montauk_…` prefixes.
+### Quick Start
+
+Generate a config file with your terminal's palette auto-detected:
+```bash
+montauk --init-theme
+```
+
+This writes `~/.config/montauk/config.toml` with all defaults and your terminal's 16 ANSI colors.
+
+### TOML Schema
+
+```toml
+[palette]
+color0  = "#2E2E2E"
+color1  = "#CC0000"
+# ... color2-color15 (populated by --init-theme)
+
+[roles]
+# Integer = palette index, string "#RRGGBB" = hex override
+accent  = 11
+caution = 9
+warning = 1
+normal  = 2
+muted   = "#787878"
+border  = "#383838"
+binary  = "#8F00FF"
+
+[thresholds]
+proc_caution_pct = 60
+proc_warning_pct = 80
+cpu_temp_warning_c = 90
+temp_caution_delta_c = 10
+gpu_temp_warning_c = 90
+alert_frames = 5
+
+[ui]
+alt_screen = true
+system_focus = false
+cpu_scale = "total"
+gpu_scale = "utilization"
+time_format = ""
+
+[process]
+max_procs = 256
+enrich_top_n = 256
+collector = "auto"
+
+[nvidia]
+smi_path = "auto"
+smi_dev = true
+smi_min_interval_ms = 0
+pmon = true
+mem = true
+log_nvml = false
+gpu_debug = false
+disable_nvml = false
+nvml_path = ""
+
+[keybinds]
+quit = "q"
+help = "h"
+fps_up = "+"
+fps_down = "-"
+sort_cpu = "c"
+sort_mem = "m"
+sort_pid = "p"
+sort_name = "n"
+sort_gpu = "g"
+sort_gmem = "v"
+toggle_gpu = "G"
+toggle_thermal = "t"
+toggle_disk = "d"
+toggle_net = "N"
+toggle_cpu_scale = "i"
+toggle_gpu_scale = "u"
+toggle_system_focus = "s"
+reset_ui = "R"
+search = "/"
+```
+
+### Process Settings
+
+- `max_procs` — Maximum processes tracked and rendered (default: `256`, range: `32–4096`).
+- `enrich_top_n` — Processes enriched with full command line (default: `256`, up to `max_procs`).
+- `collector` — Collection backend: `"auto"`, `"kernel"`, `"netlink"`, or `"traditional"`.
+
+With the kernel module, enrichment has zero /proc overhead (cmdline comes from kernel). With userspace collectors, enrichment reads `/proc/[pid]/cmdline` and `/proc/[pid]/status`. Reduce `enrich_top_n` below `max_procs` for lower-powered systems without the kernel module.
+
+### Environment Variable Fallback
+
+All settings accept `MONTAUK_*` or `montauk_*` environment variables as a fallback when not set in TOML. For example, `MONTAUK_MAX_PROCS=1024` works if `[process] max_procs` is absent from the TOML.
 
 ## CPU Scale Modes
 
@@ -279,18 +369,20 @@ montauk automatically identifies browser GPU processes (Chrome, Chromium, Helium
 - Applying intelligent fallback attribution when processes use minimal CPU
 - Using `/proc/*/fd` device file inspection for decode-only workloads
 
-### GPU Environment Variables
+### GPU Configuration
+
+All GPU settings live under `[nvidia]` in TOML (see schema above). Env var fallbacks:
 
 ```bash
-MONTAUK_NVIDIA_PMON=0     # Disable nvidia-smi pmon fallback (default: 1)
-MONTAUK_NVIDIA_MEM=0      # Disable nvidia-smi memory query (default: 1)
-MONTAUK_LOG_NVML=1        # Enable NVML debug logging
-MONTAUK_NVIDIA_SMI_DEV=0  # Disable device-level nvidia-smi fallback (default: 1)
-MONTAUK_NVIDIA_SMI_PATH=/usr/bin/nvidia-smi  # Override nvidia-smi path
-MONTAUK_SMI_MIN_INTERVAL_MS=1000             # Min interval between device-level SMI queries
-MONTAUK_GPU_DEBUG=1       # Log active GPU backend (nvml/smi/drm) to stderr
-MONTAUK_DISABLE_NVML=1    # Disable runtime NVML loader
-MONTAUK_NVML_PATH=/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.1  # Override NVML lib path
+MONTAUK_NVIDIA_PMON=0     # [nvidia] pmon = false
+MONTAUK_NVIDIA_MEM=0      # [nvidia] mem = false
+MONTAUK_LOG_NVML=1        # [nvidia] log_nvml = true
+MONTAUK_NVIDIA_SMI_DEV=0  # [nvidia] smi_dev = false
+MONTAUK_NVIDIA_SMI_PATH=… # [nvidia] smi_path = "…"
+MONTAUK_SMI_MIN_INTERVAL_MS=1000  # [nvidia] smi_min_interval_ms = 1000
+MONTAUK_GPU_DEBUG=1       # [nvidia] gpu_debug = true
+MONTAUK_DISABLE_NVML=1    # [nvidia] disable_nvml = true
+MONTAUK_NVML_PATH=…       # [nvidia] nvml_path = "…"
 ```
 
 ## Display Details
@@ -347,7 +439,10 @@ Right column: Comprehensive SYSTEM box showing:
 - WARNING severity: Red highlighting (80%+ default)
 - PROC CHURN: CAUTION severity (yellow/orange)
 - PROC SECURITY warnings: Severity-based coloring (INFO/CAUTION/WARNING)
-- Borders and titles: Configurable accent colors
+- Titles: Accent color
+- Borders: Distinct border color for all box-drawing characters
+- COMMAND column: Binary name highlighted, path prefixes and arguments muted, kernel threads fully muted (classified via Thompson NFA)
+- GPU%: Severity coloring mirroring CPU% thresholds
 
 ## Churn Handling
 
@@ -384,35 +479,23 @@ PID:12347 as
 
 The event count (8) may exceed visible PIDs (3) because some processes exit before display update.
 
-## Configuration (Environment Variables)
+## Environment Variable Reference
+
+All settings below are env var fallbacks for when a TOML key is absent. Prefer `~/.config/montauk/config.toml` (see Configuration above).
 
 ### UI/Terminal
 ```bash
-MONTAUK_ALT_SCREEN=0           # Disable alt screen (default: 1)
+MONTAUK_ALT_SCREEN=0           # [ui] alt_screen = false
+MONTAUK_PROC_CPU_SCALE=total   # [ui] cpu_scale = "total" | "core"
 ```
 
-Colors inherit from the terminal's 16-color palette. Montauk uses five
-semantic roles mapped to fixed palette indices: accent (11), caution (9),
-warning (1), normal (2), muted (8). The terminal theme defines what
-those colors look like.
+Seven semantic color roles (configured via `[roles]` in TOML): accent, caution, warning, normal, muted, border, binary.
 
 ### Thresholds
 ```bash
-MONTAUK_PROC_CAUTION_PCT=60    # Process caution threshold (default: 60%)
-MONTAUK_PROC_WARNING_PCT=80    # Process warning threshold (default: 80%)
-```
-
-Colors are configured via the UI/Terminal section above.
-
-### Alerts
-```bash
-MONTAUK_TOPPROC_ALERT_FRAMES=5  # Frames before top-proc alert (default: 5)
-                                 # Lower = more sensitive, higher = sustained load only
-```
-
-### Process Display
-```bash
-MONTAUK_PROC_CPU_SCALE=total   # Default CPU scale: total|core
+MONTAUK_PROC_CAUTION_PCT=60    # [thresholds] proc_caution_pct = 60
+MONTAUK_PROC_WARNING_PCT=80    # [thresholds] proc_warning_pct = 80
+MONTAUK_TOPPROC_ALERT_FRAMES=5 # [thresholds] alert_frames = 5
 ```
 
 ### Thermal Thresholds
@@ -421,32 +504,24 @@ MONTAUK_PROC_CPU_SCALE=total   # Default CPU scale: total|core
 - NVIDIA: Auto-discovered via NVML (slowdown, mem_max)
 - AMD/Intel: Auto-discovered via sysfs hwmon (crit, max, emergency)
 
-**Overrides:**
+**Overrides (TOML `[thresholds]` or env vars):**
 ```bash
-# Generic CPU/GPU
-MONTAUK_CPU_TEMP_WARNING_C=90
-MONTAUK_CPU_TEMP_CAUTION_C=80
-MONTAUK_GPU_TEMP_WARNING_C=90
-MONTAUK_GPU_TEMP_CAUTION_C=80
-MONTAUK_TEMP_CAUTION_DELTA_C=10   # Default offset when only warning known
-
-# GPU per-sensor overrides
-MONTAUK_GPU_TEMP_EDGE_WARNING_C=85
-MONTAUK_GPU_TEMP_EDGE_CAUTION_C=75
-MONTAUK_GPU_TEMP_HOT_WARNING_C=95
-MONTAUK_GPU_TEMP_HOT_CAUTION_C=85
-MONTAUK_GPU_TEMP_MEM_WARNING_C=95
-MONTAUK_GPU_TEMP_MEM_CAUTION_C=85
-
+MONTAUK_CPU_TEMP_WARNING_C=90       # cpu_temp_warning_c
+MONTAUK_CPU_TEMP_CAUTION_C=80       # cpu_temp_caution_c
+MONTAUK_GPU_TEMP_WARNING_C=90       # gpu_temp_warning_c
+MONTAUK_TEMP_CAUTION_DELTA_C=10     # temp_caution_delta_c
+MONTAUK_GPU_TEMP_EDGE_WARNING_C=85  # gpu_temp_edge_warning_c
+MONTAUK_GPU_TEMP_HOT_WARNING_C=95   # gpu_temp_hot_warning_c
+MONTAUK_GPU_TEMP_MEM_WARNING_C=95   # gpu_temp_mem_warning_c
 ```
 
 ### Testing/Development
 ```bash
 MONTAUK_PROC_ROOT=/custom/proc    # Remap /proc paths (userspace collectors only)
 MONTAUK_SYS_ROOT=/custom/sys      # Remap /sys paths
-MONTAUK_COLLECTOR=kernel          # Force kernel module (fails if montauk.ko not loaded)
-MONTAUK_COLLECTOR=netlink         # Force netlink proc_connector (fails if no CAP_NET_ADMIN)
-MONTAUK_COLLECTOR=traditional     # Force traditional /proc polling
+MONTAUK_COLLECTOR=kernel          # [process] collector = "kernel"
+MONTAUK_COLLECTOR=netlink         # [process] collector = "netlink"
+MONTAUK_COLLECTOR=traditional     # [process] collector = "traditional"
 ```
 
 ## Testing
@@ -558,6 +633,7 @@ makepkg -si
 - `SnapshotBuffers` — Lock-free snapshot management
 - `Producer` — Coordinated data collection pipeline
 - `Filter` — Process filtering and sorting
+- `ThompsonNFA` — RE2-style Thompson NFA regex engine with UTF-8 byte lowering (Parser → Lowering → Builder → Simulator); 256-bit bitmask character classes, shunting-yard construction, zero-allocation simulation
 - `BoyerMoore` — Boyer-Moore-Horspool substring search with 256-byte bad character table
 - `AsciiLower` — Constexpr 256-byte ASCII lowercase lookup table (branchless, no locale)
 - `TimSort` — TimSort with pattern detection and galloping mode
@@ -567,11 +643,12 @@ makepkg -si
 
 **UI Components:**
 - `Panels` — Right column rendering (PROCESSOR, GPU, MEMORY, DISK I/O, NETWORK, SYSTEM)
-- `ProcessTable` — Left column PROCESS MONITOR rendering with severity coloring
+- `ProcessTable` — Left column PROCESS MONITOR rendering with severity coloring and NFA-based COMMAND classification
 - `Renderer` — Frame composition and terminal output with ANSI escape handling
 - `Terminal` — TTY detection, color support, cursor control
 - `Formatting` — Text layout, truncation with ANSI-escape-aware functions
-- `Config` — Theme loading, environment variable parsing
+- `Config` — Unified TOML configuration (TOML -> env var -> compiled default), keybind mapping
+- `TomlReader` — Header-only TOML subset parser (portable across sibling projects)
 
 **Process Collection:**
 

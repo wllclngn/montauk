@@ -19,24 +19,23 @@ using namespace std::chrono;
 namespace montauk::app {
 
 Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
-  // Resolve configurable limits
-  int max_procs = montauk::ui::getenv_int("MONTAUK_MAX_PROCS", 256);
+  const auto& pcfg = montauk::ui::config().process;
+  int max_procs = pcfg.max_procs;
   if (max_procs < 32) max_procs = 32;
   if (max_procs > 4096) max_procs = 4096;
-  int enrich_top = montauk::ui::getenv_int("MONTAUK_ENRICH_TOP_N", max_procs);
+  int enrich_top = pcfg.enrich_top_n;
   if (enrich_top < 0) enrich_top = 0;
   if (enrich_top > max_procs) enrich_top = max_procs;
-  // Choose process collector: try netlink first, then fallback to traditional
-  const char* force = std::getenv("MONTAUK_COLLECTOR");
+  const auto& collector = pcfg.collector;
   auto make_traditional = [&](){
     // Default to ~100ms min interval to allow quick warm-up; steady cadence remains ~1s
     return std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::ProcessCollector(100, (size_t)max_procs, (size_t)enrich_top));
   };
 
-  if (force && std::strcmp(force, "traditional") == 0) {
+  if (collector == "traditional" || collector == "procfs") {
     proc_ = make_traditional();
 #ifdef MONTAUK_HAVE_KERNEL
-  } else if (force && std::strcmp(force, "kernel") == 0) {
+  } else if (collector == "kernel") {
     auto kpc = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::KernelProcessCollector());
     if (kpc->init()) {
       proc_ = std::move(kpc);
@@ -50,7 +49,7 @@ Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
       }
     }
 #endif
-  } else if (force && std::strcmp(force, "netlink") == 0) {
+  } else if (collector == "netlink") {
     auto netlink = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::NetlinkProcessCollector((size_t)max_procs, (size_t)enrich_top));
     if (!netlink->init()) {
       std::fprintf(stderr, "Netlink collector unavailable (need CAP_NET_ADMIN?). Falling back to traditional.\n");
