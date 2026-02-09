@@ -12,14 +12,7 @@
 #include <format>
 #include <string>
 
-// Forward declaration for ui_config (will be in Config module)
-namespace montauk::ui { 
-  struct UIConfig { 
-    std::string accent, caution, warning, base, success, info, muted, title;
-    int caution_pct, warning_pct;
-  };
-  const UIConfig& ui_config(); 
-}
+#include "ui/Config.hpp"
 
 namespace montauk::ui {
 
@@ -96,30 +89,6 @@ std::string sgr_reset() {
   return std::string("\x1B[0m");
 }
 
-std::string sgr_bold() { 
-  return sgr("1"); 
-}
-
-std::string sgr_fg_grey() { 
-  return sgr("90"); 
-}
-
-std::string sgr_fg_cyan() { 
-  return sgr("96"); 
-}
-
-std::string sgr_fg_red() { 
-  return sgr("31"); 
-}
-
-std::string sgr_fg_yel() { 
-  return sgr("33"); 
-}
-
-std::string sgr_fg_grn() { 
-  return sgr("32"); 
-}
-
 std::string sgr_code_int(int code) {
   if (!tty_stdout()) return {};
   return std::format("\x1B[{}m", code);
@@ -139,6 +108,20 @@ std::string sgr_truecolor(int r, int g, int b) {
   r = std::clamp(r,0,255); g = std::clamp(g,0,255); b = std::clamp(b,0,255);
   return std::format("\x1B[38;2;{};{};{}m", r, g, b);
 }
+std::string bar_color(double pct) {
+  if (!tty_stdout()) return {};
+  const auto& ui = ui_config();
+  if (pct <= (double)ui.caution_pct) return ui.normal;
+  if (pct <= (double)ui.warning_pct) return ui.caution;
+  return ui.warning;
+}
+
+std::string grey_bullet() {
+  if (!tty_stdout()) return std::string("\xE2\x80\xA2");
+  const auto& ui = ui_config();
+  return ui.muted + std::string("\xE2\x80\xA2") + sgr_reset();
+}
+
 int term_rows() {
   struct winsize ws{};
   if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0)

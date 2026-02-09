@@ -61,15 +61,14 @@ UIState::CPUScale getenv_cpu_scale(const char* name, UIState::CPUScale defv){
 const UIConfig& ui_config() {
   static UIConfig cfg = []{
     UIConfig c{};
-    // Defaults use terminal's 16-color palette (respects user's theme)
-    // Standard terminals: 11=bright yellow, 9=bright red, 1=red
-    // User can override via MONTAUK_*_IDX env vars
-    int acc_idx = getenv_int("MONTAUK_ACCENT_IDX", 11);  // bright yellow (or user's color11)
-    int cau_idx = getenv_int("MONTAUK_CAUTION_IDX", 9);  // bright red (or user's color9)
-    int war_idx = getenv_int("MONTAUK_WARNING_IDX", 1);  // red (or user's color1)
-    c.accent  = sgr_palette_idx(acc_idx);
-    c.caution = sgr_palette_idx(cau_idx);
-    c.warning = sgr_palette_idx(war_idx);
+    // All colors inherit from the terminal's 16-color palette
+    c.accent  = sgr_palette_idx(11);
+    c.caution = sgr_palette_idx(9);
+    c.warning = sgr_palette_idx(1);
+    c.normal  = sgr_palette_idx(2);
+    c.muted   = sgr_truecolor(0x78, 0x78, 0x78);
+    c.border  = sgr_truecolor(0x38, 0x38, 0x38);
+    c.binary  = sgr_truecolor(0x8F, 0x00, 0xFF);  // dome hyperpurp #8F00FF
 
     c.caution_pct = getenv_int("MONTAUK_PROC_CAUTION_PCT", 60);
     c.warning_pct = getenv_int("MONTAUK_PROC_WARNING_PCT", 80);

@@ -11,13 +11,35 @@
 #include <iomanip>
 #include <algorithm>
 
+namespace {
+// Color side borders grey for all content lines in a box (between first and last line)
+void grey_borders(std::vector<std::string>& box) {
+  using namespace montauk::ui;
+  if (!tty_stdout() || box.size() < 3) return;
+  const std::string V = "│";
+  for (size_t li = 1; li + 1 < box.size(); ++li) {
+    auto& line = box[li];
+    size_t fpos = line.find(V);
+    size_t lpos = line.rfind(V);
+    if (fpos == std::string::npos || lpos == std::string::npos || lpos <= fpos) continue;
+    std::string pre = line.substr(0, fpos);
+    std::string mid = line.substr(fpos + V.size(), lpos - (fpos + V.size()));
+    std::string suf = line.substr(lpos + V.size());
+    const auto& uic = ui_config();
+    line = pre + uic.border + V + sgr_reset() + mid + uic.border + V + sgr_reset() + suf;
+  }
+}
+} // anon namespace
+
 namespace montauk::ui {
 
 std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, int width, int target_rows) {
   std::vector<std::string> out;
   int iw = std::max(3, width - 2);
   auto box_add = [&](const std::string& title, const std::vector<std::string>& lines, int min_h=0){
-    auto b = make_box(title, lines, width, min_h); out.insert(out.end(), b.begin(), b.end());
+    auto b = make_box(title, lines, width, min_h);
+    grey_borders(b);
+    out.insert(out.end(), b.begin(), b.end());
   };
   bool show_disk = g_ui.show_disk, show_net = g_ui.show_net,
        show_thermal = g_ui.show_thermal, show_gpumon = g_ui.show_gpumon;
@@ -33,7 +55,9 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
     int barw = std::max(10, iw - (label_w + 3));
     double bar_pct = montauk::ui::smooth_value(key, pct_raw);
     std::string bar = montauk::util::retro_bar(bar_pct, barw);
-    std::ostringstream os; os << trunc_pad(label8, label_w) << " " << bar;
+    std::string col = bar_color(bar_pct);
+    std::string rst = col.empty() ? std::string() : sgr_reset();
+    std::ostringstream os; os << trunc_pad(label8, label_w) << " " << col << bar << rst;
     return os.str();
   };
 
@@ -52,12 +76,12 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
     std::vector<std::string> lines;
     auto gpu_line = [&](const std::string& key, const char* label8, double pct_raw){
       const int label_w = 8;
-      // Bar only (percent shown in SYSTEM)
-      // label + space + '[' + bar + ']' must fit
       int barw = std::max(10, iw - (label_w + 3));
       double bar_pct = montauk::ui::smooth_value(key, pct_raw);
       std::string bar = montauk::util::retro_bar(bar_pct, barw);
-      std::ostringstream os; os << trunc_pad(label8, label_w) << " " << bar;
+      std::string col = bar_color(bar_pct);
+      std::string rst = col.empty() ? std::string() : sgr_reset();
+      std::ostringstream os; os << trunc_pad(label8, label_w) << " " << col << bar << rst;
       return os.str();
     };
     auto add_row = [&](const std::string& row){ if (!row.empty()) lines.push_back(row); if (!lines.empty()) lines.push_back(""); };
@@ -252,7 +276,7 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
           if (utilp > 100) utilp = 100;
         }
         std::ostringstream rr; 
-        rr << utilp << "% UTIL • " << (int)(s.vram.power_limit_w+0.5) << "W";
+        rr << utilp << "% UTIL " << grey_bullet() << " " << ui_config().normal << (int)(s.vram.power_limit_w+0.5) << "W" << sgr_reset();
         push(lr_align(iw, "PLIMIT", rr.str()), 0);
       }
       if (s.vram.has_pstate) {
@@ -270,8 +294,8 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
       if (g_ui.system_focus && s.mem.available_kb > 0) {
         rr << "AVAILABLE:" << std::fixed << std::setprecision(0) << mem_avail_gb << "GB  ";
       }
-      rr << std::fixed << std::setprecision(1) << s.mem.used_pct << "% • "
-         << std::setprecision(2) << mem_used_gb << "GB/" << mem_tot_gb << "GB";
+      rr << std::fixed << std::setprecision(1) << s.mem.used_pct << "% " << grey_bullet() << " "
+         << ui_config().normal << std::setprecision(2) << mem_used_gb << "GB/" << mem_tot_gb << "GB" << sgr_reset();
       push(lr_align(iw, "MEM", rr.str()), 0);
     }
     if (g_ui.system_focus) {
@@ -304,8 +328,8 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
       size_t lim = std::min<size_t>(s.fs.mounts.size(), 3);
       for (size_t i=0;i<lim;i++) {
         const auto& m = s.fs.mounts[i];
-        std::ostringstream right; right << (int)(m.used_pct+0.5) << "% • "
-                                        << human_bytes(m.used_bytes) << "/" << human_bytes(m.total_bytes);
+        std::ostringstream right; right << (int)(m.used_pct+0.5) << "% " << grey_bullet() << " "
+                                        << ui_config().normal << human_bytes(m.used_bytes) << "/" << human_bytes(m.total_bytes) << sgr_reset();
         std::string left = m.device.empty() ? m.fstype : m.device;
         push(lr_align(iw, left, right.str()), 0);
       }
@@ -532,16 +556,21 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
     auto sys_box = make_box("SYSTEM", sys, width, inner_min);
     if (!sys_box.empty()) {
       const std::string V = "│"; const auto& uic = ui_config();
-      for (size_t li=1; li+1<sys_box.size() && (li-1)<sys_sev.size(); ++li) {
-        int sv = sys_sev[li-1]; if (sv <= 0) continue;
+      for (size_t li=1; li+1<sys_box.size(); ++li) {
+        int sv = (li-1 < sys_sev.size()) ? sys_sev[li-1] : 0;
         auto& line = sys_box[li]; size_t fpos = line.find(V); size_t lpos = line.rfind(V);
         if (fpos==std::string::npos || lpos==std::string::npos || lpos<=fpos) continue;
-        size_t start = fpos + V.size();
-        std::string pre = line.substr(0, start);
-        std::string mid = line.substr(start, lpos - start);
-        std::string suf = line.substr(lpos);
-        const std::string& col = (sv==2) ? uic.warning : uic.caution;
-        line = pre + col + mid + sgr_reset() + suf;
+        std::string pre = line.substr(0, fpos);
+        std::string mid = line.substr(fpos + V.size(), lpos - (fpos + V.size()));
+        std::string suf = line.substr(lpos + V.size());
+        std::string gl = uic.border + V + sgr_reset();
+        std::string gr = uic.border + V + sgr_reset();
+        if (sv > 0) {
+          const std::string& col = (sv==2) ? uic.warning : uic.caution;
+          line = pre + gl + col + mid + sgr_reset() + gr + suf;
+        } else {
+          line = pre + gl + mid + gr + suf;
+        }
       }
     }
     out.insert(out.end(), sys_box.begin(), sys_box.end());

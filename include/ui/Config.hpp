@@ -8,9 +8,13 @@ namespace montauk::ui {
 
 // UI Configuration structures
 struct UIConfig {
-  std::string accent;
-  std::string caution;
-  std::string warning;
+  std::string accent;     // palette 11 -- titles, labels
+  std::string caution;    // palette 9  -- mid-severity
+  std::string warning;    // palette 1  -- high-severity
+  std::string normal;     // palette 2  -- bar normal range, post-bullet data
+  std::string muted;      // #787878 -- bullets, secondary text, dim paths/args
+  std::string border;     // #383838 -- box-drawing characters, TUI borders
+  std::string binary;     // #8F00FF (dome hyperpurp) -- application/binary name in COMMAND column
   int caution_pct;
   int warning_pct;
 };

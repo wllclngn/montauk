@@ -389,20 +389,14 @@ The event count (8) may exceed visible PIDs (3) because some processes exit befo
 ### UI/Terminal
 ```bash
 MONTAUK_ALT_SCREEN=0           # Disable alt screen (default: 1)
-MONTAUK_TITLE_HEX=#FFB000      # Title color (hex, truecolor terminals)
-MONTAUK_TITLE_IDX=214          # Title color (palette index, fallback)
-MONTAUK_ACCENT_IDX=11          # Accent color (default: 11, cyan)
-MONTAUK_CAUTION_IDX=9          # Caution color (default: 9, bright red)
-MONTAUK_WARNING_IDX=1          # Warning color (default: 1, red)
 ```
 
-**Color Configuration:**
-- `_HEX` values use truecolor (24-bit) format when terminal supports it
-- `_IDX` values use 256-color palette indices (0-255)
-- Environment variables override built-in defaults
-- Both `MONTAUK_` and `montauk_` prefixes accepted
+Colors inherit from the terminal's 16-color palette. Montauk uses five
+semantic roles mapped to fixed palette indices: accent (11), caution (9),
+warning (1), normal (2), muted (8). The terminal theme defines what
+those colors look like.
 
-### Colors/Thresholds
+### Thresholds
 ```bash
 MONTAUK_PROC_CAUTION_PCT=60    # Process caution threshold (default: 60%)
 MONTAUK_PROC_WARNING_PCT=80    # Process warning threshold (default: 80%)

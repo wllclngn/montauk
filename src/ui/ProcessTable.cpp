@@ -4,6 +4,7 @@
 #include "ui/Formatting.hpp"
 #include "ui/Renderer.hpp"
 #include "util/TimSort.hpp"
+#include "util/ThompsonNFA.hpp"
 #include "app/Filter.hpp"
 #include <algorithm>
 #include <sstream>
@@ -13,6 +14,50 @@
 #include <unordered_set>
 
 namespace montauk::ui {
+
+// Colorize a command string using NFA pattern classification.
+// Kernel threads [kworker/...] → fully muted.
+// Path prefix /usr/bin/ → muted, binary name → default fg, args → muted.
+static std::string colorize_command(std::string_view cmd, int width, const UIConfig& ui) {
+  if (!tty_stdout()) return trunc_pad(std::string(cmd), width);
+
+  static const montauk::util::ThompsonNFA kernel_re("^\\[.+\\]$");
+
+  // Kernel thread: entirely muted
+  if (kernel_re.full_match(cmd))
+    return trunc_pad(ui.muted + std::string(cmd) + sgr_reset(), width);
+
+  // Find structural boundaries
+  size_t first_space = cmd.find(' ');
+  size_t exe_end = (first_space == std::string_view::npos) ? cmd.size() : first_space;
+  size_t last_slash = cmd.rfind('/', exe_end);
+
+  std::string colored;
+  colored.reserve(cmd.size() + 32);
+  if (last_slash != std::string_view::npos) {
+    // Path prefix (muted) + binary name (binary color)
+    colored += ui.muted;
+    colored.append(cmd.data(), last_slash + 1);
+    colored += sgr_reset();
+    colored += ui.binary;
+    colored.append(cmd.data() + last_slash + 1, exe_end - last_slash - 1);
+    colored += sgr_reset();
+  } else {
+    // No path -- binary name in binary color
+    colored += ui.binary;
+    colored.append(cmd.data(), exe_end);
+    colored += sgr_reset();
+  }
+
+  // Arguments (muted)
+  if (first_space != std::string_view::npos) {
+    colored += ui.muted;
+    colored.append(cmd.data() + first_space, cmd.size() - first_space);
+    colored += sgr_reset();
+  }
+
+  return trunc_pad(colored, width);
+}
 
 // Helper to format CPU percentage field with color coding
 static std::string fmt_cpu_field(double cpu_pct, bool colorize=true) {
@@ -184,6 +229,7 @@ std::vector<std::string> render_process_table(
   int gpud = g_ui.col_gpu_digit_w;
   int memw = g_ui.col_mem_w;
   int gmemw = g_ui.col_gmem_w;
+  const auto& ui = ui_config();
   // Header (align numeric headers to the right of their columns)
   {
     std::ostringstream h;
@@ -196,7 +242,10 @@ std::vector<std::string> render_process_table(
     }
     h << std::setw(memw) << "MEM" << "  "
       << "COMMAND";
-    proc_lines.push_back(h.str());
+    if (tty_stdout())
+      proc_lines.push_back(ui.accent + h.str() + sgr_reset());
+    else
+      proc_lines.push_back(h.str());
   }
   proc_sev.push_back(0);
   // Calculate command column width dynamically
@@ -206,7 +255,6 @@ std::vector<std::string> render_process_table(
   int cmd_w = iw - (pidw+2 + userw+2 + fields_w);
   if (cmd_w < 8) cmd_w = 8;
   // Process rows
-  const auto& ui = ui_config();
   for (auto* p : displayed) {
     double scaled_cpu = scale_proc_cpu(p->cpu_pct);
     double smooth_cpu = montauk::ui::smooth_value(std::string("proc.cpu.") + std::to_string(p->pid), scaled_cpu, 0.35);
@@ -235,7 +283,17 @@ std::vector<std::string> render_process_table(
       }
       int pad = gpud - (int)digits.size();
       if (pad < 0) pad = 0;
-      os << std::string(pad, ' ') << digits << "%  ";
+      int gpu_display_val = (int)(display_gpu + 0.5);
+      const std::string* gcol = nullptr;
+      if (severity == 0 && tty_stdout()) {
+        if (gpu_display_val >= ui.warning_pct) gcol = &ui.warning;
+        else if (gpu_display_val >= ui.caution_pct) gcol = &ui.caution;
+      }
+      os << std::string(pad, ' ');
+      if (gcol) os << *gcol;
+      os << digits;
+      if (gcol) os << sgr_reset();
+      os << "%  ";
     }
     
     // GMEM with right-alignment
@@ -254,10 +312,12 @@ std::vector<std::string> render_process_table(
       os << std::string(pad, ' ') << mem_str << "  ";
     }
     
-    // COMMAND (left-aligned)
-    std::string proc_name = p->cmd.empty() ? std::to_string(p->pid) : 
-                            sanitize_for_display(p->cmd, cmd_w + 10);
-    os << trunc_pad(proc_name, cmd_w);
+    // COMMAND (left-aligned, colorized via Thompson NFA classification)
+    {
+      std::string raw = p->cmd.empty() ? std::to_string(p->pid) :
+                        sanitize_for_display(p->cmd, cmd_w + 10);
+      os << colorize_command(raw, cmd_w, ui);
+    }
     proc_lines.push_back(os.str());
     proc_sev.push_back(severity);
   }
@@ -268,24 +328,27 @@ std::vector<std::string> render_process_table(
     title = "PROCESS MONITOR: " + std::to_string(order.size()) + suffix;
   }
   auto proc_box = make_box(title, proc_lines, width, proc_inner_min);
-  // Colorize rows based on severity
+  // Colorize rows: severity coloring for hot processes, grey side borders for all
   {
-    const std::string& V = "│";
+    const std::string V = "│";
     const auto& uic = ui_config();
     for (int li = 1; li < (int)proc_box.size() - 1; ++li) {
-      if (li - 1 >= (int)proc_sev.size()) break;
-      int sev = proc_sev[li-1];
-      if (sev <= 0) continue; // skip header and non-severe rows
+      int sev = (li - 1 < (int)proc_sev.size()) ? proc_sev[li-1] : 0;
       auto& line = proc_box[li];
       size_t fpos = line.find(V);
       size_t lpos = line.rfind(V);
       if (fpos == std::string::npos || lpos == std::string::npos || lpos <= fpos) continue;
-      size_t start = fpos + V.size();
-      std::string pre = line.substr(0, start);
-      std::string mid = line.substr(start, lpos - start);
-      std::string suf = line.substr(lpos);
-      const std::string& col = (sev==2) ? uic.warning : uic.caution;
-      line = pre + col + mid + sgr_reset() + suf;
+      std::string pre = line.substr(0, fpos);
+      std::string mid = line.substr(fpos + V.size(), lpos - (fpos + V.size()));
+      std::string suf = line.substr(lpos + V.size());
+      std::string gl = uic.border + V + sgr_reset();
+      std::string gr = uic.border + V + sgr_reset();
+      if (sev > 0) {
+        const std::string& col = (sev==2) ? uic.warning : uic.caution;
+        line = pre + gl + col + mid + sgr_reset() + gr + suf;
+      } else {
+        line = pre + gl + mid + gr + suf;
+      }
     }
   }
   // Search bar: append below process box when search mode is active
@@ -293,20 +356,19 @@ std::vector<std::string> render_process_table(
     auto hrule = [](int n) { std::string r; for (int i = 0; i < n; i++) r += "─"; return r; };
     const auto& uic = ui_config();
     // Replace bottom border with ├───┤ divider
+    const std::string sb = uic.border;  // search border color
     if (!proc_box.empty()) {
-      proc_box.back() = "├" + hrule(iw) + "┤";
+      proc_box.back() = sb + "├" + hrule(iw) + "┤" + sgr_reset();
     }
     // Search input row: │ SEARCH/FILTER: query█                │
-    // Build visible text, pad to iw with trunc_pad (handles UTF-8 display width),
-    // then wrap with ANSI color codes
     std::string label = " SEARCH/FILTER: ";
     std::string input = g_ui.filter_query + "\xE2\x96\x88";
     int input_pad = std::max(0, iw - (int)label.size() - (int)g_ui.filter_query.size() - 1);
-    proc_box.push_back("│" + uic.accent + label + sgr_reset() + input + std::string(input_pad, ' ') + "│");
+    proc_box.push_back(sb + "│" + sgr_reset() + uic.accent + label + sgr_reset() + input + std::string(input_pad, ' ') + sb + "│" + sgr_reset());
     // Bottom border with hint right-aligned: └───...── Press ESC to exit. ─┘
     std::string hint = " Press ESC to exit. ";
-    int fill = std::max(0, iw - (int)hint.size() - 1); // -1 for trailing ─
-    proc_box.push_back("└" + hrule(fill) + hint + "─" + "┘");
+    int fill = std::max(0, iw - (int)hint.size() - 1);
+    proc_box.push_back(sb + "└" + hrule(fill) + sgr_reset() + uic.muted + hint + sgr_reset() + sb + "─┘" + sgr_reset());
   }
   all.insert(all.end(), proc_box.begin(), proc_box.end());
   return all;

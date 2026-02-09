@@ -176,21 +176,9 @@ CPU percentage for warning color (default: 80)
 .B MONTAUK_TOPPROC_ALERT_FRAMES
 Consecutive frames over threshold before PROC CHURN alert (default: 5)
 .SS Colors
-.TP
-.B MONTAUK_ACCENT_IDX
-256-color index for accent (default: 11)
-.TP
-.B MONTAUK_CAUTION_IDX
-256-color index for caution (default: 9)
-.TP
-.B MONTAUK_WARNING_IDX
-256-color index for warning (default: 1)
-.TP
-.B MONTAUK_TITLE_IDX
-256-color index for title (default: 31)
-.TP
-.B MONTAUK_TITLE_HEX
-Truecolor hex for title (e.g., "ff5500")
+Colors inherit from the terminal's 16-color palette. Five semantic roles
+are mapped to fixed palette indices: accent (11), caution (9), warning (1),
+normal (2), muted (8).
 .SS Thermal
 .TP
 .B MONTAUK_CPU_TEMP_WARNING_C

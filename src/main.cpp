@@ -314,7 +314,7 @@ int main(int argc, char** argv) {
       std::ostringstream os; os << ui.warning << "ALERT: top CPU " << (int)(top_cpu+0.5) << "%" << sgr_reset() << "  ";
       alert = os.str();
     }
-    std::string dyn_help = alert + "SORT:" + sort_name + " • FOCUS:" + (g_ui.system_focus? "SYSTEM":"DEFAULT") + " • FPS:" + std::to_string(fps) + "  " + help_text;
+    std::string dyn_help = alert + "SORT:" + sort_name + " " + montauk::ui::grey_bullet() + " FOCUS:" + (g_ui.system_focus? "SYSTEM":"DEFAULT") + " " + montauk::ui::grey_bullet() + " FPS:" + std::to_string(fps) + "  " + help_text;
     montauk::ui::render_screen(s, show_help, dyn_help);
   }
   if (log_writer) log_writer->stop();

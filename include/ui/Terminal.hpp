@@ -23,15 +23,13 @@ void on_atexit_restore();
 // SGR code generation
 [[nodiscard]] std::string sgr(const char* code);
 [[nodiscard]] std::string sgr_reset();
-[[nodiscard]] std::string sgr_bold();
-[[nodiscard]] std::string sgr_fg_grey();
-[[nodiscard]] std::string sgr_fg_cyan();
-[[nodiscard]] std::string sgr_fg_red();
-[[nodiscard]] std::string sgr_fg_yel();
-[[nodiscard]] std::string sgr_fg_grn();
 [[nodiscard]] std::string sgr_code_int(int code);
 [[nodiscard]] std::string sgr_palette_idx(int idx);
 [[nodiscard]] std::string sgr_truecolor(int r, int g, int b);
+
+// Unified color helpers (source thresholds and colors from UIConfig)
+[[nodiscard]] std::string bar_color(double pct);
+[[nodiscard]] std::string grey_bullet();
 
 // Best-effort terminal write (async-signal-safe)
 void best_effort_write(int fd, const char* buf, size_t len);
