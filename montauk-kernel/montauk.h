@@ -99,9 +99,6 @@ struct montauk_proc {
 
     /* Executable path (cached on exec) */
     char                exe_path[MONTAUK_EXE_PATH_LEN];
-
-    /* Full command line with arguments */
-    char                cmdline[MONTAUK_CMDLINE_LEN];
 };
 
 /* Module statistics */

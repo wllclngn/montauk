@@ -43,7 +43,6 @@ static void montauk_proc_init_atomic(struct montauk_proc *proc,
     proc->nr_threads = 1;
     proc->rss_pages = 0;
     proc->exe_path[0] = '\0';
-    proc->cmdline[0] = '\0';
 }
 
 /*

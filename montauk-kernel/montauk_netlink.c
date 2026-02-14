@@ -94,14 +94,6 @@ static int montauk_add_proc_entry(struct sk_buff *msg,
         }
     }
 
-    /* cmdline is optional (kernel threads don't have one) */
-    if (proc->cmdline[0] != '\0') {
-        if (nla_put_string(msg, MONTAUK_ATTR_CMDLINE, proc->cmdline)) {
-            nla_nest_cancel(msg, nest);
-            return -EMSGSIZE;
-        }
-    }
-
     nla_nest_end(msg, nest);
     return 0;
 }

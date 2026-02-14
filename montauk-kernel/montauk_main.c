@@ -28,7 +28,7 @@
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("montauk developers");
 MODULE_DESCRIPTION("Process telemetry for montauk system monitor");
-MODULE_VERSION("0.1.0");
+MODULE_VERSION("4.6.0");
 
 /* Global state */
 struct rhashtable montauk_proc_table;
@@ -131,40 +131,6 @@ static void montauk_refresh_proc_times(struct montauk_proc *proc)
                 fput(exe_file);
             }
             rcu_read_unlock();
-            mmput(mm);
-        }
-    }
-
-    /* Populate cmdline if empty (new processes from fork) */
-    if (proc->cmdline[0] == '\0') {
-        mm = get_task_mm(task);
-        if (mm) {
-            unsigned long arg_start = mm->arg_start;
-            unsigned long arg_end = mm->arg_end;
-            unsigned long len = arg_end - arg_start;
-
-            if (len > 0 && len < MONTAUK_CMDLINE_LEN) {
-                int ret = access_process_vm(task, arg_start, proc->cmdline, len, 0);
-                if (ret > 0) {
-                    int i;
-                    for (i = 0; i < ret - 1; i++) {
-                        if (proc->cmdline[i] == '\0')
-                            proc->cmdline[i] = ' ';
-                    }
-                    proc->cmdline[ret - 1] = '\0';
-                }
-            } else if (len >= MONTAUK_CMDLINE_LEN) {
-                int ret = access_process_vm(task, arg_start, proc->cmdline,
-                                            MONTAUK_CMDLINE_LEN - 1, 0);
-                if (ret > 0) {
-                    int i;
-                    for (i = 0; i < ret - 1; i++) {
-                        if (proc->cmdline[i] == '\0')
-                            proc->cmdline[i] = ' ';
-                    }
-                    proc->cmdline[ret - 1] = '\0';
-                }
-            }
             mmput(mm);
         }
     }

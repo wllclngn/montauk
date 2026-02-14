@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cstdio>
 #include <fstream>
+#include <unordered_set>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <linux/netlink.h>
@@ -305,10 +306,18 @@ bool KernelProcessCollector::recv_snapshot(montauk::model::ProcessSnapshot& out)
         nla = (struct nlattr*)((char*)nla + nla_len);
     }
 
-    // Update state for next delta calculation
+    // Update state for next delta calculation and prune stale cmdline cache entries
     std::unordered_map<int32_t, uint64_t> next_last;
+    std::unordered_set<int32_t> alive_pids;
     for (const auto& p : out.processes) {
         next_last[p.pid] = p.total_time;
+        alive_pids.insert(p.pid);
+    }
+    for (auto it = cmdline_cache_.begin(); it != cmdline_cache_.end(); ) {
+        if (!alive_pids.count(it->first))
+            it = cmdline_cache_.erase(it);
+        else
+            ++it;
     }
     last_per_proc_ = std::move(next_last);
     last_cpu_total_ = cpu_total;
@@ -318,8 +327,25 @@ bool KernelProcessCollector::recv_snapshot(montauk::model::ProcessSnapshot& out)
     std::sort(out.processes.begin(), out.processes.end(),
               [](const auto& a, const auto& b) { return a.cpu_pct > b.cpu_pct; });
 
+    // Resolve cmdline from /proc in userspace (cached, one-shot per PID)
+    for (auto& ps : out.processes) {
+        if (ps.pid <= 0) continue;
+        auto it = cmdline_cache_.find(ps.pid);
+        if (it != cmdline_cache_.end()) {
+            if (!it->second.empty()) ps.cmd = it->second;
+            continue;
+        }
+        auto cmd = read_cmdline(ps.pid);
+        if (!cmd.empty()) {
+            ps.cmd = cmd;
+            cmdline_cache_.emplace(ps.pid, std::move(cmd));
+        } else {
+            cmdline_cache_.emplace(ps.pid, std::string{});
+        }
+    }
+
     out.tracked_count = out.processes.size();
-    out.enriched_count = out.processes.size();  // All processes are "enriched" from kernel
+    out.enriched_count = out.processes.size();
 
     return true;
 }
@@ -361,6 +387,25 @@ int KernelProcessCollector::read_cpu_count() {
         }
     }
     return count > 0 ? count : 1;
+}
+
+std::string KernelProcessCollector::read_cmdline(int32_t pid) {
+    auto path = std::string("/proc/") + std::to_string(pid) + "/cmdline";
+    auto bytes = montauk::util::read_file_bytes(path);
+    if (!bytes || bytes->empty()) return {};
+    std::string out;
+    out.reserve(bytes->size());
+    bool sep = true;
+    for (auto b : *bytes) {
+        if (b == 0) {
+            if (!sep) { out.push_back(' '); sep = true; }
+        } else {
+            out.push_back(static_cast<char>(b));
+            sep = false;
+        }
+    }
+    if (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
 }
 
 } // namespace montauk::collectors

@@ -2,6 +2,7 @@
 
 #include "collectors/IProcessCollector.hpp"
 #include <unordered_map>
+#include <string>
 #include <cstdint>
 
 namespace montauk::collectors {
@@ -32,12 +33,16 @@ private:
   bool have_last_{false};
   int ncpu_{0};
 
+  // Cmdline cache (one-shot per PID, populated from /proc in userspace)
+  std::unordered_map<int32_t, std::string> cmdline_cache_;
+
   // Helpers
   bool resolve_family();
   bool send_get_snapshot();
   bool recv_snapshot(montauk::model::ProcessSnapshot& out);
   uint64_t read_cpu_total();
   int read_cpu_count();
+  std::string read_cmdline(int32_t pid);
 };
 
 } // namespace montauk::collectors
