@@ -28,7 +28,7 @@
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("montauk developers");
 MODULE_DESCRIPTION("Process telemetry for montauk system monitor");
-MODULE_VERSION("4.6.0");
+MODULE_VERSION("4.7.0");
 
 /* Global state */
 struct rhashtable montauk_proc_table;

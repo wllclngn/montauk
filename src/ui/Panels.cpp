@@ -434,6 +434,9 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
     if (!s.collector_name.empty()) {
       push(lr_align(iw, "COLLECTOR", s.collector_name), 0);
     }
+    if (g_ui.system_focus) {
+      push(lr_align(iw, "SCHEDULER", read_scheduler()), 0);
+    }
     {
       std::ostringstream rr; 
       rr << "ENRICHED:" << s.procs.enriched_count << "  TOTAL:" << s.procs.total_processes;

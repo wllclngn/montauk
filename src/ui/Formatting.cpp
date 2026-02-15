@@ -195,6 +195,28 @@ std::string read_kernel_version() {
   return ver.empty() ? "unknown" : ver;
 }
 
+std::string read_scheduler() {
+  auto txt = montauk::util::read_file_string("/sys/kernel/sched_ext/root/ops");
+  if (txt) {
+    std::string name = *txt;
+    while (!name.empty() && (name.back() == '\n' || name.back() == '\r' || name.back() == ' '))
+      name.pop_back();
+    if (!name.empty()) return name;
+  }
+  auto ver = montauk::util::read_file_string("/proc/sys/kernel/osrelease");
+  if (ver) {
+    int major = 0, minor = 0;
+    auto dot = ver->find('.');
+    if (dot != std::string::npos) {
+      major = std::atoi(ver->c_str());
+      minor = std::atoi(ver->c_str() + dot + 1);
+    }
+    if (major > 6 || (major == 6 && minor >= 6))
+      return "EEVDF";
+  }
+  return "CFS";
+}
+
 std::string read_uptime_formatted() {
   auto txt = montauk::util::read_file_string("/proc/uptime");
   if (!txt) return "0D 0H 0M 0S";

@@ -21,6 +21,7 @@ namespace montauk::ui {
 // System information helpers
 [[nodiscard]] std::string read_hostname();
 [[nodiscard]] std::string read_kernel_version();
+[[nodiscard]] std::string read_scheduler();
 [[nodiscard]] std::string read_uptime_formatted();
 void read_loadavg(double& a1, double& a5, double& a15);
 
