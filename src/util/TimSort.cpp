@@ -22,6 +22,7 @@ constexpr size_t INITIAL_GALLOP = 7;   // Initial gallop threshold
 struct Run {
   size_t base;      // Starting index of the run
   size_t length;    // Length of the run
+  int power;        // Node level in PowerSort merge tree
 };
 
 // ============================================================================
@@ -460,33 +461,48 @@ void merge_with_gallop(
 }
 
 // ============================================================================
-// MERGE COLLAPSE (Maintain TimSort stack invariants)
+// POWERSORT NODE POWER (Munro & Wild 2018, CPython 3.11+)
 // ============================================================================
-// Ensures the merge stack maintains proper invariants:
-//   1. runLen[i-3] > runLen[i-2] + runLen[i-1]
-//   2. runLen[i-2] > runLen[i-1]
-// These invariants ensure balanced merges and O(n log n) performance.
-void merge_collapse(
+// Computes the depth in a conceptual nearly-optimal binary merge tree
+// for the boundary between two adjacent runs. Lower power = higher in
+// tree = merge later. Higher power = deeper = merge sooner.
+int powerloop(size_t s1, size_t n1, size_t n2, size_t n) {
+  int result = 0;
+  size_t a = 2 * s1 + n1;
+  size_t b = a + n1 + n2;
+  for (;;) {
+    ++result;
+    if (a >= n) {
+      a -= n;
+      b -= n;
+    } else if (b >= n) {
+      break;
+    }
+    a <<= 1;
+    b <<= 1;
+  }
+  return result;
+}
+
+// ============================================================================
+// POWERSORT MERGE POLICY (replaces classic TimSort stack invariants)
+// ============================================================================
+// Before pushing a new run, merge stacked runs whose power exceeds the
+// new boundary's power. This produces a provably near-optimal merge sequence.
+void powersort_merge(
     std::vector<size_t>::iterator first,
     std::vector<Run>& runs,
+    size_t new_run_len, size_t total_n,
     std::function<bool(size_t, size_t)>& comp,
     std::vector<size_t>& tmp,
     size_t& min_gallop
 ) {
-  while (runs.size() > 1) {
-    size_t n = runs.size() - 2;
-
-    if (n > 0 && runs[n - 1].length <= runs[n].length + runs[n + 1].length) {
-      // Merge the smaller of the two adjacent runs
-      if (runs[n - 1].length < runs[n + 1].length) {
-        --n;
-      }
-      merge_with_gallop(first, runs, n, comp, tmp, min_gallop);
-    } else if (runs[n].length <= runs[n + 1].length) {
-      merge_with_gallop(first, runs, n, comp, tmp, min_gallop);
-    } else {
-      break; // Invariants satisfied
+  if (!runs.empty()) {
+    int power = powerloop(runs.back().base, runs.back().length, new_run_len, total_n);
+    while (runs.size() > 1 && runs[runs.size() - 2].power > power) {
+      merge_with_gallop(first, runs, runs.size() - 2, comp, tmp, min_gallop);
     }
+    runs.back().power = power;
   }
 }
 
@@ -551,14 +567,15 @@ void timsort_impl(
       runLen = force;
     }
 
+    // PowerSort merge policy: merge stacked runs before pushing new one
+    powersort_merge(first, runs, runLen, n, comp, tmp, min_gallop);
+
     // Push run onto stack
     runs.push_back({
       static_cast<size_t>(std::distance(first, cur)),
-      runLen
+      runLen,
+      0
     });
-
-    // Maintain stack invariants
-    merge_collapse(first, runs, comp, tmp, min_gallop);
 
     cur += runLen;
     nRemaining -= runLen;
