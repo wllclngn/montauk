@@ -242,9 +242,7 @@ int main(int argc, char** argv) {
   bool show_help = false;
   auto help_text = std::string("Keys: q quit  / search  c/m/p/n sort  g GPU sort  v GMEM sort  G toggle GPU  +/- fps  arrows/PgUp/PgDn scroll  t Thermal  d Disk  N Net  i CPU scale  u GPU scale  s System focus  R reset UI  h help");
   int alert_frames = 0; int alert_needed = cfg.thresholds.alert_frames;
-  bool did_first_clear = false;
   for (int i = 0; (iterations <= 0 || i < iterations) && !g_stop.load(); ++i) {
-    if (use_alt && !did_first_clear) { best_effort_write(STDOUT_FILENO, "\x1B[2J\x1B[H", 7); did_first_clear = true; }
     // Non-blocking input with poll
     struct pollfd pfd{.fd=STDIN_FILENO,.events=POLLIN,.revents=0};
     int to = (i == 0) ? 0 : sleep_ms; if (to < 10 && i > 0) to = 10; if (to > 1000) to = 1000;

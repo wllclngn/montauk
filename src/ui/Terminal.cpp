@@ -249,7 +249,7 @@ CursorGuard::~CursorGuard() {
 
 AltScreenGuard::AltScreenGuard(bool enable) {
   if (enable && tty_stdout()) {
-    best_effort_write(STDOUT_FILENO, "\x1B[?1049h", 8);
+    best_effort_write(STDOUT_FILENO, "\x1B[?1049h\x1B[2J\x1B[H", 15);
     active_ = true;
     g_alt_in_use.store(true);
   }
