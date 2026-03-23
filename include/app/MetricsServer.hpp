@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <thread>
 #include "app/SnapshotBuffers.hpp"
+#include "app/TraceBuffers.hpp"
 #include "model/Snapshot.hpp"
 
 namespace montauk::app {
@@ -29,6 +30,21 @@ struct MetricsSnapshot {
 
 // Serialize a MetricsSnapshot into Prometheus text exposition format (version 0.0.4).
 [[nodiscard]] std::string snapshot_to_prometheus(const MetricsSnapshot& snap);
+
+// Serialize a TraceSnapshot into Prometheus text exposition format.
+[[nodiscard]] std::string trace_to_prometheus(const montauk::model::TraceSnapshot& snap);
+
+// Read a TraceSnapshot from TraceBuffers via seqlock.
+[[nodiscard]] inline montauk::model::TraceSnapshot read_trace_snapshot(const TraceBuffers& buffers) {
+  montauk::model::TraceSnapshot ts{};
+  uint64_t seq_before, seq_after;
+  do {
+    seq_before = buffers.seq();
+    ts = buffers.front();
+    seq_after = buffers.seq();
+  } while (seq_before != seq_after);
+  return ts;
+}
 
 // Read a bounded MetricsSnapshot from SnapshotBuffers via seqlock.
 [[nodiscard]] inline MetricsSnapshot read_metrics_snapshot(const SnapshotBuffers& buffers) {
@@ -59,7 +75,8 @@ struct MetricsSnapshot {
 
 class MetricsServer {
 public:
-  MetricsServer(const SnapshotBuffers& buffers, uint16_t port);
+  MetricsServer(const SnapshotBuffers& buffers, uint16_t port,
+                const TraceBuffers* trace = nullptr);
   ~MetricsServer();
   MetricsServer(const MetricsServer&) = delete;
   MetricsServer& operator=(const MetricsServer&) = delete;
@@ -72,6 +89,7 @@ private:
   void handle_client(int client_fd);
 
   const SnapshotBuffers& buffers_;
+  const TraceBuffers* trace_{nullptr};
   uint16_t port_;
   int listen_fd_{-1};
   int stop_eventfd_{-1};

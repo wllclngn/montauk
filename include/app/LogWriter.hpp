@@ -6,13 +6,15 @@
 #include <stop_token>
 #include <chrono>
 #include "app/SnapshotBuffers.hpp"
+#include "app/TraceBuffers.hpp"
 
 namespace montauk::app {
 
 class LogWriter {
 public:
   LogWriter(const SnapshotBuffers& buffers, std::filesystem::path log_dir,
-            std::chrono::milliseconds interval = std::chrono::milliseconds(1000));
+            std::chrono::milliseconds interval = std::chrono::milliseconds(1000),
+            const TraceBuffers* trace = nullptr);
   ~LogWriter();
   LogWriter(const LogWriter&) = delete;
   LogWriter& operator=(const LogWriter&) = delete;
@@ -25,6 +27,7 @@ private:
   [[nodiscard]] std::filesystem::path chunk_path() const;
 
   const SnapshotBuffers& buffers_;
+  const TraceBuffers* trace_{nullptr};
   std::filesystem::path log_dir_;
   std::chrono::milliseconds interval_;
   std::jthread thread_;

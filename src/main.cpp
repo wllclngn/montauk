@@ -3,6 +3,10 @@
 #include "app/Security.hpp"
 #include "app/MetricsServer.hpp"
 #include "app/LogWriter.hpp"
+#include "app/TraceBuffers.hpp"
+#ifdef MONTAUK_HAVE_BPF
+#include "collectors/BpfTraceCollector.hpp"
+#endif
 #include "util/Retro.hpp"
 #include "model/Snapshot.hpp"
 #include "ui/Terminal.hpp"
@@ -79,6 +83,7 @@ int main(int argc, char** argv) {
   std::filesystem::path log_dir; // non-empty enables LogWriter
   int log_interval_ms = 1000;    // default 1s write interval
   bool headless = false;     // --headless: skip TUI, daemon mode
+  std::string trace_pattern; // --trace PATTERN: trace process group
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--iterations" && i + 1 < argc) iterations = std::stoi(argv[++i]);
@@ -88,6 +93,7 @@ int main(int argc, char** argv) {
     else if (a == "--log" && i + 1 < argc) log_dir = argv[++i];
     else if (a == "--log-interval-ms" && i + 1 < argc) log_interval_ms = std::stoi(argv[++i]);
     else if (a == "--headless") headless = true;
+    else if (a == "--trace" && i + 1 < argc) trace_pattern = argv[++i];
     else if (a == "--init-theme") {
       auto colors = montauk::ui::detect_palette();
       montauk::util::TomlReader toml;
@@ -155,17 +161,21 @@ int main(int argc, char** argv) {
     else if (a == "-h" || a == "--help") {
       std::cout << "Usage: montauk [--self-test-seconds S] [--iterations N] [--sleep-ms MS]\n";
       std::cout << "               [--metrics PORT] [--log DIR] [--log-interval-ms MS] [--headless]\n";
-      std::cout << "               [--init-theme]\n";
+      std::cout << "               [--trace PATTERN] [--init-theme]\n";
       std::cout << "Notes: Text UI runs until Ctrl+C by default.\n";
       std::cout << "       --metrics PORT        Enable Prometheus endpoint on PORT\n";
       std::cout << "       --log DIR             Write timestamped snapshots to DIR\n";
       std::cout << "       --log-interval-ms MS  Write interval in ms (default: 1000)\n";
       std::cout << "       --headless            Daemon mode (no TUI, requires --metrics or --log)\n";
+      std::cout << "       --trace PATTERN       Trace process group matching PATTERN (headless)\n";
       std::cout << "       --init-theme          Detect terminal palette and write config.toml\n";
       return 0;
     }
   }
-  if (headless && metrics_port == 0 && log_dir.empty()) {
+  // --trace implies headless
+  if (!trace_pattern.empty()) headless = true;
+
+  if (headless && metrics_port == 0 && log_dir.empty() && trace_pattern.empty()) {
     std::cerr << "Error: --headless requires --metrics PORT or --log DIR\n";
     return 1;
   }
@@ -175,24 +185,59 @@ int main(int argc, char** argv) {
     montauk::app::Producer producer(buffers);
     producer.start();
 
+    // Trace subsystem (optional, parallel to main pipeline)
+    std::unique_ptr<montauk::app::TraceBuffers> trace_buffers;
+#ifdef MONTAUK_HAVE_BPF
+    std::unique_ptr<montauk::collectors::BpfTraceCollector> trace_collector;
+    if (!trace_pattern.empty()) {
+      trace_buffers = std::make_unique<montauk::app::TraceBuffers>();
+      trace_collector = std::make_unique<montauk::collectors::BpfTraceCollector>(
+          *trace_buffers, trace_pattern);
+      trace_collector->start();
+    }
+#else
+    if (!trace_pattern.empty()) {
+      std::cerr << "Error: --trace requires eBPF support (libbpf + bpftool + clang)\n";
+      std::cerr << "Rebuild with libbpf installed: pacman -S libbpf bpf\n";
+      return 1;
+    }
+#endif
+
     std::unique_ptr<montauk::app::MetricsServer> metrics;
     if (metrics_port > 0) {
-      metrics = std::make_unique<montauk::app::MetricsServer>(buffers, metrics_port);
+      metrics = std::make_unique<montauk::app::MetricsServer>(
+          buffers, metrics_port, trace_buffers.get());
       metrics->start();
     }
 
     std::unique_ptr<montauk::app::LogWriter> log_writer;
     if (!log_dir.empty()) {
       log_writer = std::make_unique<montauk::app::LogWriter>(
-          buffers, log_dir, std::chrono::milliseconds(log_interval_ms));
+          buffers, log_dir, std::chrono::milliseconds(log_interval_ms),
+          trace_buffers.get());
       log_writer->start();
     }
 
     // Headless mode: no TUI, just run Producer + outputs until Ctrl+C
     if (headless) {
+#ifdef MONTAUK_HAVE_BPF
+      // Wait briefly for BPF to initialize, then check for failure
+      if (trace_collector) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (trace_collector->failed()) {
+          std::cerr << "Error: --trace requires root or CAP_BPF + CAP_PERFMON\n";
+          trace_collector->stop();
+          producer.stop();
+          return 1;
+        }
+      }
+#endif
       while (!g_stop.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
       }
+#ifdef MONTAUK_HAVE_BPF
+      if (trace_collector) trace_collector->stop();
+#endif
       if (log_writer) log_writer->stop();
       if (metrics) metrics->stop();
       producer.stop();
@@ -239,9 +284,6 @@ int main(int argc, char** argv) {
   g_ui.show_disk = true;
   g_ui.show_net = true;
   if (iterations <= 0) iterations = INT32_MAX;
-  bool show_help = false;
-  auto help_text = std::string("Keys: q quit  / search  c/m/p/n sort  g GPU sort  v GMEM sort  G toggle GPU  +/- fps  arrows/PgUp/PgDn scroll  t Thermal  d Disk  N Net  i CPU scale  u GPU scale  s System focus  R reset UI  h help");
-  int alert_frames = 0; int alert_needed = cfg.thresholds.alert_frames;
   for (int i = 0; (iterations <= 0 || i < iterations) && !g_stop.load(); ++i) {
     // Non-blocking input with poll
     struct pollfd pfd{.fd=STDIN_FILENO,.events=POLLIN,.revents=0};
@@ -281,7 +323,7 @@ int main(int argc, char** argv) {
           auto action = cfg.lookup_key(static_cast<char>(c));
           switch (action) {
             case Config::Action::QUIT: g_stop.store(true); break;
-            case Config::Action::HELP: show_help = !show_help; break;
+            case Config::Action::HELP: break;
             case Config::Action::FPS_UP: sleep_ms = std::max(33, sleep_ms - 10); break;
             case Config::Action::FPS_DOWN: sleep_ms = std::min(1000, sleep_ms + 10); break;
             case Config::Action::SORT_CPU: g_ui.sort = SortMode::CPU; break;
@@ -346,29 +388,11 @@ int main(int argc, char** argv) {
       seq_after = buffers.seq();
     } while (seq_before != seq_after);
     const auto& s = s_copy;
-    // Dynamic help with current sort/fps and optional alert banner
-    // Report the active sort mode accurately in the help line
-    std::string sort_name =
-      (g_ui.sort==SortMode::CPU?  "cpu" :
-      (g_ui.sort==SortMode::MEM?  "mem" :
-      (g_ui.sort==SortMode::PID?  "pid" :
-      (g_ui.sort==SortMode::NAME? "name" :
-      (g_ui.sort==SortMode::GPU?  "gpu" : "gmem")))));
-    int fps = (sleep_ms>0)? (1000/std::max(1,sleep_ms)) : 0;
-    // Alert: sustained top process CPU over warning threshold (respect current CPU scale)
-    const auto& ui = ui_config();
-    int ncpu = (int)std::max<size_t>(1, s.cpu.per_core_pct.size());
-    auto scale_proc = [&](double v){ return (g_ui.cpu_scale==UIState::CPUScale::Total)? (v/(double)ncpu) : v; };
-    double top_cpu = 0.0; for (const auto& p : s.procs.processes) { double v = scale_proc(p.cpu_pct); if (v > top_cpu) top_cpu = v; }
-    if ((int)(top_cpu+0.5) >= ui.warning_pct) alert_frames++; else alert_frames = 0;
-    std::string alert;
-    if (alert_frames >= alert_needed) {
-      std::ostringstream os; os << ui.warning << "ALERT: top CPU " << (int)(top_cpu+0.5) << "%" << sgr_reset() << "  ";
-      alert = os.str();
-    }
-    std::string dyn_help = alert + "SORT:" + sort_name + " " + montauk::ui::grey_bullet() + " FOCUS:" + (g_ui.system_focus? "SYSTEM":"DEFAULT") + " " + montauk::ui::grey_bullet() + " FPS:" + std::to_string(fps) + "  " + help_text;
-    montauk::ui::render_screen(s, show_help, dyn_help);
+    montauk::ui::render_screen(s, false, "");
   }
+#ifdef MONTAUK_HAVE_BPF
+  if (trace_collector) trace_collector->stop();
+#endif
   if (log_writer) log_writer->stop();
   if (metrics) metrics->stop();
   producer.stop();

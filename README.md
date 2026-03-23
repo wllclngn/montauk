@@ -17,6 +17,7 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **Multi-vendor Support**: NVIDIA (NVML + fallbacks), AMD (sysfs), Intel (fdinfo)
 - **Sophisticated Attribution**: Multiple fallback mechanisms for GPU metrics when vendor APIs are unavailable
 - **Prometheus Metrics Endpoint**: Optional HTTP `/metrics` endpoint serving Prometheus exposition format over io_uring, enabling integration with Prometheus, Grafana, and Kubernetes monitoring stacks
+- **eBPF Process Group Tracing**: `--trace PATTERN` attaches eBPF programs to kernel tracepoints for real-time per-thread syscall, scheduler state, and fd tracking across an entire process tree — event-driven, non-invasive, no ptrace, with continuous flight recording via Prometheus logs
 - **Headless Daemon Mode**: Run without TUI as a pure metrics exporter (`--headless --metrics PORT`)
 - **Structured Logging**: Timestamped Prometheus exposition snapshots to disk (`--log DIR`)
 - **Live Process Search**: Boyer-Moore-Horspool substring search with branchless ASCII lowercasing via `/` or `Ctrl+F`
@@ -151,7 +152,7 @@ See `montauk-kernel/README.md` for full documentation including architecture, pr
 
 ## Operating Modes
 
-montauk supports three operating modes via composable CLI flags:
+montauk supports four operating modes via composable CLI flags:
 
 ```bash
 montauk                                # TUI only (default)
@@ -162,6 +163,9 @@ montauk --headless --metrics 9101      # Daemon mode: Prometheus only, no TUI
 montauk --headless --log /var/log/montauk              # Daemon mode: logging only
 montauk --headless --metrics 9101 --log /var/log/montauk  # Daemon mode: both
 montauk --headless                     # Error: requires --metrics or --log
+montauk --trace firefox                # Trace mode: per-thread diagnostics for process group
+montauk --trace myapp --metrics 9101   # Trace mode + Prometheus endpoint
+montauk --trace myapp --log /tmp/trace # Trace mode + flight recorder
 montauk --init-theme                   # Detect terminal palette, write config.toml
 ```
 
@@ -186,6 +190,40 @@ Requires liburing at build time. Without liburing, montauk compiles normally wit
 When `--log DIR` is specified, montauk writes timestamped Prometheus exposition snapshots to disk. Files rotate hourly with the naming convention `montauk_YYYY-MM-DD_HH.prom`. Each block is prefixed with a `# montauk_scrape_timestamp_ms` comment for replay and analysis. The LogWriter reads from the same SnapshotBuffers as the TUI and metrics endpoint.
 
 No additional dependencies required. Works independently of or alongside `--metrics`.
+
+**Trace Mode (eBPF):**
+
+When `--trace PATTERN` is specified, montauk enters headless trace mode powered by eBPF. It attaches BPF programs to kernel tracepoints (`sched_process_fork`, `sched_process_exec`, `sched_process_exit`, `raw_syscalls/sys_enter`, `raw_syscalls/sys_exit`, `sched_switch`, and syscall-specific tracepoints for fd tracking) for real-time, event-driven instrumentation. No `/proc` scanning, no text parsing, no TOCTOU races.
+
+montauk discovers processes through a three-layer approach:
+
+1. **Exec matching**: BPF extracts the filename from `sched_process_exec` tracepoint args and matches against PATTERN
+2. **Discovery map**: Every process that makes any syscall gets its `comm` recorded in a lightweight BPF hash map. Userspace scans this map periodically and promotes matches to the tracked set
+3. **Fork auto-tracking**: Once a root process is tracked, all children are automatically tracked via BPF `sched_process_fork` handler
+
+Pattern matching is case-insensitive Boyer-Moore-Horspool on both the exec filename and the kernel `task->comm`. If no matching processes are running, montauk waits until they appear. montauk automatically excludes its own process chain from tracing.
+
+This works for any process — standard applications, `clone()` without `exec()`, processes that rename themselves via `prctl(PR_SET_NAME)`, thread pools, container runtimes, Wine/Proton, anything. No `/proc` reads at any point.
+
+Per-thread data collected via eBPF:
+- Thread state (R/S/D/T/Z) from `sched_switch` tracepoint (real-time state transitions)
+- Current syscall number and arguments from `raw_syscalls/sys_enter` (decoded: futex, ioctl, epoll_wait, io_uring_enter, etc.)
+- Per-thread CPU time via `sched_switch` on-CPU duration tracking
+- Open file descriptors tracked via `sys_enter_openat`, `sys_enter_close`, `sys_exit_socket`, `sys_exit_eventfd2` tracepoints
+
+Requires root at runtime (kernel tracepoint attachment requires `CAP_SYS_ADMIN` on most configurations). Build requires `libbpf`, `bpftool`, and `clang` (BPF target). Auto-detected by CMake; if unavailable, `--trace` prints an error.
+
+Trace mode composes with `--metrics` and `--log`. When combined with `--metrics PORT`, the Prometheus endpoint appends `montauk_trace_*` metrics alongside the standard system metrics:
+- `montauk_trace_process_info{pid,ppid,cmd,root}` — process group membership
+- `montauk_trace_thread_state{pid,tid,comm,state}` — per-thread state
+- `montauk_trace_thread_cpu_percent{pid,tid,comm}` — per-thread CPU utilization
+- `montauk_trace_thread_syscall{pid,tid,comm,syscall,wchan}` — current syscall and wait channel
+- `montauk_trace_fd_target{pid,fd,target}` — open file descriptors (pipes, devices, sockets)
+- `montauk_trace_group_size`, `montauk_trace_thread_total`, `montauk_trace_waiting` — group metadata
+
+When combined with `--log DIR`, trace metrics are written alongside standard metrics in the hourly `.prom` files, creating a flight recorder for post-mortem analysis.
+
+The trace subsystem runs as a parallel pipeline with its own lock-free seqlock double buffer, independent of the main monitoring pipeline. BPF programs maintain per-thread state maps and a global discovery map in the kernel; userspace reads these maps every 500ms to publish snapshots. Zero `/proc` reads after eBPF attach — all data comes from BPF maps and ring buffer events. No impact on existing TUI or system-wide metrics when `--trace` is not used.
 
 ## UI Controls
 

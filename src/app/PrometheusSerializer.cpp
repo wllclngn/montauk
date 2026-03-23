@@ -1,4 +1,5 @@
 #include "app/MetricsServer.hpp"
+#include "model/Trace.hpp"
 #include <charconv>
 #include <cstdio>
 #include <algorithm>
@@ -110,6 +111,36 @@ void emit_labeled_3u(std::string& out, const char* name,
   out += k2;  out += "=\"";  append_escaped(out, v2);  out += "\",";
   out += k3;  out += "=\"";  append_escaped(out, v3);  out += "\"} ";
   append_uint(out, value);  out += '\n';
+}
+
+// 4-label: name{k1="v1",k2="v2",k3="v3",k4="v4"} value
+void emit_labeled_4i(std::string& out, const char* name,
+                     const char* k1, std::string_view v1,
+                     const char* k2, std::string_view v2,
+                     const char* k3, std::string_view v3,
+                     const char* k4, std::string_view v4, int value) {
+  out += name;  out += '{';
+  out += k1;  out += "=\"";  append_escaped(out, v1);  out += "\",";
+  out += k2;  out += "=\"";  append_escaped(out, v2);  out += "\",";
+  out += k3;  out += "=\"";  append_escaped(out, v3);  out += "\",";
+  out += k4;  out += "=\"";  append_escaped(out, v4);  out += "\"} ";
+  append_int(out, value);  out += '\n';
+}
+
+// 5-label: name{k1="v1",...,k5="v5"} value
+void emit_labeled_5i(std::string& out, const char* name,
+                     const char* k1, std::string_view v1,
+                     const char* k2, std::string_view v2,
+                     const char* k3, std::string_view v3,
+                     const char* k4, std::string_view v4,
+                     const char* k5, std::string_view v5, int value) {
+  out += name;  out += '{';
+  out += k1;  out += "=\"";  append_escaped(out, v1);  out += "\",";
+  out += k2;  out += "=\"";  append_escaped(out, v2);  out += "\",";
+  out += k3;  out += "=\"";  append_escaped(out, v3);  out += "\",";
+  out += k4;  out += "=\"";  append_escaped(out, v4);  out += "\",";
+  out += k5;  out += "=\"";  append_escaped(out, v5);  out += "\"} ";
+  append_int(out, value);  out += '\n';
 }
 
 } // anonymous namespace
@@ -362,6 +393,110 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
   if (s.thermal.has_fan) {
     emit_header(out, "montauk_thermal_fan_speed_rpm", "CPU fan speed RPM", "gauge");
     emit_gauge_d(out, "montauk_thermal_fan_speed_rpm", s.thermal.fan_rpm);
+  }
+
+  return out;
+}
+
+std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
+  std::string out;
+  out.reserve(4096);
+
+  out += "\n# ---- Trace ----\n";
+
+  // ---- Trace metadata ----
+  emit_header(out, "montauk_trace_waiting", "Trace mode waiting for pattern match", "gauge");
+  emit_gauge_i(out, "montauk_trace_waiting", t.waiting_for_match ? 1 : 0);
+
+  emit_header(out, "montauk_trace_group_size", "Number of processes in traced group", "gauge");
+  emit_gauge_i(out, "montauk_trace_group_size", t.procs_count);
+
+  emit_header(out, "montauk_trace_thread_total", "Total threads across traced group", "gauge");
+  emit_gauge_i(out, "montauk_trace_thread_total", t.thread_count);
+
+  if (t.procs_count == 0) return out;
+
+  // ---- Per-process info ----
+  emit_header(out, "montauk_trace_process_info", "Traced process group member", "gauge");
+  for (int i = 0; i < t.procs_count; ++i) {
+    const auto& p = t.procs[i];
+    char pid_buf[12], ppid_buf[12];
+    auto [p1, e1] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), p.pid);
+    auto [p2, e2] = std::to_chars(ppid_buf, ppid_buf + sizeof(ppid_buf), p.ppid);
+    emit_labeled_4i(out, "montauk_trace_process_info",
+                    "pid", std::string_view(pid_buf, p1),
+                    "ppid", std::string_view(ppid_buf, p2),
+                    "cmd", std::string_view(p.cmd),
+                    "root", p.is_root ? "1" : "0", 1);
+  }
+
+  // ---- Per-thread state ----
+  if (t.thread_count > 0) {
+    emit_header(out, "montauk_trace_thread_state", "Per-thread state for traced group", "gauge");
+    for (int i = 0; i < t.thread_count; ++i) {
+      const auto& th = t.threads[i];
+      char pid_buf[12], tid_buf[12];
+      auto [p1, e1] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), th.pid);
+      auto [p2, e2] = std::to_chars(tid_buf, tid_buf + sizeof(tid_buf), th.tid);
+      char state_str[2] = {th.state, '\0'};
+      emit_labeled_4i(out, "montauk_trace_thread_state",
+                      "pid", std::string_view(pid_buf, p1),
+                      "tid", std::string_view(tid_buf, p2),
+                      "comm", std::string_view(th.comm),
+                      "state", std::string_view(state_str), 1);
+    }
+
+    // ---- Per-thread CPU% ----
+    emit_header(out, "montauk_trace_thread_cpu_percent", "Per-thread CPU utilization", "gauge");
+    for (int i = 0; i < t.thread_count; ++i) {
+      const auto& th = t.threads[i];
+      char pid_buf[12], tid_buf[12];
+      auto [p1, e1] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), th.pid);
+      auto [p2, e2] = std::to_chars(tid_buf, tid_buf + sizeof(tid_buf), th.tid);
+      out += "montauk_trace_thread_cpu_percent{pid=\"";
+      out.append(pid_buf, p1);
+      out += "\",tid=\"";
+      out.append(tid_buf, p2);
+      out += "\",comm=\"";
+      append_escaped(out, std::string_view(th.comm));
+      out += "\"} ";
+      append_double(out, th.cpu_pct);
+      out += '\n';
+    }
+
+    // ---- Per-thread syscall ----
+    emit_header(out, "montauk_trace_thread_syscall", "Per-thread current syscall", "gauge");
+    for (int i = 0; i < t.thread_count; ++i) {
+      const auto& th = t.threads[i];
+      char pid_buf[12], tid_buf[12];
+      auto [p1, e1] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), th.pid);
+      auto [p2, e2] = std::to_chars(tid_buf, tid_buf + sizeof(tid_buf), th.tid);
+      emit_labeled_5i(out, "montauk_trace_thread_syscall",
+                      "pid", std::string_view(pid_buf, p1),
+                      "tid", std::string_view(tid_buf, p2),
+                      "comm", std::string_view(th.comm),
+                      "syscall", std::string_view(th.syscall_name),
+                      "wchan", std::string_view(th.wchan),
+                      th.syscall_nr);
+    }
+  }
+
+  // ---- FD targets ----
+  if (t.fd_count > 0) {
+    emit_header(out, "montauk_trace_fd_target", "Per-process fd targets", "gauge");
+    for (int i = 0; i < t.fd_count; ++i) {
+      const auto& fd = t.fds[i];
+      char pid_buf[12], fd_buf[12];
+      auto [p1, e1] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), fd.pid);
+      auto [p2, e2] = std::to_chars(fd_buf, fd_buf + sizeof(fd_buf), fd.fd_num);
+      out += "montauk_trace_fd_target{pid=\"";
+      out.append(pid_buf, p1);
+      out += "\",fd=\"";
+      out.append(fd_buf, p2);
+      out += "\",target=\"";
+      append_escaped(out, std::string_view(fd.target));
+      out += "\"} 1\n";
+    }
   }
 
   return out;

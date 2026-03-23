@@ -2,8 +2,9 @@
 
 namespace montauk::app {
 
-MetricsServer::MetricsServer(const SnapshotBuffers& buffers, uint16_t port)
-    : buffers_(buffers), port_(port) {}
+MetricsServer::MetricsServer(const SnapshotBuffers& buffers, uint16_t port,
+                             const TraceBuffers* trace)
+    : buffers_(buffers), trace_(trace), port_(port) {}
 
 MetricsServer::~MetricsServer() = default;
 

@@ -16,8 +16,9 @@ namespace montauk::app {
 // Tags for distinguishing CQE sources
 enum class UringTag : uint64_t { ListenPoll = 1, StopPoll = 2 };
 
-MetricsServer::MetricsServer(const SnapshotBuffers& buffers, uint16_t port)
-    : buffers_(buffers), port_(port) {}
+MetricsServer::MetricsServer(const SnapshotBuffers& buffers, uint16_t port,
+                             const TraceBuffers* trace)
+    : buffers_(buffers), trace_(trace), port_(port) {}
 
 MetricsServer::~MetricsServer() { stop(); }
 
@@ -163,6 +164,10 @@ void MetricsServer::handle_client(int fd) {
     // Serve Prometheus metrics
     MetricsSnapshot ms = read_metrics_snapshot(buffers_);
     body = snapshot_to_prometheus(ms);
+    if (trace_) {
+      auto ts = read_trace_snapshot(*trace_);
+      body += trace_to_prometheus(ts);
+    }
 
     headers = "HTTP/1.1 200 OK\r\n"
               "Content-Type: text/plain; version=0.0.4; charset=utf-8\r\n"

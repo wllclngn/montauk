@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 4.9.0 LANGUAGES CXX)
+project(montauk VERSION 5.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -55,6 +55,7 @@ add_library(montauk_core
     src/collectors/ProcessCollector.cpp
     src/collectors/NetlinkProcessCollector.cpp
     src/collectors/ThermalCollector.cpp
+    src/app/TraceBuffers.cpp
 )
 target_include_directories(montauk_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(montauk_core PUBLIC _GNU_SOURCE)
@@ -90,6 +91,58 @@ if(MONTAUK_KERNEL)
   target_compile_definitions(montauk_core PUBLIC MONTAUK_HAVE_KERNEL=1)
   target_sources(montauk_core PRIVATE src/collectors/KernelProcessCollector.cpp)
   message(STATUS "Kernel module support enabled: MONTAUK_COLLECTOR=kernel available")
+endif()
+
+# eBPF trace support (--trace mode)
+option(MONTAUK_NO_BPF "Disable eBPF trace support even if libbpf is available" OFF)
+if(NOT MONTAUK_NO_BPF)
+find_library(LIBBPF_LIBRARY bpf)
+find_path(LIBBPF_INCLUDE bpf/libbpf.h)
+find_program(BPFTOOL bpftool)
+find_program(CLANG_BPF clang)
+if(LIBBPF_LIBRARY AND LIBBPF_INCLUDE AND BPFTOOL AND CLANG_BPF)
+  # Generate vmlinux.h from kernel BTF
+  add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/vmlinux.h
+    COMMAND ${BPFTOOL} btf dump file /sys/kernel/btf/vmlinux format c > ${CMAKE_BINARY_DIR}/vmlinux.h
+    COMMENT "Generating vmlinux.h from kernel BTF"
+  )
+  # Compile BPF program
+  add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/montauk_trace.bpf.o
+    COMMAND ${CLANG_BPF} -target bpf -g -O2
+      -I${CMAKE_BINARY_DIR}
+      -I${CMAKE_SOURCE_DIR}/bpf
+      -D__TARGET_ARCH_x86
+      -Wno-missing-declarations
+      -c ${CMAKE_SOURCE_DIR}/bpf/montauk_trace.bpf.c
+      -o ${CMAKE_BINARY_DIR}/montauk_trace.bpf.o
+    DEPENDS ${CMAKE_SOURCE_DIR}/bpf/montauk_trace.bpf.c
+            ${CMAKE_SOURCE_DIR}/bpf/montauk_trace.h
+            ${CMAKE_BINARY_DIR}/vmlinux.h
+    COMMENT "Compiling BPF program"
+  )
+  # Generate skeleton header
+  add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/montauk_trace.skel.h
+    COMMAND ${BPFTOOL} gen skeleton ${CMAKE_BINARY_DIR}/montauk_trace.bpf.o
+            > ${CMAKE_BINARY_DIR}/montauk_trace.skel.h
+    DEPENDS ${CMAKE_BINARY_DIR}/montauk_trace.bpf.o
+    COMMENT "Generating BPF skeleton"
+  )
+  add_custom_target(bpf_skel DEPENDS ${CMAKE_BINARY_DIR}/montauk_trace.skel.h)
+
+  target_sources(montauk_core PRIVATE src/collectors/BpfTraceCollector.cpp)
+  target_include_directories(montauk_core PUBLIC ${CMAKE_BINARY_DIR} ${LIBBPF_INCLUDE} ${CMAKE_SOURCE_DIR}/bpf)
+  target_link_libraries(montauk_core PUBLIC ${LIBBPF_LIBRARY} elf z)
+  target_compile_definitions(montauk_core PUBLIC MONTAUK_HAVE_BPF=1)
+  add_dependencies(montauk_core bpf_skel)
+  message(STATUS "libbpf detected: enabling eBPF trace mode (--trace)")
+else()
+  message(STATUS "libbpf/bpftool/clang not found: --trace disabled")
+endif()
+else()
+  message(STATUS "eBPF trace disabled by MONTAUK_NO_BPF")
 endif()
 
 add_executable(montauk src/main.cpp)

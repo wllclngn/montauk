@@ -9,8 +9,9 @@
 namespace montauk::app {
 
 LogWriter::LogWriter(const SnapshotBuffers& buffers, std::filesystem::path log_dir,
-                     std::chrono::milliseconds interval)
-    : buffers_(buffers), log_dir_(std::move(log_dir)), interval_(interval) {
+                     std::chrono::milliseconds interval,
+                     const TraceBuffers* trace)
+    : buffers_(buffers), trace_(trace), log_dir_(std::move(log_dir)), interval_(interval) {
   std::error_code ec;
   std::filesystem::create_directories(log_dir_, ec);
   if (ec) {
@@ -79,6 +80,10 @@ void LogWriter::run(std::stop_token st) {
     file.put('\n');
 
     std::string body = snapshot_to_prometheus(ms);
+    if (trace_) {
+      auto ts = read_trace_snapshot(*trace_);
+      body += trace_to_prometheus(ts);
+    }
     file.write(body.data(), static_cast<std::streamsize>(body.size()));
 
     file.flush();

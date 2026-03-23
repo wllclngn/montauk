@@ -1,9 +1,18 @@
-.TH MONTAUK 1 "January 2026" "montauk 1.0" "User Commands"
+.TH MONTAUK 1 "March 2026" "montauk 5.0.0" "User Commands"
 .SH NAME
 montauk \- high-performance Linux system monitor with kernel module support
 .SH SYNOPSIS
 .B montauk
-.RB [ \-\-self\-test ]
+.RB [ \-\-metrics
+.IR PORT ]
+.RB [ \-\-log
+.IR DIR ]
+.RB [ \-\-log\-interval\-ms
+.IR MS ]
+.RB [ \-\-headless ]
+.RB [ \-\-trace
+.IR PATTERN ]
+.RB [ \-\-init\-theme ]
 .RB [ \-\-self\-test\-seconds
 .IR N ]
 .RB [ \-\-iterations
@@ -33,8 +42,55 @@ Multi-sensor thermal instrumentation with vendor-specific thresholds
 Zero external dependencies, Python/CMake build automation
 .SH OPTIONS
 .TP
-.B \-\-self\-test
-Run in self-test mode: exercise all collectors and exit with status.
+.BI \-\-metrics " PORT"
+Enable Prometheus metrics endpoint on PORT. Serves text exposition format at
+http://localhost:PORT/metrics. Requires liburing at build time.
+.TP
+.BI \-\-log " DIR"
+Write timestamped Prometheus exposition snapshots to DIR. Files rotate hourly
+with naming convention montauk_YYYY-MM-DD_HH.prom.
+.TP
+.BI \-\-log\-interval\-ms " MS"
+Write interval for log files in milliseconds (default: 1000).
+.TP
+.B \-\-headless
+Daemon mode: skip TUI, run as background metrics exporter. Requires
+\-\-metrics or \-\-log.
+.TP
+.BI \-\-trace " PATTERN"
+eBPF trace mode: attaches BPF programs to kernel tracepoints
+(sched_process_fork/exec/exit, raw_syscalls, sched_switch, and fd-related
+syscalls) for real-time, event-driven process group instrumentation.
+Implies headless mode.
+.sp
+Process discovery uses a three-layer approach: (1) exec filename matching
+from the sched_process_exec tracepoint, (2) a global discovery map that
+records the comm of every process making syscalls, scanned periodically for
+pattern matches, and (3) automatic fork tracking of children once a root
+process is found. This works for any process model \(em standard exec, clone() without exec(),
+processes that rename themselves via prctl(PR_SET_NAME), thread pools, container
+runtimes, or any other Linux process lifecycle. Zero /proc reads after eBPF
+attach.
+.sp
+If no matching processes are running, montauk waits until they appear.
+Automatically excludes its own process chain from tracing.
+.sp
+Per-thread data collected via eBPF: state (R/S/D/T/Z) from sched_switch,
+current syscall with decoded name and arguments from raw_syscalls/sys_enter,
+per-thread CPU time from sched_switch on-CPU tracking, and open file
+descriptors tracked via openat/close/socket/eventfd2 tracepoints.
+.sp
+Requires root at runtime (kernel tracepoint attachment requires CAP_SYS_ADMIN
+on most kernel configurations). Build requires libbpf, bpftool, and clang
+(BPF target). Auto-detected by CMake.
+.sp
+Composes with \-\-metrics and \-\-log to export trace data as Prometheus
+metrics (montauk_trace_* family) or write it to flight recorder logs for
+post-mortem analysis.
+.TP
+.B \-\-init\-theme
+Detect terminal palette and write ~/.config/montauk/config.toml with
+auto-detected colors and all defaults.
 .TP
 .BI \-\-self\-test\-seconds " N"
 Duration for self-test mode in seconds.
@@ -43,7 +99,7 @@ Duration for self-test mode in seconds.
 Run for N iterations then exit (useful for benchmarking).
 .TP
 .BI \-\-sleep\-ms " N"
-Sleep N milliseconds between iterations (default: 1000).
+Sleep N milliseconds between iterations (default: 250).
 .SH PROCESS COLLECTION MODES
 montauk supports three collection backends, auto-detected in priority order:
 .SS Kernel Module (Best)
@@ -122,6 +178,73 @@ echo "options montauk max_procs=4096" | sudo tee /etc/modprobe.d/montauk.conf
 .PP
 .B Important:
 Re-run install.py after kernel upgrades to rebuild the module.
+.SH TRACE MODE
+The \-\-trace flag enables eBPF-powered per-thread process group diagnostics.
+BPF programs attach to kernel tracepoints for event-driven instrumentation
+with zero /proc overhead. Given a pattern, montauk finds all matching
+processes, discovers their full process tree via BPF fork tracking, and
+continuously collects:
+.IP \(bu 2
+Thread state (R/S/D/T/Z) via tp/sched/sched_switch
+.IP \(bu 2
+Current syscall with decoded name (futex, ioctl, epoll_wait, io_uring_enter, etc.) via tp/raw_syscalls/sys_enter
+.IP \(bu 2
+Syscall arguments (ioctl command number, futex operation)
+.IP \(bu 2
+Per-thread CPU time via sched_switch on-CPU duration tracking
+.IP \(bu 2
+Open file descriptors tracked via openat/close/socket/eventfd2 tracepoints
+.IP \(bu 2
+Process lifecycle events (fork/exec/exit) via tp/sched tracepoints
+.SS Requirements
+.IP \(bu 2
+Runtime: root or CAP_BPF + CAP_PERFMON
+.IP \(bu 2
+Build: libbpf, bpftool, clang (BPF target)
+.IP \(bu 2
+Kernel: 5.8+ with BTF enabled (CONFIG_DEBUG_INFO_BTF=y)
+.SS Examples
+.nf
+.RS
+# Trace a running application
+montauk --trace myapp
+
+# Trace with Prometheus endpoint for Grafana
+montauk --trace myapp --metrics 9101
+
+# Trace with flight recorder for post-mortem
+montauk --trace myapp --log /tmp/trace
+
+# Trace with both
+montauk --trace myapp --metrics 9101 --log /tmp/trace
+.RE
+.fi
+.SS Prometheus Metrics
+When combined with \-\-metrics, the following metric families are appended:
+.TP
+.B montauk_trace_process_info
+Process group membership (labels: pid, ppid, cmd, root)
+.TP
+.B montauk_trace_thread_state
+Per-thread state (labels: pid, tid, comm, state)
+.TP
+.B montauk_trace_thread_cpu_percent
+Per-thread CPU utilization (labels: pid, tid, comm)
+.TP
+.B montauk_trace_thread_syscall
+Current syscall and wait channel (labels: pid, tid, comm, syscall, wchan)
+.TP
+.B montauk_trace_fd_target
+Open file descriptors (labels: pid, fd, target)
+.TP
+.B montauk_trace_group_size
+Number of processes in the traced group
+.TP
+.B montauk_trace_thread_total
+Total threads across the traced group
+.TP
+.B montauk_trace_waiting
+1 if waiting for pattern match, 0 if actively tracing
 .SH KEYBINDINGS
 .TP
 .B q
@@ -330,6 +453,6 @@ Report issues at: https://github.com/wllclngn/montauk/issues
 .SH COPYRIGHT
 MIT License. See LICENSE file in repository.
 .SH VERSION
-montauk 1.0
+montauk 5.0.0
 .br
-January 2026
+March 2026

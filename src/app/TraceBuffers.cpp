@@ -1,0 +1,24 @@
+#include "app/TraceBuffers.hpp"
+
+namespace montauk::app {
+
+TraceBuffers::TraceBuffers() {
+  a_.seq = 0; b_.seq = 0;
+}
+
+montauk::model::TraceSnapshot& TraceBuffers::back() { return *back_; }
+
+void TraceBuffers::publish() {
+  // increment sequence before publish
+  back_->seq = front_.load(std::memory_order_acquire)->seq + 1;
+  // swap pointers
+  auto* old_front = front_.load(std::memory_order_relaxed);
+  front_.store(back_, std::memory_order_release);
+  back_ = old_front; // now becomes new back
+}
+
+const montauk::model::TraceSnapshot& TraceBuffers::front() const {
+  return *front_.load(std::memory_order_acquire);
+}
+
+} // namespace montauk::app

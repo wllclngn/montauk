@@ -2,12 +2,15 @@
 """
 montauk installer
 
-Builds and installs montauk system monitor, optionally with kernel module support.
+Builds and installs montauk system monitor, optionally with kernel module
+and/or eBPF trace support.
 
 Usage:
-    ./install.py              # Build and install (prompts for kernel if headers found)
-    ./install.py --kernel     # Build and install with kernel module (no prompt)
-    ./install.py --no-kernel  # Build and install without kernel module (no prompt)
+    ./install.py              # Build and install (prompts for kernel/bpf if deps found)
+    ./install.py --kernel     # Build with kernel module (no prompt)
+    ./install.py --no-kernel  # Skip kernel module (no prompt)
+    ./install.py --bpf        # Build with eBPF trace support (no prompt)
+    ./install.py --no-bpf     # Skip eBPF trace support (no prompt)
     ./install.py --debug      # Debug build
     ./install.py --prefix /usr # Install to /usr instead of /usr/local
     ./install.py build        # Build only, don't install
@@ -121,6 +124,19 @@ def check_kernel_headers(kver: str) -> bool:
     return Path(f"/lib/modules/{kver}/build").exists()
 
 
+def detect_kernel_compiler(kver: str) -> list:
+    """Return extra make args (e.g. ['LLVM=1']) if the kernel was built with LLVM."""
+    auto_conf = Path(f"/lib/modules/{kver}/build/include/config/auto.conf")
+    if auto_conf.exists():
+        try:
+            text = auto_conf.read_text()
+            if "CONFIG_CC_IS_CLANG=y" in text:
+                return ["LLVM=1"]
+        except OSError:
+            pass
+    return []
+
+
 # =============================================================================
 # THEME
 # =============================================================================
@@ -173,9 +189,12 @@ def build_and_install_kernel_module(source_dir: Path) -> bool:
     else:
         build_src = kernel_dir
 
-    # Clean + build
-    run_cmd_capture(["make", "-C", kbuild, f"M={build_src}", "clean"])
-    ret, _, stderr = run_cmd_capture(["make", "-C", kbuild, f"M={build_src}", "modules"])
+    # Clean + build (match the kernel's compiler)
+    cc_args = detect_kernel_compiler(kver)
+    if cc_args:
+        log_info(f"Kernel was built with LLVM toolchain, using {cc_args[0]}")
+    run_cmd_capture(["make", "-C", kbuild, f"M={build_src}", "clean"] + cc_args)
+    ret, _, stderr = run_cmd_capture(["make", "-C", kbuild, f"M={build_src}", "modules"] + cc_args)
     if ret != 0:
         log_error("Kernel module build failed!")
         print(stderr)
@@ -281,6 +300,101 @@ def uninstall_kernel_module() -> bool:
     return True
 
 
+# =============================================================================
+# EBPF TRACE SUPPORT
+# =============================================================================
+
+def check_bpf_deps() -> dict:
+    """Check for eBPF trace dependencies. Returns dict of tool -> path or None."""
+    deps = {}
+    for tool in ["clang", "bpftool"]:
+        ret, stdout, _ = run_cmd_capture(["which", tool])
+        deps[tool] = stdout.strip() if ret == 0 else None
+
+    # Check libbpf
+    ret, _, _ = run_cmd_capture(["pkg-config", "--exists", "libbpf"])
+    deps["libbpf"] = ret == 0
+
+    # Check kernel BTF
+    deps["btf"] = Path("/sys/kernel/btf/vmlinux").exists()
+
+    return deps
+
+
+def prompt_bpf() -> bool:
+    """Prompt user for eBPF trace support. Returns True if yes."""
+    log_info("eBPF tracing dependencies found.")
+    log_info("montauk can build with eBPF support for --trace mode:")
+    log_info("  - Real-time per-thread syscall/state tracking via kernel tracepoints")
+    log_info("  - Event-driven process tree discovery (no /proc polling)")
+    log_info("  - Per-thread CPU%, wait channel, fd targets — all from eBPF maps")
+    log_info("  - Requires root or CAP_BPF + CAP_PERFMON at runtime")
+    print()
+    try:
+        while True:
+            response = input(
+                "Build with eBPF trace support? [Y/N]: "
+            ).strip().lower()
+            if response in ("y", "yes"):
+                return True
+            elif response in ("n", "no"):
+                return False
+    except EOFError:
+        print()
+        log_info("No input (non-interactive). Skipping eBPF trace support.")
+        return False
+
+
+def resolve_bpf(args) -> bool:
+    """Determine whether to build with eBPF trace support.
+    --bpf: yes, no prompt.
+    --no-bpf: no, no prompt.
+    Neither: check for deps, prompt if found.
+    """
+    if args.bpf:
+        deps = check_bpf_deps()
+        missing = []
+        if not deps["clang"]:
+            missing.append("clang")
+        if not deps["bpftool"]:
+            missing.append("bpftool")
+        if not deps["libbpf"]:
+            missing.append("libbpf")
+        if not deps["btf"]:
+            missing.append("kernel BTF (/sys/kernel/btf/vmlinux)")
+        if missing:
+            log_error("eBPF dependencies not found: " + ", ".join(missing))
+            print()
+            log_info("Install them first:")
+            print("         Arch Linux:    sudo pacman -S libbpf bpf clang")
+            print("         Debian/Ubuntu: sudo apt install libbpf-dev bpftool clang linux-tools-$(uname -r)")
+            print("         Fedora:        sudo dnf install libbpf-devel bpftool clang")
+            print()
+            return False
+        return True
+
+    if args.no_bpf:
+        return False
+
+    # Auto-detect
+    deps = check_bpf_deps()
+    if deps["clang"] and deps["bpftool"] and deps["libbpf"] and deps["btf"]:
+        return prompt_bpf()
+
+    # Some deps missing -- mention it
+    log_info("eBPF trace support (--trace mode) is available but requires:")
+    log_info("  clang, bpftool, libbpf, kernel BTF")
+    missing = [k for k in ["clang", "bpftool", "libbpf", "btf"] if not deps.get(k)]
+    log_info(f"  Missing: {', '.join(missing)}")
+    print()
+    log_info("To enable:  sudo pacman -S libbpf bpf clang  (Arch)")
+    log_info("Then re-run:  ./install.py --bpf")
+    print()
+    log_info("Continuing without eBPF trace support...")
+    print()
+    return False
+
+
 def prompt_kernel() -> bool:
     """Prompt user for kernel module support. Returns True if yes."""
     kver = get_kernel_version()
@@ -358,9 +472,10 @@ def resolve_kernel(args, source_dir: Path) -> bool:
 
 
 def cmd_build(args, source_dir: Path) -> bool:
-    """Build montauk (and optionally the kernel module)."""
+    """Build montauk (and optionally the kernel module and eBPF trace)."""
     build_dir = source_dir / "build"
     use_kernel = resolve_kernel(args, source_dir)
+    use_bpf = resolve_bpf(args)
 
     # Build kernel module first if requested
     if use_kernel:
@@ -381,6 +496,12 @@ def cmd_build(args, source_dir: Path) -> bool:
     if use_kernel:
         cmake_args.append("-DMONTAUK_KERNEL=ON")
         log_info("Kernel collector: enabled")
+
+    if not use_bpf:
+        cmake_args.append("-DMONTAUK_NO_BPF=ON")
+        log_info("eBPF trace: disabled")
+    else:
+        log_info("eBPF trace: enabled (--trace mode)")
 
     if args.prefix:
         cmake_args.append(f"-DCMAKE_INSTALL_PREFIX={args.prefix}")
@@ -563,9 +684,11 @@ Commands:
   test        Run tests
 
 Examples:
-  ./install.py                    # Build and install (prompts for kernel if available)
+  ./install.py                    # Build and install (prompts for kernel/bpf if available)
   ./install.py --kernel           # Build with kernel module support (no prompt)
   ./install.py --no-kernel        # Build without kernel module (no prompt)
+  ./install.py --bpf              # Build with eBPF trace support (no prompt)
+  ./install.py --no-bpf           # Build without eBPF trace support (no prompt)
   ./install.py --prefix /usr      # Install to /usr/bin
   ./install.py build              # Build only
   ./install.py clean              # Clean build
@@ -580,6 +703,11 @@ Examples:
                               help="Build and install kernel module (no prompt)")
     kernel_group.add_argument("--no-kernel", action="store_true",
                               help="Skip kernel module (no prompt)")
+    bpf_group = parser.add_mutually_exclusive_group()
+    bpf_group.add_argument("--bpf", action="store_true",
+                            help="Build with eBPF trace support (no prompt)")
+    bpf_group.add_argument("--no-bpf", action="store_true",
+                            help="Skip eBPF trace support (no prompt)")
     parser.add_argument("--debug", action="store_true",
                        help="Build with debug symbols")
     parser.add_argument("--prefix", type=str, default=None,
