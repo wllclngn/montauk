@@ -1,4 +1,4 @@
-.TH MONTAUK 1 "March 2026" "montauk 5.0.0" "User Commands"
+.TH MONTAUK 1 "March 2026" "montauk 5.1.0" "User Commands"
 .SH NAME
 montauk \- high-performance Linux system monitor with kernel module support
 .SH SYNOPSIS
@@ -77,8 +77,10 @@ Automatically excludes its own process chain from tracing.
 .sp
 Per-thread data collected via eBPF: state (R/S/D/T/Z) from sched_switch,
 current syscall with decoded name and arguments from raw_syscalls/sys_enter,
-per-thread CPU time from sched_switch on-CPU tracking, and open file
-descriptors tracked via openat/close/socket/eventfd2 tracepoints.
+per-thread CPU time from sched_switch on-CPU tracking, open file
+descriptors tracked via openat/close/socket/eventfd2 tracepoints, and
+file I/O details (read/write/lseek/pread64/fstat) with full argument
+capture: fd, byte count or seek offset, whence, and return value.
 .sp
 Requires root at runtime (kernel tracepoint attachment requires CAP_SYS_ADMIN
 on most kernel configurations). Build requires libbpf, bpftool, and clang
@@ -195,6 +197,8 @@ Per-thread CPU time via sched_switch on-CPU duration tracking
 .IP \(bu 2
 Open file descriptors tracked via openat/close/socket/eventfd2 tracepoints
 .IP \(bu 2
+File I/O profiling: read/write/lseek/pread64/fstat with fd, byte count, seek offset/whence, and return value via dedicated syscall tracepoints
+.IP \(bu 2
 Process lifecycle events (fork/exec/exit) via tp/sched tracepoints
 .SS Requirements
 .IP \(bu 2
@@ -233,6 +237,12 @@ Per-thread CPU utilization (labels: pid, tid, comm)
 .TP
 .B montauk_trace_thread_syscall
 Current syscall and wait channel (labels: pid, tid, comm, syscall, wchan)
+.TP
+.B montauk_trace_thread_io
+File I/O details per thread: last read/write/lseek/pread64/fstat with fd,
+byte count or seek offset, return value, and seek whence
+(labels: pid, tid, comm, syscall, fd, count, result, whence).
+Correlate with montauk_trace_fd_target to reconstruct full file I/O sequences.
 .TP
 .B montauk_trace_fd_target
 Open file descriptors (labels: pid, fd, target)
@@ -453,6 +463,6 @@ Report issues at: https://github.com/wllclngn/montauk/issues
 .SH COPYRIGHT
 MIT License. See LICENSE file in repository.
 .SH VERSION
-montauk 5.0.0
+montauk 5.1.0
 .br
 March 2026

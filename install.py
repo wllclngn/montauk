@@ -672,6 +672,12 @@ def cmd_test(args, source_dir: Path) -> bool:
 # =============================================================================
 
 def main() -> int:
+    if os.geteuid() == 0:
+        log_error("Do not run this script as root or with sudo.")
+        log_error("The installer uses sudo internally only where needed (kernel module install).")
+        log_error("Running as root poisons the build directory with root-owned files.")
+        return 1
+
     parser = argparse.ArgumentParser(
         description="Build and install montauk system monitor",
         formatter_class=argparse.RawDescriptionHelpFormatter,

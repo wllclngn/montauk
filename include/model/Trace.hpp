@@ -17,6 +17,13 @@ struct ThreadSample {
   char     comm[24]{};              // /proc comm is max 16 chars + padding
   char     wchan[48]{};             // kernel wait function name
   char     syscall_name[24]{};      // decoded name or raw number string
+
+  // I/O syscall details (from BPF io_* fields)
+  int32_t  io_fd{-1};
+  uint64_t io_count{};
+  uint32_t io_whence{};
+  int64_t  io_result{};
+  uint64_t io_timestamp_ns{};
 };
 
 struct FdSample {

@@ -28,6 +28,7 @@ void append_int(std::string& out, int v) {
   out.append(buf, ptr);
 }
 
+
 void append_escaped(std::string& out, std::string_view sv, size_t max_len = 0) {
   size_t limit = (max_len > 0) ? std::min(sv.size(), max_len) : sv.size();
   for (size_t i = 0; i < limit; ++i) {
@@ -478,6 +479,42 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
                       "syscall", std::string_view(th.syscall_name),
                       "wchan", std::string_view(th.wchan),
                       th.syscall_nr);
+    }
+
+    // ---- Per-thread I/O details ----
+    emit_header(out, "montauk_trace_thread_io", "Per-thread last I/O syscall details", "gauge");
+    for (int i = 0; i < t.thread_count; ++i) {
+      const auto& th = t.threads[i];
+      if (th.io_fd < 0)
+        continue; // no valid I/O data
+
+      char pid_buf[12], tid_buf[12], fd_buf[12], count_buf[24], result_buf[24], whence_buf[12];
+      auto [p1, e1] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), th.pid);
+      auto [p2, e2] = std::to_chars(tid_buf, tid_buf + sizeof(tid_buf), th.tid);
+      auto [p3, e3] = std::to_chars(fd_buf, fd_buf + sizeof(fd_buf), th.io_fd);
+      auto [p4, e4] = std::to_chars(count_buf, count_buf + sizeof(count_buf), th.io_count);
+      auto [p5, e5] = std::to_chars(result_buf, result_buf + sizeof(result_buf), th.io_result);
+      auto [p6, e6] = std::to_chars(whence_buf, whence_buf + sizeof(whence_buf), th.io_whence);
+
+      out += "montauk_trace_thread_io{pid=\"";
+      out.append(pid_buf, p1);
+      out += "\",tid=\"";
+      out.append(tid_buf, p2);
+      out += "\",comm=\"";
+      append_escaped(out, std::string_view(th.comm));
+      out += "\",syscall=\"";
+      append_escaped(out, std::string_view(th.syscall_name));
+      out += "\",fd=\"";
+      out.append(fd_buf, p3);
+      out += "\",count=\"";
+      out.append(count_buf, p4);
+      out += "\",result=\"";
+      out.append(result_buf, p5);
+      out += "\",whence=\"";
+      out.append(whence_buf, p6);
+      out += "\"} ";
+      append_uint(out, th.io_timestamp_ns);
+      out += '\n';
     }
   }
 

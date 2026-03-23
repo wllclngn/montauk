@@ -17,7 +17,7 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **Multi-vendor Support**: NVIDIA (NVML + fallbacks), AMD (sysfs), Intel (fdinfo)
 - **Sophisticated Attribution**: Multiple fallback mechanisms for GPU metrics when vendor APIs are unavailable
 - **Prometheus Metrics Endpoint**: Optional HTTP `/metrics` endpoint serving Prometheus exposition format over io_uring, enabling integration with Prometheus, Grafana, and Kubernetes monitoring stacks
-- **eBPF Process Group Tracing**: `--trace PATTERN` attaches eBPF programs to kernel tracepoints for real-time per-thread syscall, scheduler state, and fd tracking across an entire process tree — event-driven, non-invasive, no ptrace, with continuous flight recording via Prometheus logs
+- **eBPF Process Group Tracing**: `--trace PATTERN` attaches eBPF programs to kernel tracepoints for real-time per-thread syscall, scheduler state, fd tracking, and file I/O profiling (read/write/lseek/fstat with byte counts, offsets, and return values) across an entire process tree — event-driven, non-invasive, no ptrace, with continuous flight recording via Prometheus logs
 - **Headless Daemon Mode**: Run without TUI as a pure metrics exporter (`--headless --metrics PORT`)
 - **Structured Logging**: Timestamped Prometheus exposition snapshots to disk (`--log DIR`)
 - **Live Process Search**: Boyer-Moore-Horspool substring search with branchless ASCII lowercasing via `/` or `Ctrl+F`
@@ -210,6 +210,7 @@ Per-thread data collected via eBPF:
 - Current syscall number and arguments from `raw_syscalls/sys_enter` (decoded: futex, ioctl, epoll_wait, io_uring_enter, etc.)
 - Per-thread CPU time via `sched_switch` on-CPU duration tracking
 - Open file descriptors tracked via `sys_enter_openat`, `sys_enter_close`, `sys_exit_socket`, `sys_exit_eventfd2` tracepoints
+- **File I/O details** (v5.1.0): per-thread `read`, `write`, `lseek`, `pread64`, and `fstat` tracking with full argument capture (fd, byte count, seek offset/whence) and return values. Enables diagnosing file I/O divergences between implementations — e.g., comparing a custom wineserver against stock to find exactly where file operations differ
 
 Requires root at runtime (kernel tracepoint attachment requires `CAP_SYS_ADMIN` on most configurations). Build requires `libbpf`, `bpftool`, and `clang` (BPF target). Auto-detected by CMake; if unavailable, `--trace` prints an error.
 
@@ -218,6 +219,7 @@ Trace mode composes with `--metrics` and `--log`. When combined with `--metrics 
 - `montauk_trace_thread_state{pid,tid,comm,state}` — per-thread state
 - `montauk_trace_thread_cpu_percent{pid,tid,comm}` — per-thread CPU utilization
 - `montauk_trace_thread_syscall{pid,tid,comm,syscall,wchan}` — current syscall and wait channel
+- `montauk_trace_thread_io{pid,tid,comm,syscall,fd,count,result,whence}` — file I/O details: last read/write/lseek/pread64/fstat per thread with fd, byte count or seek offset, return value, and seek whence. Correlate with `fd_target` to see full file I/O sequences per file
 - `montauk_trace_fd_target{pid,fd,target}` — open file descriptors (pipes, devices, sockets)
 - `montauk_trace_group_size`, `montauk_trace_thread_total`, `montauk_trace_waiting` — group metadata
 

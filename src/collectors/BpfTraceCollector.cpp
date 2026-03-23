@@ -307,6 +307,13 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
         // Comm from BPF thread_map — no /proc
         std::memcpy(th.comm, ts.comm, sizeof(ts.comm));
 
+        // I/O syscall details
+        th.io_fd = ts.io_fd;
+        th.io_count = ts.io_count;
+        th.io_whence = ts.io_whence;
+        th.io_result = ts.io_result;
+        th.io_timestamp_ns = ts.io_timestamp_ns;
+
         // Synthetic wchan from syscall name
         if (th.state != 'R' && ts.syscall_nr >= 0) {
           std::memcpy(th.wchan, th.syscall_name,

@@ -224,6 +224,7 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
     new_ts.syscall_arg0 = ctx->args[0];
     new_ts.syscall_arg1 = ctx->args[1];
     new_ts.state = 0; // R
+    new_ts.io_fd = -1;
     bpf_get_current_comm(new_ts.comm, sizeof(new_ts.comm));
     bpf_map_update_elem(&thread_map, &tid, &new_ts, BPF_ANY);
   }
@@ -412,5 +413,207 @@ int handle_eventfd2_exit(struct trace_event_raw_sys_exit *ctx) {
   __builtin_memcpy(entry.target, "eventfd", 7);
 
   bpf_map_update_elem(&fd_map, &key, &entry, BPF_ANY);
+  return 0;
+}
+
+// ---- FILE I/O TRACKING ----
+
+// -- lseek (syscall 8) --
+
+SEC("tp/syscalls/sys_enter_lseek")
+int handle_lseek_enter(struct trace_event_raw_sys_enter *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_fd = (s32)ctx->args[0];
+  ts->io_count = ctx->args[1];   // offset argument
+  ts->io_whence = (u32)ctx->args[2];
+  return 0;
+}
+
+SEC("tp/syscalls/sys_exit_lseek")
+int handle_lseek_exit(struct trace_event_raw_sys_exit *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_result = ctx->ret;
+  ts->io_timestamp_ns = bpf_ktime_get_ns();
+  return 0;
+}
+
+// -- read (syscall 0) --
+
+SEC("tp/syscalls/sys_enter_read")
+int handle_read_enter(struct trace_event_raw_sys_enter *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_fd = (s32)ctx->args[0];
+  ts->io_count = ctx->args[2];
+  return 0;
+}
+
+SEC("tp/syscalls/sys_exit_read")
+int handle_read_exit(struct trace_event_raw_sys_exit *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_result = ctx->ret;
+  ts->io_timestamp_ns = bpf_ktime_get_ns();
+  return 0;
+}
+
+// -- write (syscall 1) --
+
+SEC("tp/syscalls/sys_enter_write")
+int handle_write_enter(struct trace_event_raw_sys_enter *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_fd = (s32)ctx->args[0];
+  ts->io_count = ctx->args[2];
+  return 0;
+}
+
+SEC("tp/syscalls/sys_exit_write")
+int handle_write_exit(struct trace_event_raw_sys_exit *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_result = ctx->ret;
+  ts->io_timestamp_ns = bpf_ktime_get_ns();
+  return 0;
+}
+
+// -- pread64 (syscall 17) --
+
+SEC("tp/syscalls/sys_enter_pread64")
+int handle_pread64_enter(struct trace_event_raw_sys_enter *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_fd = (s32)ctx->args[0];
+  ts->io_count = ctx->args[2];
+  ts->io_whence = (u32)ctx->args[3]; // offset for pread64
+  return 0;
+}
+
+SEC("tp/syscalls/sys_exit_pread64")
+int handle_pread64_exit(struct trace_event_raw_sys_exit *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_result = ctx->ret;
+  ts->io_timestamp_ns = bpf_ktime_get_ns();
+  return 0;
+}
+
+// -- fstat / newfstat (syscall 5) --
+
+SEC("tp/syscalls/sys_enter_newfstat")
+int handle_fstat_enter(struct trace_event_raw_sys_enter *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_fd = (s32)ctx->args[0];
+  ts->io_count = ctx->args[1]; // statbuf pointer for exit handler
+  return 0;
+}
+
+SEC("tp/syscalls/sys_exit_newfstat")
+int handle_fstat_exit(struct trace_event_raw_sys_exit *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_result = ctx->ret;
+  ts->io_timestamp_ns = bpf_ktime_get_ns();
+
+  // On success, read st_size from the stat buffer (offset 48 on x86_64)
+  if (ctx->ret == 0 && ts->io_count != 0) {
+    s64 st_size = 0;
+    bpf_probe_read_user(&st_size, sizeof(st_size),
+                         (void *)(ts->io_count + 48));
+    ts->io_result = st_size;
+  }
   return 0;
 }

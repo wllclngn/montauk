@@ -50,6 +50,13 @@ struct thread_bpf_state {
   __u64 runtime_ns;   // accumulated on-CPU time
   __u64 enter_ns;     // timestamp of last sched-in (for delta)
   char  comm[16];
+
+  // File I/O tracking: captures last I/O syscall details per thread
+  __s32 io_fd;            // fd involved in last I/O syscall (-1 = none)
+  __u64 io_count;         // read/write: byte count; lseek: offset argument
+  __u32 io_whence;        // lseek whence (0=SET, 1=CUR, 2=END)
+  __s64 io_result;        // return value (bytes read/written, new offset, or -errno)
+  __u64 io_timestamp_ns;  // ktime_get_ns() when I/O completed
 };
 
 // Per-PID process info (BPF map value)
