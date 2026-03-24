@@ -195,15 +195,18 @@ No additional dependencies required. Works independently of or alongside `--metr
 
 When `--trace PATTERN` is specified, montauk enters headless trace mode powered by eBPF. It attaches BPF programs to kernel tracepoints (`sched_process_fork`, `sched_process_exec`, `sched_process_exit`, `raw_syscalls/sys_enter`, `raw_syscalls/sys_exit`, `sched_switch`, and syscall-specific tracepoints for fd tracking) for real-time, event-driven instrumentation. No `/proc` scanning, no text parsing, no TOCTOU races.
 
-montauk discovers processes through a three-layer approach:
+montauk discovers and tracks processes through a four-layer approach, all event-driven with zero userspace roundtrip for the critical path:
 
-1. **Exec matching**: BPF extracts the filename from `sched_process_exec` tracepoint args and matches against PATTERN
-2. **Discovery map**: Every process that makes any syscall gets its `comm` recorded in a lightweight BPF hash map. Userspace scans this map periodically and promotes matches to the tracked set
-3. **Fork auto-tracking**: Once a root process is tracked, all children are automatically tracked via BPF `sched_process_fork` handler
+1. **BPF-side exec matching** (v5.2.0): Pattern stored in a BPF array map, matched DIRECTLY in the `sched_process_exec` handler against both the exec'd filename and `task->comm`. Process is added to `proc_map` atomically in kernel — no ringbuf, no userspace delay. Children forked afterward are auto-tracked immediately via `sched_process_fork`.
+2. **BPF-side first-syscall matching** (v5.2.0): On a process's first syscall, BPF checks `comm` against the pattern and auto-tracks on match. Catches `clone()` without `exec()` — the process is tracked before its second syscall.
+3. **BPF-side prctl(PR_SET_NAME) matching** (v5.2.0): When any process renames itself, BPF re-checks the new name against the pattern and auto-tracks on match. Catches processes that set their identity after startup.
+4. **Fork auto-tracking**: Once a root process is tracked, all children are automatically tracked via BPF `sched_process_fork` handler. The parent is tracked before it can fork, so children are never missed.
 
-Pattern matching is case-insensitive Boyer-Moore-Horspool on both the exec filename and the kernel `task->comm`. If no matching processes are running, montauk waits until they appear. montauk automatically excludes its own process chain from tracing.
+Userspace `rescan_comms` and `handle_event` remain as fallback paths for edge cases, but the primary discovery is entirely BPF-side. The pattern match uses a bounded case-insensitive substring search that is BPF-verifier-safe (fixed iteration count, no unbounded loops).
 
-This works for any process — standard applications, `clone()` without `exec()`, processes that rename themselves via `prctl(PR_SET_NAME)`, thread pools, container runtimes, Wine/Proton, anything. No `/proc` reads at any point.
+Pattern matching is case-insensitive on both the exec filename and the kernel `task->comm`. If no matching processes are running, montauk waits until they appear. montauk automatically excludes its own process chain from tracing.
+
+This works for any process — standard applications, `clone()` without `exec()`, processes that rename themselves via `prctl(PR_SET_NAME)`, thread pools, container runtimes, any process model on Linux. No `/proc` reads at any point. No timing-based polling for discovery — every match is event-driven.
 
 Per-thread data collected via eBPF:
 - Thread state (R/S/D/T/Z) from `sched_switch` tracepoint (real-time state transitions)

@@ -361,6 +361,20 @@ void BpfTraceCollector::run(std::stop_token st) {
     return;
   }
 
+  // Write pattern to .rodata BEFORE load — libbpf freezes .rodata at load time.
+  // bpf_strncmp requires a readonly (frozen + BPF_F_RDONLY_PROG) map pointer.
+  {
+    auto len = pattern_.size();
+    if (len > TRACE_PATTERN_MAX - 1) len = TRACE_PATTERN_MAX - 1;
+    for (size_t i = 0; i < len; ++i) {
+      char c = pattern_[i];
+      skel_->rodata->trace_pat.pattern[i] = (c >= 'A' && c <= 'Z') ? c + 32 : c;
+    }
+    skel_->rodata->trace_pat.len = static_cast<uint8_t>(len);
+    std::fprintf(stderr, "montauk: BPF pattern set in .rodata (%zu bytes: %s)\n",
+                 len, pattern_.c_str());
+  }
+
   int err = montauk_trace_bpf__load(skel_);
   if (err) {
     std::fprintf(stderr, "montauk: failed to load BPF programs (need root or CAP_BPF)\n");
@@ -391,6 +405,8 @@ void BpfTraceCollector::run(std::stop_token st) {
 
   std::fprintf(stderr, "montauk: eBPF trace attached (pattern: %s)\n",
                pattern_.c_str());
+
+  // Pattern already loaded via .rodata before __load() above.
 
   // Self-exclusion via getpid/getppid — no /proc
   build_self_exclusion();

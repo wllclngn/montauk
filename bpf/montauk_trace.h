@@ -14,6 +14,14 @@
 #define TRACE_MAX_THREADS   1024
 #define TRACE_MAX_FDS       4096
 #define TRACE_MAX_DISCOVERY 4096  // discovery map: all processes seen by sys_enter
+#define TRACE_PATTERN_MAX   32   // max pattern length for BPF-side matching
+
+// BPF-side pattern for immediate exec matching (no userspace roundtrip).
+// Userspace writes this once at startup. BPF reads it on every exec.
+struct trace_pattern {
+  char  pattern[TRACE_PATTERN_MAX]; // lowercase search pattern
+  __u8  len;                        // actual length (0 = disabled)
+};
 
 // Discovery entry: lightweight pid→comm for pattern matching
 struct discovery_entry {
