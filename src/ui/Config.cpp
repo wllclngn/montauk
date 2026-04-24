@@ -155,8 +155,6 @@ static constexpr KeybindDef default_keybinds[] = {
   {"sort_gmem",           'v', Config::Action::SORT_GMEM},
   {"toggle_gpu",          'G', Config::Action::TOGGLE_GPU},
   {"toggle_thermal",      't', Config::Action::TOGGLE_THERMAL},
-  {"toggle_disk",         'd', Config::Action::TOGGLE_DISK},
-  {"toggle_net",          'N', Config::Action::TOGGLE_NET},
   {"toggle_cpu_scale",    'i', Config::Action::TOGGLE_CPU_SCALE},
   {"toggle_gpu_scale",    'u', Config::Action::TOGGLE_GPU_SCALE},
   {"toggle_system_focus", 's', Config::Action::TOGGLE_SYSTEM_FOCUS},
@@ -249,6 +247,33 @@ const Config& config() {
     c.nvidia.disable_nvml        = resolve_bool(toml, have_toml, "nvidia", "disable_nvml",           "MONTAUK_DISABLE_NVML", false);
     c.nvidia.nvml_path           = resolve_string(toml, have_toml, "nvidia", "nvml_path",            "MONTAUK_NVML_PATH", "");
 
+    // --- [chart] --- (Phase 7: pixel-rendered charts)
+    c.chart.history_seconds = resolve_int(toml, have_toml, "chart", "history_seconds", "MONTAUK_CHART_HISTORY_SECONDS", 60);
+    if (c.chart.history_seconds < 1)    c.chart.history_seconds = 1;
+    if (c.chart.history_seconds > 3600) c.chart.history_seconds = 3600;
+
+    auto parse_chart_colors = [&](const char* section, Config::ChartColors& out) {
+      out.line     = resolve_string(toml, have_toml, section, "line",     nullptr, "");
+      out.line_alt = resolve_string(toml, have_toml, section, "line_alt", nullptr, "");
+      out.fill     = resolve_string(toml, have_toml, section, "fill",     nullptr, "auto");
+      std::string alpha_s = resolve_string(toml, have_toml, section, "fill_alpha", nullptr, "");
+      if (!alpha_s.empty()) {
+        try {
+          double v = std::stod(alpha_s);
+          if (v < 0.0) v = 0.0;
+          if (v > 1.0) v = 1.0;
+          out.fill_alpha = v;
+        } catch (...) {
+          // keep default
+        }
+      }
+    };
+    parse_chart_colors("chart",         c.chart.global);
+    parse_chart_colors("chart.cpu",     c.chart.cpu);
+    parse_chart_colors("chart.gpu",     c.chart.gpu);
+    parse_chart_colors("chart.memory",  c.chart.memory);
+    parse_chart_colors("chart.network", c.chart.network);
+
     // --- [keybinds] ---
     populate_keybinds(c, toml, have_toml);
 
@@ -273,8 +298,6 @@ void reset_ui_defaults() {
   g_ui.sort = SortMode::CPU;
   g_ui.scroll = 0;
   g_ui.system_focus = false;
-  g_ui.show_disk = true;
-  g_ui.show_net = true;
   g_ui.show_gpumon = true;
   g_ui.cpu_scale = UIState::CPUScale::Total;
   g_ui.gpu_scale = UIState::GPUScale::Utilization;

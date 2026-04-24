@@ -63,11 +63,38 @@ struct Config {
     std::string nvml_path;
   } nvidia;
 
+  // [chart] — global defaults + per-panel color overrides.
+  // Color values: role name ("accent", "muted", etc.), hex "#RRGGBB",
+  // palette index "0".."15", or "auto" (meaning: inherit from line).
+  struct ChartColors {
+    std::string line;       // primary curve color; empty => inherit [roles].accent
+    std::string line_alt;   // secondary curve color (NETWORK TX); empty => [roles].muted
+    std::string fill;       // "auto" => line color at fill_alpha; explicit => that color
+    double      fill_alpha = 0.40;
+  };
+  struct Chart {
+    // History retention in seconds. Ring buffer capacity = history_seconds *
+    // refresh_hz. Clamped [1, 3600] during parse. 0 means "use default".
+    int history_seconds = 60;
+
+    // Global defaults applied to every chart unless a per-panel section
+    // overrides. Per-panel overrides live in ChartColors instances below.
+    ChartColors global;
+
+    // Per-panel overrides. Any string left empty inherits from `global`,
+    // which in turn inherits from [roles]. Pass 4 parses the [chart.<panel>]
+    // sections into these.
+    ChartColors cpu;
+    ChartColors gpu;
+    ChartColors memory;
+    ChartColors network;
+  } chart;
+
   // [keybinds]
   enum class Action : uint8_t {
     NONE, QUIT, HELP, FPS_UP, FPS_DOWN,
     SORT_CPU, SORT_MEM, SORT_PID, SORT_NAME, SORT_GPU, SORT_GMEM,
-    TOGGLE_GPU, TOGGLE_THERMAL, TOGGLE_DISK, TOGGLE_NET,
+    TOGGLE_GPU, TOGGLE_THERMAL,
     TOGGLE_CPU_SCALE, TOGGLE_GPU_SCALE, TOGGLE_SYSTEM_FOCUS,
     RESET_UI, SEARCH,
   };
@@ -97,8 +124,6 @@ enum class SortMode { CPU, MEM, PID, NAME, GPU, GMEM };
 struct UIState {
   SortMode sort{SortMode::CPU};
   int scroll{0};
-  bool show_disk{true};
-  bool show_net{true};
   bool show_thermal{true};
   bool show_gpumon{true};
   int last_proc_page_rows{14};

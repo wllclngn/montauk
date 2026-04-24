@@ -2,7 +2,9 @@
 #include "ui/Config.hpp"
 #include "ui/Terminal.hpp"
 #include "ui/Formatting.hpp"
-#include "ui/Renderer.hpp"
+#include "ui/widget/Panel.hpp"
+#include "ui/widgets/ChartPanel.hpp"
+#include "app/ChartHistories.hpp"
 #include "util/Retro.hpp"
 #include "app/Security.hpp"
 #include "util/Churn.hpp"
@@ -10,243 +12,220 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
-
-namespace {
-// Color side borders grey for all content lines in a box (between first and last line)
-void grey_borders(std::vector<std::string>& box) {
-  using namespace montauk::ui;
-  if (!tty_stdout() || box.size() < 3) return;
-  const std::string V = "│";
-  for (size_t li = 1; li + 1 < box.size(); ++li) {
-    auto& line = box[li];
-    size_t fpos = line.find(V);
-    size_t lpos = line.rfind(V);
-    if (fpos == std::string::npos || lpos == std::string::npos || lpos <= fpos) continue;
-    std::string pre = line.substr(0, fpos);
-    std::string mid = line.substr(fpos + V.size(), lpos - (fpos + V.size()));
-    std::string suf = line.substr(lpos + V.size());
-    const auto& uic = ui_config();
-    line = pre + uic.border + V + sgr_reset() + mid + uic.border + V + sgr_reset() + suf;
-  }
-}
-} // anon namespace
+#include <climits>
 
 namespace montauk::ui {
 
-std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, int width, int target_rows) {
-  std::vector<std::string> out;
-  int iw = std::max(3, width - 2);
-  auto box_add = [&](const std::string& title, const std::vector<std::string>& lines, int min_h=0){
-    auto b = make_box(title, lines, width, min_h);
-    grey_borders(b);
-    out.insert(out.end(), b.begin(), b.end());
-  };
-  bool show_disk = g_ui.show_disk, show_net = g_ui.show_net,
-       show_thermal = g_ui.show_thermal, show_gpumon = g_ui.show_gpumon;
-  // In SYSTEM focus, hide other panels; when leaving focus, restore default panels
-  if (g_ui.system_focus) {
-    show_disk=false; show_net=false; show_gpumon=false;
-  } else {
-    show_disk=true; show_net=true; show_gpumon=true;
-  }
-  // Shared helper for one-line retro bars (label width 8, bar-only)
-  auto bar_line8 = [&](const std::string& key, const char* label8, double pct_raw){
-    const int label_w = 8;
-    int barw = std::max(10, iw - (label_w + 3));
-    double bar_pct = montauk::ui::smooth_value(key, pct_raw);
-    std::string bar = montauk::util::retro_bar(bar_pct, barw);
-    std::string col = bar_color(bar_pct);
-    std::string rst = col.empty() ? std::string() : sgr_reset();
-    std::ostringstream os; os << trunc_pad(label8, label_w) << " " << col << bar << rst;
-    return os.str();
+void render_right_column(widget::Canvas& canvas,
+                         const widget::LayoutRect& rect,
+                         const montauk::model::Snapshot& s) {
+  const int width = rect.width;
+  const int iw = std::max(3, width - 2);
+  const int target_rows = rect.height;
+  int current_y = rect.y;
+
+  // Emit one Panel onto the shared canvas at the current vertical offset.
+  auto emit_panel = [&](const std::string& title,
+                        const std::vector<std::string>& lines,
+                        int min_content_rows) {
+    int content_rows = std::max(static_cast<int>(lines.size()), min_content_rows);
+    int panel_rows = widget::Panel::height_for(content_rows);
+    widget::LayoutRect panel_rect{rect.x, current_y, rect.width, panel_rows};
+    widget::Panel panel(title, lines);
+    panel.render(canvas, panel_rect, s);
+    current_y += panel_rows;
   };
 
-  // PROCESSOR (CPU) — first on right (hidden in SYSTEM focus)
-  if (!g_ui.system_focus) {
-    std::vector<std::string> lines;
-    lines.push_back(bar_line8("cpu.total", "CPU", s.cpu.usage_pct));
-    box_add("PROCESSOR", lines, 1);
-  }
-  // (DISK I/O and NETWORK moved below GPU MONITOR)
-  // GPU Info removed (details live in SYSTEM)
-  // VRAM panel removed; VRAM appears as a row in GPU MONITOR and details in SYSTEM
-  // THERMALS moved into SYSTEM box (removed)
-  // GPU — fixed size with gentle spacing between rows
-  if (show_gpumon) {
-    std::vector<std::string> lines;
-    auto gpu_line = [&](const std::string& key, const char* label8, double pct_raw){
-      const int label_w = 8;
-      int barw = std::max(10, iw - (label_w + 3));
-      double bar_pct = montauk::ui::smooth_value(key, pct_raw);
-      std::string bar = montauk::util::retro_bar(bar_pct, barw);
-      std::string col = bar_color(bar_pct);
-      std::string rst = col.empty() ? std::string() : sgr_reset();
-      std::ostringstream os; os << trunc_pad(label8, label_w) << " " << col << bar << rst;
-      return os.str();
-    };
-    auto add_row = [&](const std::string& row){ if (!row.empty()) lines.push_back(row); if (!lines.empty()) lines.push_back(""); };
-    // Order: GPU → VRAM → MEM → ENC → DEC
-    if (s.vram.has_util)    { add_row(gpu_line("gpu.util", "GPU", s.vram.gpu_util_pct)); }
-    if (s.vram.total_mb > 0) { add_row(gpu_line("gpu.vram_used", "VRAM", s.vram.used_pct)); }
-    if (s.vram.has_mem_util){ add_row(gpu_line("gpu.mem_util", "MEM", s.vram.mem_util_pct)); }
-    if (s.vram.has_encdec) {
-      add_row(gpu_line("gpu.enc", "ENC", s.vram.enc_util_pct));
-      add_row(gpu_line("gpu.dec", "DEC", s.vram.dec_util_pct));
+  // Phase 7 layout: normal mode shows the four charted panels only
+  // (PROCESSOR, GPU, MEMORY, NETWORK). system_focus = total takeover — all
+  // four hidden, the SYSTEM detail block fills the right column. DISK I/O
+  // panel is gone from normal mode entirely (details appear inside SYSTEM).
+  const bool show_charts  = !g_ui.system_focus;
+  const bool show_gpumon  = show_charts && g_ui.show_gpumon;
+  const bool show_thermal = g_ui.show_thermal;  // gates thermal detail inside SYSTEM
+
+  // Pre-declare the ChartPanel instances so they persist across frames
+  // (scroll buffer + Kitty image ID per instance).
+  static widgets::ChartPanel cpu_chart(
+      "PROCESSOR", "cpu", &montauk::app::chart_histories().cpu_total);
+  static widgets::ChartPanel gpu_util_chart(
+      "GPU",  "gpu", &montauk::app::chart_histories().gpu_util);
+  static widgets::ChartPanel vram_chart(
+      "VRAM", "gpu", &montauk::app::chart_histories().vram_used);
+  static widgets::ChartPanel gpu_mem_chart(
+      "MEM",  "gpu", &montauk::app::chart_histories().gpu_mem);
+  static widgets::ChartPanel enc_chart(
+      "ENC",  "gpu", &montauk::app::chart_histories().enc);
+  static widgets::ChartPanel dec_chart(
+      "DEC",  "gpu", &montauk::app::chart_histories().dec);
+  static widgets::ChartPanel mem_chart(
+      "MEMORY", "memory", &montauk::app::chart_histories().mem_used);
+  static widgets::ChartPanel net_chart(
+      "NETWORK", "network",
+      widgets::ChartPanel::DualCurveSources{
+          &montauk::app::chart_histories().net_rx,
+          &montauk::app::chart_histories().net_tx});
+
+  // Dynamic slot sizing: count visible panels, then distribute the full
+  // vertical budget proportionally. Panels stretch to fill the column.
+  // Minimum slot height of 3 rows (1 content + 2 border) prevents squish
+  // on very short terminals.
+  struct Slot {
+    widgets::ChartPanel* panel;
+    bool visible;
+  };
+  const Slot slots[] = {
+      {&cpu_chart,      show_charts},
+      {&gpu_util_chart, show_gpumon && s.vram.has_util},
+      {&vram_chart,     show_gpumon && s.vram.total_mb > 0},
+      {&gpu_mem_chart,  show_gpumon && s.vram.has_mem_util},
+      {&enc_chart,      show_gpumon && s.vram.has_encdec},
+      {&dec_chart,      show_gpumon && s.vram.has_encdec},
+      {&mem_chart,      show_charts},
+      {&net_chart,      show_charts},
+  };
+
+  // First sweep: any chart that was placed last frame but isn't visible
+  // this frame gets its Kitty placement deleted. Without this the
+  // terminal keeps rendering the stale image under newly-drawn SYSTEM
+  // text (or under a narrower chart set when GPU toggles off). Matches
+  // the pattern OUROBOROS uses in AlbumBrowser::clear_all_images().
+  for (const auto& sl : slots) {
+    if (!sl.visible && sl.panel->is_placed()) {
+      sl.panel->hide(canvas);
     }
-    // POWER removed from GPU MONITOR (shown in SYSTEM)
-    // Remove the trailing spacer if present
-    if (!lines.empty() && lines.back().empty()) lines.pop_back();
-    box_add("GPU", lines, (int)lines.size());
   }
-  // MEMORY (after GPU) — hidden in SYSTEM focus
-  if (!g_ui.system_focus) {
-    std::vector<std::string> lines;
-    lines.push_back(bar_line8("mem.used", "MEMORY", s.mem.used_pct));
-    box_add("MEMORY", lines, 1);
+
+  if (show_charts) {
+    int n_visible = 0;
+    for (const auto& sl : slots) if (sl.visible) ++n_visible;
+
+    if (n_visible > 0) {
+      // Integer division gives each panel a base height; any remainder is
+      // distributed one extra row at a time to the first `remainder` panels
+      // so the column fills exactly.
+      const int base = std::max(3, target_rows / n_visible);
+      int remainder = target_rows - base * n_visible;
+      if (remainder < 0) remainder = 0;  // if too many panels, stop filling
+
+      for (const auto& sl : slots) {
+        if (!sl.visible) continue;
+        if (current_y >= rect.y + target_rows) break;
+        int rows = base + (remainder > 0 ? 1 : 0);
+        if (remainder > 0) --remainder;
+        // Clamp to remaining space.
+        int avail = (rect.y + target_rows) - current_y;
+        if (rows > avail) rows = avail;
+        if (rows < 3) continue;  // not enough room for a meaningful chart
+        widget::LayoutRect panel_rect{rect.x, current_y, rect.width, rows};
+        sl.panel->render(canvas, panel_rect, s);
+        current_y += rows;
+      }
+    }
   }
-  // DISK I/O (after MEMORY)
-  if (show_disk) {
-    std::vector<std::string> lines;
-    {
-      std::ostringstream rs; rs << "R:" << (int)(s.disk.total_read_bps/1000000) << "MB/s  W:" << (int)(s.disk.total_write_bps/1000000) << "MB/s";
-      lines.push_back(lr_align(iw, "", rs.str()));
-    }
-    size_t lim = std::min<size_t>(s.disk.devices.size(), 3);
-    for (size_t i=0;i<lim;i++) {
-      const auto& d = s.disk.devices[i];
-      std::ostringstream r; r << (int)(d.util_pct+0.5) << "%";
-      lines.push_back(lr_align(iw, d.name, r.str()));
-    }
-    box_add("DISK I/O", lines, 3);
-  }
-  // NETWORK (after DISK I/O)
-  if (show_net) {
-    std::vector<std::string> lines;
-    {
-      std::ostringstream rs; rs << "↓" << (int)(s.net.agg_rx_bps/1024) << "KB/s  ↑" << (int)(s.net.agg_tx_bps/1024) << "KB/s";
-      lines.push_back(lr_align(iw, "", rs.str()));
-    }
-    size_t lim = std::min<size_t>(s.net.interfaces.size(), 3);
-    for (size_t i=0;i<lim;i++) {
-      const auto& n = s.net.interfaces[i];
-      std::ostringstream rr; rr << "↓" << (int)(n.rx_bps/1024) << "KB/s  ↑" << (int)(n.tx_bps/1024) << "KB/s";
-      lines.push_back(lr_align(iw, n.name, rr.str()));
-    }
-    box_add("NETWORK", lines, 3);
-  }
-  // SYSTEM box — last, elastic to fill all remaining space to match PROCESS MONITOR height
-  {
-    int remaining = std::max(0, target_rows - (int)out.size());
-    // Always create SYSTEM box, minimum 1 line of content
+
+  // SYSTEM — only renders in focus mode, fills the full right column.
+  // Severity coloring is baked into the lines themselves at build time.
+  if (g_ui.system_focus) {
+    int remaining = std::max(0, target_rows - (current_y - rect.y));
     int inner_min = std::max(1, remaining - 2);
-    std::vector<std::string> sys; std::vector<int> sys_sev; // 0 none, 1 caution, 2 warning
-    auto push = [&](const std::string& line, int sev=0){ sys.push_back(line); sys_sev.push_back(sev); };
-    
-    // Hostname/Date/Time/Uptime/Kernel (show in SYSTEM focus only)
+
+    const auto& uic = ui_config();
+    std::vector<std::string> sys;
+    auto push = [&](const std::string& line, int sev = 0) {
+      sys.push_back(severity_colored(line, sev));
+    };
+
+    // Hostname/Date/Time/Uptime/Kernel (SYSTEM focus only)
     if (g_ui.system_focus) {
-      std::string hostname = read_hostname();
-      push(lr_align(iw, "HOSTNAME", hostname), 0);
-      
-      std::string kernel = read_kernel_version();
-      push(lr_align(iw, "KERNEL", kernel), 0);
-      
-      bool prefer12 = [](){
-        const auto& tf = montauk::ui::config().ui.time_format;
+      push(lr_align(iw, "HOSTNAME", read_hostname()), 0);
+      push(lr_align(iw, "KERNEL", read_kernel_version()), 0);
+
+      bool prefer12 = []() {
+        const auto& tf = config().ui.time_format;
         if (!tf.empty()) {
           std::string fmt = tf;
-          for (auto& ch : fmt) ch = montauk::util::ascii_lower((unsigned char)ch);
+          for (auto& ch : fmt) ch = montauk::util::ascii_lower(static_cast<unsigned char>(ch));
           if (fmt.find("12") != std::string::npos) return true;
           if (fmt.find("24") != std::string::npos) return false;
         }
         return prefer_12h_clock_from_locale();
       }();
-      std::string dates = format_date_now_locale();
-      std::string times = format_time_now(prefer12);
-      push(lr_align(iw, "DATE", dates), 0);
-      push(lr_align(iw, "TIME", times), 0);
-      
-      std::string uptime = read_uptime_formatted();
-      push(lr_align(iw, "UPTIME", uptime), 0);
-      
+      push(lr_align(iw, "DATE", format_date_now_locale()), 0);
+      push(lr_align(iw, "TIME", format_time_now(prefer12)), 0);
+      push(lr_align(iw, "UPTIME", read_uptime_formatted()), 0);
       push("", 0);
     }
 
-    // === CPU SECTION ===
-    if (!s.cpu.model.empty()) {
-      push(lr_align(iw, "CPU", s.cpu.model), 0);
+    // COLLECTOR & PROCESS STATS
+    if (!s.collector_name.empty()) push(lr_align(iw, "COLLECTOR", s.collector_name), 0);
+    if (g_ui.system_focus) push(lr_align(iw, "SCHEDULER", read_scheduler()), 0);
+    {
+      std::ostringstream rr;
+      rr << "ENRICHED:" << s.procs.enriched_count << "  TOTAL:" << s.procs.total_processes;
+      push(lr_align(iw, "PROCESSES", rr.str()), 0);
     }
-    int ncpu = (int)std::max<size_t>(1, s.cpu.per_core_pct.size());
+    if (g_ui.system_focus) {
+      std::ostringstream rr; rr << "R:" << s.procs.state_running << "  S:" << s.procs.state_sleeping << "  Z:" << s.procs.state_zombie;
+      push(lr_align(iw, "STATES", rr.str()), 0);
+    }
+    push("", 0);
+
+    // CPU SECTION
+    if (!s.cpu.model.empty()) push(lr_align(iw, "CPU", s.cpu.model), 0);
+    int ncpu = static_cast<int>(std::max<size_t>(1, s.cpu.per_core_pct.size()));
     double topc = 0.0; for (double v : s.cpu.per_core_pct) if (v > topc) topc = v;
     {
       std::ostringstream rr; rr << "AVG:" << (int)(s.cpu.usage_pct+0.5) << "%  TOP:" << (int)(topc+0.5) << "%  COUNT:" << ncpu;
       push(lr_align(iw, "THREADS", rr.str()), 0);
     }
-    // CPU freq/governor/turbo
     if (g_ui.system_focus) {
       auto fi = read_cpu_freq_info();
       std::ostringstream rr; rr.setf(std::ios::fixed);
       rr << "CURRENT:";
-      if (fi.has_cur) { rr << std::setprecision(1) << fi.cur_ghz << "GHz  "; } else { rr << "N/A  "; }
+      if (fi.has_cur) rr << std::setprecision(1) << fi.cur_ghz << "GHz  "; else rr << "N/A  ";
       rr << "MAX:";
-      if (fi.has_max) { rr << std::setprecision(1) << fi.max_ghz << "GHz "; } else { rr << "N/A "; }
+      if (fi.has_max) rr << std::setprecision(1) << fi.max_ghz << "GHz "; else rr << "N/A ";
       if (!fi.governor.empty()) rr << "GOV:" << fi.governor << "  ";
-      if (!fi.turbo.empty()) rr << "TURBO:" << fi.turbo;
+      if (!fi.turbo.empty())    rr << "TURBO:" << fi.turbo;
       push(lr_align(iw, "FREQ", rr.str()), 0);
-    }
-    // CPU UTIL breakdown
-    if (g_ui.system_focus) {
-      std::ostringstream rr; rr.setf(std::ios::fixed);
-      auto pcti = [](double v){ int x = (int)(v+0.5); if (x<0) x=0; return x; };
-      rr << "USR:" << pcti(s.cpu.pct_user) << "%  "
+
+      std::ostringstream ur; ur.setf(std::ios::fixed);
+      auto pcti = [](double v){ int x=(int)(v+0.5); return x<0?0:x; };
+      ur << "USR:" << pcti(s.cpu.pct_user) << "%  "
          << "SYS:" << pcti(s.cpu.pct_system) << "%  "
          << "IOWAIT:" << pcti(s.cpu.pct_iowait) << "%  "
          << "IRQ:" << pcti(s.cpu.pct_irq) << "%  "
          << "STEAL:" << pcti(s.cpu.pct_steal) << "%";
-      push(lr_align(iw, "UTIL", rr.str()), 0);
-    }
-    // LOAD AVG
-    if (g_ui.system_focus) {
+      push(lr_align(iw, "UTIL", ur.str()), 0);
+
       double a1=0,a5=0,a15=0; read_loadavg(a1,a5,a15);
-      std::ostringstream rr; rr.setf(std::ios::fixed);
-      rr << std::setprecision(2) << a1 << "  " << a5 << "  " << a15;
-      push(lr_align(iw, "LOAD AVG", rr.str()), 0);
-    }
-    // CTXT/INTR (context switches and interrupts per second)
-    if (g_ui.system_focus) {
-      std::ostringstream rr;
+      std::ostringstream lr; lr.setf(std::ios::fixed);
+      lr << std::setprecision(2) << a1 << "  " << a5 << "  " << a15;
+      push(lr_align(iw, "LOAD AVG", lr.str()), 0);
+
       auto format_rate = [](double rate) -> std::string {
+        std::ostringstream os; os.setf(std::ios::fixed);
+        os << std::setprecision(0) << rate;
+        std::string n = os.str();
         if (rate >= 1000.0) {
-          std::ostringstream os; os.setf(std::ios::fixed);
-          os << std::setprecision(0) << rate;
-          std::string num_str = os.str();
-          // Add thousand separators
-          int insertPosition = (int)num_str.length() - 3;
-          while (insertPosition > 0) {
-            num_str.insert(insertPosition, ",");
-            insertPosition -= 3;
-          }
-          return num_str;
-        } else {
-          std::ostringstream os; os.setf(std::ios::fixed);
-          os << std::setprecision(0) << rate;
-          return os.str();
+          int ip = static_cast<int>(n.length()) - 3;
+          while (ip > 0) { n.insert(ip, ","); ip -= 3; }
         }
+        return n;
       };
-      rr << format_rate(s.cpu.ctxt_per_sec) << "/s  " << format_rate(s.cpu.intr_per_sec) << "/s";
-      push(lr_align(iw, "CTXT/INTR", rr.str()), 0);
+      std::ostringstream cir;
+      cir << format_rate(s.cpu.ctxt_per_sec) << "/s  " << format_rate(s.cpu.intr_per_sec) << "/s";
+      push(lr_align(iw, "CTXT/INTR", cir.str()), 0);
     }
     push("", 0);
-    
-    // === GPU SECTION ===
+
+    // GPU SECTION
     if (!s.vram.name.empty()) push(lr_align(iw, "GPU", s.vram.name), 0);
     if (s.vram.has_util || s.vram.total_mb > 0) {
       std::ostringstream rr;
-      if (s.vram.has_util) {
-        rr << "G:" << (int)(s.vram.gpu_util_pct+0.5) << "% ";
-      }
-      if (s.vram.total_mb > 0) {
-        rr << "VRAM:" << std::fixed << std::setprecision(1) << s.vram.used_pct << "% ";
-      }
+      if (s.vram.has_util) rr << "G:" << (int)(s.vram.gpu_util_pct+0.5) << "% ";
+      if (s.vram.total_mb > 0) rr << "VRAM:" << std::fixed << std::setprecision(1) << s.vram.used_pct << "% ";
       if (s.vram.has_util) {
         rr << "M:" << (int)(s.vram.mem_util_pct+0.5) << "%";
         if (s.vram.has_encdec) rr << "  E:" << (int)(s.vram.enc_util_pct+0.5) << "%  D:" << (int)(s.vram.dec_util_pct+0.5) << "%";
@@ -254,9 +233,9 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
       push(lr_align(iw, "UTIL", rr.str()), 0);
     }
     if (s.nvml.available) {
-      auto pid_status = [&](){
+      auto pid_status = [&]() {
         if (s.nvml.sampled_pids > 0) return std::string("nvml");
-        int dev_util = (int)(s.vram.gpu_util_pct + 0.5);
+        int dev_util = static_cast<int>(s.vram.gpu_util_pct + 0.5);
         if (dev_util > 0 && s.nvml.running_pids > 0) return std::string("share");
         return std::string("none");
       }();
@@ -265,23 +244,23 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
                                 << " RUN:" << s.nvml.running_pids
                                 << " SAMP:" << s.nvml.sampled_pids
                                 << " AGE:" << s.nvml.sample_age_ms << "ms"
-                                << " MIG:" << (s.nvml.mig_enabled? "on":"off");
+                                << " MIG:" << (s.nvml.mig_enabled ? "on" : "off");
       push(lr_align(iw, "NVML", rr.str()), 0);
     }
-    if (s.vram.has_power) { 
-      std::ostringstream rr; rr << (int)(s.vram.power_draw_w+0.5) << "W"; 
-      push(lr_align(iw, "POWER", rr.str()), 0); 
+    if (s.vram.has_power) {
+      std::ostringstream rr; rr << (int)(s.vram.power_draw_w+0.5) << "W";
+      push(lr_align(iw, "POWER", rr.str()), 0);
     }
     if (g_ui.system_focus) {
       if (s.vram.has_power_limit) {
         int utilp = 0;
         if (s.vram.has_power && s.vram.power_limit_w > 0.0) {
-          utilp = (int)((s.vram.power_draw_w / s.vram.power_limit_w) * 100.0 + 0.5);
+          utilp = static_cast<int>((s.vram.power_draw_w / s.vram.power_limit_w) * 100.0 + 0.5);
           if (utilp < 0) utilp = 0;
           if (utilp > 100) utilp = 100;
         }
-        std::ostringstream rr; 
-        rr << utilp << "% UTIL " << grey_bullet() << " " << ui_config().normal << (int)(s.vram.power_limit_w+0.5) << "W" << sgr_reset();
+        std::ostringstream rr;
+        rr << utilp << "% UTIL " << grey_bullet() << " " << uic.normal << (int)(s.vram.power_limit_w+0.5) << "W" << sgr_reset();
         push(lr_align(iw, "PLIMIT", rr.str()), 0);
       }
       if (s.vram.has_pstate) {
@@ -290,8 +269,8 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
       }
     }
     push("", 0);
-    
-    // === MEMORY SECTION ===
+
+    // MEMORY SECTION
     double mem_used_gb = s.mem.used_kb/1048576.0, mem_tot_gb = s.mem.total_kb/1048576.0;
     double mem_avail_gb = s.mem.available_kb/1048576.0;
     {
@@ -300,47 +279,39 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
         rr << "AVAILABLE:" << std::fixed << std::setprecision(0) << mem_avail_gb << "GB  ";
       }
       rr << std::fixed << std::setprecision(1) << s.mem.used_pct << "% " << grey_bullet() << " "
-         << ui_config().normal << std::setprecision(2) << mem_used_gb << "GB/" << mem_tot_gb << "GB" << sgr_reset();
+         << uic.normal << std::setprecision(2) << mem_used_gb << "GB/" << mem_tot_gb << "GB" << sgr_reset();
       push(lr_align(iw, "MEM", rr.str()), 0);
     }
     if (g_ui.system_focus) {
       std::ostringstream rr;
-      rr << std::fixed << std::setprecision(1) << (s.mem.cached_kb/1048576.0) << "GB / " 
+      rr << std::fixed << std::setprecision(1) << (s.mem.cached_kb/1048576.0) << "GB / "
          << std::setprecision(1) << (s.mem.buffers_kb/1048576.0) << "GB";
       push(lr_align(iw, "CACHE/BUF", rr.str()), 0);
     }
-    // No SWAP line in SYSTEM focus per design preference
     push("", 0);
-    
-    // === DISK I/O / FILESYSTEMS SECTION ===
+
+    // DISK I/O / FILESYSTEMS
     if (!s.fs.mounts.empty()) {
       push("DISK I/O:", 0);
-      // Aggregate read/write throughput (SYSTEM focus only)
       if (g_ui.system_focus) {
-        std::ostringstream os; 
+        std::ostringstream os;
         os << (int)(s.disk.total_read_bps/1000000) << "MB/s/" << (int)(s.disk.total_write_bps/1000000) << "MB/s";
         push(lr_align(iw, "READ/WRITE", os.str()), 0);
       }
-      auto human_bytes = [](uint64_t b){
-        const double kb = 1024.0, mb = kb*1024.0, gb = mb*1024.0, tb = gb*1024.0;
-        std::ostringstream os; os.setf(std::ios::fixed); os<<std::setprecision(1);
-        if (b >= (uint64_t)tb) { os<< (b/tb) << "T"; }
-        else if (b >= (uint64_t)gb) { os<< (b/gb) << "G"; }
-        else if (b >= (uint64_t)mb) { os<< (b/mb) << "M"; }
-        else { os<< (int)(b/kb+0.5) << "K"; }
-        return os.str();
-      };
+      auto human_bytes = [](uint64_t b) { return format_size(b, 1, true); };
       size_t lim = std::min<size_t>(s.fs.mounts.size(), 3);
       for (size_t i=0;i<lim;i++) {
         const auto& m = s.fs.mounts[i];
-        std::ostringstream right; right << (int)(m.used_pct+0.5) << "% " << grey_bullet() << " "
-                                        << ui_config().normal << human_bytes(m.used_bytes) << "/" << human_bytes(m.total_bytes) << sgr_reset();
+        std::ostringstream right;
+        right << (int)(m.used_pct+0.5) << "% " << grey_bullet() << " "
+              << uic.normal << human_bytes(m.used_bytes) << "/" << human_bytes(m.total_bytes) << sgr_reset();
         std::string left = m.device.empty() ? m.fstype : m.device;
         push(lr_align(iw, left, right.str()), 0);
       }
       push("", 0);
     }
-    // === NETWORK SECTION (inside SYSTEM focus) ===
+
+    // NETWORK SECTION (inside SYSTEM focus)
     if (g_ui.system_focus) {
       push("NETWORK", 0);
       {
@@ -355,50 +326,42 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
       }
       push("", 0);
     }
-    
-    // === TEMPERATURE SECTION ===
+
+    // TEMPERATURE SECTION
     if (show_thermal) {
-      const auto& thr = montauk::ui::config().thresholds;
-      auto thr_from = [&](bool has_thr, double thr_c, int cfg_warn){
+      const auto& thr = config().thresholds;
+      auto thr_from = [&](bool has_thr, double thr_c, int cfg_warn) {
         int fallback_warn = cfg_warn > 0 ? cfg_warn : thr.gpu_temp_warning_c;
-        int warn = has_thr ? (int)(thr_c + 0.5) : fallback_warn;
+        int warn = has_thr ? static_cast<int>(thr_c + 0.5) : fallback_warn;
         int gpu_cau = thr.gpu_temp_caution_c > 0 ? thr.gpu_temp_caution_c : std::max(0, warn - thr.temp_caution_delta_c);
         return std::pair<int,int>{gpu_cau, warn};
       };
-      // CPU temp
       if (s.thermal.has_temp) {
-        int warn = s.thermal.has_warn ? (int)(s.thermal.warn_c + 0.5) : thr.cpu_temp_warning_c;
+        int warn = s.thermal.has_warn ? static_cast<int>(s.thermal.warn_c + 0.5) : thr.cpu_temp_warning_c;
         int caution = thr.cpu_temp_caution_c > 0 ? thr.cpu_temp_caution_c : std::max(0, warn - thr.temp_caution_delta_c);
-        int val = (int)(s.thermal.cpu_max_c + 0.5);
-        int sev = (val>=warn)?2:((val>=caution)?1:0);
+        int val = static_cast<int>(s.thermal.cpu_max_c + 0.5);
         std::ostringstream rr; rr << val << "°C";
-        push(lr_align(iw, "CPU TEMP", rr.str()), sev);
+        push(lr_align(iw, "CPU TEMP", rr.str()), compute_severity(val, caution, warn));
       }
-      // GPU temps
-      for (size_t i=0;i<s.vram.devices.size(); ++i) {
+      for (size_t i = 0; i < s.vram.devices.size(); ++i) {
         const auto& d = s.vram.devices[i];
         if (!(d.has_temp_edge || d.has_temp_hotspot || d.has_temp_mem)) continue;
         std::ostringstream rr;
-        bool first=false;
+        bool first = false;
         int dev_sev = 0;
-        if (d.has_temp_edge) { auto [cau,warn] = thr_from(d.has_thr_edge, d.thr_edge_c, thr.gpu_temp_edge_warning_c); int v=(int)(d.temp_edge_c+0.5); dev_sev=std::max(dev_sev,(v>=warn)?2:((v>=cau)?1:0)); rr << "E:" << v << "°C"; first=true; }
-        if (d.has_temp_hotspot) { auto [cau,warn] = thr_from(d.has_thr_hotspot, d.thr_hotspot_c, thr.gpu_temp_hot_warning_c); int v=(int)(d.temp_hotspot_c+0.5); dev_sev=std::max(dev_sev,(v>=warn)?2:((v>=cau)?1:0)); rr << (first?"  ":"") << "H:" << v << "°C"; first=true; }
-        if (d.has_temp_mem) { auto [cau,warn] = thr_from(d.has_thr_mem, d.thr_mem_c, thr.gpu_temp_mem_warning_c); int v=(int)(d.temp_mem_c+0.5); dev_sev=std::max(dev_sev,(v>=warn)?2:((v>=cau)?1:0)); rr << (first?"  ":"") << "M:" << v << "°C"; }
-        {
-          std::string label = (s.vram.devices.size()>1) ? (std::string("GPU") + std::to_string(i) + " TEMP") : std::string("GPU TEMP");
-          push(lr_align(iw, label, rr.str()), dev_sev);
-        }
+        if (d.has_temp_edge)    { auto [cau,warn] = thr_from(d.has_thr_edge,    d.thr_edge_c,    thr.gpu_temp_edge_warning_c); int v=static_cast<int>(d.temp_edge_c+0.5);    dev_sev = std::max(dev_sev, compute_severity(v, cau, warn)); rr << "E:" << v << "°C"; first=true; }
+        if (d.has_temp_hotspot) { auto [cau,warn] = thr_from(d.has_thr_hotspot, d.thr_hotspot_c, thr.gpu_temp_hot_warning_c);  int v=static_cast<int>(d.temp_hotspot_c+0.5); dev_sev = std::max(dev_sev, compute_severity(v, cau, warn)); rr << (first?"  ":"") << "H:" << v << "°C"; first=true; }
+        if (d.has_temp_mem)     { auto [cau,warn] = thr_from(d.has_thr_mem,     d.thr_mem_c,     thr.gpu_temp_mem_warning_c);  int v=static_cast<int>(d.temp_mem_c+0.5);     dev_sev = std::max(dev_sev, compute_severity(v, cau, warn)); rr << (first?"  ":"") << "M:" << v << "°C"; }
+        std::string label = (s.vram.devices.size() > 1) ? (std::string("GPU") + std::to_string(i) + " TEMP") : std::string("GPU TEMP");
+        push(lr_align(iw, label, rr.str()), dev_sev);
       }
-      // Fan speeds (SYSTEM focus only)
       if (g_ui.system_focus) {
-        // CPU fan speed (hwmon)
         if (s.thermal.has_fan) {
           std::ostringstream rr; rr << (int)(s.thermal.fan_rpm + 0.5) << " RPM";
           push(lr_align(iw, "CPU FAN", rr.str()), 0);
         } else {
           push(lr_align(iw, "CPU FAN", "UNDETECTED"), 0);
         }
-        // GPU fan speed (per device)
         for (size_t i = 0; i < s.vram.devices.size(); ++i) {
           const auto& d = s.vram.devices[i];
           std::string label = (s.vram.devices.size() > 1) ? (std::string("GPU") + std::to_string(i) + " FAN") : std::string("GPU FAN");
@@ -409,49 +372,26 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
             push(lr_align(iw, label, "UNDETECTED"), 0);
           }
         }
-      }
-      // Margin temps summary line (SYSTEM focus): CPU Δ.., GPU Δ..
-      if (g_ui.system_focus) {
-        int cpu_delta = 0; int gpu_delta = 0; bool have_gpu=false;
+        int cpu_delta = 0, gpu_delta = 0; bool have_gpu = false;
         if (s.thermal.has_temp) {
-          int warn = s.thermal.has_warn ? (int)(s.thermal.warn_c + 0.5) : thr.cpu_temp_warning_c;
-          int val = (int)(s.thermal.cpu_max_c + 0.5); cpu_delta = std::max(0, warn - val);
+          int warn = s.thermal.has_warn ? static_cast<int>(s.thermal.warn_c + 0.5) : thr.cpu_temp_warning_c;
+          int val = static_cast<int>(s.thermal.cpu_max_c + 0.5); cpu_delta = std::max(0, warn - val);
         }
         for (const auto& d : s.vram.devices) {
-          int best = INT_MAX; bool any=false;
-          if (d.has_temp_edge) { int warn = d.has_thr_edge? (int)(d.thr_edge_c+0.5) : thr.gpu_temp_warning_c; int v=(int)(d.temp_edge_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
-          if (d.has_temp_hotspot) { int warn = d.has_thr_hotspot? (int)(d.thr_hotspot_c+0.5) : thr.gpu_temp_warning_c; int v=(int)(d.temp_hotspot_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
-          if (d.has_temp_mem) { int warn = d.has_thr_mem? (int)(d.thr_mem_c+0.5) : thr.gpu_temp_warning_c; int v=(int)(d.temp_mem_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
-          if (any) { if (!have_gpu) { gpu_delta = best; have_gpu=true; } else { gpu_delta = std::min(gpu_delta, best); } }
+          int best = INT_MAX; bool any = false;
+          if (d.has_temp_edge)    { int warn = d.has_thr_edge?    static_cast<int>(d.thr_edge_c+0.5)    : thr.gpu_temp_warning_c; int v=static_cast<int>(d.temp_edge_c+0.5);    best = std::min(best, std::max(0, warn - v)); any=true; }
+          if (d.has_temp_hotspot) { int warn = d.has_thr_hotspot? static_cast<int>(d.thr_hotspot_c+0.5) : thr.gpu_temp_warning_c; int v=static_cast<int>(d.temp_hotspot_c+0.5); best = std::min(best, std::max(0, warn - v)); any=true; }
+          if (d.has_temp_mem)     { int warn = d.has_thr_mem?     static_cast<int>(d.thr_mem_c+0.5)     : thr.gpu_temp_warning_c; int v=static_cast<int>(d.temp_mem_c+0.5);     best = std::min(best, std::max(0, warn - v)); any=true; }
+          if (any) { if (!have_gpu) { gpu_delta = best; have_gpu = true; } else gpu_delta = std::min(gpu_delta, best); }
         }
         std::ostringstream rr; rr << "CPU \xCE\x94" << cpu_delta << "°C"; if (have_gpu) rr << "  GPU \xCE\x94" << gpu_delta << "°C";
         push(lr_align(iw, "MARGIN TEMPS", rr.str()), 0);
       }
       push("", 0);
     }
-    
-    // === COLLECTOR & PROCESS STATS ===
-    if (!s.collector_name.empty()) {
-      push(lr_align(iw, "COLLECTOR", s.collector_name), 0);
-    }
-    if (g_ui.system_focus) {
-      push(lr_align(iw, "SCHEDULER", read_scheduler()), 0);
-    }
-    {
-      std::ostringstream rr; 
-      rr << "ENRICHED:" << s.procs.enriched_count << "  TOTAL:" << s.procs.total_processes;
-      push(lr_align(iw, "PROCESSES", rr.str()), 0);
-    }
-    // States breakdown (System focus only)
-    if (g_ui.system_focus) {
-      std::ostringstream rr; rr << "R:" << s.procs.state_running << "  S:" << s.procs.state_sleeping << "  Z:" << s.procs.state_zombie;
-      push(lr_align(iw, "STATES", rr.str()), 0);
-    }
-    push("", 0);
-    
-    // PROC CHURN / PROC SECURITY - mutually exclusive display
+
+    // PROC CHURN / PROC SECURITY - mutually exclusive
     if (s.churn.recent_2s_events > 0) {
-      // Collect churned processes and categorize them
       std::vector<const montauk::model::ProcSample*> churned;
       int auth_churn = 0, sys_churn = 0, user_churn = 0;
       for (const auto& p : s.procs.processes) {
@@ -471,35 +411,29 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
         }
       }
 
-      // Determine severity: auth churn during high activity = warning, otherwise caution
       int churn_severity = (auth_churn > 0 && s.churn.recent_2s_events >= 3) ? 2 : 1;
 
-      // Summary line with categorized counts
       std::ostringstream summary;
       summary << s.churn.recent_2s_events << " events";
       if (auth_churn > 0) summary << "  AUTH:" << auth_churn;
-      if (sys_churn > 0) summary << "  SYS:" << sys_churn;
+      if (sys_churn > 0)  summary << "  SYS:" << sys_churn;
       if (user_churn > 0) summary << "  USER:" << user_churn;
       push(lr_align(iw, "PROC CHURN", summary.str()), churn_severity);
 
-      // In SYSTEM focus, show detailed churn info matching security format
       if (g_ui.system_focus) {
-        // Source breakdown
         if (s.churn.recent_2s_proc > 0 || s.churn.recent_2s_sys > 0) {
           std::ostringstream src;
           src << "SOURCE  /proc:" << s.churn.recent_2s_proc << "  /sys:" << s.churn.recent_2s_sys;
           push(src.str(), 0);
         }
 
-        // Detailed process lines (matching security finding format)
-        int lines_used = (int)sys.size();
+        int lines_used = static_cast<int>(sys.size());
         int available = inner_min - lines_used;
-        int detail_lines = std::min(available, (int)churned.size());
+        int detail_lines = std::min(available, static_cast<int>(churned.size()));
 
         for (int i = 0; i < detail_lines; ++i) {
           const auto& p = *churned[i];
           std::ostringstream line;
-          // Determine per-process severity
           std::string cmd_lower = p.cmd;
           std::transform(cmd_lower.begin(), cmd_lower.end(), cmd_lower.begin(),
                          [](unsigned char c){ return static_cast<char>(montauk::util::ascii_lower(c)); });
@@ -508,10 +442,8 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
           int proc_sev = is_auth ? 2 : 1;
 
           line << "PROC CHURN ";
-          if (proc_sev >= 2) line << "⚠ ";
-          else line << "▴ ";
+          line << (proc_sev >= 2 ? "⚠ " : "▴ ");
           line << "PID " << p.pid << ' ' << (p.user_name.empty() ? "?" : p.user_name) << ' ';
-          // Truncate cmd for display
           std::string cmd_disp = p.cmd.empty() ? std::to_string(p.pid) : p.cmd;
           if (cmd_disp.size() > 40) cmd_disp = cmd_disp.substr(0, 37) + "...";
           line << cmd_disp;
@@ -520,38 +452,26 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
         }
       }
     } else {
-      // No churn - show PROC SECURITY
       auto findings = montauk::app::collect_security_findings(s);
       if (findings.empty()) {
         push(lr_align(iw, "PROC SECURITY", "OK"), 0);
       } else {
         int warn = 0, caution = 0;
         for (const auto& f : findings) {
-          if (f.severity >= 2) ++warn;
+          if      (f.severity >= 2) ++warn;
           else if (f.severity == 1) ++caution;
         }
-        std::ostringstream summary;
-        bool wrote = false;
-        if (warn > 0) { summary << "WARN:" << warn; wrote = true; }
-        if (caution > 0) {
-          if (wrote) summary << "  ";
-          summary << "CAUTION:" << caution;
-          wrote = true;
-        }
-        if (!wrote) {
-          summary << "INFO:" << findings.size();
-        }
+        std::ostringstream summary; bool wrote = false;
+        if (warn > 0)    { summary << "WARN:" << warn; wrote = true; }
+        if (caution > 0) { if (wrote) summary << "  "; summary << "CAUTION:" << caution; wrote = true; }
+        if (!wrote)      { summary << "INFO:" << findings.size(); }
         int summary_sev = warn > 0 ? 2 : (caution > 0 ? 1 : 0);
-        
-        // Summary line
         push(lr_align(iw, "PROC SECURITY", summary.str()), summary_sev);
-        
-        // In SYSTEM focus, show detailed findings - fill ALL available space
+
         if (g_ui.system_focus) {
-          int lines_used = (int)sys.size();
+          int lines_used = static_cast<int>(sys.size());
           int available = inner_min - lines_used;
-          int max_rows = std::min(available, (int)findings.size());
-          
+          int max_rows = std::min(available, static_cast<int>(findings.size()));
           for (int i = 0; i < max_rows; ++i) {
             const auto& f = findings[i];
             push(montauk::app::format_security_line_default(f), f.severity);
@@ -559,35 +479,11 @@ std::vector<std::string> render_right_column(const montauk::model::Snapshot& s, 
         }
       }
     }
-    
-    // Build box then apply full-line coloring for temperature lines if needed
-    auto sys_box = make_box("SYSTEM", sys, width, inner_min);
-    if (!sys_box.empty()) {
-      const std::string V = "│"; const auto& uic = ui_config();
-      for (size_t li=1; li+1<sys_box.size(); ++li) {
-        int sv = (li-1 < sys_sev.size()) ? sys_sev[li-1] : 0;
-        auto& line = sys_box[li]; size_t fpos = line.find(V); size_t lpos = line.rfind(V);
-        if (fpos==std::string::npos || lpos==std::string::npos || lpos<=fpos) continue;
-        std::string pre = line.substr(0, fpos);
-        std::string mid = line.substr(fpos + V.size(), lpos - (fpos + V.size()));
-        std::string suf = line.substr(lpos + V.size());
-        std::string gl = uic.border + V + sgr_reset();
-        std::string gr = uic.border + V + sgr_reset();
-        if (sv > 0) {
-          const std::string& col = (sv==2) ? uic.warning : uic.caution;
-          line = pre + gl + col + mid + sgr_reset() + gr + suf;
-        } else {
-          line = pre + gl + mid + gr + suf;
-        }
-      }
-    }
-    out.insert(out.end(), sys_box.begin(), sys_box.end());
+
+    emit_panel("SYSTEM", sys, inner_min);
   }
-  // Pad to exactly target_rows to match PROCESS MONITOR height
-  while ((int)out.size() < target_rows) {
-    out.push_back(std::string(width, ' '));
-  }
-  return out;
+  // Remaining rows in rect (if any) stay untouched on the canvas — they were
+  // cleared to blank cells at canvas construction.
 }
 
 } // namespace montauk::ui

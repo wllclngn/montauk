@@ -429,3 +429,431 @@ TEST(timsort_stress_10m_random) {
   assert_sorted(data, "10m_random");
   ASSERT_TRUE(std::is_sorted(data.begin(), data.end()));
 }
+
+// ============================================================================
+// SUBLIMATION BACKEND TESTS
+// ============================================================================
+// Compiled in only when montauk is built with USE_SUBLIMATION=ON. Verifies:
+//   1. Direct sublimation entry points produce sorted output across patterns.
+//   2. The dispatcher routes correctly and preserves the sorted property.
+//   3. TimSort and Sublimation paths over the same input both produce a valid
+//      ascending order (permutations may differ -- pack-sort tiebreaks on
+//      original index, TimSort is stable -- but the sorted property holds).
+#ifdef HAVE_SUBLIMATION
+#include "util/SortDispatch.hpp"
+#include "sublimation_pack.h"
+#include "sublimation_strings.h"
+#include <cstring>
+#include <string>
+
+// Verify keys[indices[i]] is non-decreasing for ascending sort.
+template <typename KeyT>
+static bool is_sorted_by_key_asc(const std::vector<KeyT>& keys,
+                                 const std::vector<uint32_t>& indices) {
+  for (size_t i = 1; i < indices.size(); ++i) {
+    if (keys[indices[i]] < keys[indices[i-1]]) return false;
+  }
+  return true;
+}
+template <typename KeyT>
+static bool is_sorted_by_key_desc(const std::vector<KeyT>& keys,
+                                  const std::vector<uint32_t>& indices) {
+  for (size_t i = 1; i < indices.size(); ++i) {
+    if (keys[indices[i]] > keys[indices[i-1]]) return false;
+  }
+  return true;
+}
+
+// Verify indices is a valid permutation of 0..n-1 (no dupes, no out-of-range).
+static bool is_valid_permutation(const std::vector<uint32_t>& indices) {
+  std::vector<uint32_t> sorted = indices;
+  std::sort(sorted.begin(), sorted.end());
+  for (uint32_t i = 0; i < sorted.size(); ++i) {
+    if (sorted[i] != i) return false;
+  }
+  return true;
+}
+
+TEST(sublimation_pack_u32_random) {
+  const size_t n = 4096;
+  std::vector<uint32_t> keys(n);
+  for (size_t i = 0; i < n; ++i) {
+    getrandom(&keys[i], sizeof(uint32_t), 0);
+  }
+  std::vector<uint32_t> idx(n);
+  std::iota(idx.begin(), idx.end(), 0u);
+
+  sublimation_pack_sort_u32(keys.data(), idx.data(), n, /*descending=*/false);
+
+  ASSERT_TRUE(is_valid_permutation(idx));
+  ASSERT_TRUE(is_sorted_by_key_asc(keys, idx));
+}
+
+TEST(sublimation_pack_u32_descending) {
+  const size_t n = 1024;
+  std::vector<uint32_t> keys(n);
+  for (size_t i = 0; i < n; ++i) {
+    getrandom(&keys[i], sizeof(uint32_t), 0);
+  }
+  std::vector<uint32_t> idx(n);
+  std::iota(idx.begin(), idx.end(), 0u);
+
+  sublimation_pack_sort_u32(keys.data(), idx.data(), n, /*descending=*/true);
+
+  ASSERT_TRUE(is_valid_permutation(idx));
+  ASSERT_TRUE(is_sorted_by_key_desc(keys, idx));
+}
+
+TEST(sublimation_pack_u32_already_sorted) {
+  const size_t n = 1024;
+  std::vector<uint32_t> keys(n);
+  for (uint32_t i = 0; i < n; ++i) keys[i] = i;
+  std::vector<uint32_t> idx(n);
+  std::iota(idx.begin(), idx.end(), 0u);
+
+  sublimation_pack_sort_u32(keys.data(), idx.data(), n, /*descending=*/false);
+
+  ASSERT_TRUE(is_valid_permutation(idx));
+  ASSERT_TRUE(is_sorted_by_key_asc(keys, idx));
+  // Already-sorted should preserve original index order.
+  for (uint32_t i = 0; i < n; ++i) ASSERT_EQ(idx[i], i);
+}
+
+TEST(sublimation_pack_u32_reversed) {
+  const size_t n = 1024;
+  std::vector<uint32_t> keys(n);
+  for (uint32_t i = 0; i < n; ++i) keys[i] = static_cast<uint32_t>(n - 1 - i);
+  std::vector<uint32_t> idx(n);
+  std::iota(idx.begin(), idx.end(), 0u);
+
+  sublimation_pack_sort_u32(keys.data(), idx.data(), n, /*descending=*/false);
+
+  ASSERT_TRUE(is_valid_permutation(idx));
+  ASSERT_TRUE(is_sorted_by_key_asc(keys, idx));
+}
+
+TEST(sublimation_pack_u32_all_equal) {
+  const size_t n = 1024;
+  std::vector<uint32_t> keys(n, 42u);
+  std::vector<uint32_t> idx(n);
+  std::iota(idx.begin(), idx.end(), 0u);
+
+  sublimation_pack_sort_u32(keys.data(), idx.data(), n, /*descending=*/false);
+
+  ASSERT_TRUE(is_valid_permutation(idx));
+  // All-equal keys: pack-sort tiebreaks on index, so output == input.
+  for (uint32_t i = 0; i < n; ++i) ASSERT_EQ(idx[i], i);
+}
+
+TEST(sublimation_pack_f32_random) {
+  const size_t n = 2048;
+  std::vector<float> keys(n);
+  for (size_t i = 0; i < n; ++i) {
+    uint32_t bits;
+    getrandom(&bits, sizeof(bits), 0);
+    keys[i] = static_cast<float>(bits % 100000) / 1000.0f;  // [0, 100)
+  }
+  std::vector<uint32_t> idx(n);
+  std::iota(idx.begin(), idx.end(), 0u);
+
+  sublimation_pack_sort_f32(keys.data(), idx.data(), n, /*descending=*/true);
+
+  ASSERT_TRUE(is_valid_permutation(idx));
+  ASSERT_TRUE(is_sorted_by_key_desc(keys, idx));
+}
+
+TEST(sublimation_pack_i32_negative_values) {
+  const size_t n = 512;
+  std::vector<int32_t> keys(n);
+  for (size_t i = 0; i < n; ++i) {
+    int32_t v;
+    getrandom(&v, sizeof(v), 0);
+    keys[i] = v;  // full int32 range incl. negatives
+  }
+  std::vector<uint32_t> idx(n);
+  std::iota(idx.begin(), idx.end(), 0u);
+
+  sublimation_pack_sort_i32(keys.data(), idx.data(), n, /*descending=*/false);
+
+  ASSERT_TRUE(is_valid_permutation(idx));
+  ASSERT_TRUE(is_sorted_by_key_asc(keys, idx));
+}
+
+TEST(sublimation_strings_random) {
+  // Build a pool of distinct random strings.
+  const size_t n = 1024;
+  std::vector<std::string> storage(n);
+  for (size_t i = 0; i < n; ++i) {
+    char buf[16];
+    for (size_t j = 0; j < 15; ++j) {
+      uint8_t c;
+      getrandom(&c, 1, 0);
+      buf[j] = 'a' + (c % 26);
+    }
+    buf[15] = '\0';
+    storage[i] = buf;
+  }
+  std::vector<const char*> arr(n);
+  for (size_t i = 0; i < n; ++i) arr[i] = storage[i].c_str();
+  std::vector<uint32_t> idx(n);
+  std::iota(idx.begin(), idx.end(), 0u);
+
+  sublimation_strings_indices(arr.data(), idx.data(), n);
+
+  ASSERT_TRUE(is_valid_permutation(idx));
+  for (size_t i = 1; i < n; ++i) {
+    ASSERT_TRUE(std::strcmp(arr[idx[i-1]], arr[idx[i]]) <= 0);
+  }
+}
+
+TEST(sublimation_strings_common_prefix) {
+  // Stress the MSD radix tail by giving every string the same 8-byte prefix.
+  const size_t n = 512;
+  std::vector<std::string> storage(n);
+  for (size_t i = 0; i < n; ++i) {
+    char buf[24];
+    std::memcpy(buf, "common__", 8);
+    for (size_t j = 8; j < 23; ++j) {
+      uint8_t c;
+      getrandom(&c, 1, 0);
+      buf[j] = 'a' + (c % 26);
+    }
+    buf[23] = '\0';
+    storage[i] = buf;
+  }
+  std::vector<const char*> arr(n);
+  for (size_t i = 0; i < n; ++i) arr[i] = storage[i].c_str();
+  std::vector<uint32_t> idx(n);
+  std::iota(idx.begin(), idx.end(), 0u);
+
+  sublimation_strings_indices(arr.data(), idx.data(), n);
+
+  ASSERT_TRUE(is_valid_permutation(idx));
+  for (size_t i = 1; i < n; ++i) {
+    ASSERT_TRUE(std::strcmp(arr[idx[i-1]], arr[idx[i]]) <= 0);
+  }
+}
+
+// Cross-backend equivalence: same input through dispatcher (default = TimSort)
+// and direct sublimation. Both must produce a valid ascending permutation.
+// Permutations may differ for equal keys; the sorted property is what matters.
+TEST(sublimation_dispatcher_vs_direct_u32) {
+  const size_t n = 256;
+  std::vector<uint32_t> keys(n);
+  for (size_t i = 0; i < n; ++i) {
+    uint32_t v;
+    getrandom(&v, sizeof(v), 0);
+    keys[i] = v % 1000;  // heavy duplicates
+  }
+
+  std::vector<uint32_t> idx_dispatch(n), idx_direct(n);
+  std::iota(idx_dispatch.begin(), idx_dispatch.end(), 0u);
+  std::iota(idx_direct.begin(), idx_direct.end(), 0u);
+
+  // resolve_backend() defaults to TimSort unless MONTAUK_SORT_BACKEND is set.
+  montauk::util::sort_by_key_u32(keys, idx_dispatch, /*descending=*/false);
+  sublimation_pack_sort_u32(keys.data(), idx_direct.data(), n, /*descending=*/false);
+
+  ASSERT_TRUE(is_valid_permutation(idx_dispatch));
+  ASSERT_TRUE(is_valid_permutation(idx_direct));
+  ASSERT_TRUE(is_sorted_by_key_asc(keys, idx_dispatch));
+  ASSERT_TRUE(is_sorted_by_key_asc(keys, idx_direct));
+}
+
+// String dispatcher vs direct sublimation_strings_indices.
+TEST(sublimation_dispatcher_vs_direct_strings) {
+  const size_t n = 128;
+  std::vector<std::string> storage(n);
+  for (size_t i = 0; i < n; ++i) {
+    char buf[12];
+    for (size_t j = 0; j < 11; ++j) {
+      uint8_t c;
+      getrandom(&c, 1, 0);
+      buf[j] = 'a' + (c % 26);
+    }
+    buf[11] = '\0';
+    storage[i] = buf;
+  }
+  std::vector<const char*> arr(n);
+  for (size_t i = 0; i < n; ++i) arr[i] = storage[i].c_str();
+
+  std::vector<uint32_t> idx_dispatch(n), idx_direct(n);
+  std::iota(idx_dispatch.begin(), idx_dispatch.end(), 0u);
+  std::iota(idx_direct.begin(), idx_direct.end(), 0u);
+
+  montauk::util::sort_by_string(std::span<const char* const>(arr.data(), arr.size()),
+                                idx_dispatch);
+  sublimation_strings_indices(arr.data(), idx_direct.data(), n);
+
+  ASSERT_TRUE(is_valid_permutation(idx_dispatch));
+  ASSERT_TRUE(is_valid_permutation(idx_direct));
+  for (size_t i = 1; i < n; ++i) {
+    ASSERT_TRUE(std::strcmp(arr[idx_dispatch[i-1]], arr[idx_dispatch[i]]) <= 0);
+    ASSERT_TRUE(std::strcmp(arr[idx_direct[i-1]],   arr[idx_direct[i]])   <= 0);
+  }
+}
+
+// ============================================================================
+// HEAD-TO-HEAD TIMING: TimSort vs Sublimation on identical inputs
+// ============================================================================
+// For each pattern + size, we run both backends on a fresh copy of the same
+// input, time each with steady_clock, and print:
+//   pattern  n  timsort_ns/elem  sublimation_ns/elem  speedup
+// Best-of-3 to dampen scheduler noise. Output goes to stdout so it shows up
+// alongside the [PASS] lines from minitest.
+#include <chrono>
+#include <cstdio>
+
+namespace {
+
+using clk = std::chrono::steady_clock;
+
+// Best-of-3 sort timing. Returns total nanoseconds for the fastest run.
+template <typename SortFn>
+uint64_t time_sort_best_of_3(const std::vector<uint32_t>& keys_template, SortFn sort_fn) {
+  uint64_t best = UINT64_MAX;
+  for (int rep = 0; rep < 3; ++rep) {
+    std::vector<uint32_t> keys = keys_template;
+    std::vector<uint32_t> idx(keys.size());
+    std::iota(idx.begin(), idx.end(), 0u);
+    auto t0 = clk::now();
+    sort_fn(keys, idx);
+    auto t1 = clk::now();
+    uint64_t ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+    if (ns < best) best = ns;
+  }
+  return best;
+}
+
+void bench_compare_u32(const char* pattern, std::vector<uint32_t> keys) {
+  const size_t n = keys.size();
+
+  // TimSort: sort size_t indices via the existing util::timsort, comparator
+  // reads from keys[]. Matches what montauk uses today.
+  auto timsort_fn = [](std::vector<uint32_t>& k, std::vector<uint32_t>& idx) {
+    std::vector<size_t> tmp(idx.begin(), idx.end());
+    montauk::util::timsort(tmp.begin(), tmp.end(),
+        [&](size_t a, size_t b) { return k[a] < k[b]; });
+    for (size_t i = 0; i < idx.size(); ++i) idx[i] = static_cast<uint32_t>(tmp[i]);
+  };
+
+  // Sublimation: direct call to the pack-sort entry point.
+  auto sub_fn = [](std::vector<uint32_t>& k, std::vector<uint32_t>& idx) {
+    sublimation_pack_sort_u32(k.data(), idx.data(), idx.size(), /*descending=*/false);
+  };
+
+  uint64_t ts_ns  = time_sort_best_of_3(keys, timsort_fn);
+  uint64_t sub_ns = time_sort_best_of_3(keys, sub_fn);
+
+  double ts_per  = (double)ts_ns  / (double)n;
+  double sub_per = (double)sub_ns / (double)n;
+  double speedup = (double)ts_ns  / (double)sub_ns;
+
+  std::printf("[BENCH] %-22s n=%-7zu  timsort=%9lu ns (%6.2f ns/el)  "
+              "sublimation=%9lu ns (%6.2f ns/el)  speedup=%5.2fx\n",
+              pattern, n, (unsigned long)ts_ns, ts_per,
+              (unsigned long)sub_ns, sub_per, speedup);
+  std::fflush(stdout);
+}
+
+void bench_compare_strings(const char* pattern, std::vector<std::string> storage) {
+  const size_t n = storage.size();
+  std::vector<const char*> arr(n);
+  for (size_t i = 0; i < n; ++i) arr[i] = storage[i].c_str();
+
+  uint64_t ts_best = UINT64_MAX, sub_best = UINT64_MAX;
+  for (int rep = 0; rep < 3; ++rep) {
+    {
+      std::vector<size_t> idx(n);
+      std::iota(idx.begin(), idx.end(), 0u);
+      auto t0 = clk::now();
+      montauk::util::timsort(idx.begin(), idx.end(),
+          [&](size_t a, size_t b) { return std::strcmp(arr[a], arr[b]) < 0; });
+      auto t1 = clk::now();
+      uint64_t ns = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+      if (ns < ts_best) ts_best = ns;
+    }
+    {
+      std::vector<uint32_t> idx(n);
+      std::iota(idx.begin(), idx.end(), 0u);
+      auto t0 = clk::now();
+      sublimation_strings_indices(arr.data(), idx.data(), n);
+      auto t1 = clk::now();
+      uint64_t ns = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+      if (ns < sub_best) sub_best = ns;
+    }
+  }
+
+  double ts_per  = (double)ts_best  / (double)n;
+  double sub_per = (double)sub_best / (double)n;
+  double speedup = (double)ts_best  / (double)sub_best;
+
+  std::printf("[BENCH] %-22s n=%-7zu  timsort=%9lu ns (%6.2f ns/el)  "
+              "sublimation=%9lu ns (%6.2f ns/el)  speedup=%5.2fx\n",
+              pattern, n, (unsigned long)ts_best, ts_per,
+              (unsigned long)sub_best, sub_per, speedup);
+  std::fflush(stdout);
+}
+
+std::vector<uint32_t> gen_random_u32(size_t n, uint32_t mod = 0) {
+  std::vector<uint32_t> v(n);
+  for (size_t i = 0; i < n; ++i) {
+    uint32_t x;
+    getrandom(&x, sizeof(x), 0);
+    v[i] = mod ? (x % mod) : x;
+  }
+  return v;
+}
+
+std::vector<std::string> gen_random_strings(size_t n, size_t len) {
+  std::vector<std::string> v(n);
+  for (size_t i = 0; i < n; ++i) {
+    std::string s(len, '\0');
+    for (size_t j = 0; j < len; ++j) {
+      uint8_t c;
+      getrandom(&c, 1, 0);
+      s[j] = 'a' + (c % 26);
+    }
+    v[i] = std::move(s);
+  }
+  return v;
+}
+
+} // anonymous namespace
+
+TEST(bench_u32_random_256) {
+  bench_compare_u32("random_u32", gen_random_u32(256));
+}
+TEST(bench_u32_random_4096) {
+  bench_compare_u32("random_u32", gen_random_u32(4096));
+}
+TEST(bench_u32_random_100k) {
+  bench_compare_u32("random_u32", gen_random_u32(100000));
+}
+TEST(bench_u32_already_sorted_4096) {
+  std::vector<uint32_t> keys(4096);
+  std::iota(keys.begin(), keys.end(), 0u);
+  bench_compare_u32("already_sorted", std::move(keys));
+}
+TEST(bench_u32_reversed_4096) {
+  std::vector<uint32_t> keys(4096);
+  for (uint32_t i = 0; i < 4096; ++i) keys[i] = 4095u - i;
+  bench_compare_u32("reversed", std::move(keys));
+}
+TEST(bench_u32_heavy_dup_4096) {
+  // Heavy duplicates: keys mod 16 (only 16 distinct values across 4096 items).
+  bench_compare_u32("heavy_duplicates", gen_random_u32(4096, 16));
+}
+TEST(bench_strings_random_256) {
+  bench_compare_strings("random_strings_L16", gen_random_strings(256, 16));
+}
+TEST(bench_strings_random_4096) {
+  bench_compare_strings("random_strings_L16", gen_random_strings(4096, 16));
+}
+TEST(bench_strings_random_100k) {
+  bench_compare_strings("random_strings_L16", gen_random_strings(100000, 16));
+}
+#endif // HAVE_SUBLIMATION

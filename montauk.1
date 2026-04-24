@@ -1,4 +1,4 @@
-.TH MONTAUK 1 "March 2026" "montauk 5.2.0" "User Commands"
+.TH MONTAUK 1 "April 2026" "montauk 6.0.0" "User Commands"
 .SH NAME
 montauk \- high-performance Linux system monitor with kernel module support
 .SH SYNOPSIS
@@ -272,8 +272,28 @@ Toggle system focus (condensed view)
 .B c
 Toggle CPU scale (per-core vs total)
 .TP
-.B ?
-Toggle help
+.B ? / h
+Toggle the in-app help overlay. The overlay loads this manpage at runtime
+(via \fBman -P cat montauk\fR) and renders it inside the PROCESS MONITOR
+column, leaving the right column (PROCESSOR/GPU/MEMORY/etc.) untouched.
+Content reflows on terminal resize / split-screen via \fBMANWIDTH\fR.
+.SS Help overlay scroll keys
+While the help overlay is open, the following keys are intercepted:
+.TP
+.B j / k
+Scroll one line down/up
+.TP
+.B d / Space
+Page down (20 lines)
+.TP
+.B u
+Page up (20 lines)
+.TP
+.B g / G
+Jump to top/bottom
+.TP
+.B q / ? / Esc
+Close the overlay and return to the normal view
 .SH ENVIRONMENT
 All environment variables accept both MONTAUK_ and montauk_ prefixes.
 .SS General
@@ -456,6 +476,81 @@ Increase --sleep-ms for longer intervals
 .BR nvidia\-smi (1),
 .BR modprobe (8),
 .BR insmod (8)
+.SH CHARTS
+In normal mode, the right column shows four pixel-rendered area charts:
+\fBPROCESSOR\fR (CPU total), \fBGPU\fR (5 stacked sub-charts: GPU util, VRAM,
+MEM, ENC, DEC), \fBMEMORY\fR (RAM used), and \fBNETWORK\fR (dual-curve RX+TX
+with shared y-axis). Curves use monotone cubic Hermite interpolation —
+smooth waves that never overshoot between monotone samples.
+.PP
+Press \fBs\fR to enter SYSTEM mode: all four charts hide and a detail-text
+view of everything else (hostname, kernel, uptime, CPU model/freq/loadavg,
+NVML, power limits, filesystem mounts, per-iface network, thermals, fan
+speeds, process states, proc security) fills the right column.
+.SS Terminal compatibility
+Chart rendering requires a graphics-capable terminal. Detection cascade at
+startup:
+.RS 4
+1. \fBKitty graphics protocol\fR (primary) — kitty, WezTerm, Ghostty,
+Konsole. Uses frame composition (\fIa=f, c=1\fR) to send a single-pixel
+column per frame for scrolling updates: ~5 KB/sec total wire traffic.
+.br
+2. \fBSixel\fR (secondary) — mlterm, xterm with Sixel, foot. Re-emits full
+frames each refresh; higher bandwidth than Kitty, noticeable over SSH.
+.br
+3. Neither — chart slots render a one-line notice directing users to this
+manpage. There is no ASCII-bar fallback.
+.RE
+.PP
+A startup diagnostic to stderr names the detected protocol and cell-pixel
+size. Re-detection happens on \fBSIGWINCH\fR.
+.SS tmux
+Inside tmux, Kitty graphics require passthrough:
+.PP
+.RS 4
+\fBset -g allow-passthrough on\fR
+.RE
+.PP
+Sixel does not require passthrough but is bandwidth-heavier.
+.SS SSH
+Over SSH, the Kitty delta-frame path (\~5 KB/sec) is comfortable on any
+modern link. The Sixel path re-emits full frames and is noticeably chunkier
+on slow links; future point releases may add a bandwidth-triggered
+downgrade, not in 6.0.
+.SS TOML configuration
+The \fB[chart]\fR section controls history window and colors. Per-panel
+overrides use \fB[chart.cpu]\fR, \fB[chart.gpu]\fR, \fB[chart.memory]\fR,
+\fB[chart.network]\fR.
+.PP
+.RS 4
+.nf
+[chart]
+history_seconds = 60      # 1\-3600; default 60
+line       = "accent"     # primary curve color
+fill       = "auto"       # "auto" = line color at fill_alpha
+fill_alpha = 0.40
+line_alt   = "muted"      # secondary curve (NETWORK TX)
+
+[chart.cpu]
+line = "#4ADE80"          # green
+
+[chart.gpu]
+line = "#F87171"          # red
+
+[chart.memory]
+line = "#60A5FA"          # blue
+
+[chart.network]
+line     = "#A78BFA"      # purple (RX)
+line_alt = "#FBBF24"      # yellow (TX)
+.fi
+.RE
+.PP
+Color values: a hex string \fB#RRGGBB\fR, a role name (\fBaccent\fR,
+\fBmuted\fR, \fBnormal\fR, \fBwarning\fR, \fBcaution\fR, \fBborder\fR,
+\fBbinary\fR), or \fBauto\fR for \fBfill\fR (meaning: inherit line color
+with \fBfill_alpha\fR). Any key omitted inherits from \fB[chart]\fR, then
+from \fB[roles]\fR, then from a compiled per-panel default.
 .SH AUTHORS
 Written in C++23 for Linux systems programmers.
 .SH BUGS
@@ -463,6 +558,6 @@ Report issues at: https://github.com/wllclngn/montauk/issues
 .SH COPYRIGHT
 MIT License. See LICENSE file in repository.
 .SH VERSION
-montauk 5.2.0
+montauk 6.0.0
 .br
-March 2026
+April 2026

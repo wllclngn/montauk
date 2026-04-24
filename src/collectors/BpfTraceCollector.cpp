@@ -82,10 +82,105 @@ void BpfTraceCollector::stop() {
 }
 
 // ---------------------------------------------------------------------------
+// ntsync op name decode
+// ---------------------------------------------------------------------------
+static const char* ntsync_op_name(uint8_t op) {
+  switch (op) {
+    case 0:  return "create_sem";
+    case 1:  return "sem_release";
+    case 2:  return "wait_any";
+    case 3:  return "wait_all";
+    case 4:  return "create_mutex";
+    case 5:  return "mutex_unlock";
+    case 6:  return "mutex_kill";
+    case 7:  return "create_event";
+    case 8:  return "event_set";
+    case 9:  return "event_reset";
+    case 10: return "event_pulse";
+    case 11: return "sem_read";
+    case 12: return "mutex_read";
+    case 13: return "event_read";
+    default: return "unknown";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Ring buffer event handler — NO /proc reads
 // ---------------------------------------------------------------------------
 int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
   auto* self = static_cast<BpfTraceCollector*>(ctx);
+
+  // ntsync events
+  if (len >= sizeof(struct montauk_ntsync_event)) {
+    auto* hdr = static_cast<const uint32_t*>(data);
+    if (*hdr == TRACE_EVT_NTSYNC) {
+      auto* nts = static_cast<const struct montauk_ntsync_event*>(data);
+      const char* op = ntsync_op_name(nts->op);
+
+      if (nts->op == NTS_WAIT_ANY || nts->op == NTS_WAIT_ALL) {
+        const char* tag = (nts->result == -999) ? "ENTER" : "EXIT";
+        std::fprintf(stderr, "montauk: NTSYNC %s pid=%d tid=%d %s(fds=[",
+                     tag, nts->pid, nts->tid, op);
+        unsigned n = nts->wait_count;
+        if (n > NTSYNC_MAX_WAIT_FDS) n = NTSYNC_MAX_WAIT_FDS;
+        for (unsigned i = 0; i < n; ++i)
+          std::fprintf(stderr, "%s%d", i ? "," : "", nts->wait_fds[i]);
+        std::fprintf(stderr, "], count=%u, alert=%u) = %ld idx=%u\n",
+                     nts->wait_count, nts->wait_alert,
+                     (long)nts->result, nts->wait_index);
+      } else {
+        std::fprintf(stderr, "montauk: NTSYNC pid=%d tid=%d %s(fd=%d) = %ld arg0=%u arg1=%u\n",
+                     nts->pid, nts->tid, op, nts->fd,
+                     (long)nts->result, nts->arg0, nts->arg1);
+      }
+
+      // Accumulate for snapshot
+      if (self->pending_ntsync_.size() <
+          static_cast<size_t>(montauk::model::TraceSnapshot::MAX_NTSYNC)) {
+        auto& s = self->pending_ntsync_.emplace_back();
+        s.pid = static_cast<int32_t>(nts->pid);
+        s.tid = static_cast<int32_t>(nts->tid);
+        s.op = nts->op;
+        s.fd = nts->fd;
+        s.result = nts->result;
+        s.timestamp_ns = nts->timestamp_ns;
+        s.arg0 = nts->arg0;
+        s.arg1 = nts->arg1;
+        s.timeout_ns = nts->timeout_ns;
+        s.wait_count = nts->wait_count;
+        s.wait_index = nts->wait_index;
+        s.wait_owner = nts->wait_owner;
+        s.wait_alert = nts->wait_alert;
+        std::memcpy(s.wait_fds, nts->wait_fds, sizeof(s.wait_fds));
+        std::memcpy(s.comm, nts->comm, 16);
+      }
+      return 0;
+    }
+  }
+
+  // I/O events have a different struct layout
+  if (len >= sizeof(struct montauk_io_event)) {
+    auto* hdr = static_cast<const uint32_t*>(data);
+    if (*hdr == TRACE_EVT_IO) {
+      auto* io = static_cast<struct montauk_io_event*>(data);
+      const char* name;
+      switch (io->syscall_nr) {
+        case 0:  name = "read"; break;
+        case 1:  name = "write"; break;
+        case 5:  name = "fstat"; break;
+        case 8:  name = "lseek"; break;
+        case 17: name = "pread64"; break;
+        case 257: name = "openat"; break;
+        default: name = "?"; break;
+      }
+      std::fprintf(stderr, "montauk: IO pid=%d tid=%d %s(fd=%d, count=%lu) = %ld whence=%u comm='%.16s'\n",
+                   io->pid, io->tid, name, io->fd,
+                   (unsigned long)io->count, (long)io->result,
+                   io->whence, io->comm);
+      return 0;
+    }
+  }
+
   if (len < sizeof(struct montauk_ring_event))
     return 0;
 
@@ -249,8 +344,13 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
         tp.pid = static_cast<int32_t>(info.pid);
         tp.ppid = static_cast<int32_t>(info.ppid);
         tp.is_root = info.is_root;
-        // Comm from BPF map — no /proc
+        tp.exited = info.exited;
+        tp.exit_code = info.exit_code;
+        tp.fork_ts = info.fork_ts;
+        tp.exec_ts = info.exec_ts;
+        tp.exit_ts = info.exit_ts;
         std::memcpy(tp.cmd, info.comm, sizeof(info.comm));
+        std::memcpy(tp.exec_file, info.exec_file, sizeof(info.exec_file));
         snap.procs_count++;
       }
       key = next_key;
@@ -314,6 +414,30 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
         th.io_result = ts.io_result;
         th.io_timestamp_ns = ts.io_timestamp_ns;
 
+        // Decode ntsync ioctls in thread state display
+        if (ts.syscall_nr == 16) {
+          uint32_t cmd = static_cast<uint32_t>(ts.syscall_arg1);
+          if (((cmd >> 8) & 0xFF) == 0x4E && (cmd & 0xFF) >= 0x80 && (cmd & 0xFF) <= 0x8D) {
+            uint8_t nr = cmd & 0xFF;
+            const char* nts = nullptr;
+            switch (nr) {
+              case 0x80: nts = "ntsync:create_sem"; break;
+              case 0x82: nts = "ntsync:wait_any"; break;
+              case 0x83: nts = "ntsync:wait_all"; break;
+              case 0x84: nts = "ntsync:create_mutex"; break;
+              case 0x87: nts = "ntsync:create_event"; break;
+              case 0x88: nts = "ntsync:event_set"; break;
+              case 0x89: nts = "ntsync:event_reset"; break;
+              case 0x8a: nts = "ntsync:event_pulse"; break;
+              default:   nts = "ntsync:op"; break;
+            }
+            auto nlen = std::strlen(nts);
+            if (nlen > sizeof(th.syscall_name) - 1) nlen = sizeof(th.syscall_name) - 1;
+            std::memcpy(th.syscall_name, nts, nlen);
+            th.syscall_name[nlen] = '\0';
+          }
+        }
+
         // Synthetic wchan from syscall name
         if (th.state != 'R' && ts.syscall_nr >= 0) {
           std::memcpy(th.wchan, th.syscall_name,
@@ -346,6 +470,15 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
       key = next_key;
     }
   }
+
+  // Drain ntsync events accumulated since last snapshot
+  snap.ntsync_count = static_cast<int>(
+      std::min(pending_ntsync_.size(),
+               static_cast<size_t>(montauk::model::TraceSnapshot::MAX_NTSYNC)));
+  for (int i = 0; i < snap.ntsync_count; ++i) {
+    snap.ntsync_events[i] = pending_ntsync_[i];
+  }
+  pending_ntsync_.clear();
 
   last_snapshot_ns_ = now_ns;
 }

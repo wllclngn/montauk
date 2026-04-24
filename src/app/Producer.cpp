@@ -1,4 +1,5 @@
 #include "app/Producer.hpp"
+#include "app/ChartHistories.hpp"
 #include <unistd.h>
 #include <cstdio>
 #include <cstring>
@@ -178,6 +179,7 @@ void Producer::run(std::stop_token st) {
       s.alerts.clear();
       for (auto& it : a) s.alerts.push_back(montauk::model::AlertItem{it.severity, it.message});
     }
+    chart_histories().push_snapshot(s);
     buffers_.publish();
   }
 
@@ -215,6 +217,7 @@ void Producer::run(std::stop_token st) {
         gpu_attr_->enrich(s);
         next_nvml = now + nvml_interval;
       }
+      chart_histories().push_snapshot(s);
       buffers_.publish();
     }
     // sleep until the earliest next_due or next_pub, bounded

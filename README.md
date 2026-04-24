@@ -47,11 +47,11 @@ For maximum efficiency, montauk includes an optional kernel module (`montauk-ker
 
 ## Screenshots
 
-### Main Interface, Arch Linux
-![Main](2026-01-23_08-24.png)
+### Main Interface
+![Main](screenshot-default.png)
 
-### SYSTEM Interface, Debian Linux
-![Main](2026-01-23_08-25.png)
+### SYSTEM Interface
+![SYSTEM](screenshot-system.png)
 
 ## Installation
 
@@ -256,7 +256,11 @@ The trace subsystem runs as a parallel pipeline with its own lock-free seqlock d
 - `t` — Toggle Thermal panel
 - `d` — Toggle Disk I/O panel
 - `N` — Toggle Network panel
-- `h` — Toggle help line
+
+**Help Overlay:**
+- `?` or `h` — Toggle the in-app help overlay
+- The overlay loads `man montauk` at runtime and renders it inside the PROCESS MONITOR column (right column stays visible). Content reflows to the available width on resize / split-screen via `MANWIDTH`. Single source of truth: edit `montauk.1`, the overlay updates on next open.
+- While open: `j`/`k` scroll one line, `d`/`Space` page down, `u` page up, `g`/`G` jump to top/bottom, `q`/`?`/`Esc` close
 
 **Modes:**
 - `s` — Toggle SYSTEM focus mode (shows detailed system information in right column)
@@ -793,4 +797,4 @@ Process table sorting uses a C++23 TimSort implementation (`src/util/TimSort.cpp
 
 ## License
 
-MIT License. See LICENSE file in repository.
+GPL-2.0. See LICENSE file in repository.

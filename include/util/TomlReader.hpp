@@ -29,6 +29,20 @@ public:
       if (eq == std::string_view::npos) continue;
       std::string key(trim(sv.substr(0, eq)));
       std::string val(trim(sv.substr(eq + 1)));
+      // Strip inline TOML comments. For quoted strings, the closing quote
+      // ends the value; any `#` after it is a comment. For unquoted values
+      // a `#` anywhere starts the comment.
+      if (!val.empty() && val.front() == '"') {
+        auto close = val.find('"', 1);
+        if (close != std::string::npos) val.resize(close + 1);
+      } else {
+        auto hash = val.find('#');
+        if (hash != std::string::npos) {
+          val.resize(hash);
+          auto trimmed = trim(std::string_view(val));
+          val.assign(trimmed.data(), trimmed.size());
+        }
+      }
       // Strip surrounding quotes from string values
       if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
         val = val.substr(1, val.size() - 2);

@@ -3,6 +3,7 @@
 #include "util/BoyerMoore.hpp"
 #include <thread>
 #include <string>
+#include <vector>
 #include <atomic>
 #include <unordered_set>
 
@@ -52,6 +53,9 @@ private:
   struct ring_buffer* rb_{nullptr};
 
   uint64_t last_snapshot_ns_{};
+
+  // Pending ntsync events accumulated between snapshots (same thread, no lock)
+  std::vector<montauk::model::NtsyncSample> pending_ntsync_;
 
   bool printed_waiting_{false};
   std::atomic<bool> load_failed_{false};

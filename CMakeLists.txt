@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 5.2.0 LANGUAGES CXX)
+project(montauk VERSION 6.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,12 +22,14 @@ endif()
 # Build options
 option(MONTAUK_BUILD_TESTS "Build unit tests" OFF)
 option(MONTAUK_KERNEL "Build with kernel module collector support (requires montauk-kernel loaded)" OFF)
+option(USE_SUBLIMATION "Build with sublimation sort backend available at runtime" OFF)
 
 add_library(montauk_core
     src/util/Procfs.cpp
     src/util/Churn.cpp
     src/util/Retro.cpp
     src/util/TimSort.cpp
+    src/util/SortDispatch.cpp
     src/util/BoyerMoore.cpp
     src/util/ThompsonNFA.cpp
     src/util/NvmlDyn.cpp
@@ -36,7 +38,8 @@ add_library(montauk_core
     src/ui/Formatting.cpp
     src/ui/Renderer.cpp
     src/ui/Panels.cpp
-    src/ui/ProcessTable.cpp
+    src/ui/HelpOverlay.cpp
+    src/app/ChartHistories.cpp
     src/app/SnapshotBuffers.cpp
     src/app/GpuAttributor.cpp
     src/app/Producer.cpp
@@ -56,6 +59,13 @@ add_library(montauk_core
     src/collectors/NetlinkProcessCollector.cpp
     src/collectors/ThermalCollector.cpp
     src/app/TraceBuffers.cpp
+    src/ui/widget/Canvas.cpp
+    src/ui/widget/Chart.cpp
+    src/ui/widget/Component.cpp
+    src/ui/widget/GraphicsProtocol.cpp
+    src/ui/widget/Panel.cpp
+    src/ui/widgets/ChartPanel.cpp
+    src/ui/widgets/ProcessTable.cpp
 )
 target_include_directories(montauk_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(montauk_core PUBLIC _GNU_SOURCE)
@@ -101,10 +111,16 @@ find_path(LIBBPF_INCLUDE bpf/libbpf.h)
 find_program(BPFTOOL bpftool)
 find_program(CLANG_BPF clang)
 if(LIBBPF_LIBRARY AND LIBBPF_INCLUDE AND BPFTOOL AND CLANG_BPF)
-  # Generate vmlinux.h from kernel BTF
+  # Generate vmlinux.h from kernel BTF.
+  # Strip bpf_stream_vprintk: kernel BTF declares the older 4-arg signature,
+  # but libbpf's bpf_helpers.h declares the newer 5-arg form (with aux__prog).
+  # Both visible in the same TU = clang conflicting-types error. Drop the BTF
+  # copy; bpf_helpers.h's declaration is the authoritative one.
   add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/vmlinux.h
-    COMMAND ${BPFTOOL} btf dump file /sys/kernel/btf/vmlinux format c > ${CMAKE_BINARY_DIR}/vmlinux.h
+    COMMAND ${BPFTOOL} btf dump file /sys/kernel/btf/vmlinux format c
+            | sed "/^extern int bpf_stream_vprintk/d"
+            > ${CMAKE_BINARY_DIR}/vmlinux.h
     COMMENT "Generating vmlinux.h from kernel BTF"
   )
   # Compile BPF program
@@ -143,6 +159,20 @@ else()
 endif()
 else()
   message(STATUS "eBPF trace disabled by MONTAUK_NO_BPF")
+endif()
+
+# Sublimation sort backend (opt-in, runtime default stays TimSort).
+# install.py fetches and installs libsublimation system-wide; this section
+# locates it via pkg-config and links it in. When USE_SUBLIMATION=OFF the
+# dispatcher falls through to TimSort and zero sublimation symbols land in
+# the final binary.
+if(USE_SUBLIMATION)
+  find_package(Sublimation 1.2 REQUIRED)
+  target_link_libraries(montauk_core PUBLIC Sublimation::sublimation)
+  target_compile_definitions(montauk_core PUBLIC HAVE_SUBLIMATION=1)
+  message(STATUS "Sublimation backend: enabled (libsublimation ${Sublimation_VERSION})")
+else()
+  message(STATUS "Sublimation backend: disabled")
 endif()
 
 add_executable(montauk src/main.cpp)
@@ -185,6 +215,7 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_gpu_smi_device.cpp
     tests/test_thompson_nfa.cpp
     tests/test_toml_reader.cpp
+    tests/test_canvas.cpp
   )
   target_include_directories(montauk_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(montauk_tests PRIVATE montauk_core)

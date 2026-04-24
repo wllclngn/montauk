@@ -2,22 +2,22 @@
 
 #include "model/Snapshot.hpp"
 #include <string>
-#include <vector>
 
 namespace montauk::ui {
 
-// Box drawing
-[[nodiscard]] std::vector<std::string> make_box(
-    const std::string& title, 
-    const std::vector<std::string>& lines, 
-    int width, 
-    int min_height = 0
-);
+class HelpOverlay;
 
-// Frame rendering
-void render_screen(const montauk::model::Snapshot& s, bool show_help_line, const std::string& help_text);
-
-// NOTE: render_left_column and render_right_column remain in main.cpp
-// They are ~900 lines and tightly coupled to the main rendering loop
+// Render one frame of the TUI to stdout. Composes the process table (or the
+// help overlay if active) on the left, and the right-column panel stack on
+// the right, via the widget::Canvas pipeline. Writes the frame in a single
+// atomic stdout write.
+//
+// help_text + show_help_line: optional status line rendered at the top.
+// overlay (may be null): if non-null and visible(), replaces the process
+//                        table with the help overlay content.
+void render_screen(const montauk::model::Snapshot& s,
+                   bool show_help_line,
+                   const std::string& help_text,
+                   HelpOverlay* overlay = nullptr);
 
 } // namespace montauk::ui

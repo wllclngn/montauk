@@ -1,4 +1,5 @@
 #include "ui/Formatting.hpp"
+#include "ui/Config.hpp"
 #include "ui/Terminal.hpp"
 #include "util/Procfs.hpp"
 #include <algorithm>
@@ -7,6 +8,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <cwchar>
+#include <iomanip>
 #include <list>
 #include <mutex>
 #include <sstream>
@@ -365,8 +367,38 @@ std::string sanitize_for_display(const std::string& s, size_t max_len) {
       out += '?';
     }
   }
-  
+
   return out;
+}
+
+std::string format_size(uint64_t bytes, int precision, bool include_tb) {
+  const double kb = 1024.0, mb = kb * 1024.0, gb = mb * 1024.0, tb = gb * 1024.0;
+  std::ostringstream os;
+  if (precision > 0) { os.setf(std::ios::fixed); os << std::setprecision(precision); }
+
+  if (include_tb && bytes >= static_cast<uint64_t>(tb)) {
+    os << (bytes / tb) << "T";
+  } else if (bytes >= static_cast<uint64_t>(gb)) {
+    if (precision > 0) os << (bytes / gb) << "G";
+    else               os << static_cast<int>(bytes / gb + 0.5) << "G";
+  } else if (bytes >= static_cast<uint64_t>(mb)) {
+    if (precision > 0) os << (bytes / mb) << "M";
+    else               os << static_cast<int>(bytes / mb + 0.5) << "M";
+  } else {
+    os << static_cast<int>(bytes / kb + 0.5) << "K";
+  }
+  return os.str();
+}
+
+std::string format_size_kib(uint64_t kib, int precision, bool include_tb) {
+  return format_size(kib * 1024ull, precision, include_tb);
+}
+
+std::string severity_colored(const std::string& text, int severity) {
+  if (severity == 0 || !tty_stdout()) return text;
+  const auto& ui = ui_config();
+  const std::string& col = (severity >= 2) ? ui.warning : ui.caution;
+  return col + text + sgr_reset();
 }
 
 } // namespace montauk::ui

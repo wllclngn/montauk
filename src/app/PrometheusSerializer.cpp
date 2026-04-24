@@ -424,11 +424,39 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
     char pid_buf[12], ppid_buf[12];
     auto [p1, e1] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), p.pid);
     auto [p2, e2] = std::to_chars(ppid_buf, ppid_buf + sizeof(ppid_buf), p.ppid);
-    emit_labeled_4i(out, "montauk_trace_process_info",
-                    "pid", std::string_view(pid_buf, p1),
-                    "ppid", std::string_view(ppid_buf, p2),
-                    "cmd", std::string_view(p.cmd),
-                    "root", p.is_root ? "1" : "0", 1);
+    // Lifecycle: exit_code encodes signal (low 7 bits) and status (bits 8-15)
+    int sig = p.exit_code & 0x7f;
+    int status = (p.exit_code >> 8) & 0xff;
+    char exit_buf[12], sig_buf[12], fork_buf[24], exec_buf[24], exitts_buf[24];
+    auto [p3, e3] = std::to_chars(exit_buf, exit_buf + sizeof(exit_buf), status);
+    auto [p4, e4] = std::to_chars(sig_buf, sig_buf + sizeof(sig_buf), sig);
+    auto [p5, e5] = std::to_chars(fork_buf, fork_buf + sizeof(fork_buf), p.fork_ts);
+    auto [p6, e6] = std::to_chars(exec_buf, exec_buf + sizeof(exec_buf), p.exec_ts);
+    auto [p7, e7] = std::to_chars(exitts_buf, exitts_buf + sizeof(exitts_buf), p.exit_ts);
+
+    out += "montauk_trace_process_info{pid=\"";
+    out.append(pid_buf, p1);
+    out += "\",ppid=\"";
+    out.append(ppid_buf, p2);
+    out += "\",cmd=\"";
+    append_escaped(out, std::string_view(p.cmd));
+    out += "\",root=\"";
+    out += p.is_root ? "1" : "0";
+    out += "\",exited=\"";
+    out += p.exited ? "1" : "0";
+    out += "\",exit_status=\"";
+    out.append(exit_buf, p3);
+    out += "\",exit_signal=\"";
+    out.append(sig_buf, p4);
+    out += "\",exec_file=\"";
+    append_escaped(out, std::string_view(p.exec_file));
+    out += "\",fork_ts=\"";
+    out.append(fork_buf, p5);
+    out += "\",exec_ts=\"";
+    out.append(exec_buf, p6);
+    out += "\",exit_ts=\"";
+    out.append(exitts_buf, p7);
+    out += "\"} 1\n";
   }
 
   // ---- Per-thread state ----
@@ -514,6 +542,53 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
       out.append(whence_buf, p6);
       out += "\"} ";
       append_uint(out, th.io_timestamp_ns);
+      out += '\n';
+    }
+  }
+
+  // ---- ntsync operations ----
+  if (t.ntsync_count > 0) {
+    static const char* nts_ops[] = {
+      "create_sem", "sem_release", "wait_any", "wait_all",
+      "create_mutex", "mutex_unlock", "mutex_kill",
+      "create_event", "event_set", "event_reset", "event_pulse",
+      "sem_read", "mutex_read", "event_read"
+    };
+    emit_header(out, "montauk_trace_ntsync", "ntsync synchronization operations", "gauge");
+    for (int i = 0; i < t.ntsync_count; ++i) {
+      const auto& ns = t.ntsync_events[i];
+      char pid_buf[12], tid_buf[12], fd_buf[12], result_buf[24];
+      auto [p1, e1] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), ns.pid);
+      auto [p2, e2] = std::to_chars(tid_buf, tid_buf + sizeof(tid_buf), ns.tid);
+      auto [p3, e3] = std::to_chars(fd_buf, fd_buf + sizeof(fd_buf), ns.fd);
+      auto [p4, e4] = std::to_chars(result_buf, result_buf + sizeof(result_buf), ns.result);
+      const char* op_str = (ns.op < 14) ? nts_ops[ns.op] : "unknown";
+
+      char arg0_buf[12], arg1_buf[12], owner_buf[12];
+      auto [p5, e5] = std::to_chars(arg0_buf, arg0_buf + sizeof(arg0_buf), ns.arg0);
+      auto [p6, e6] = std::to_chars(arg1_buf, arg1_buf + sizeof(arg1_buf), ns.arg1);
+      auto [p7, e7] = std::to_chars(owner_buf, owner_buf + sizeof(owner_buf), ns.wait_owner);
+
+      out += "montauk_trace_ntsync{pid=\"";
+      out.append(pid_buf, p1);
+      out += "\",tid=\"";
+      out.append(tid_buf, p2);
+      out += "\",comm=\"";
+      append_escaped(out, std::string_view(ns.comm));
+      out += "\",op=\"";
+      out += op_str;
+      out += "\",fd=\"";
+      out.append(fd_buf, p3);
+      out += "\",result=\"";
+      out.append(result_buf, p4);
+      out += "\",arg0=\"";
+      out.append(arg0_buf, p5);
+      out += "\",arg1=\"";
+      out.append(arg1_buf, p6);
+      out += "\",owner=\"";
+      out.append(owner_buf, p7);
+      out += "\"} ";
+      append_uint(out, ns.timestamp_ns);
       out += '\n';
     }
   }

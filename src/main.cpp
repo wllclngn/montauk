@@ -7,11 +7,11 @@
 #ifdef MONTAUK_HAVE_BPF
 #include "collectors/BpfTraceCollector.hpp"
 #endif
-#include "util/Retro.hpp"
 #include "model/Snapshot.hpp"
 #include "ui/Terminal.hpp"
 #include "ui/Formatting.hpp"
 #include "ui/Renderer.hpp"
+#include "ui/HelpOverlay.hpp"
 #include "ui/Config.hpp"
 #include "util/TomlReader.hpp"
 
@@ -20,14 +20,11 @@
 #include <csignal>
 #include <cstdio>
 #include <iostream>
-#include <iomanip>
 #include <string>
 #include <thread>
 #include <vector>
 #include <sstream>
 #include <algorithm>
-#include <numeric>
-#include <climits>
 #include <cmath>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -37,13 +34,9 @@
 #include <poll.h>
 #include <fcntl.h>
 #include <cctype>
-#include <ctime>
 #include <clocale>
 #include <fstream>
 #include <filesystem>
-#include <iterator>
-#include <langinfo.h>
-#include "util/Procfs.hpp"
 
 using namespace std::chrono_literals;
 
@@ -148,6 +141,19 @@ int main(int argc, char** argv) {
       set_bool_default("nvidia", "pmon", true);
       set_bool_default("nvidia", "mem", true);
       set_bool_default("nvidia", "disable_nvml", false);
+      // Write default chart settings (Phase 7 charts). Line colors reference
+      // role names so the chart palette tracks [roles] automatically on any
+      // theme swap; users who prefer literal hex can overwrite.
+      set_int_default("chart", "history_seconds", 60);
+      set_str_default("chart.cpu",     "line", "accent");
+      set_str_default("chart.cpu",     "fill", "auto");
+      set_str_default("chart.gpu",     "line", "warning");
+      set_str_default("chart.gpu",     "fill", "auto");
+      set_str_default("chart.memory",  "line", "normal");
+      set_str_default("chart.memory",  "fill", "auto");
+      set_str_default("chart.network", "line",     "binary");
+      set_str_default("chart.network", "line_alt", "caution");
+      set_str_default("chart.network", "fill",     "auto");
       // Ensure directory exists
       auto last_slash = cfg_path.rfind('/');
       if (last_slash != std::string::npos)
@@ -281,9 +287,8 @@ int main(int argc, char** argv) {
                      ? UIState::CPUScale::Core : UIState::CPUScale::Total;
   g_ui.system_focus = cfg.ui.system_focus;
   g_ui.show_gpumon = true;
-  g_ui.show_disk = true;
-  g_ui.show_net = true;
   if (iterations <= 0) iterations = INT32_MAX;
+  montauk::ui::HelpOverlay help_overlay;
   for (int i = 0; (iterations <= 0 || i < iterations) && !g_stop.load(); ++i) {
     // Non-blocking input with poll
     struct pollfd pfd{.fd=STDIN_FILENO,.events=POLLIN,.revents=0};
@@ -315,15 +320,29 @@ int main(int argc, char** argv) {
             }
             // All other keys (arrows, etc.) swallowed
           }
+        } else if (help_overlay.visible()) {
+          // Help overlay input: scroll keys + close keys, ignore everything else
+          for (ssize_t ki = 0; ki < n; ++ki) {
+            unsigned char c = buf[ki];
+            if (c == 'q' || c == '?' || c == 0x1B /*Esc*/) { help_overlay.close(); break; }
+            else if (c == 'j') help_overlay.scroll_down();
+            else if (c == 'k') help_overlay.scroll_up();
+            else if (c == 'd' || c == ' ') help_overlay.page_down();
+            else if (c == 'u') help_overlay.page_up();
+            else if (c == 'g') help_overlay.scroll_top();
+            else if (c == 'G') help_overlay.scroll_bottom();
+          }
         } else {
         // Keybind-driven input handler
         size_t k = 0;
         while (k < (size_t)n) {
           unsigned char c = buf[k++];
+          // '?' opens the help overlay regardless of keybind config
+          if (c == '?') { help_overlay.toggle(); continue; }
           auto action = cfg.lookup_key(static_cast<char>(c));
           switch (action) {
             case Config::Action::QUIT: g_stop.store(true); break;
-            case Config::Action::HELP: break;
+            case Config::Action::HELP: help_overlay.toggle(); break;
             case Config::Action::FPS_UP: sleep_ms = std::max(33, sleep_ms - 10); break;
             case Config::Action::FPS_DOWN: sleep_ms = std::min(1000, sleep_ms + 10); break;
             case Config::Action::SORT_CPU: g_ui.sort = SortMode::CPU; break;
@@ -334,16 +353,12 @@ int main(int argc, char** argv) {
             case Config::Action::SORT_GMEM: g_ui.sort = SortMode::GMEM; break;
             case Config::Action::TOGGLE_GPU: g_ui.show_gpumon = !g_ui.show_gpumon; break;
             case Config::Action::TOGGLE_THERMAL: g_ui.show_thermal = !g_ui.show_thermal; break;
-            case Config::Action::TOGGLE_DISK: g_ui.show_disk = !g_ui.show_disk; break;
-            case Config::Action::TOGGLE_NET: g_ui.show_net = !g_ui.show_net; break;
             case Config::Action::TOGGLE_CPU_SCALE:
               g_ui.cpu_scale = (g_ui.cpu_scale==UIState::CPUScale::Total? UIState::CPUScale::Core : UIState::CPUScale::Total); break;
             case Config::Action::TOGGLE_GPU_SCALE:
               g_ui.gpu_scale = (g_ui.gpu_scale==UIState::GPUScale::Capacity? UIState::GPUScale::Utilization : UIState::GPUScale::Capacity); break;
             case Config::Action::TOGGLE_SYSTEM_FOCUS:
               g_ui.system_focus = !g_ui.system_focus;
-              if (g_ui.system_focus) { g_ui.show_gpumon = false; g_ui.show_disk = false; g_ui.show_net = false; }
-              else { g_ui.show_gpumon = true; g_ui.show_disk = true; g_ui.show_net = true; }
               break;
             case Config::Action::RESET_UI: reset_ui_defaults(); break;
             case Config::Action::SEARCH:
@@ -388,7 +403,7 @@ int main(int argc, char** argv) {
       seq_after = buffers.seq();
     } while (seq_before != seq_after);
     const auto& s = s_copy;
-    montauk::ui::render_screen(s, false, "");
+    montauk::ui::render_screen(s, false, "", &help_overlay);
   }
 #ifdef MONTAUK_HAVE_BPF
   if (trace_collector) trace_collector->stop();

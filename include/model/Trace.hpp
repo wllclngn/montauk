@@ -33,16 +33,41 @@ struct FdSample {
 };
 
 struct TracedProcess {
-  int32_t pid{};
-  int32_t ppid{};
-  bool    is_root{false};           // matched pattern directly vs. inherited child
-  char    cmd[128]{};
+  int32_t  pid{};
+  int32_t  ppid{};
+  bool     is_root{false};
+  bool     exited{false};
+  int32_t  exit_code{};
+  uint64_t fork_ts{};
+  uint64_t exec_ts{};
+  uint64_t exit_ts{};
+  char     cmd[128]{};
+  char     exec_file[64]{};
+};
+
+struct NtsyncSample {
+  int32_t  pid{};
+  int32_t  tid{};
+  uint8_t  op{};           // ntsync_trace_op enum
+  int32_t  fd{};
+  int64_t  result{};
+  uint64_t timestamp_ns{};
+  uint32_t arg0{};         // create: param0 / signal: prev_state
+  uint32_t arg1{};         // create: param1
+  uint64_t timeout_ns{};
+  uint32_t wait_count{};
+  uint32_t wait_index{};
+  uint32_t wait_owner{};
+  uint32_t wait_alert{};
+  uint32_t wait_fds[8]{};  // first 8 object fds
+  char     comm[24]{};
 };
 
 struct TraceSnapshot {
   static constexpr int MAX_PROCS   = 64;
   static constexpr int MAX_THREADS = 256;
   static constexpr int MAX_FDS     = 256;
+  static constexpr int MAX_NTSYNC  = 512;
 
   std::array<TracedProcess, MAX_PROCS> procs{};
   int procs_count{};
@@ -52,6 +77,9 @@ struct TraceSnapshot {
 
   std::array<FdSample, MAX_FDS> fds{};
   int fd_count{};
+
+  std::array<NtsyncSample, MAX_NTSYNC> ntsync_events{};
+  int ntsync_count{};
 
   bool     waiting_for_match{false};
   uint64_t seq{};

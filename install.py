@@ -395,6 +395,192 @@ def resolve_bpf(args) -> bool:
     return False
 
 
+# =============================================================================
+# SUBLIMATION SORT BACKEND
+# =============================================================================
+
+SUBLIMATION_REPO = "https://github.com/wllclngn/sublimation.git"
+SUBLIMATION_BUILD_DIR = Path("/tmp/sublimation")
+
+
+def check_sublimation_deps() -> dict:
+    """Check for sublimation build dependencies."""
+    deps = {}
+
+    # git for clone
+    ret, stdout, _ = run_cmd_capture(["which", "git"])
+    deps["git"] = stdout.strip() if ret == 0 else None
+
+    # gcc 13+ for C23 (sublimation needs -std=c2x)
+    ret, stdout, _ = run_cmd_capture(["gcc", "-dumpversion"])
+    if ret == 0:
+        try:
+            major = int(stdout.strip().split(".")[0])
+            deps["gcc_c23"] = major >= 13
+            deps["gcc_version"] = stdout.strip()
+        except (ValueError, IndexError):
+            deps["gcc_c23"] = False
+            deps["gcc_version"] = None
+    else:
+        deps["gcc_c23"] = False
+        deps["gcc_version"] = None
+
+    # CPU features: BMI2 (PEXT) and AVX2 for the random-data fast path
+    bmi2 = False
+    avx2 = False
+    try:
+        with open("/proc/cpuinfo", "r") as f:
+            for line in f:
+                if line.startswith("flags"):
+                    flags = line.split(":", 1)[1].split()
+                    bmi2 = "bmi2" in flags
+                    avx2 = "avx2" in flags
+                    break
+    except OSError:
+        pass
+    deps["bmi2"] = bmi2
+    deps["avx2"] = avx2
+
+    # Already installed system-wide? Check pkg-config first, then fall back to
+    # the CMake config file (some distros don't have /usr/local/lib/pkgconfig
+    # on PKG_CONFIG_PATH by default).
+    ret, _, _ = run_cmd_capture(["pkg-config", "--exists", "sublimation"])
+    if ret == 0:
+        deps["installed"] = True
+    else:
+        deps["installed"] = Path("/usr/local/lib/cmake/Sublimation/SublimationConfig.cmake").exists()
+
+    return deps
+
+
+def prompt_sublimation() -> bool:
+    """Prompt user for sublimation sort backend. Returns True if yes."""
+    log_info("sublimation build dependencies found.")
+    log_info("montauk can ship with sublimation as an opt-in alternative sort backend:")
+    log_info("  - C23 adaptive sort, flow-model architecture (Young tableau classifier)")
+    log_info("  - 2-3x speedup on string sort vs qsort+strcmp; pack-key index sort for numerics")
+    log_info("  - Installed system-wide; runtime default stays TimSort")
+    log_info("  - Activate per-user via MONTAUK_SORT_BACKEND=sublimation env / config")
+    log_info(f"  - Fetched from {SUBLIMATION_REPO}")
+    print()
+    try:
+        while True:
+            response = input(
+                "Build with sublimation sort backend? [Y/N]: "
+            ).strip().lower()
+            if response in ("y", "yes"):
+                return True
+            elif response in ("n", "no"):
+                return False
+    except EOFError:
+        print()
+        log_info("No input (non-interactive). Skipping sublimation backend.")
+        return False
+
+
+def resolve_sublimation(args) -> bool:
+    """Determine whether to build with sublimation sort backend.
+    --sublimation: yes, no prompt.
+    --no-sublimation: no, no prompt.
+    Neither: check for deps, prompt if found.
+    """
+    if args.sublimation:
+        deps = check_sublimation_deps()
+        missing = []
+        if not deps["git"]:
+            missing.append("git")
+        if not deps["gcc_c23"]:
+            missing.append(f"gcc 13+ (found {deps['gcc_version'] or 'none'}; need 13+ for C23)")
+        if not deps["bmi2"]:
+            missing.append("CPU BMI2 (PEXT)")
+        if not deps["avx2"]:
+            missing.append("CPU AVX2")
+        if missing:
+            log_error("sublimation dependencies not met: " + ", ".join(missing))
+            print()
+            log_info("BMI2/AVX2 require Haswell-or-newer CPU. On older hardware, re-run")
+            log_info("with --no-sublimation; the TimSort backend works on any CPU.")
+            print()
+            return False
+        return True
+
+    if args.no_sublimation:
+        return False
+
+    # Auto-detect
+    deps = check_sublimation_deps()
+    if deps["git"] and deps["gcc_c23"] and deps["bmi2"] and deps["avx2"]:
+        return prompt_sublimation()
+
+    # Some deps missing -- mention what's needed
+    log_info("sublimation sort backend (opt-in alternative) is available but requires:")
+    log_info("  git, gcc 13+ (C23), CPU BMI2 + AVX2")
+    missing = []
+    if not deps["git"]:
+        missing.append("git")
+    if not deps["gcc_c23"]:
+        missing.append(f"gcc 13+ (have {deps['gcc_version'] or 'none'})")
+    if not deps["bmi2"]:
+        missing.append("BMI2")
+    if not deps["avx2"]:
+        missing.append("AVX2")
+    log_info(f"  Missing: {', '.join(missing)}")
+    print()
+    log_info("Continuing without sublimation backend...")
+    print()
+    return False
+
+
+def fetch_and_install_sublimation() -> bool:
+    """Clone sublimation to /tmp, run its install.py to build + install system-wide.
+
+    Skips if libsublimation is already detected by pkg-config.
+    """
+    deps = check_sublimation_deps()
+    if deps["installed"]:
+        log_info("sublimation already installed system-wide (pkg-config detected)")
+        return True
+
+    log_info("FETCHING SUBLIMATION")
+    log_info(f"Repo:  {SUBLIMATION_REPO}")
+    log_info(f"Stage: {SUBLIMATION_BUILD_DIR}")
+
+    # Clean stale stage
+    if SUBLIMATION_BUILD_DIR.exists():
+        shutil.rmtree(SUBLIMATION_BUILD_DIR)
+
+    ret = run_cmd(["git", "clone", "--depth", "1", SUBLIMATION_REPO, str(SUBLIMATION_BUILD_DIR)])
+    if ret != 0:
+        log_error("git clone failed")
+        log_info("Re-run with --no-sublimation to skip the sublimation backend.")
+        return False
+
+    sub_installer = SUBLIMATION_BUILD_DIR / "install.py"
+    if not sub_installer.exists():
+        log_error(f"sublimation install.py not found at {sub_installer}")
+        return False
+
+    print()
+    log_info("BUILDING + INSTALLING SUBLIMATION")
+    ret = run_cmd(["python3", str(sub_installer)], cwd=SUBLIMATION_BUILD_DIR)
+    if ret != 0:
+        log_error("sublimation install failed")
+        log_info(f"Check {SUBLIMATION_BUILD_DIR} for details, or re-run with --no-sublimation.")
+        return False
+
+    # Verify pkg-config now finds it
+    ret, _, _ = run_cmd_capture(["pkg-config", "--exists", "sublimation"])
+    if ret != 0:
+        log_warn("sublimation installed but pkg-config doesn't find it.")
+        log_warn("You may need to set PKG_CONFIG_PATH=/usr/local/lib/pkgconfig.")
+    else:
+        ret, ver, _ = run_cmd_capture(["pkg-config", "--modversion", "sublimation"])
+        log_info(f"sublimation installed (version {ver.strip()})")
+
+    print()
+    return True
+
+
 def prompt_kernel() -> bool:
     """Prompt user for kernel module support. Returns True if yes."""
     kver = get_kernel_version()
@@ -472,14 +658,20 @@ def resolve_kernel(args, source_dir: Path) -> bool:
 
 
 def cmd_build(args, source_dir: Path) -> bool:
-    """Build montauk (and optionally the kernel module and eBPF trace)."""
+    """Build montauk (and optionally the kernel module, eBPF trace, sublimation)."""
     build_dir = source_dir / "build"
     use_kernel = resolve_kernel(args, source_dir)
     use_bpf = resolve_bpf(args)
+    use_sublimation = resolve_sublimation(args)
 
     # Build kernel module first if requested
     if use_kernel:
         if not build_and_install_kernel_module(source_dir):
+            return False
+
+    # Fetch + install sublimation before configuring CMake (find_package needs it).
+    if use_sublimation:
+        if not fetch_and_install_sublimation():
             return False
 
     log_info("CONFIGURING BUILD")
@@ -502,6 +694,22 @@ def cmd_build(args, source_dir: Path) -> bool:
         log_info("eBPF trace: disabled")
     else:
         log_info("eBPF trace: enabled (--trace mode)")
+
+    if use_sublimation:
+        cmake_args.append("-DUSE_SUBLIMATION=ON")
+        log_info("Sublimation backend: enabled and active by default")
+    else:
+        log_info("Sublimation backend: disabled (TimSort only)")
+
+    # Test binary (montauk_tests) is opt-in. The --test flag on install/build
+    # adds it; otherwise we explicitly pass OFF so any stale CMakeCache from
+    # a prior `./install.py test` run doesn't leak test sources into a normal
+    # install.
+    if args.test:
+        cmake_args.append("-DMONTAUK_BUILD_TESTS=ON")
+        log_info("Test binary: enabled (--test)")
+    else:
+        cmake_args.append("-DMONTAUK_BUILD_TESTS=OFF")
 
     if args.prefix:
         cmake_args.append(f"-DCMAKE_INSTALL_PREFIX={args.prefix}")
@@ -537,8 +745,9 @@ def cmd_build(args, source_dir: Path) -> bool:
     size = binary.stat().st_size
     log_info(f"Built {binary} ({size} bytes)")
 
-    # Stash kernel decision for cmd_install to use
+    # Stash decisions for cmd_install to use
     args._use_kernel = use_kernel
+    args._use_sublimation = use_sublimation
     return True
 
 
@@ -565,6 +774,18 @@ def cmd_install(args, source_dir: Path) -> bool:
     size = binary.stat().st_size
     log_info(f"Installed {install_path} ({size} bytes)")
 
+    # Install the manpage so `man montauk` works (and the in-app help overlay
+    # can read it via popen).
+    manpage_src = source_dir / "montauk.1"
+    if manpage_src.exists():
+        manpage_dest = prefix / "share" / "man" / "man1" / "montauk.1"
+        ret = run_cmd_sudo(["install", "-Dm644", str(manpage_src), str(manpage_dest)])
+        if ret == 0:
+            log_info(f"Installed manpage to {manpage_dest}")
+            run_cmd_sudo(["mandb", "-q"])  # refresh man index, best-effort
+        else:
+            log_warn("Failed to install manpage (in-app help overlay will be empty)")
+
     # Detect terminal palette and write config.toml on first install
     if init_theme(install_path):
         log_info(f"Wrote config to {get_config_dir()}/config.toml")
@@ -584,6 +805,10 @@ def cmd_install(args, source_dir: Path) -> bool:
     if use_kernel:
         log_info("Kernel module is loaded and will auto-load on boot.")
         log_warn("Re-run this installer after kernel upgrades!")
+
+    if getattr(args, '_use_sublimation', False):
+        log_info("Sublimation backend compiled in and ACTIVE by default.")
+        log_info("To opt back out to TimSort: MONTAUK_SORT_BACKEND=timsort montauk")
 
     return True
 
@@ -695,6 +920,9 @@ Examples:
   ./install.py --no-kernel        # Build without kernel module (no prompt)
   ./install.py --bpf              # Build with eBPF trace support (no prompt)
   ./install.py --no-bpf           # Build without eBPF trace support (no prompt)
+  ./install.py --sublimation      # Build with sublimation sort backend (no prompt)
+  ./install.py --no-sublimation   # Skip sublimation sort backend (no prompt)
+  ./install.py --test             # Also build montauk_tests alongside
   ./install.py --prefix /usr      # Install to /usr/bin
   ./install.py build              # Build only
   ./install.py clean              # Clean build
@@ -714,8 +942,15 @@ Examples:
                             help="Build with eBPF trace support (no prompt)")
     bpf_group.add_argument("--no-bpf", action="store_true",
                             help="Skip eBPF trace support (no prompt)")
+    sublimation_group = parser.add_mutually_exclusive_group()
+    sublimation_group.add_argument("--sublimation", action="store_true",
+                                   help="Build with sublimation sort backend (no prompt)")
+    sublimation_group.add_argument("--no-sublimation", action="store_true",
+                                   help="Skip sublimation sort backend (no prompt)")
     parser.add_argument("--debug", action="store_true",
                        help="Build with debug symbols")
+    parser.add_argument("--test", action="store_true",
+                       help="Also build montauk_tests (default: off)")
     parser.add_argument("--prefix", type=str, default=None,
                        help="Installation prefix (default: /usr/local)")
 

@@ -47,8 +47,16 @@ struct {
 // Ring buffer for lifecycle events → userspace
 struct {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
-  __uint(max_entries, 64 * 1024); // 64KB
+  __uint(max_entries, 256 * 1024); // 256KB (ntsync events are 128 bytes, high-frequency)
 } events SEC(".maps");
+
+// Per-CPU scratch for ntsync ioctl enter → exit state passing
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, u32);
+  __type(value, struct ntsync_scratch);
+} ntsync_scratch SEC(".maps");
 
 // Per-CPU scratch for openat filename passing (enter → exit)
 struct {
@@ -183,6 +191,24 @@ static __always_inline void emit_event(u32 type, u32 pid, u32 ppid,
   bpf_ringbuf_submit(evt, 0);
 }
 
+static __always_inline void emit_io_event(u32 pid, u32 tid, s32 syscall_nr,
+                                          s32 fd, s64 result, u64 count, u32 whence) {
+  struct montauk_io_event *evt;
+  evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
+  if (!evt)
+    return;
+  evt->type = TRACE_EVT_IO;
+  evt->pid = pid;
+  evt->tid = tid;
+  evt->syscall_nr = syscall_nr;
+  evt->fd = fd;
+  evt->result = result;
+  evt->count = count;
+  evt->whence = whence;
+  bpf_get_current_comm(evt->comm, sizeof(evt->comm));
+  bpf_ringbuf_submit(evt, 0);
+}
+
 // ---- PROCESS LIFECYCLE ----
 
 SEC("tp/sched/sched_process_fork")
@@ -200,12 +226,16 @@ int handle_fork(struct trace_event_raw_sched_process_fork *ctx) {
   child_info.ppid = parent_pid;
   child_info.tracked = 1;
   child_info.is_root = 0;
+  child_info.exited = 0;
+  child_info.exit_code = 0;
+  child_info.fork_ts = bpf_ktime_get_ns();
+  child_info.exec_ts = 0;
+  child_info.exit_ts = 0;
   // Child inherits parent comm initially; exec will update it
   __builtin_memcpy(child_info.comm, parent->comm, 16);
+  child_info.exec_file[0] = 0;
 
   bpf_map_update_elem(&proc_map, &child_pid, &child_info, BPF_ANY);
-
-  emit_event(TRACE_EVT_FORK, parent_pid, parent_pid, child_pid);
   return 0;
 }
 
@@ -213,27 +243,23 @@ SEC("tp/sched/sched_process_exec")
 int handle_exec(struct trace_event_raw_sched_process_exec *ctx) {
   u32 pid = ctx->pid;
 
-  // Update comm for tracked processes
-  struct proc_bpf_info *info = bpf_map_lookup_elem(&proc_map, &pid);
-  if (info) {
-    bpf_get_current_comm(info->comm, sizeof(info->comm));
-  }
-
   // Read exec'd filename from tracepoint data area
   char filename[64] = {};
   unsigned short fname_off = ctx->__data_loc_filename & 0xFFFF;
   bpf_probe_read_kernel_str(filename, sizeof(filename),
                              (void *)ctx + fname_off);
 
+  // Update proc_map for tracked processes (histogram-style, no ring buffer)
+  struct proc_bpf_info *info = bpf_map_lookup_elem(&proc_map, &pid);
+  if (info) {
+    bpf_get_current_comm(info->comm, sizeof(info->comm));
+    info->exec_ts = bpf_ktime_get_ns();
+    __builtin_memcpy(info->exec_file, filename, 64);
+  }
+
   // BPF-SIDE PATTERN MATCH — no userspace roundtrip.
-  // Match against comm (set by kernel to exec'd binary name).
-  // Single call keeps handle_exec under the 1M instruction verifier limit.
-  // Children are auto-tracked by handle_fork on the next clone().
   if (!is_tracked(pid)) {
     if (trace_pat.len > 0) {
-      // comm is set to the exec'd binary basename by the kernel,
-      // and filename is also available — try both via scratch buffer.
-      // Copy filename (up to 56 bytes) to scratch, match once.
       if (bpf_substr_match(filename, 56, (const char *)trace_pat.pattern, trace_pat.len)) {
         auto_track_pid(pid);
       } else {
@@ -246,22 +272,6 @@ int handle_exec(struct trace_event_raw_sched_process_exec *ctx) {
     }
   }
 
-  // Also check discovery_map sys_enter pattern match (for clone-without-exec)
-  // This is the existing path — still valuable for prctl(PR_SET_NAME) processes.
-
-  // Emit exec event to ringbuf (for userspace logging/UI)
-  struct montauk_ring_event *evt;
-  evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
-  if (!evt)
-    return 0;
-  evt->type = TRACE_EVT_EXEC;
-  evt->pid = pid;
-  evt->ppid = 0;
-  evt->child_pid = 0;
-  bpf_get_current_comm(evt->comm, sizeof(evt->comm));
-  __builtin_memcpy(evt->filename, filename, 64);
-
-  bpf_ringbuf_submit(evt, 0);
   return 0;
 }
 
@@ -272,21 +282,66 @@ int handle_exit(struct trace_event_raw_sched_process_exit *ctx) {
   if (!is_tracked(pid))
     return 0;
 
-  emit_event(TRACE_EVT_EXIT, pid, 0, 0);
-
-  // Remove from proc map
-  bpf_map_delete_elem(&proc_map, &pid);
+  // Mark process as exited in proc_map with exit code and timestamp.
+  // Do NOT delete from proc_map — userspace needs to read the exit data.
+  // Userspace is responsible for cleaning up after scraping.
+  struct proc_bpf_info *info = bpf_map_lookup_elem(&proc_map, &pid);
+  if (info) {
+    info->exited = 1;
+    info->exit_ts = bpf_ktime_get_ns();
+    // Exit code from task_struct: (exit_code >> 8) = status, (exit_code & 0x7f) = signal
+    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+    if (task) {
+      int code = 0;
+      bpf_probe_read_kernel(&code, sizeof(code), &task->exit_code);
+      info->exit_code = code;
+    }
+  }
 
   // Thread cleanup: delete this tid from thread_map
-  // (threads share pid with process for main thread)
   bpf_map_delete_elem(&thread_map, &pid);
   return 0;
+}
+
+// ---- NTSYNC HELPERS (used by raw_syscalls handlers below) ----
+
+static __always_inline bool is_ntsync_ioctl(u32 cmd) {
+  return ((cmd >> 8) & 0xFF) == 0x4E &&
+         (cmd & 0xFF) >= 0x80 && (cmd & 0xFF) <= 0x8D;
+}
+
+static __always_inline u8 ntsync_cmd_to_op(u32 cmd) {
+  u8 nr = cmd & 0xFF;
+  switch (nr) {
+    case 0x80: return NTS_CREATE_SEM;
+    case 0x81: return NTS_SEM_RELEASE;
+    case 0x82: return NTS_WAIT_ANY;
+    case 0x83: return NTS_WAIT_ALL;
+    case 0x84: return NTS_CREATE_MUTEX;
+    case 0x85: return NTS_MUTEX_UNLOCK;
+    case 0x86: return NTS_MUTEX_KILL;
+    case 0x87: return NTS_CREATE_EVENT;
+    case 0x88: return NTS_EVENT_SET;
+    case 0x89: return NTS_EVENT_RESET;
+    case 0x8a: return NTS_EVENT_PULSE;
+    case 0x8b: return NTS_SEM_READ;
+    case 0x8c: return NTS_MUTEX_READ;
+    case 0x8d: return NTS_EVENT_READ;
+    default:   return 0xFF;
+  }
 }
 
 // ---- SYSCALL TRACING ----
 
 SEC("tp/raw_syscalls/sys_enter")
 int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
+  // Cache ctx fields immediately — BPF verifier disallows ctx pointer
+  // dereference after register arithmetic later in the function.
+  long syscall_id = ctx->id;
+  u64 arg0 = ctx->args[0];
+  u64 arg1 = ctx->args[1];
+  u64 arg2 = ctx->args[2];
+
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid = pid_tgid >> 32;
   u32 tid = (u32)pid_tgid;
@@ -313,8 +368,8 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
   }
 
   // prctl(PR_SET_NAME) — update comm everywhere + re-check pattern
-  if (ctx->id == 157 && ctx->args[0] == 15) {
-    const char *name = (const char *)ctx->args[1];
+  if (syscall_id == 157 && arg0 == 15) {
+    const char *name = (const char *)arg1;
 
     // Update discovery_map with new name
     struct discovery_entry de = {};
@@ -349,20 +404,91 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
 
   struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
   if (ts) {
-    ts->syscall_nr = ctx->id;
-    ts->syscall_arg0 = ctx->args[0];
-    ts->syscall_arg1 = ctx->args[1];
+    ts->syscall_nr = syscall_id;
+    ts->syscall_arg0 = arg0;
+    ts->syscall_arg1 = arg1;
   } else {
     struct thread_bpf_state new_ts = {};
     new_ts.pid = pid;
     new_ts.tid = tid;
-    new_ts.syscall_nr = ctx->id;
-    new_ts.syscall_arg0 = ctx->args[0];
-    new_ts.syscall_arg1 = ctx->args[1];
+    new_ts.syscall_nr = syscall_id;
+    new_ts.syscall_arg0 = arg0;
+    new_ts.syscall_arg1 = arg1;
     new_ts.state = 0; // R
     new_ts.io_fd = -1;
     bpf_get_current_comm(new_ts.comm, sizeof(new_ts.comm));
     bpf_map_update_elem(&thread_map, &tid, &new_ts, BPF_ANY);
+  }
+
+  // ntsync ioctl capture: stash args in per-CPU scratch for exit handler
+  if (syscall_id == 16) { // ioctl
+    u32 cmd = (u32)arg1;
+    if (is_ntsync_ioctl(cmd)) {
+      u32 zero = 0;
+      struct ntsync_scratch *s = bpf_map_lookup_elem(&ntsync_scratch, &zero);
+      if (s) {
+        __builtin_memset(s, 0, sizeof(*s));
+        s->pid = pid;
+        s->fd = (s32)arg0;
+        s->op = ntsync_cmd_to_op(cmd);
+        s->arg_ptr = arg2;
+
+        u64 arg = arg2;
+        switch (s->op) {
+          case NTS_CREATE_SEM:
+          case NTS_CREATE_MUTEX:
+          case NTS_CREATE_EVENT: {
+            u32 vals[2] = {};
+            bpf_probe_read_user(vals, sizeof(vals), (void *)arg);
+            s->arg0 = vals[0];
+            s->arg1 = vals[1];
+            break;
+          }
+          case NTS_WAIT_ANY:
+          case NTS_WAIT_ALL: {
+            u64 wa_buf[5] = {};
+            bpf_probe_read_user(wa_buf, 40, (void *)arg);
+            s->timeout_ns = wa_buf[0];
+            u64 objs_ptr = wa_buf[1];
+            u32 *wa32 = (u32 *)&wa_buf[2];
+            s->wait_count = wa32[0];
+            s->wait_owner = wa32[3];
+            s->wait_alert = wa32[4];
+            u32 n = s->wait_count;
+            if (n > NTSYNC_MAX_WAIT_FDS) n = NTSYNC_MAX_WAIT_FDS;
+            if (n > 0 && objs_ptr)
+              bpf_probe_read_user(s->wait_fds, n * sizeof(u32), (void *)objs_ptr);
+            // Emit ENTRY event for waits so blocked calls are visible
+            {
+              struct montauk_ntsync_event *we;
+              we = bpf_ringbuf_reserve(&events, sizeof(*we), 0);
+              if (we) {
+                we->type = TRACE_EVT_NTSYNC;
+                we->pid = pid;
+                we->tid = tid;
+                we->op = s->op;
+                we->fd = s->fd;
+                we->result = -999; // sentinel: ENTRY (not yet completed)
+                we->timestamp_ns = bpf_ktime_get_ns();
+                we->arg0 = 0;
+                we->arg1 = 0;
+                we->timeout_ns = s->timeout_ns;
+                we->wait_count = s->wait_count;
+                we->wait_index = 0;
+                we->wait_owner = s->wait_owner;
+                we->wait_alert = s->wait_alert;
+                __builtin_memcpy(we->wait_fds, s->wait_fds, sizeof(we->wait_fds));
+                bpf_get_current_comm(we->comm, sizeof(we->comm));
+                bpf_ringbuf_submit(we, 0);
+              }
+            }
+            break;
+          }
+          default:
+            break;
+        }
+      }
+    }
   }
   return 0;
 }
@@ -379,6 +505,58 @@ int handle_sys_exit(struct trace_event_raw_sys_exit *ctx) {
   struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
   if (ts) {
     ts->syscall_nr = -1; // back to running
+  }
+
+  // ntsync ioctl exit: emit ring event if scratch was populated by enter
+  {
+    u32 zero = 0;
+    struct ntsync_scratch *s = bpf_map_lookup_elem(&ntsync_scratch, &zero);
+    if (s && s->pid == pid && (s->op != 0 || s->fd != 0)) {
+      struct montauk_ntsync_event *evt;
+      evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
+      if (evt) {
+        evt->type = TRACE_EVT_NTSYNC;
+        evt->pid = pid;
+        evt->tid = tid;
+        evt->op = s->op;
+        evt->fd = s->fd;
+        evt->result = ctx->ret;
+        evt->timestamp_ns = bpf_ktime_get_ns();
+        evt->arg0 = s->arg0;
+        evt->arg1 = s->arg1;
+        evt->timeout_ns = s->timeout_ns;
+        evt->wait_count = s->wait_count;
+        evt->wait_index = 0;
+        evt->wait_owner = s->wait_owner;
+        evt->wait_alert = s->wait_alert;
+        __builtin_memcpy(evt->wait_fds, s->wait_fds, sizeof(evt->wait_fds));
+        bpf_get_current_comm(evt->comm, sizeof(evt->comm));
+
+        // WAIT ops: read back index (OUT param at offset 20)
+        if ((s->op == NTS_WAIT_ANY || s->op == NTS_WAIT_ALL) && s->arg_ptr) {
+          u32 out_index = 0;
+          bpf_probe_read_user(&out_index, sizeof(out_index), (void *)(s->arg_ptr + 20));
+          evt->wait_index = out_index;
+        }
+        // EVENT_SET/RESET/PULSE: read back prev_state
+        if (s->op >= NTS_EVENT_SET && s->op <= NTS_EVENT_PULSE && s->arg_ptr) {
+          u32 prev = 0;
+          bpf_probe_read_user(&prev, sizeof(prev), (void *)s->arg_ptr);
+          evt->arg0 = prev;
+        }
+        // Read ops: read back result struct
+        if ((s->op == NTS_SEM_READ || s->op == NTS_MUTEX_READ || s->op == NTS_EVENT_READ)
+            && s->arg_ptr) {
+          u32 vals[2] = {};
+          bpf_probe_read_user(vals, sizeof(vals), (void *)s->arg_ptr);
+          evt->arg0 = vals[0];
+          evt->arg1 = vals[1];
+        }
+
+        bpf_ringbuf_submit(evt, 0);
+      }
+      s->pid = 0; // clear scratch
+    }
   }
   return 0;
 }
@@ -489,6 +667,7 @@ int handle_openat_exit(struct trace_event_raw_sys_exit *ctx) {
   __builtin_memcpy(entry.target, scratch->target, sizeof(entry.target));
 
   bpf_map_update_elem(&fd_map, &key, &entry, BPF_ANY);
+  emit_io_event(pid, (u32)pid_tgid, 257, (s32)fd, fd, 0, 0);
   return 0;
 }
 
@@ -590,6 +769,7 @@ int handle_lseek_exit(struct trace_event_raw_sys_exit *ctx) {
 
   ts->io_result = ctx->ret;
   ts->io_timestamp_ns = bpf_ktime_get_ns();
+  emit_io_event(pid, tid, 8, ts->io_fd, ctx->ret, ts->io_count, ts->io_whence);
   return 0;
 }
 
@@ -628,6 +808,7 @@ int handle_read_exit(struct trace_event_raw_sys_exit *ctx) {
 
   ts->io_result = ctx->ret;
   ts->io_timestamp_ns = bpf_ktime_get_ns();
+  emit_io_event(pid, tid, 0, ts->io_fd, ctx->ret, ts->io_count, 0);
   return 0;
 }
 
@@ -666,6 +847,7 @@ int handle_write_exit(struct trace_event_raw_sys_exit *ctx) {
 
   ts->io_result = ctx->ret;
   ts->io_timestamp_ns = bpf_ktime_get_ns();
+  emit_io_event(pid, tid, 1, ts->io_fd, ctx->ret, ts->io_count, 0);
   return 0;
 }
 
@@ -705,6 +887,7 @@ int handle_pread64_exit(struct trace_event_raw_sys_exit *ctx) {
 
   ts->io_result = ctx->ret;
   ts->io_timestamp_ns = bpf_ktime_get_ns();
+  emit_io_event(pid, tid, 17, ts->io_fd, ctx->ret, ts->io_count, ts->io_whence);
   return 0;
 }
 
@@ -751,5 +934,10 @@ int handle_fstat_exit(struct trace_event_raw_sys_exit *ctx) {
                          (void *)(ts->io_count + 48));
     ts->io_result = st_size;
   }
+  emit_io_event(pid, tid, 5, ts->io_fd, ts->io_result, ts->io_count, 0);
   return 0;
 }
+
+// ntsync ioctl handlers are integrated into handle_sys_enter/handle_sys_exit
+// above via the raw_syscalls tracepoints (sys_enter_ioctl doesn't exist on
+// all kernels). The ntsync filter checks syscall_nr == 16 and magic 'N'.
