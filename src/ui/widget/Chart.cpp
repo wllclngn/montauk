@@ -140,10 +140,9 @@ void Chart::clear() {
   std::fill(buffer_.begin(), buffer_.end(), uint8_t{0});
 }
 
-// Rasterize the full buffer each frame. The scroll-buffer optimization
-// (memmove + 1-column rerender) is left for a future pass — correctness
-// first, optimization second. The bandwidth win (1-column Kitty emit) is
-// still available because rightmost_column() extracts the right strip.
+// Rasterize the full buffer each frame. Per-pixel cost is bounded by
+// width × height; chart_w is small (~hundreds of cells × cell-px), so a
+// from-scratch redraw is well under any per-frame budget.
 void Chart::rasterize_single(std::span<const float> samples,
                              int x_start_px, int x_end_px,
                              const Style& style) {
@@ -293,20 +292,6 @@ void Chart::update_dual(std::span<const float> primary,
       }
     }
   }
-}
-
-std::vector<uint8_t> Chart::rightmost_column() const {
-  std::vector<uint8_t> col(static_cast<size_t>(h_) * 4, 0);
-  const int x = w_ - 1;
-  for (int y = 0; y < h_; ++y) {
-    const uint8_t* px = buffer_.data() + (static_cast<size_t>(y) * static_cast<size_t>(w_) + static_cast<size_t>(x)) * 4;
-    size_t o = static_cast<size_t>(y) * 4;
-    col[o + 0] = px[0];
-    col[o + 1] = px[1];
-    col[o + 2] = px[2];
-    col[o + 3] = px[3];
-  }
-  return col;
 }
 
 } // namespace montauk::ui::widget

@@ -7,19 +7,12 @@
 
 namespace montauk::ui::widget {
 
-// Chart rasterizer. Renders a scrolling area chart as RGBA pixels.
+// Chart rasterizer. Renders a scrolling area chart as RGBA pixels using
+// monotone cubic Hermite interpolation (Fritsch–Carlson tangents) — smooth
+// curves that never overshoot between monotone samples, which keeps
+// bounded-percentage data (CPU%, memory%, etc.) visually correct.
 //
-// Interpolation: monotone cubic Hermite — smooth wave-like curves that never
-// overshoot between monotone samples (critical for bounded-percentage data
-// like CPU%, memory%, etc.).
-//
-// Scroll optimization: the RGBA buffer is persistent across frames. On each
-// update, the buffer is memmoved left by `cols_per_sample` pixels and only
-// the trailing 2 segments (the newly-dependent region) are re-rasterized.
-// This makes per-frame rasterization cost independent of buffer width.
-//
-// Input samples are expected in the range [0.0, 1.0]. Callers normalize
-// percentages (pct / 100.0) or other metrics (value / max) before pushing.
+// Input samples are expected in [0.0, 1.0]; callers normalize before push.
 class Chart {
  public:
   struct Style {
@@ -51,10 +44,6 @@ class Chart {
   [[nodiscard]] const uint8_t* pixels() const { return buffer_.data(); }
   [[nodiscard]] int width_px() const { return w_; }
   [[nodiscard]] int height_px() const { return h_; }
-
-  // Extract the rightmost 1-pixel column as a flat RGBA vector
-  // (height_px * 4 bytes). Used for Kitty's incremental-column emit.
-  [[nodiscard]] std::vector<uint8_t> rightmost_column() const;
 
   // Whether a full emit is required next frame (first render after construct
   // or resize). After the first emit, clear_dirty_full() can be called.

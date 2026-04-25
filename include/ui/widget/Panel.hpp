@@ -6,37 +6,49 @@
 
 namespace montauk::ui::widget {
 
-// Generic bordered panel. Accepts a title and a list of pre-formatted content
-// lines (which may carry embedded ANSI SGR codes for per-line coloring) and
-// renders them inside a box. Data-source agnostic — callers assemble lines
-// from any source (Snapshot fields, static strings, external queries, etc.)
-// and hand them to Panel for rendering.
-//
-// Use this for all right-column montauk panels. Widgets with genuinely
-// unique state (HelpOverlay, ProcessTable) remain their own Component
-// subclasses.
+// One row of a montauk Panel. Three kinds:
+//   Empty   — vertical spacer; nothing drawn.
+//   Header  — single text line drawn left-anchored; meant for section titles
+//             like "DISK I/O" or "NETWORK" inside the SYSTEM panel.
+//   KeyValue — label drawn at the left, value drawn right-anchored to the
+//             panel's inner-rect right edge. No string padding involved —
+//             label and value are placed at independent cell positions, so
+//             values stay visually pinned to the right edge under any width
+//             change. severity 0 = normal, 1 = caution, 2 = warning.
+struct Row {
+  enum class Kind { Empty, Header, KeyValue };
+  Kind kind = Kind::Empty;
+  std::string label;   // Header text, or KeyValue label
+  std::string value;   // KeyValue right-side text (may contain embedded SGR)
+  int severity = 0;
+
+  static Row empty() { return Row{Kind::Empty, {}, {}, 0}; }
+  static Row header(std::string text, int sev = 0) { return Row{Kind::Header, std::move(text), {}, sev}; }
+  static Row kv(std::string label, std::string value, int sev = 0) {
+    return Row{Kind::KeyValue, std::move(label), std::move(value), sev};
+  }
+};
+
+// Bordered panel. Title is centered on the top border in the accent color;
+// rows are drawn cell-by-cell inside the inner rect — labels at the left
+// edge, values right-anchored. Severity-driven row tinting happens at draw
+// time, not via embedded SGR in the strings.
 class Panel : public Component {
 public:
-  Panel() = default;
-  Panel(std::string title, std::vector<std::string> lines)
-      : title_(std::move(title)), lines_(std::move(lines)) {}
+  Panel(std::string title, std::vector<Row> rows)
+      : title_(std::move(title)), rows_(std::move(rows)) {}
 
-  void set_title(std::string title) { title_ = std::move(title); }
-  void set_lines(std::vector<std::string> lines) { lines_ = std::move(lines); }
-
-  // Height (rows) needed to display `content_rows` content lines plus top
-  // and bottom borders.
+  // Total panel height (rows) for `content_rows` interior lines including
+  // both border edges.
   [[nodiscard]] static int height_for(int content_rows) { return content_rows + 2; }
 
-  // Snapshot is unused — Panel content is provided via set_title/set_lines.
-  // The parameter is present to satisfy the Component interface.
   void render(Canvas& canvas,
               const LayoutRect& rect,
               const montauk::model::Snapshot& snap) override;
 
 private:
   std::string title_;
-  std::vector<std::string> lines_;
+  std::vector<Row> rows_;
 };
 
 } // namespace montauk::ui::widget

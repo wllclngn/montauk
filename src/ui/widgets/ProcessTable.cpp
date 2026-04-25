@@ -18,147 +18,218 @@ namespace montauk::ui::widgets {
 
 namespace {
 
-// Colorize a command string using NFA pattern classification.
-// Kernel threads [kworker/...] → fully muted.
-// Path prefix /usr/bin/ → muted, binary name → default fg, args → muted.
-std::string colorize_command(std::string_view cmd, int width, const UIConfig& ui) {
-  if (!tty_stdout()) return trunc_pad(std::string(cmd), width);
+int right_align_x(int col_x, int col_w, int value_visible_cols) {
+  int x = col_x + col_w - value_visible_cols;
+  if (x < col_x) x = col_x;
+  return x;
+}
 
+std::string format_pct_digits(double pct) {
+  if (pct > 0.0 && pct < 1.0) {
+    double r = std::round(pct * 10.0) / 10.0;
+    if (r < 0.1) r = 0.1;
+    std::ostringstream oss; oss << std::fixed << std::setprecision(1) << r;
+    return oss.str();
+  }
+  std::ostringstream oss; oss << static_cast<int>(pct + 0.5);
+  return oss.str();
+}
+
+widget::Style severity_to_style(int severity) {
+  const auto& uic = ui_config();
+  if (severity >= 2) return widget::parse_sgr_style(uic.warning);
+  if (severity >= 1) return widget::parse_sgr_style(uic.caution);
+  return widget::Style{};
+}
+
+void draw_command_classified(widget::Canvas& canvas, int x, int y,
+                             int max_width, std::string_view cmd,
+                             const UIConfig& ui, int row_severity) {
+  if (max_width <= 0 || cmd.empty()) return;
   static const montauk::util::ThompsonNFA kernel_re("^\\[.+\\]$");
+  const widget::Style muted_style  = widget::parse_sgr_style(ui.muted);
+  const widget::Style binary_style = widget::parse_sgr_style(ui.binary);
+  const widget::Style row_style    = severity_to_style(row_severity);
 
-  if (kernel_re.full_match(cmd))
-    return trunc_pad(ui.muted + std::string(cmd) + sgr_reset(), width);
+  if (row_severity > 0) {
+    canvas.draw_text(x, y, cmd.substr(0, std::min<size_t>(cmd.size(), max_width)), row_style);
+    return;
+  }
+
+  if (kernel_re.full_match(cmd)) {
+    canvas.draw_text(x, y, cmd.substr(0, std::min<size_t>(cmd.size(), max_width)), muted_style);
+    return;
+  }
 
   size_t first_space = cmd.find(' ');
   size_t exe_end = (first_space == std::string_view::npos) ? cmd.size() : first_space;
   size_t last_slash = cmd.rfind('/', exe_end);
 
-  std::string colored;
-  colored.reserve(cmd.size() + 32);
+  int budget = max_width;
+  int cur_x = x;
+  auto draw_seg = [&](std::string_view seg, widget::Style st) {
+    if (budget <= 0 || seg.empty()) return;
+    int take = static_cast<int>(std::min<size_t>(seg.size(), static_cast<size_t>(budget)));
+    canvas.draw_text(cur_x, y, seg.substr(0, take), st);
+    cur_x += take;
+    budget -= take;
+  };
+
   if (last_slash != std::string_view::npos) {
-    colored += ui.muted;
-    colored.append(cmd.data(), last_slash + 1);
-    colored += sgr_reset();
-    colored += ui.binary;
-    colored.append(cmd.data() + last_slash + 1, exe_end - last_slash - 1);
-    colored += sgr_reset();
+    draw_seg(cmd.substr(0, last_slash + 1), muted_style);
+    draw_seg(cmd.substr(last_slash + 1, exe_end - last_slash - 1), binary_style);
   } else {
-    colored += ui.binary;
-    colored.append(cmd.data(), exe_end);
-    colored += sgr_reset();
+    draw_seg(cmd.substr(0, exe_end), binary_style);
   }
-
   if (first_space != std::string_view::npos) {
-    colored += ui.muted;
-    colored.append(cmd.data() + first_space, cmd.size() - first_space);
-    colored += sgr_reset();
+    draw_seg(cmd.substr(first_space, cmd.size() - first_space), muted_style);
   }
-
-  return trunc_pad(colored, width);
-}
-
-std::string fmt_cpu_field(double cpu_pct, bool colorize = true) {
-  std::string digits;
-  int display_val;
-
-  if (cpu_pct > 0.0 && cpu_pct < 1.0) {
-    double rounded = std::round(cpu_pct * 10.0) / 10.0;
-    if (rounded < 0.1) rounded = 0.1;
-    std::ostringstream oss; oss << std::fixed << std::setprecision(1) << rounded;
-    digits = oss.str();
-    display_val = 0;
-  } else {
-    display_val = static_cast<int>(cpu_pct + 0.5);
-    digits = std::to_string(display_val);
-  }
-
-  std::string value_str = digits + "%";
-  int pad = 4 - static_cast<int>(value_str.size()); if (pad < 0) pad = 0;
-
-  const auto& ui = ui_config();
-  const std::string* col = nullptr;
-  if (colorize) {
-    int sev = compute_severity(display_val, ui.caution_pct, ui.warning_pct);
-    if      (sev == 2) col = &ui.warning;
-    else if (sev == 1) col = &ui.caution;
-  }
-
-  std::string out;
-  out.reserve(4 + 3 + 16);
-  out.append(pad, ' ');
-  if (col) out += *col;
-  out += digits;
-  if (col) out += sgr_reset();
-  out += "%  ";
-  return out;
 }
 
 } // namespace
 
+void ProcessTable::reset_view() {
+  sort_mode_   = SortMode::CPU;
+  scroll_      = 0;
+  cpu_scale_   = CPUScale::Total;
+  gpu_scale_   = GPUScale::Utilization;
+  filter_query_.clear();
+  search_mode_ = false;
+}
+
+void ProcessTable::handle_input(const widget::InputEvent& ev) {
+  // Search mode swallows printable input as filter chars.
+  if (search_mode_) {
+    if (ev.is(widget::Key::Escape)) {
+      search_mode_ = false;
+      return;
+    }
+    if (ev.is(widget::Key::Enter)) {
+      search_mode_ = false;
+      scroll_ = 0;
+      return;
+    }
+    if (ev.is(widget::Key::Backspace)) {
+      if (!filter_query_.empty()) {
+        filter_query_.pop_back();
+        scroll_ = 0;
+      } else {
+        search_mode_ = false;
+      }
+      return;
+    }
+    if (ev.is_printable_char()) {
+      filter_query_ += ev.character;
+      scroll_ = 0;
+    }
+    return;
+  }
+
+  // Esc with a non-empty filter clears it.
+  if (ev.is(widget::Key::Escape)) {
+    if (!filter_query_.empty()) {
+      filter_query_.clear();
+      scroll_ = 0;
+    }
+    return;
+  }
+
+  // Scroll keys.
+  const int max_scroll = std::max(0, last_total_ - last_page_rows_);
+  if (ev.is(widget::Key::ArrowUp))   { if (scroll_ > 0) --scroll_; return; }
+  if (ev.is(widget::Key::ArrowDown)) { scroll_ = std::min(scroll_ + 1, max_scroll); return; }
+  if (ev.is(widget::Key::PageUp))    {
+    int page = std::max(1, last_page_rows_ - 2);
+    scroll_ = std::max(0, scroll_ - page);
+    return;
+  }
+  if (ev.is(widget::Key::PageDown))  {
+    int page = std::max(1, last_page_rows_ - 2);
+    scroll_ = std::min(scroll_ + page, max_scroll);
+    return;
+  }
+
+  // Single-char bindings.
+  if (!ev.is(widget::Key::Char)) return;
+  switch (ev.character) {
+    case 'c': sort_mode_ = SortMode::CPU;  scroll_ = 0; break;
+    case 'm': sort_mode_ = SortMode::MEM;  scroll_ = 0; break;
+    case 'p': sort_mode_ = SortMode::PID;  scroll_ = 0; break;
+    case 'n': sort_mode_ = SortMode::NAME; scroll_ = 0; break;
+    case 'g': sort_mode_ = SortMode::GPU;  scroll_ = 0; break;
+    case 'v': sort_mode_ = SortMode::GMEM; scroll_ = 0; break;
+    case '/':
+      search_mode_ = true;
+      filter_query_.clear();
+      scroll_ = 0;
+      break;
+    case 'i':
+      cpu_scale_ = (cpu_scale_ == CPUScale::Total) ? CPUScale::Core : CPUScale::Total;
+      break;
+    case 'u':
+      gpu_scale_ = (gpu_scale_ == GPUScale::Capacity)
+                       ? GPUScale::Utilization : GPUScale::Capacity;
+      break;
+    default: break;
+  }
+}
+
 void ProcessTable::render(widget::Canvas& canvas,
                           const widget::LayoutRect& rect,
                           const montauk::model::Snapshot& s) {
-  const int width = rect.width;
-  const int iw = std::max(3, width - 2);
   const auto& ui = ui_config();
-
-  auto ncpu = static_cast<int>(std::max<size_t>(1, s.cpu.per_core_pct.size()));
+  const int target_rows = rect.height;
+  const int ncpu = static_cast<int>(std::max<size_t>(1, s.cpu.per_core_pct.size()));
   auto scale_proc_cpu = [&](double raw) {
-    return (g_ui.cpu_scale == UIState::CPUScale::Total) ? (raw / static_cast<double>(ncpu)) : raw;
+    return (cpu_scale_ == CPUScale::Total) ? (raw / static_cast<double>(ncpu)) : raw;
   };
-  auto human_kib = [](uint64_t kib) { return format_size_kib(kib); };
 
-  // Build sorted/filtered index order
+  // 1. Smooth + sort + filter.
   std::vector<size_t> order(s.procs.processes.size());
   std::iota(order.begin(), order.end(), 0);
   std::vector<double> sm(order.size(), 0.0);
   for (size_t i = 0; i < order.size(); ++i) {
     const auto& p = s.procs.processes[i];
-    sm[i] = montauk::ui::smooth_value(std::string("proc.cpu.") + std::to_string(p.pid), scale_proc_cpu(p.cpu_pct), 0.35);
+    sm[i] = montauk::ui::smooth_value(
+        std::string("proc.cpu.") + std::to_string(p.pid),
+        scale_proc_cpu(p.cpu_pct), 0.35);
   }
 
-  // Sort dispatch. The sublimation switch path at this precise site is a hard
-  // constraint of the refactor — do not touch.
+  // Sort dispatch — sublimation switch path is a hard-pinned constraint.
   if (montauk::util::resolve_backend() == montauk::util::SortBackend::Sublimation) {
     const size_t n = order.size();
     std::vector<uint32_t> idx32(n);
     for (size_t i = 0; i < n; ++i) idx32[i] = static_cast<uint32_t>(i);
-    switch (g_ui.sort) {
+    switch (sort_mode_) {
       case SortMode::CPU: {
         std::vector<float> keys(n);
         for (size_t i = 0; i < n; ++i) keys[i] = static_cast<float>(sm[i]);
-        montauk::util::sort_by_key_f32(keys, idx32, /*descending=*/true);
-        break;
+        montauk::util::sort_by_key_f32(keys, idx32, /*descending=*/true); break;
       }
       case SortMode::MEM: {
         std::vector<uint32_t> keys(n);
         for (size_t i = 0; i < n; ++i) keys[i] = static_cast<uint32_t>(s.procs.processes[i].rss_kb);
-        montauk::util::sort_by_key_u32(keys, idx32, /*descending=*/true);
-        break;
+        montauk::util::sort_by_key_u32(keys, idx32, /*descending=*/true); break;
       }
       case SortMode::PID: {
         std::vector<uint32_t> keys(n);
         for (size_t i = 0; i < n; ++i) keys[i] = static_cast<uint32_t>(s.procs.processes[i].pid);
-        montauk::util::sort_by_key_u32(keys, idx32, /*descending=*/false);
-        break;
+        montauk::util::sort_by_key_u32(keys, idx32, /*descending=*/false); break;
       }
       case SortMode::GPU: {
         std::vector<float> keys(n);
         for (size_t i = 0; i < n; ++i) keys[i] = static_cast<float>(s.procs.processes[i].gpu_util_pct);
-        montauk::util::sort_by_key_f32(keys, idx32, /*descending=*/true);
-        break;
+        montauk::util::sort_by_key_f32(keys, idx32, /*descending=*/true); break;
       }
       case SortMode::GMEM: {
         std::vector<uint32_t> keys(n);
         for (size_t i = 0; i < n; ++i) keys[i] = static_cast<uint32_t>(s.procs.processes[i].gpu_mem_kb);
-        montauk::util::sort_by_key_u32(keys, idx32, /*descending=*/true);
-        break;
+        montauk::util::sort_by_key_u32(keys, idx32, /*descending=*/true); break;
       }
       case SortMode::NAME: {
         std::vector<const char*> ptrs(n);
         for (size_t i = 0; i < n; ++i) ptrs[i] = s.procs.processes[i].cmd.c_str();
-        montauk::util::sort_by_string(ptrs, idx32);
-        break;
+        montauk::util::sort_by_string(ptrs, idx32); break;
       }
     }
     for (size_t i = 0; i < n; ++i) order[i] = static_cast<size_t>(idx32[i]);
@@ -166,7 +237,7 @@ void ProcessTable::render(widget::Canvas& canvas,
     montauk::util::timsort(order.begin(), order.end(), [&](size_t a, size_t b) {
       const auto& A = s.procs.processes[a];
       const auto& B = s.procs.processes[b];
-      switch (g_ui.sort) {
+      switch (sort_mode_) {
         case SortMode::CPU:  if (sm[a] != sm[b]) return sm[a] > sm[b]; break;
         case SortMode::MEM:  if (A.rss_kb != B.rss_kb) return A.rss_kb > B.rss_kb; break;
         case SortMode::PID:  if (A.pid != B.pid) return A.pid < B.pid; break;
@@ -180,194 +251,191 @@ void ProcessTable::render(widget::Canvas& canvas,
     });
   }
 
-  // Search filter
-  if (!g_ui.filter_query.empty()) {
+  if (!filter_query_.empty()) {
     montauk::app::ProcessFilterSpec fspec{};
-    fspec.name_contains = g_ui.filter_query;
+    fspec.name_contains = filter_query_;
     montauk::app::ProcessFilter filt(fspec);
     auto matched = filt.apply(s.procs);
     std::unordered_set<size_t> match_set(matched.begin(), matched.end());
     std::erase_if(order, [&](size_t idx) { return !match_set.contains(idx); });
   }
 
-  // Layout math: figure out how many process rows fit
-  const int search_rows = g_ui.search_mode ? 2 : 0; // divider was bottom border, plus input + new bottom
-  const int proc_inner_min = std::max(14, target_rows_ - 2 - search_rows);
-  const int desired_rows = std::max(1, proc_inner_min - 1); // minus header row
-  g_ui.last_proc_page_rows = desired_rows;
-  g_ui.last_proc_total = static_cast<int>(order.size());
-  int max_scroll = std::max(0, static_cast<int>(order.size()) - desired_rows);
-  if (g_ui.scroll > max_scroll) g_ui.scroll = max_scroll;
+  // 2. Layout / pagination.
+  const int search_rows = search_mode_ ? 2 : 0;
+  const int main_h = std::max(3, target_rows - search_rows);
+  const int proc_inner_min = std::max(2, main_h - 2);
+  const int desired_rows = std::max(1, proc_inner_min - 1);
+  last_page_rows_ = desired_rows;
+  last_total_     = static_cast<int>(order.size());
+  int max_scroll = std::max(0, last_total_ - desired_rows);
+  if (scroll_ > max_scroll) scroll_ = max_scroll;
 
-  const int skip = g_ui.scroll;
+  const int skip = scroll_;
   const int take = desired_rows;
-  std::vector<const montauk::model::ProcSample*> displayed; displayed.reserve(static_cast<size_t>(take));
+  std::vector<const montauk::model::ProcSample*> displayed;
+  displayed.reserve(static_cast<size_t>(take));
   int limit = std::min(static_cast<int>(order.size()), skip + take);
   for (int i = skip; i < limit; ++i) displayed.push_back(&s.procs.processes[order[i]]);
 
-  // Measure column widths across ALL sorted processes (sticky)
-  int pid_w_meas = 5, user_w_meas = 4, gpu_digit_w_meas = 3, mem_w_meas = 4, gmem_w_meas = 4;
-  for (size_t ii = 0; ii < order.size(); ++ii) {
-    const auto& p = s.procs.processes[order[ii]];
-    int pid_digits = static_cast<int>(std::to_string(p.pid).size());
-    if (pid_digits > pid_w_meas) pid_w_meas = pid_digits;
-    int user_vis = static_cast<int>(p.user_name.size());
-    if (user_vis > user_w_meas) user_w_meas = user_vis;
+  // 3. Sticky column widths.
+  int pid_w_meas = 5, user_w_meas = 4, gpu_d_meas = 3, mem_w_meas = 4, gmem_w_meas = 4;
+  for (size_t i = 0; i < order.size(); ++i) {
+    const auto& p = s.procs.processes[order[i]];
+    pid_w_meas  = std::max(pid_w_meas,  static_cast<int>(std::to_string(p.pid).size()));
+    user_w_meas = std::max(user_w_meas, static_cast<int>(p.user_name.size()));
     if (p.has_gpu_util) {
-      int gdig = static_cast<int>(std::to_string(static_cast<int>(p.gpu_util_pct + 0.5)).size());
-      if (gdig > gpu_digit_w_meas) gpu_digit_w_meas = gdig;
+      gpu_d_meas = std::max(gpu_d_meas,
+          static_cast<int>(std::to_string(static_cast<int>(p.gpu_util_pct + 0.5)).size()));
     }
-    std::string hm = human_kib(p.rss_kb);
-    if (static_cast<int>(hm.size()) > mem_w_meas) mem_w_meas = static_cast<int>(hm.size());
-    std::string hg = human_kib(p.gpu_mem_kb);
-    if (static_cast<int>(hg.size()) > gmem_w_meas) gmem_w_meas = static_cast<int>(hg.size());
+    mem_w_meas  = std::max(mem_w_meas,  static_cast<int>(format_size_kib(p.rss_kb).size()));
+    gmem_w_meas = std::max(gmem_w_meas, static_cast<int>(format_size_kib(p.gpu_mem_kb).size()));
   }
-  pid_w_meas       = std::min(8,  std::max(5, pid_w_meas));
-  user_w_meas      = std::min(12, std::max(4, user_w_meas));
-  gpu_digit_w_meas = std::min(4,  std::max(3, gpu_digit_w_meas));
-  mem_w_meas       = std::min(6,  std::max(4, mem_w_meas));
-  gmem_w_meas      = std::min(6,  std::max(4, gmem_w_meas));
+  pid_w_meas  = std::clamp(pid_w_meas,  5,  8);
+  user_w_meas = std::clamp(user_w_meas, 4, 12);
+  gpu_d_meas  = std::clamp(gpu_d_meas,  3,  4);
+  mem_w_meas  = std::clamp(mem_w_meas,  4,  6);
+  gmem_w_meas = std::clamp(gmem_w_meas, 4,  6);
+  col_pid_w_       = std::max(col_pid_w_,       pid_w_meas);
+  col_user_w_      = std::max(col_user_w_,      user_w_meas);
+  col_gpu_digit_w_ = std::max(col_gpu_digit_w_, gpu_d_meas);
+  col_mem_w_       = std::max(col_mem_w_,       mem_w_meas);
+  col_gmem_w_      = std::max(col_gmem_w_,      gmem_w_meas);
 
-  g_ui.col_pid_w       = std::max(g_ui.col_pid_w,       pid_w_meas);
-  g_ui.col_user_w      = std::max(g_ui.col_user_w,      user_w_meas);
-  g_ui.col_gpu_digit_w = std::max(g_ui.col_gpu_digit_w, gpu_digit_w_meas);
-  g_ui.col_mem_w       = std::max(g_ui.col_mem_w,       mem_w_meas);
-  g_ui.col_gmem_w      = std::max(g_ui.col_gmem_w,      gmem_w_meas);
+  const int pidw  = col_pid_w_;
+  const int userw = col_user_w_;
+  const int gpud  = col_gpu_digit_w_;
+  const int memw  = col_mem_w_;
+  const int gmemw = col_gmem_w_;
+  const int cpuw  = 4;
+  const int gpuw  = gpud + 1;
+  const int gap   = 2;
 
-  const int pidw  = g_ui.col_pid_w;
-  const int userw = g_ui.col_user_w;
-  const int gpud  = g_ui.col_gpu_digit_w;
-  const int memw  = g_ui.col_mem_w;
-  const int gmemw = g_ui.col_gmem_w;
-
-  // Build content lines
-  std::vector<std::string> content;
-  content.reserve(static_cast<size_t>(proc_inner_min));
-
-  // Header
-  {
-    std::ostringstream h;
-    h << std::setw(pidw) << "PID" << "  "
-      << rpad_trunc("USER", userw) << "  "
-      << std::setw(4) << "CPU%" << "  "
-      << std::setw(gpud + 1) << "GPU%" << "  ";
-    if (g_ui.show_gmem) h << std::setw(gmemw) << "GMEM" << "  ";
-    h << std::setw(memw) << "MEM" << "  " << "COMMAND";
-    content.push_back(tty_stdout() ? (ui.accent + h.str() + sgr_reset()) : h.str());
-  }
-
-  // Rows
-  int fields_w = 6 + (gpud + 3);
-  if (g_ui.show_gmem) fields_w += (gmemw + 2);
-  fields_w += (memw + 2);
-  int cmd_w = iw - (pidw + 2 + userw + 2 + fields_w);
-  if (cmd_w < 8) cmd_w = 8;
-
-  for (auto* p : displayed) {
-    double scaled_cpu = scale_proc_cpu(p->cpu_pct);
-    double smooth_cpu = montauk::ui::smooth_value(std::string("proc.cpu.") + std::to_string(p->pid), scaled_cpu, 0.35);
-    int severity = compute_severity(static_cast<int>(smooth_cpu + 0.5), ui.caution_pct, ui.warning_pct);
-
-    std::ostringstream os;
-    os << std::setw(pidw) << p->pid << "  "
-       << rpad_trunc(sanitize_for_display(p->user_name, userw), userw) << "  "
-       << fmt_cpu_field(smooth_cpu, severity == 0);
-
-    // GPU%
-    {
-      int ngpu_dev = std::max(1, s.nvml.devices);
-      double display_gpu = (g_ui.gpu_scale == UIState::GPUScale::Capacity) ? p->gpu_util_pct / static_cast<double>(ngpu_dev) : p->gpu_util_pct;
-      std::string digits;
-      if (display_gpu > 0.0 && display_gpu < 1.0) {
-        double rounded = std::round(display_gpu * 10.0) / 10.0;
-        if (rounded < 0.1) rounded = 0.1;
-        std::ostringstream oss; oss << std::fixed << std::setprecision(1) << rounded;
-        digits = oss.str();
-      } else {
-        digits = std::to_string(static_cast<int>(display_gpu + 0.5));
-      }
-      int pad = gpud - static_cast<int>(digits.size());
-      if (pad < 0) pad = 0;
-      int gpu_display_val = static_cast<int>(display_gpu + 0.5);
-      const std::string* gcol = nullptr;
-      if (severity == 0 && tty_stdout()) {
-        int gpu_sev = compute_severity(gpu_display_val, ui.caution_pct, ui.warning_pct);
-        if      (gpu_sev == 2) gcol = &ui.warning;
-        else if (gpu_sev == 1) gcol = &ui.caution;
-      }
-      os << std::string(pad, ' ');
-      if (gcol) os << *gcol;
-      os << digits;
-      if (gcol) os << sgr_reset();
-      os << "%  ";
-    }
-
-    if (g_ui.show_gmem) {
-      std::string gmem_str = human_kib(p->gpu_mem_kb);
-      int pad = gmemw - static_cast<int>(gmem_str.size()); if (pad < 0) pad = 0;
-      os << std::string(pad, ' ') << gmem_str << "  ";
-    }
-    {
-      std::string mem_str = human_kib(p->rss_kb);
-      int pad = memw - static_cast<int>(mem_str.size()); if (pad < 0) pad = 0;
-      os << std::string(pad, ' ') << mem_str << "  ";
-    }
-    {
-      std::string raw = p->cmd.empty() ? std::to_string(p->pid) : sanitize_for_display(p->cmd, cmd_w + 10);
-      os << colorize_command(raw, cmd_w, ui);
-    }
-
-    content.push_back(severity_colored(os.str(), severity));
-  }
-
-  // Pad content to proc_inner_min
-  while (static_cast<int>(content.size()) < proc_inner_min) content.push_back(std::string());
-
-  // Draw: the main frame sits at rect.y .. rect.y + proc_inner_min + 1 (top + content + bottom).
-  // When search mode is active, two extra rows follow below for the input + new bottom border.
-  widget::Style border_style = widget::parse_sgr_style(ui.border);
-  const int main_h = proc_inner_min + 2;
+  const widget::Style border_style = widget::parse_sgr_style(ui.border);
+  const widget::Style title_style  = widget::parse_sgr_style(ui.accent);
+  const widget::Style muted_style  = widget::parse_sgr_style(ui.muted);
 
   canvas.draw_rect(rect.x, rect.y, rect.width, main_h, border_style);
 
-  // Title centered on the top border row.
   std::string title = "PROCESS MONITOR";
-  if (!g_ui.filter_query.empty()) {
+  if (!filter_query_.empty()) {
     std::string suffix = (order.size() == 1) ? " RESULT" : " RESULTS";
     title = "PROCESS MONITOR: " + std::to_string(order.size()) + suffix;
   }
-  std::string title_text = " " + title + " ";
+  const std::string title_text = " " + title + " ";
   int title_x = rect.x + (rect.width - static_cast<int>(title_text.size())) / 2;
   if (title_x < rect.x + 2) title_x = rect.x + 2;
-  widget::Style title_style = widget::parse_sgr_style(ui.accent);
   canvas.draw_text(title_x, rect.y, title_text, title_style);
 
-  // Content lines
-  int content_x = rect.x + 1;
-  int content_y = rect.y + 1;
-  for (size_t i = 0; i < content.size() && static_cast<int>(i) < proc_inner_min; ++i) {
-    canvas.draw_text(content_x, content_y + static_cast<int>(i), content[i]);
+  const int inner_x = rect.x + 1;
+  const int inner_y = rect.y + 1;
+  const int inner_w = rect.width - 2;
+  if (inner_w <= 0) return;
+
+  const int x_pid_r   = inner_x + pidw;
+  const int x_user    = x_pid_r + gap;
+  const int x_user_r  = x_user + userw;
+  const int x_cpu     = x_user_r + gap;
+  const int x_cpu_r   = x_cpu + cpuw;
+  const int x_gpu     = x_cpu_r + gap;
+  const int x_gpu_r   = x_gpu + gpuw;
+  int x_gmem = 0, x_gmem_r = 0;
+  if (show_gmem_) {
+    x_gmem   = x_gpu_r + gap;
+    x_gmem_r = x_gmem + gmemw;
+  }
+  const int x_mem   = (show_gmem_ ? x_gmem_r : x_gpu_r) + gap;
+  const int x_mem_r = x_mem + memw;
+  const int x_cmd   = x_mem_r + gap;
+  const int cmd_w   = std::max(8, (inner_x + inner_w) - x_cmd);
+
+  int header_y = inner_y;
+  canvas.draw_text(right_align_x(inner_x, pidw, 3),  header_y, "PID",  title_style);
+  canvas.draw_text(x_user,                            header_y, "USER", title_style);
+  canvas.draw_text(right_align_x(x_cpu, cpuw, 4),     header_y, "CPU%", title_style);
+  canvas.draw_text(right_align_x(x_gpu, gpuw, 4),     header_y, "GPU%", title_style);
+  if (show_gmem_) {
+    canvas.draw_text(right_align_x(x_gmem, gmemw, 4), header_y, "GMEM", title_style);
+  }
+  canvas.draw_text(right_align_x(x_mem, memw, 3),     header_y, "MEM",  title_style);
+  canvas.draw_text(x_cmd,                             header_y, "COMMAND", title_style);
+
+  for (size_t i = 0; i < displayed.size(); ++i) {
+    const auto* p = displayed[i];
+    const int y = inner_y + 1 + static_cast<int>(i);
+    if (y >= rect.y + main_h - 1) break;
+
+    const double scaled_cpu = scale_proc_cpu(p->cpu_pct);
+    const double smooth_cpu = montauk::ui::smooth_value(
+        std::string("proc.cpu.") + std::to_string(p->pid), scaled_cpu, 0.35);
+    const int row_severity = compute_severity(static_cast<int>(smooth_cpu + 0.5),
+                                               ui.caution_pct, ui.warning_pct);
+    const widget::Style row_style = severity_to_style(row_severity);
+
+    {
+      std::string pid_str = std::to_string(p->pid);
+      canvas.draw_text(right_align_x(inner_x, pidw, static_cast<int>(pid_str.size())),
+                       y, pid_str, row_style);
+    }
+    {
+      std::string u = p->user_name;
+      if (static_cast<int>(u.size()) > userw) u = u.substr(0, static_cast<size_t>(userw));
+      canvas.draw_text(x_user, y, u, row_style);
+    }
+    {
+      std::string digits = format_pct_digits(smooth_cpu);
+      std::string field  = digits + "%";
+      const widget::Style cpu_style = (row_severity > 0) ? row_style : widget::Style{};
+      canvas.draw_text(right_align_x(x_cpu, cpuw, static_cast<int>(field.size())),
+                       y, field, cpu_style);
+    }
+    {
+      const int ngpu_dev = std::max(1, s.nvml.devices);
+      double display_gpu = (gpu_scale_ == GPUScale::Capacity)
+                              ? p->gpu_util_pct / static_cast<double>(ngpu_dev)
+                              : p->gpu_util_pct;
+      std::string digits = format_pct_digits(display_gpu);
+      std::string field  = digits + "%";
+      widget::Style gpu_style = row_style;
+      if (row_severity == 0) {
+        int gsev = compute_severity(static_cast<int>(display_gpu + 0.5),
+                                    ui.caution_pct, ui.warning_pct);
+        gpu_style = severity_to_style(gsev);
+      }
+      canvas.draw_text(right_align_x(x_gpu, gpuw, static_cast<int>(field.size())),
+                       y, field, gpu_style);
+    }
+    if (show_gmem_) {
+      std::string g = format_size_kib(p->gpu_mem_kb);
+      canvas.draw_text(right_align_x(x_gmem, gmemw, static_cast<int>(g.size())),
+                       y, g, row_style);
+    }
+    {
+      std::string m = format_size_kib(p->rss_kb);
+      canvas.draw_text(right_align_x(x_mem, memw, static_cast<int>(m.size())),
+                       y, m, row_style);
+    }
+    {
+      std::string raw = p->cmd.empty() ? std::to_string(p->pid)
+                                       : sanitize_for_display(p->cmd, cmd_w + 10);
+      draw_command_classified(canvas, x_cmd, y, cmd_w, raw, ui, row_severity);
+    }
   }
 
-  // Search bar
-  if (g_ui.search_mode) {
-    // Overwrite the bottom border row of the main frame with ├──┤
-    int divider_y = rect.y + main_h - 1;
+  if (search_mode_) {
+    const int divider_y = rect.y + main_h - 1;
     canvas.put(rect.x, divider_y, "├", border_style);
     for (int x = 1; x < rect.width - 1; ++x) canvas.put(rect.x + x, divider_y, "─", border_style);
     canvas.put(rect.x + rect.width - 1, divider_y, "┤", border_style);
 
-    // Input row
-    int input_y = divider_y + 1;
+    const int input_y = divider_y + 1;
     canvas.put(rect.x, input_y, "│", border_style);
     canvas.put(rect.x + rect.width - 1, input_y, "│", border_style);
-    std::string label = " SEARCH/FILTER: ";
-    std::string input = g_ui.filter_query + "\xE2\x96\x88";
-    std::string input_row = ui.accent + label + sgr_reset() + input;
-    canvas.draw_text(rect.x + 1, input_y, input_row);
+    canvas.draw_text(rect.x + 1, input_y, " SEARCH/FILTER: ", title_style);
+    int after_label = rect.x + 1 + 16;
+    std::string input = filter_query_ + "\xE2\x96\x88";
+    canvas.draw_text(after_label, input_y, input);
 
-    // New bottom border with right-aligned hint
-    int bottom_y = input_y + 1;
+    const int bottom_y = input_y + 1;
     canvas.put(rect.x, bottom_y, "└", border_style);
     for (int x = 1; x < rect.width - 1; ++x) canvas.put(rect.x + x, bottom_y, "─", border_style);
     canvas.put(rect.x + rect.width - 1, bottom_y, "┘", border_style);
@@ -375,7 +443,6 @@ void ProcessTable::render(widget::Canvas& canvas,
     std::string hint = " Press ESC to exit. ";
     int hint_x = rect.x + rect.width - 1 - static_cast<int>(hint.size()) - 1;
     if (hint_x < rect.x + 1) hint_x = rect.x + 1;
-    widget::Style muted_style = widget::parse_sgr_style(ui.muted);
     canvas.draw_text(hint_x, bottom_y, hint, muted_style);
   }
 }

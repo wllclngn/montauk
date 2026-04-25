@@ -1,23 +1,38 @@
 #pragma once
 
 #include "model/Snapshot.hpp"
-#include <string>
+#include "ui/widget/InputEvent.hpp"
+#include <memory>
 
 namespace montauk::ui {
 
-class HelpOverlay;
+// Owns the entire TUI: process table, help overlay, right-column toggles,
+// the layout solver. main.cpp creates one Renderer, drives input through
+// handle_input, and calls render() each frame.
+class Renderer {
+ public:
+  Renderer();
+  ~Renderer();
 
-// Render one frame of the TUI to stdout. Composes the process table (or the
-// help overlay if active) on the left, and the right-column panel stack on
-// the right, via the widget::Canvas pipeline. Writes the frame in a single
-// atomic stdout write.
-//
-// help_text + show_help_line: optional status line rendered at the top.
-// overlay (may be null): if non-null and visible(), replaces the process
-//                        table with the help overlay content.
-void render_screen(const montauk::model::Snapshot& s,
-                   bool show_help_line,
-                   const std::string& help_text,
-                   HelpOverlay* overlay = nullptr);
+  // Composes one frame and writes it to stdout in a single atomic write.
+  void render(const montauk::model::Snapshot& s);
+
+  // Dispatches an input event. Routing rules:
+  //   - Help overlay visible:        all events go to the overlay.
+  //   - ProcessTable in search mode: all events go to the table.
+  //   - Otherwise:                   global keys handled here, others
+  //                                  forwarded to the focused widget.
+  void handle_input(const widget::InputEvent& event);
+
+  [[nodiscard]] bool should_quit() const;
+  [[nodiscard]] int  sleep_ms() const;
+
+  // Seed the render state from config at startup. Idempotent — call once.
+  void seed_from_config();
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
 
 } // namespace montauk::ui

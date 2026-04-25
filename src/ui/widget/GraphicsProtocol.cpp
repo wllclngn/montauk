@@ -170,19 +170,6 @@ GraphicsEmitter::GraphicsEmitter() {
   detect();
 }
 
-const char* GraphicsEmitter::protocol_name() const {
-  switch (protocol_) {
-    case Protocol::Kitty: return "Kitty";
-    case Protocol::Sixel: return "Sixel";
-    case Protocol::None:  return "none";
-  }
-  return "none";
-}
-
-void GraphicsEmitter::redetect() {
-  detect();
-}
-
 void GraphicsEmitter::detect_cell_size() {
   // Primary: CSI 16 t → "\x1b[6;<h>;<w>t"
   {
@@ -352,76 +339,6 @@ std::string GraphicsEmitter::emit_full(uint32_t chart_id,
     oss << "\x1b\\";
   }
 
-  return oss.str();
-}
-
-// 1-pixel-wide column composited onto the previous frame of `chart_id`.
-// Kitty only; Sixel has no delta protocol (returns empty → caller falls back
-// to a full frame).
-std::string GraphicsEmitter::emit_column(uint32_t chart_id,
-                                          int x_px, int h_px,
-                                          const uint8_t* rgba_column) {
-  if (protocol_ != Protocol::Kitty || rgba_column == nullptr || h_px <= 0) {
-    return {};
-  }
-  const size_t bytes = static_cast<size_t>(h_px) * 4;
-  std::string b64 = base64_encode(rgba_column, bytes);
-
-  std::ostringstream oss;
-  // a=f frame data, c=1 composite onto frame #1 (the previous frame),
-  // x=x_px y=0 s=1 v=h_px rectangle, q=2 quiet.
-  oss << "\x1b_Ga=f,i=" << chart_id
-      << ",c=1,x=" << x_px << ",y=0,s=1,v=" << h_px
-      << ",q=2;" << b64 << "\x1b\\";
-  return oss.str();
-}
-
-// a=t: transmit only, no new placement. Kitty treats this as replacing the
-// pixel data for an existing image ID; all active placements of that image
-// continue to display at their current locations but now render the new
-// bytes. This is the per-frame update path once an initial a=T placement
-// exists — no cursor positioning, no placement churn, no flicker.
-std::string GraphicsEmitter::emit_replace(uint32_t chart_id,
-                                           const uint8_t* rgba,
-                                           int w_px, int h_px) {
-  if (protocol_ != Protocol::Kitty || rgba == nullptr || w_px <= 0 || h_px <= 0) {
-    return {};
-  }
-  const size_t bytes = static_cast<size_t>(w_px) * static_cast<size_t>(h_px) * 4;
-  std::string b64 = base64_encode(rgba, bytes);
-
-  std::ostringstream oss;
-  constexpr size_t kChunk = 4096;
-  auto header_once = [&](std::ostream& o, int continuation) {
-    o << "a=t,i=" << chart_id
-      << ",f=32,s=" << w_px << ",v=" << h_px
-      << ",q=2";
-    if (continuation >= 0) o << ",m=" << continuation;
-  };
-  if (b64.size() <= kChunk) {
-    oss << "\x1b_G";
-    header_once(oss, -1);
-    oss << ';' << b64 << "\x1b\\";
-  } else {
-    size_t off = 0;
-    bool first = true;
-    while (off < b64.size()) {
-      size_t take = std::min(kChunk, b64.size() - off);
-      size_t next = off + take;
-      bool more = next < b64.size();
-      oss << "\x1b_G";
-      if (first) {
-        header_once(oss, more ? 1 : 0);
-        first = false;
-      } else {
-        oss << "m=" << (more ? 1 : 0);
-      }
-      oss << ';';
-      oss.write(b64.data() + off, static_cast<std::streamsize>(take));
-      oss << "\x1b\\";
-      off = next;
-    }
-  }
   return oss.str();
 }
 

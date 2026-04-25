@@ -1,14 +1,11 @@
 #include "ui/Config.hpp"
 #include "ui/Terminal.hpp"
-#include "util/AsciiLower.hpp"
 #include "util/TomlReader.hpp"
 #include <cctype>
 #include <cstdlib>
 #include <string>
 
 namespace montauk::ui {
-
-constinit UIState g_ui{};
 
 bool parse_hex_rgb(const std::string& hex, int& r, int& g, int& b) {
   if (hex.size()!=7 || hex[0] != '#') return false;
@@ -45,16 +42,6 @@ int getenv_int(const char* name, int defv) {
   const char* v = getenv_compat(name);
   if (!v || !*v) return defv;
   try { return std::stoi(v); } catch(...) { return defv; }
-}
-
-UIState::CPUScale getenv_cpu_scale(const char* name, UIState::CPUScale defv){
-  const char* v = getenv_compat(name);
-  if (!v || !*v) return defv;
-  std::string s = v;
-  for (auto& c : s) c = montauk::util::ascii_lower((unsigned char)c);
-  if (s=="core"||s=="percore"||s=="irix") return UIState::CPUScale::Core;
-  if (s=="total"||s=="machine"||s=="share") return UIState::CPUScale::Total;
-  return defv;
 }
 
 static bool env_flag(const char* name, bool defv) {
@@ -140,61 +127,6 @@ static std::string resolve_string(const montauk::util::TomlReader& toml, bool ha
   return def;
 }
 
-// Default keybind table
-struct KeybindDef { const char* name; char key; Config::Action action; };
-static constexpr KeybindDef default_keybinds[] = {
-  {"quit",                'q', Config::Action::QUIT},
-  {"help",                'h', Config::Action::HELP},
-  {"fps_up",              '+', Config::Action::FPS_UP},
-  {"fps_down",            '-', Config::Action::FPS_DOWN},
-  {"sort_cpu",            'c', Config::Action::SORT_CPU},
-  {"sort_mem",            'm', Config::Action::SORT_MEM},
-  {"sort_pid",            'p', Config::Action::SORT_PID},
-  {"sort_name",           'n', Config::Action::SORT_NAME},
-  {"sort_gpu",            'g', Config::Action::SORT_GPU},
-  {"sort_gmem",           'v', Config::Action::SORT_GMEM},
-  {"toggle_gpu",          'G', Config::Action::TOGGLE_GPU},
-  {"toggle_thermal",      't', Config::Action::TOGGLE_THERMAL},
-  {"toggle_cpu_scale",    'i', Config::Action::TOGGLE_CPU_SCALE},
-  {"toggle_gpu_scale",    'u', Config::Action::TOGGLE_GPU_SCALE},
-  {"toggle_system_focus", 's', Config::Action::TOGGLE_SYSTEM_FOCUS},
-  {"reset_ui",            'R', Config::Action::RESET_UI},
-  {"search",              '/', Config::Action::SEARCH},
-};
-
-static void populate_keybinds(Config& c, const montauk::util::TomlReader& toml, bool have_toml) {
-  for (const auto& kb : default_keybinds) {
-    char key = kb.key;
-    if (have_toml && toml.has("keybinds", kb.name)) {
-      std::string val = toml.get_string("keybinds", kb.name);
-      if (!val.empty()) key = val[0];
-    }
-    c.keybinds[key] = kb.action;
-    // For letter keys, also map the opposite case (unless already mapped)
-    if (std::isalpha(static_cast<unsigned char>(key))) {
-      char alt = std::isupper(static_cast<unsigned char>(key))
-                   ? static_cast<char>(std::tolower(static_cast<unsigned char>(key)))
-                   : static_cast<char>(std::toupper(static_cast<unsigned char>(key)));
-      // Only auto-map if the alt case isn't already explicitly bound
-      if (c.keybinds.find(alt) == c.keybinds.end()) {
-        // Don't auto-map if another keybind explicitly uses that case
-        bool alt_explicit = false;
-        for (const auto& kb2 : default_keybinds) {
-          char k2 = kb2.key;
-          if (have_toml && toml.has("keybinds", kb2.name)) {
-            std::string v2 = toml.get_string("keybinds", kb2.name);
-            if (!v2.empty()) k2 = v2[0];
-          }
-          if (k2 == alt) { alt_explicit = true; break; }
-        }
-        if (!alt_explicit) c.keybinds[alt] = kb.action;
-      }
-    }
-  }
-  // Always map Ctrl+F to search (0x06)
-  c.keybinds[0x06] = Config::Action::SEARCH;
-}
-
 const Config& config() {
   static Config cfg = []{
     Config c{};
@@ -247,7 +179,7 @@ const Config& config() {
     c.nvidia.disable_nvml        = resolve_bool(toml, have_toml, "nvidia", "disable_nvml",           "MONTAUK_DISABLE_NVML", false);
     c.nvidia.nvml_path           = resolve_string(toml, have_toml, "nvidia", "nvml_path",            "MONTAUK_NVML_PATH", "");
 
-    // --- [chart] --- (Phase 7: pixel-rendered charts)
+    // --- [chart] --- pixel-rendered area charts
     c.chart.history_seconds = resolve_int(toml, have_toml, "chart", "history_seconds", "MONTAUK_CHART_HISTORY_SECONDS", 60);
     if (c.chart.history_seconds < 1)    c.chart.history_seconds = 1;
     if (c.chart.history_seconds > 3600) c.chart.history_seconds = 3600;
@@ -274,9 +206,6 @@ const Config& config() {
     parse_chart_colors("chart.memory",  c.chart.memory);
     parse_chart_colors("chart.network", c.chart.network);
 
-    // --- [keybinds] ---
-    populate_keybinds(c, toml, have_toml);
-
     return c;
   }();
   return cfg;
@@ -292,17 +221,6 @@ const UIConfig& ui_config() {
     };
   }();
   return uic;
-}
-
-void reset_ui_defaults() {
-  g_ui.sort = SortMode::CPU;
-  g_ui.scroll = 0;
-  g_ui.system_focus = false;
-  g_ui.show_gpumon = true;
-  g_ui.cpu_scale = UIState::CPUScale::Total;
-  g_ui.gpu_scale = UIState::GPUScale::Utilization;
-  g_ui.filter_query.clear();
-  g_ui.search_mode = false;
 }
 
 } // namespace montauk::ui

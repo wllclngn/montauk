@@ -1,13 +1,10 @@
 #include "ui/Formatting.hpp"
 #include "ui/Config.hpp"
-#include "ui/Terminal.hpp"
 #include "util/Procfs.hpp"
 #include <algorithm>
 #include <chrono>
 #include <clocale>
-#include <cstdlib>
 #include <ctime>
-#include <cwchar>
 #include <iomanip>
 #include <list>
 #include <mutex>
@@ -16,124 +13,6 @@
 #include <langinfo.h>
 
 namespace montauk::ui {
-
-// Helper: decode UTF-8 character to wchar_t, return bytes consumed (0 on error)
-static int utf8_to_wchar(const char* s, size_t len, wchar_t* out) {
-  if (len == 0 || !s) return 0;
-  unsigned char c = s[0];
-
-  if ((c & 0x80) == 0) {
-    // ASCII
-    *out = c;
-    return 1;
-  } else if ((c & 0xE0) == 0xC0 && len >= 2) {
-    // 2-byte
-    *out = ((c & 0x1F) << 6) | (s[1] & 0x3F);
-    return 2;
-  } else if ((c & 0xF0) == 0xE0 && len >= 3) {
-    // 3-byte (includes CJK)
-    *out = ((c & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
-    return 3;
-  } else if ((c & 0xF8) == 0xF0 && len >= 4) {
-    // 4-byte
-    *out = ((c & 0x07) << 18) | ((s[1] & 0x3F) << 12) |
-           ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
-    return 4;
-  }
-  return 0;  // Invalid
-}
-
-int display_cols(const std::string& s) {
-  int cols = 0;
-  for (size_t i = 0; i < s.size(); ) {
-    // Skip ANSI escape sequences (CSI: \x1B[...m)
-    if (s[i] == '\x1B' && i+1 < s.size() && s[i+1] == '[') {
-      i += 2;
-      while (i < s.size() && (s[i] < '@' || s[i] > '~')) i++;
-      if (i < s.size()) i++; // skip final byte
-      continue;
-    }
-    // Decode UTF-8 and use wcwidth for proper display width
-    wchar_t wc;
-    int len = utf8_to_wchar(s.c_str() + i, s.size() - i, &wc);
-    if (len > 0) {
-      int w = wcwidth(wc);
-      cols += (w > 0) ? w : 1;  // wcwidth returns -1 for non-printable, use 1
-      i += len;
-    } else {
-      // Invalid UTF-8, skip byte
-      cols++;
-      i++;
-    }
-  }
-  return cols;
-}
-
-std::string take_cols(const std::string& s, int cols) {
-  if (cols <= 0) return std::string();
-  std::string out;
-  out.reserve(s.size());
-  int seen = 0;
-  size_t i = 0;
-  while (i < s.size() && seen < cols) {
-    // Copy ANSI escape sequences without counting them
-    if (s[i] == '\x1B' && i+1 < s.size() && s[i+1] == '[') {
-      size_t start = i;
-      i += 2;
-      while (i < s.size() && (s[i] < '@' || s[i] > '~')) i++;
-      if (i < s.size()) i++; // include final byte
-      out.append(s, start, i - start);
-      continue;
-    }
-    // Decode UTF-8 and check display width
-    wchar_t wc;
-    int len = utf8_to_wchar(s.c_str() + i, s.size() - i, &wc);
-    if (len > 0) {
-      int w = wcwidth(wc);
-      if (w < 0) w = 1;  // Non-printable, assume 1
-      // Don't exceed requested columns (important for wide chars)
-      if (seen + w > cols) break;
-      out.append(s, i, len);
-      i += len;
-      seen += w;
-    } else {
-      // Invalid UTF-8, skip byte
-      out += s[i];
-      i++;
-      seen++;
-    }
-  }
-  return out;
-}
-
-std::string trunc_pad(const std::string& s, int w) {
-  if (w <= 0) return "";
-  int cols = display_cols(s);
-  if (cols == w) return s;
-  if (cols < w) return s + std::string(w - cols, ' ');
-  if (w <= 1) return take_cols(s, w);
-  return take_cols(s, w - 1) + "…";
-}
-
-std::string rpad_trunc(const std::string& s, int w) {
-  if (w <= 0) return "";
-  int cols = display_cols(s);
-  if (cols == w) return s;
-  if (cols < w) return std::string(w - cols, ' ') + s;
-  return take_cols(s, w);
-}
-
-std::string lr_align(int iw, const std::string& left, const std::string& right){
-  if (iw <= 0) return std::string();
-  int rvis = display_cols(right);
-  int tlw = iw - rvis - 1; 
-  if (tlw < 0) tlw = 0;
-  std::string l = trunc_pad(left, tlw);
-  int lvis = display_cols(l);
-  int space = iw - lvis - rvis; 
-  if (space < 0) space = 0;
-  return l + std::string(space, ' ') + right;
-}
 
 bool prefer_12h_clock_from_locale() {
   static std::once_flag init_flag;
@@ -392,13 +271,6 @@ std::string format_size(uint64_t bytes, int precision, bool include_tb) {
 
 std::string format_size_kib(uint64_t kib, int precision, bool include_tb) {
   return format_size(kib * 1024ull, precision, include_tb);
-}
-
-std::string severity_colored(const std::string& text, int severity) {
-  if (severity == 0 || !tty_stdout()) return text;
-  const auto& ui = ui_config();
-  const std::string& col = (severity >= 2) ? ui.warning : ui.caution;
-  return col + text + sgr_reset();
 }
 
 } // namespace montauk::ui

@@ -41,49 +41,21 @@ class GraphicsEmitter {
   [[nodiscard]] Protocol protocol() const { return protocol_; }
   [[nodiscard]] CellPixelSize cell_size() const { return cell_; }
 
-  // A human-readable label for the detected protocol. Used by the startup
-  // diagnostic and by the "terminal lacks graphics" notice.
-  [[nodiscard]] const char* protocol_name() const;
-
   // Build the escape sequence(s) to transmit+display a full RGBA image at
   // cell (cell_x, cell_y), occupying (cell_w, cell_h) terminal cells.
-  // `chart_id` identifies this chart for later updates. Use on the first
-  // frame and when the chart's cell footprint changes (creates a placement).
-  // Empty string if no graphics support.
+  // `chart_id` identifies this chart; successive emits with the same id
+  // replace the placement in place. Empty string if no graphics support.
   [[nodiscard]] std::string emit_full(uint32_t chart_id,
                                        int cell_x, int cell_y,
                                        int cell_w, int cell_h,
                                        const uint8_t* rgba,
                                        int w_px, int h_px);
 
-  // Kitty-only: replace the RGBA data for a previously-displayed image
-  // without creating a new placement. The existing placement continues to
-  // display at its original cell position, but now shows the new bytes.
-  // Use on every frame after the initial emit_full to update the chart
-  // in place without the "flash/disappear" that comes from re-transmitting
-  // with a=T (which creates new placements and orphans old ones).
-  // Returns empty on Sixel (Sixel has no image-data-replace semantics —
-  // Sixel callers should use emit_full every frame).
-  [[nodiscard]] std::string emit_replace(uint32_t chart_id,
-                                          const uint8_t* rgba,
-                                          int w_px, int h_px);
-
-  // Kitty only: composite a 1-px-wide RGBA strip at (x_px, 0) onto the
-  // previous frame of `chart_id`. `h_px` must match the chart height.
-  // Returns empty string on Sixel or when protocol is None.
-  [[nodiscard]] std::string emit_column(uint32_t chart_id,
-                                         int x_px, int h_px,
-                                         const uint8_t* rgba_column);
-
   // Kitty only: delete the image (and all its placements) identified by
-  // `chart_id` from the terminal. Used when a chart transitions from
-  // visible to hidden (e.g. SYSTEM-focus mode) so Kitty doesn't keep
-  // rendering the stale placement over newly-drawn text. Returns empty
-  // on non-Kitty protocols — Sixel leaves no placement to clean up.
+  // `chart_id`. Used when a chart transitions visible → hidden so Kitty
+  // doesn't keep rendering the stale placement over newly-drawn text.
+  // Returns empty on non-Kitty protocols.
   [[nodiscard]] std::string emit_delete(uint32_t chart_id);
-
-  // Re-probe the terminal (on SIGWINCH). Cell size and protocol may change.
-  void redetect();
 
  private:
   GraphicsEmitter();

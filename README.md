@@ -31,7 +31,9 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **TOML Configuration**: Unified `~/.config/montauk/config.toml` with palette detection, configurable keybindings, and env var fallback
 - **Dynamic Layout**: All panels fill available vertical space automatically
 - **Security Monitoring**: Process security analysis with severity-based highlighting
-- **Dual Display Modes**: Compact default view and comprehensive SYSTEM focus mode
+- **Dual Display Modes**: Pixel-rendered area-chart default view (Kitty/Sixel) and comprehensive SYSTEM focus mode
+- **Cell-Based UI Architecture**: OUROBOROS-derived Canvas/Component/FlexLayout pipeline — every cell is structurally clipped, no padded-string rendering, no rubberbanding on resize
+- **Pixel-Rendered Charts**: Monotone cubic Hermite area charts with anti-aliased line + fill, transmitted via Kitty `t=t` /dev/shm temp-file (no PTY saturation) or Sixel fallback
 
 ## Kernel Module (Optional)
 
@@ -252,10 +254,8 @@ The trace subsystem runs as a parallel pipeline with its own lock-free seqlock d
 - `n` — Sort by Name
 
 **Display Toggles:**
-- `G` — Toggle GPU panel
-- `t` — Toggle Thermal panel
-- `d` — Toggle Disk I/O panel
-- `N` — Toggle Network panel
+- `G` — Toggle GPU charts (util / VRAM / GPU MEM / ENC / DEC)
+- `t` — Toggle Thermal section inside SYSTEM focus
 
 **Help Overlay:**
 - `?` or `h` — Toggle the in-app help overlay
@@ -269,7 +269,7 @@ The trace subsystem runs as a parallel pipeline with its own lock-free seqlock d
 - `R` — Reset UI to defaults
 - `+/-` — Increase/decrease refresh rate
 
-**Note:** In SYSTEM focus mode, the right column displays comprehensive system metrics including CPU, GPU, memory, disk, network, thermal, and process statistics. Default mode shows individual panels (PROCESSOR, GPU, MEMORY, DISK I/O, NETWORK, SYSTEM).
+**Note:** Default mode shows pixel-rendered area charts (PROCESSOR, GPU, VRAM, GPU MEM, ENC, DEC, MEMORY, NETWORK) in the right column via the terminal graphics protocol — Kitty primary, Sixel fallback. SYSTEM focus mode (`s`) replaces the chart stack with a comprehensive text panel covering identity, runtime, CPU, GPU, memory, disk, network, thermal, and process statistics.
 
 ## Configuration
 
@@ -688,13 +688,22 @@ makepkg -si
 - `MetricsServer` — io_uring HTTP server for Prometheus endpoint (optional, requires liburing)
 - `PrometheusSerializer` — Serializes MetricsSnapshot to Prometheus text exposition format via `std::to_chars()`
 
-**UI Components:**
-- `Panels` — Right column rendering (PROCESSOR, GPU, MEMORY, DISK I/O, NETWORK, SYSTEM)
-- `ProcessTable` — Left column PROCESS MONITOR rendering with severity coloring and NFA-based COMMAND classification
-- `Renderer` — Frame composition and terminal output with ANSI escape handling
+**UI Components (cell-based, OUROBOROS-derived):**
+- `widget::Canvas` — Cell-grid rendering surface with structural clipping and image-mask support for pixel blits
+- `widget::Component` — Base class for every widget; subclasses implement `render` and `handle_input`
+- `widget::FlexLayout` — Flexbox-style constraint solver for hierarchical layout (no manual `cols * 2 / 3` math)
+- `widget::Panel` — Bordered panel that draws structured `Row`s (label/value pairs, headers, blanks) cell-by-cell
+- `widget::Chart` — Monotone cubic Hermite area-chart rasterizer with anti-aliased line + fill
+- `widget::GraphicsEmitter` — Kitty (`a=T,t=t` /dev/shm) and Sixel emit paths for pixel charts
+- `widget::InputEvent` + `parse_input_bytes` — stdin → typed key events (Char / Enter / Esc / arrows / page keys)
+- `widgets::ProcessTable` — Left-column PROCESS MONITOR; owns sort/scroll/filter/search/columns/scale state
+- `widgets::ChartPanel` — One pixel-rendered area chart per metric (PROCESSOR, GPU, VRAM, GPU MEM, ENC, DEC, MEMORY, NETWORK)
+- `Panels` — Builds the right-column SYSTEM panel as `vector<Row>` (identity / runtime / CPU / GPU / memory / disk / network / thermal / security)
+- `HelpOverlay` — Manpage-driven scrollable help with its own input handler
+- `Renderer` — Owns ProcessTable + HelpOverlay + RightColumnState; runs the input dispatch and frame composition
 - `Terminal` — TTY detection, color support, cursor control
-- `Formatting` — Text layout, truncation with ANSI-escape-aware functions
-- `Config` — Unified TOML configuration (TOML -> env var -> compiled default), keybind mapping
+- `Formatting` — Domain helpers (`smooth_value`, hostname/kernel/freq readers, `format_size`, severity helper)
+- `Config` — Unified TOML configuration (TOML → env var → compiled default)
 - `TomlReader` — Header-only TOML subset parser (portable across sibling projects)
 
 **Process Collection:**

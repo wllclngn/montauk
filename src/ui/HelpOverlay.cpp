@@ -47,10 +47,29 @@ void HelpOverlay::toggle() {
   // Lazy loading happens in render() at the actual column width.
 }
 
-void HelpOverlay::scroll_up()   { if (scroll_offset_ > 0) --scroll_offset_; }
-void HelpOverlay::scroll_down() { ++scroll_offset_; }
-void HelpOverlay::page_up()     { scroll_offset_ = std::max(0, scroll_offset_ - 20); }
-void HelpOverlay::page_down()   { scroll_offset_ += 20; }
+void HelpOverlay::handle_input(const widget::InputEvent& ev) {
+  if (!visible_) return;
+
+  if (ev.is(widget::Key::Escape))     { close(); return; }
+  if (ev.is(widget::Key::ArrowUp))    { if (scroll_offset_ > 0) --scroll_offset_; return; }
+  if (ev.is(widget::Key::ArrowDown))  { ++scroll_offset_; return; }
+  if (ev.is(widget::Key::PageUp))     { scroll_offset_ = std::max(0, scroll_offset_ - 20); return; }
+  if (ev.is(widget::Key::PageDown))   { scroll_offset_ += 20; return; }
+
+  if (!ev.is(widget::Key::Char)) return;
+  switch (ev.character) {
+    case 'q':
+    case '?':                 close(); break;
+    case 'j':                 ++scroll_offset_; break;
+    case 'k':                 if (scroll_offset_ > 0) --scroll_offset_; break;
+    case 'd':
+    case ' ':                 scroll_offset_ += 20; break;
+    case 'u':                 scroll_offset_ = std::max(0, scroll_offset_ - 20); break;
+    case 'g':                 scroll_offset_ = 0; break;
+    case 'G':                 scroll_offset_ = static_cast<int>(lines_.size()); break;
+    default: break;
+  }
+}
 
 void HelpOverlay::render(widget::Canvas& canvas,
                          const widget::LayoutRect& rect,
@@ -72,9 +91,9 @@ void HelpOverlay::render(widget::Canvas& canvas,
   widget::Style title_style  = widget::parse_sgr_style(ui_config().accent);
   widget::LayoutRect inner = draw_box_border(canvas, rect, title, border_style, title_style);
 
-  // Draw body lines. Canvas draw_text parses embedded SGR codes and clips at
-  // the inner-rect width structurally — no manual control-char stripping or
-  // trunc_pad needed. Tabs are still expanded because man emits them.
+  // Draw body lines. Canvas::draw_text parses embedded SGR and clips at the
+  // inner rect — no manual sanitizing needed. Tabs are expanded because man
+  // emits them.
   int y = inner.y;
   int end = std::min(total, scroll_offset_ + inner_h);
   for (int i = scroll_offset_; i < end; ++i, ++y) {

@@ -16,9 +16,7 @@ struct SizeConstraints {
     std::optional<int> preferred_height;
 };
 
-// Flexbox-style growth and shrink properties.
-// Declared for API completeness; the flexbox solver is NOT implemented in
-// montauk — parent renderers compute fixed rects directly.
+// Flexbox-style growth and shrink properties. Consumed by widget::FlexLayout.
 struct FlexProperties {
     float flex_grow = 0.0f;
     float flex_shrink = 1.0f;

@@ -5,15 +5,6 @@
 
 namespace montauk::ui {
 
-// UTF-8 text width utilities (uses wcwidth for proper wide char support)
-[[nodiscard]] int display_cols(const std::string& s);
-[[nodiscard]] std::string take_cols(const std::string& s, int cols);
-
-// Text formatting and alignment
-[[nodiscard]] std::string trunc_pad(const std::string& s, int w);
-[[nodiscard]] std::string rpad_trunc(const std::string& s, int w);
-[[nodiscard]] std::string lr_align(int iw, const std::string& left, const std::string& right);
-
 // Date/time formatting
 [[nodiscard]] bool prefer_12h_clock_from_locale();
 [[nodiscard]] std::string format_time_now(bool prefer12h);
@@ -60,10 +51,5 @@ struct CpuFreqInfo {
 // Convenience wrapper: same as format_size but input is in KiB (1024-byte
 // blocks). Equivalent to format_size(kib * 1024, precision, include_tb).
 [[nodiscard]] std::string format_size_kib(uint64_t kib, int precision = 0, bool include_tb = false);
-
-// Wrap `text` in a severity-appropriate SGR color so the whole span renders
-// in caution/warning color. Severity 0 (or non-TTY) returns the text unchanged.
-// Uses the colors from ui_config() — caller must ensure config is initialized.
-[[nodiscard]] std::string severity_colored(const std::string& text, int severity);
 
 } // namespace montauk::ui

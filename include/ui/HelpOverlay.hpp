@@ -15,16 +15,11 @@ public:
   void close() { visible_ = false; }
   [[nodiscard]] bool visible() const { return visible_; }
 
-  void scroll_up();
-  void scroll_down();
-  void page_up();
-  void page_down();
-  void scroll_top()    { scroll_offset_ = 0; }
-  void scroll_bottom() { scroll_offset_ = static_cast<int>(lines_.size()); }
-
   void render(widget::Canvas& canvas,
               const widget::LayoutRect& rect,
               const montauk::model::Snapshot& snap) override;
+
+  void handle_input(const widget::InputEvent& event) override;
 
 private:
   // Reformats the manpage at the given column width via MANWIDTH=N.

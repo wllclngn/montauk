@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 6.0.0 LANGUAGES CXX)
+project(montauk VERSION 6.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,7 +27,6 @@ option(USE_SUBLIMATION "Build with sublimation sort backend available at runtime
 add_library(montauk_core
     src/util/Procfs.cpp
     src/util/Churn.cpp
-    src/util/Retro.cpp
     src/util/TimSort.cpp
     src/util/SortDispatch.cpp
     src/util/BoyerMoore.cpp
@@ -37,7 +36,6 @@ add_library(montauk_core
     src/ui/Config.cpp
     src/ui/Formatting.cpp
     src/ui/Renderer.cpp
-    src/ui/Panels.cpp
     src/ui/HelpOverlay.cpp
     src/app/ChartHistories.cpp
     src/app/SnapshotBuffers.cpp
@@ -62,10 +60,14 @@ add_library(montauk_core
     src/ui/widget/Canvas.cpp
     src/ui/widget/Chart.cpp
     src/ui/widget/Component.cpp
+    src/ui/widget/FlexLayout.cpp
     src/ui/widget/GraphicsProtocol.cpp
+    src/ui/widget/InputEvent.cpp
     src/ui/widget/Panel.cpp
     src/ui/widgets/ChartPanel.cpp
     src/ui/widgets/ProcessTable.cpp
+    src/ui/widgets/RightColumn.cpp
+    src/ui/widgets/SystemPanel.cpp
 )
 target_include_directories(montauk_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(montauk_core PUBLIC _GNU_SOURCE)
