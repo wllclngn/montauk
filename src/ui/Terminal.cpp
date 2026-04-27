@@ -8,11 +8,15 @@
 #include <cctype>
 #include "util/AsciiLower.hpp"
 #include <algorithm>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstdio>
+#include <deque>
 #include <format>
+#include <mutex>
 #include <poll.h>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ui/Config.hpp"
@@ -21,6 +25,84 @@ namespace montauk::ui {
 
 constinit std::atomic<bool> g_stop{false};
 constinit std::atomic<bool> g_alt_in_use{false};
+
+// Async writer: render loop pushes finished frames; a dedicated thread
+// drains with blocking write()s. Decouples render cadence from PTY
+// drain rate.
+namespace {
+std::mutex              g_writer_mtx;
+std::condition_variable g_writer_cv;
+std::deque<std::string> g_write_queue;
+std::thread             g_writer_thread;
+std::atomic<bool>       g_writer_running{false};
+
+// Bound the queue. If we ever pile up beyond this it means the terminal
+// is wedged or the producer is wildly faster than drain — drop oldest
+// frames so we don't unbound memory or stall the render loop.
+constexpr size_t kMaxQueuedFrames = 4;
+
+void writer_loop() {
+  while (true) {
+    std::string chunk;
+    {
+      std::unique_lock<std::mutex> lock(g_writer_mtx);
+      g_writer_cv.wait(lock, [] {
+        return !g_write_queue.empty() || !g_writer_running.load();
+      });
+      if (g_write_queue.empty()) {
+        if (!g_writer_running.load()) return;
+        continue;
+      }
+      chunk = std::move(g_write_queue.front());
+      g_write_queue.pop_front();
+    }
+
+    size_t written = 0;
+    while (written < chunk.size()) {
+      ssize_t n = ::write(STDOUT_FILENO, chunk.data() + written, chunk.size() - written);
+      if (n > 0) { written += static_cast<size_t>(n); continue; }
+      if (n < 0 && errno == EINTR) continue;
+      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        pollfd pfd{STDOUT_FILENO, POLLOUT, 0};
+        ::poll(&pfd, 1, 100);
+        continue;
+      }
+      // Unrecoverable — drop the rest of this chunk rather than spin.
+      break;
+    }
+  }
+}
+} // namespace
+
+void start_async_writer() {
+  if (g_writer_running.exchange(true)) return;  // already running
+  g_writer_thread = std::thread(writer_loop);
+}
+
+void stop_async_writer() {
+  if (!g_writer_running.exchange(false)) return;
+  g_writer_cv.notify_all();
+  if (g_writer_thread.joinable()) g_writer_thread.join();
+  std::lock_guard<std::mutex> lock(g_writer_mtx);
+  g_write_queue.clear();
+}
+
+void enqueue_frame(std::string frame) {
+  if (frame.empty()) return;
+  if (!g_writer_running.load()) {
+    // Fall back to synchronous write — early startup or after shutdown.
+    best_effort_write(STDOUT_FILENO, frame.data(), frame.size());
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_writer_mtx);
+    while (g_write_queue.size() >= kMaxQueuedFrames) {
+      g_write_queue.pop_front();
+    }
+    g_write_queue.push_back(std::move(frame));
+  }
+  g_writer_cv.notify_one();
+}
 
 void best_effort_write(int fd, const char* buf, size_t len) {
   while (len > 0) {

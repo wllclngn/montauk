@@ -36,8 +36,22 @@ void on_atexit_restore();
 [[nodiscard]] std::string query_palette_color(int idx);
 [[nodiscard]] std::vector<std::string> detect_palette();
 
-// Best-effort terminal write (async-signal-safe)
+// Best-effort terminal write (async-signal-safe). Used by guards
+// (alt-screen, cursor) and signal/atexit handlers — these need ordered,
+// synchronous writes so terminal state is correct on shutdown.
 void best_effort_write(int fd, const char* buf, size_t len);
+
+// Async writer thread for frame output. The renderer hot loop hands
+// finished frame buffers to enqueue_frame() and returns immediately;
+// the writer drains the queue with blocking write()s on its own thread,
+// keeping the render loop unaffected by PTY backpressure.
+//
+// Frames are dropped if the queue grows past a small bound (the writer
+// is slower than the producer is wedged — better to skip a frame than
+// pile up). On shutdown, stop_async_writer() drains then joins.
+void start_async_writer();
+void stop_async_writer();
+void enqueue_frame(std::string frame);
 
 // RAII guards for terminal state
 class RawTermGuard {

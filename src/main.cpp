@@ -247,6 +247,7 @@ int main(int argc, char** argv) {
   bool use_alt = cfg.ui.alt_screen && tty_stdout();
   montauk::ui::RawTermGuard raw{}; montauk::ui::CursorGuard curs{}; montauk::ui::AltScreenGuard alt{use_alt};
   std::atexit(&on_atexit_restore);
+  montauk::ui::start_async_writer();
 
   if (iterations <= 0) iterations = INT32_MAX;
   montauk::ui::Renderer renderer;
@@ -287,6 +288,7 @@ int main(int argc, char** argv) {
   if (log_writer) log_writer->stop();
   if (metrics) metrics->stop();
   producer.stop();
+  montauk::ui::stop_async_writer();
   return 0;
 
   } catch (const std::exception& e) {

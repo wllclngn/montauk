@@ -16,66 +16,108 @@ namespace montauk::ui {
 
 namespace {
 
-// Serialize a Canvas to ANSI-encoded bytes ready for stdout. Emits SGR
-// codes only on Style transitions, terminates with a cursor-park escape,
-// returns one contiguous buffer so the caller issues a single write().
-std::string canvas_to_frame(const widget::Canvas& canvas, int rows, int cols) {
+// Append an SGR escape for `s` onto `frame`. Emits a single CSI sequence
+// per call; callers track when the style has actually changed.
+void append_sgr(std::string& frame, const widget::Style& s) {
+  if (s.fg == widget::Color::Default && s.bg == widget::Color::Default
+      && s.attr == widget::Attribute::None) {
+    frame += "\x1b[0m";
+    return;
+  }
+  std::ostringstream oss;
+  oss << "\x1b[0";
+  if (widget::has_attribute(s.attr, widget::Attribute::Bold))      oss << ";1";
+  if (widget::has_attribute(s.attr, widget::Attribute::Dim))       oss << ";2";
+  if (widget::has_attribute(s.attr, widget::Attribute::Underline)) oss << ";4";
+  if (widget::has_attribute(s.attr, widget::Attribute::Blink))     oss << ";5";
+  if (widget::has_attribute(s.attr, widget::Attribute::Reverse))   oss << ";7";
+  if (widget::is_truecolor(s.fg)) {
+    oss << ";38;2;" << static_cast<int>(widget::color_r(s.fg)) << ';'
+                     << static_cast<int>(widget::color_g(s.fg)) << ';'
+                     << static_cast<int>(widget::color_b(s.fg));
+  } else if (s.fg != widget::Color::Default) {
+    int idx = static_cast<int>(s.fg);
+    if (idx >= 1 && idx <= 8)       oss << ';' << (29 + idx);
+    else if (idx >= 9 && idx <= 16) oss << ';' << (81 + idx);
+  }
+  if (widget::is_truecolor(s.bg)) {
+    oss << ";48;2;" << static_cast<int>(widget::color_r(s.bg)) << ';'
+                     << static_cast<int>(widget::color_g(s.bg)) << ';'
+                     << static_cast<int>(widget::color_b(s.bg));
+  } else if (s.bg != widget::Color::Default) {
+    int idx = static_cast<int>(s.bg);
+    if (idx >= 1 && idx <= 8)       oss << ';' << (39 + idx);
+    else if (idx >= 9 && idx <= 16) oss << ';' << (91 + idx);
+  }
+  oss << 'm';
+  frame += oss.str();
+}
+
+// Build a frame buffer that contains only the cells that changed between
+// `prev` and `curr`. For each changed run, emit one cursor-position
+// escape, an SGR if the style differs from the last emitted style, and
+// the content. Adjacent changed cells on the same row reuse the cursor
+// position implicitly (the terminal advances as it draws). Style is
+// tracked across cell boundaries so we don't repeat SGRs.
+//
+// On `full_repaint`, prev is treated as all-blank and every non-blank
+// cell of curr is emitted (used for the first frame and after a resize).
+std::string canvas_diff_to_frame(const widget::Canvas& curr,
+                                  const widget::Canvas& prev,
+                                  int rows, int cols,
+                                  bool full_repaint) {
   std::string frame;
-  frame.reserve(static_cast<size_t>(rows) * static_cast<size_t>(cols) + 64);
-  frame += "\x1B[H";
+  // Worst case is a full repaint, but typical steady-state diffs are
+  // tiny. Reserve modestly.
+  frame.reserve(full_repaint
+                    ? static_cast<size_t>(rows) * static_cast<size_t>(cols) + 64
+                    : 1024);
 
-  auto emit_sgr = [&frame](const widget::Style& s) {
-    if (s.fg == widget::Color::Default && s.bg == widget::Color::Default
-        && s.attr == widget::Attribute::None) {
-      frame += "\x1b[0m";
-      return;
-    }
-    std::ostringstream oss;
-    oss << "\x1b[0";
-    if (widget::has_attribute(s.attr, widget::Attribute::Bold))      oss << ";1";
-    if (widget::has_attribute(s.attr, widget::Attribute::Dim))       oss << ";2";
-    if (widget::has_attribute(s.attr, widget::Attribute::Underline)) oss << ";4";
-    if (widget::has_attribute(s.attr, widget::Attribute::Blink))     oss << ";5";
-    if (widget::has_attribute(s.attr, widget::Attribute::Reverse))   oss << ";7";
-    if (widget::is_truecolor(s.fg)) {
-      oss << ";38;2;" << static_cast<int>(widget::color_r(s.fg)) << ';'
-                       << static_cast<int>(widget::color_g(s.fg)) << ';'
-                       << static_cast<int>(widget::color_b(s.fg));
-    } else if (s.fg != widget::Color::Default) {
-      int idx = static_cast<int>(s.fg);
-      if (idx >= 1 && idx <= 8)       oss << ';' << (29 + idx);
-      else if (idx >= 9 && idx <= 16) oss << ';' << (81 + idx);
-    }
-    if (widget::is_truecolor(s.bg)) {
-      oss << ";48;2;" << static_cast<int>(widget::color_r(s.bg)) << ';'
-                       << static_cast<int>(widget::color_g(s.bg)) << ';'
-                       << static_cast<int>(widget::color_b(s.bg));
-    } else if (s.bg != widget::Color::Default) {
-      int idx = static_cast<int>(s.bg);
-      if (idx >= 1 && idx <= 8)       oss << ';' << (39 + idx);
-      else if (idx >= 9 && idx <= 16) oss << ';' << (91 + idx);
-    }
-    oss << 'm';
-    frame += oss.str();
-  };
+  if (full_repaint) {
+    frame += "\x1B[2J\x1B[H";  // clear + home
+  }
 
-  widget::Style current{};
-  bool style_dirty = true;
+  widget::Style current_style{};
+  bool style_known = false;
+  int  cursor_x = -1;
+  int  cursor_y = -1;
+
+  const widget::Cell blank;  // default Cell{" ", {}} for full-repaint sentinel
+
   for (int y = 0; y < rows; ++y) {
     for (int x = 0; x < cols; ++x) {
-      const widget::Cell& cell = canvas.at(x, y);
-      if (style_dirty || !(cell.style == current)) {
-        emit_sgr(cell.style);
-        current = cell.style;
-        style_dirty = false;
+      const widget::Cell& cell = curr.at(x, y);
+      const widget::Cell& base = full_repaint ? blank : prev.at(x, y);
+      if (cell == base) continue;
+
+      // Position the cursor (skip the move if we're already there from
+      // the previous emit on this row).
+      if (cursor_y != y || cursor_x != x) {
+        frame += std::format("\x1B[{};{}H", y + 1, x + 1);
+        cursor_x = x;
+        cursor_y = y;
       }
-      if (!cell.content.empty()) frame += cell.content;
+      // Style transition.
+      if (!style_known || !(cell.style == current_style)) {
+        append_sgr(frame, cell.style);
+        current_style = cell.style;
+        style_known = true;
+      }
+      // Content. Empty content means image-occupied or default-blank —
+      // emit a single space so the prior frame's character is overwritten.
+      frame += cell.content.empty() ? std::string(" ") : cell.content;
+      cursor_x += 1;  // single-cell content; double-width chars don't appear in montauk's UI strings
     }
-    frame += "\x1b[0m";
-    if (y < rows - 1) frame += "\n";
-    style_dirty = true;
   }
-  for (const auto& cmd : canvas.graphics_commands()) frame += cmd.escape;
+
+  // Graphics commands are appended verbatim — each one carries its own
+  // cursor positioning prefix. Chart panels already throttle so most
+  // frames have an empty graphics-command list.
+  for (const auto& cmd : curr.graphics_commands()) frame += cmd.escape;
+
+  // Reset SGR so any out-of-band terminal output after our frame doesn't
+  // inherit our last color, and park the cursor at the bottom-right.
+  if (style_known) frame += "\x1b[0m";
   frame += std::format("\x1B[{};{}H", rows, cols);
   return frame;
 }
@@ -88,6 +130,13 @@ struct Renderer::Impl {
   HelpOverlay           help_overlay;
   int                   sleep_ms   = 250;
   bool                  quit       = false;
+
+  // Previous frame's canvas, kept for dirty-cell diffing in render().
+  // Empty until the first frame; on resize we replace it with a fresh
+  // blank canvas at the new size and force a full repaint.
+  widget::Canvas        prev_canvas{1, 1};
+  int                   last_cols  = 0;
+  int                   last_rows  = 0;
 };
 
 Renderer::Renderer() : impl_(std::make_unique<Impl>()) {}
@@ -160,6 +209,15 @@ void Renderer::render(const montauk::model::Snapshot& s) {
   const int cols = term_cols();
   const int rows = std::max(5, term_rows());
 
+  // On size change, the previous canvas is the wrong shape — treat the
+  // next frame as a full repaint against a fresh blank baseline.
+  const bool size_changed = (cols != impl_->last_cols || rows != impl_->last_rows);
+  if (size_changed) {
+    impl_->prev_canvas = widget::Canvas(cols, rows);
+    impl_->last_cols = cols;
+    impl_->last_rows = rows;
+  }
+
   widget::FlexLayout root;
   root.set_direction(widget::FlexDirection::Row);
   root.set_spacing(1);
@@ -178,8 +236,12 @@ void Renderer::render(const montauk::model::Snapshot& s) {
   }
   impl_->right_column.render(canvas, right_rect, s);
 
-  std::string frame = canvas_to_frame(canvas, rows, cols);
-  best_effort_write(STDOUT_FILENO, frame.data(), frame.size());
+  std::string frame = canvas_diff_to_frame(canvas, impl_->prev_canvas,
+                                            rows, cols, size_changed);
+  enqueue_frame(std::move(frame));
+
+  // Move the just-rendered canvas into prev for next frame's diff.
+  impl_->prev_canvas = std::move(canvas);
 }
 
 } // namespace montauk::ui
