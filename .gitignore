@@ -25,6 +25,11 @@ cmake-build-*/
 /pkg/
 /*.pkg.tar.*
 /*.src.tar.*
+# makepkg's git+url source clones into ./src/<pkgname>/ when BUILDDIR
+# isn't relocated. The PKGBUILD now auto-redirects BUILDDIR to /tmp,
+# but this guards against any leak slipping past on a fresh checkout
+# or edited PKGBUILD before the override lands.
+/src/montauk/
 
 # Local packaging workspace (created by helper scripts)
 /packaging/_aur_local/

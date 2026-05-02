@@ -45,7 +45,6 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
       std::string cur_phys;
       int cur_cpu_cores = -1;
       std::map<std::string,int> socket_cores;
-      int logical_count_cpuinfo = 0;
       while (std::getline(ss, line)) {
         // common on x86
         if (line.rfind("model name", 0) == 0) {
@@ -65,10 +64,6 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
           auto pos = line.find(':'); if (pos!=std::string::npos) {
             try { cur_cpu_cores = std::stoi(line.substr(pos+1)); } catch(...) { cur_cpu_cores=-1; }
           }
-        }
-        if (line.rfind("processor", 0) == 0) {
-          // counts logical entries
-          logical_count_cpuinfo++;
         }
         if (line.empty()) {
           if (!cur_phys.empty() && cur_cpu_cores > 0) {

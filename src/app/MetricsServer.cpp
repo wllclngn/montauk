@@ -29,7 +29,12 @@ void MetricsServer::start() {
 void MetricsServer::stop() {
   if (stop_eventfd_ >= 0) {
     uint64_t val = 1;
-    (void)::write(stop_eventfd_, &val, sizeof(val));
+    // FORTIFY_SOURCE remaps write() to a fortified inline that re-applies
+    // warn_unused_result, ignoring a plain (void) cast. Capture the return
+    // and discard explicitly. The eventfd is best-effort wakeup; a failed
+    // write here just means the worker polls for stop_token instead.
+    ssize_t r = ::write(stop_eventfd_, &val, sizeof(val));
+    (void)r;
   }
   if (thread_.joinable()) {
     thread_.request_stop();
