@@ -25,6 +25,7 @@ void ChartHistories::resize(std::size_t capacity) {
   mem_used.resize(capacity);
   net_rx.resize(capacity);
   net_tx.resize(capacity);
+  for (auto& h : cpu_per_core) h.resize(capacity);
 }
 
 void ChartHistories::push_snapshot(const montauk::model::Snapshot& s) {
@@ -38,6 +39,17 @@ void ChartHistories::push_snapshot(const montauk::model::Snapshot& s) {
   mem_used.push(static_cast<float>(s.mem.used_pct / 100.0));
   net_rx.push(static_cast<float>(s.net.agg_rx_bps));
   net_tx.push(static_cast<float>(s.net.agg_tx_bps));
+
+  // Per-core: lazy-size on first sample, grow on hotplug. Each per-core
+  // ring matches the singleton capacity (history_seconds × refresh_hz).
+  const std::size_t n = s.cpu.per_core_pct.size();
+  if (cpu_per_core.size() != n) {
+    const std::size_t cap = cpu_total.capacity();
+    cpu_per_core.assign(n, montauk::util::History<float>(cap));
+  }
+  for (std::size_t i = 0; i < n; ++i) {
+    cpu_per_core[i].push(static_cast<float>(s.cpu.per_core_pct[i] / 100.0));
+  }
 }
 
 ChartHistories& chart_histories() {

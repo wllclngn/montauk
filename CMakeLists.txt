@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 6.3.0 LANGUAGES CXX)
+project(montauk VERSION 6.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -65,6 +65,7 @@ add_library(montauk_core
     src/ui/widget/InputEvent.cpp
     src/ui/widget/Panel.cpp
     src/ui/widgets/ChartPanel.cpp
+    src/ui/widgets/CpuGrid.cpp
     src/ui/widgets/ProcessTable.cpp
     src/ui/widgets/RightColumn.cpp
     src/ui/widgets/SystemPanel.cpp

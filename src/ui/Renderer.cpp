@@ -5,6 +5,7 @@
 #include "ui/widget/Canvas.hpp"
 #include "ui/widget/FlexLayout.hpp"
 #include "ui/widget/LayoutRect.hpp"
+#include "ui/widgets/CpuGrid.hpp"
 #include "ui/widgets/ProcessTable.hpp"
 #include "ui/widgets/RightColumn.hpp"
 
@@ -126,10 +127,14 @@ std::string canvas_diff_to_frame(const widget::Canvas& curr,
 
 struct Renderer::Impl {
   widgets::ProcessTable proc_table;
+  widgets::CpuGrid      cpu_grid;
   widgets::RightColumn  right_column;
   HelpOverlay           help_overlay;
   int                   sleep_ms   = 250;
   bool                  quit       = false;
+  // Shift+C toggles the CPU TOPOLOGY grid in the left rect, replacing
+  // PROCESS MONITOR. False = process table; true = cpu_grid.
+  bool                  cpu_view   = false;
 
   // Previous frame's canvas, kept for dirty-cell diffing in render().
   // Empty until the first frame; on resize we replace it with a fresh
@@ -173,6 +178,15 @@ void Renderer::handle_input(const widget::InputEvent& ev) {
     return;
   }
 
+  // CPU TOPOLOGY view is modal — its own scroll keys + Esc/'C' close.
+  // Quit ('q') stays globally available so users can always bail.
+  if (impl_->cpu_view) {
+    if (ev.is_char('q')) { impl_->quit = true; return; }
+    impl_->cpu_grid.handle_input(ev);
+    if (impl_->cpu_grid.consume_close_request()) impl_->cpu_view = false;
+    return;
+  }
+
   // Search-mode in the process table is modal — same routing.
   if (impl_->proc_table.search_mode()) {
     impl_->proc_table.handle_input(ev);
@@ -192,6 +206,7 @@ void Renderer::handle_input(const widget::InputEvent& ev) {
       case 'G': impl_->right_column.set_show_gpumon (!impl_->right_column.show_gpumon());  return;
       case 't': impl_->right_column.set_show_thermal(!impl_->right_column.show_thermal()); return;
       case 's': impl_->right_column.set_system_focus(!impl_->right_column.system_focus()); return;
+      case 'C': impl_->cpu_view = true; return;  // PROCESS MONITOR → CPU TOPOLOGY
       case 'R':
         impl_->proc_table.reset_view();
         impl_->right_column.reset();
@@ -230,8 +245,15 @@ void Renderer::render(const montauk::model::Snapshot& s) {
   const widget::LayoutRect right_rect{rects[1].x, 0, rects[1].width, rows};
 
   if (impl_->help_overlay.visible()) {
+    // Hide CPU grid placements before help draws over them.
+    if (impl_->cpu_grid.consume_close_request()) impl_->cpu_view = false;
+    impl_->cpu_grid.hide(canvas);
     impl_->help_overlay.render(canvas, left_rect, s);
+  } else if (impl_->cpu_view) {
+    impl_->cpu_grid.render(canvas, left_rect, s);
   } else {
+    // CPU view just got closed — clean its Kitty placements off the screen.
+    impl_->cpu_grid.hide(canvas);
     impl_->proc_table.render(canvas, left_rect, s);
   }
   impl_->right_column.render(canvas, right_rect, s);

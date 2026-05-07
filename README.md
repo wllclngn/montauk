@@ -31,9 +31,10 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **TOML Configuration**: Unified `~/.config/montauk/config.toml` with palette detection, configurable keybindings, and env var fallback
 - **Dynamic Layout**: All panels fill available vertical space automatically
 - **Security Monitoring**: Process security analysis with severity-based highlighting
-- **Dual Display Modes**: Pixel-rendered area-chart default view (Kitty/Sixel) and comprehensive SYSTEM focus mode
+- **Three Display Modes**: Default (pixel-rendered area-chart right column over PROCESS MONITOR), SYSTEM focus (text-detail panel replacing the chart stack), and CPU TOPOLOGY (per-core mini-chart grid replacing PROCESS MONITOR) — each toggle-driven, mutually exclusive in their respective columns, no flicker on switch
 - **Cell-Based UI Architecture**: OUROBOROS-derived Canvas/Component/FlexLayout pipeline — every cell is structurally clipped, no padded-string rendering, no rubberbanding on resize
 - **Pixel-Rendered Charts**: Monotone cubic Hermite area charts with anti-aliased line + fill, transmitted via Kitty `t=t` /dev/shm temp-file (no PTY saturation) or Sixel fallback
+- **Per-Core Topology View**: Shift+C replaces PROCESS MONITOR with a dynamic grid of bordered boxes — one per logical CPU — each rendering a pixel-rasterized area chart of that core's last-N-seconds utilization (with live util% in every box title). Grid geometry auto-fills both axes; high-core-count systems fall into a scrollable layout at minimum cell height. Same Kitty/Sixel substrate as the right-column charts.
 
 ## Kernel Module (Optional)
 
@@ -52,8 +53,17 @@ For maximum efficiency, montauk includes an optional kernel module (`montauk-ker
 ### Main Interface
 ![Main](screenshot-default.png)
 
-### SYSTEM Interface
+Default view. PROCESS MONITOR on the left; pixel-rendered area charts (PROCESSOR, GPU, VRAM, GPU MEM, ENC, DEC, MEMORY, NETWORK) stacked on the right. Charts emit through Kitty's `t=t` /dev/shm transport (Sixel fallback) and update at 1 Hz over a 60-second rolling window.
+
+### SYSTEM Focus (`s`)
 ![SYSTEM](screenshot-system.png)
+
+`s` swaps the right-column chart stack for a comprehensive text panel: identity (hostname, kernel, uptime), runtime (collector, scheduler, process states), CPU (model, threads, freq/governor, load avg, ctxt-sw rate), GPU (model, util, NVML, power, p-state), memory, disk I/O, network, thermal margins, and process-security findings — severity-coloured in place.
+
+### CPU Topology (`Shift+C`)
+![Topology](screenshot-topology.png)
+
+`Shift+C` swaps PROCESS MONITOR for a dynamic grid of bordered boxes — one per logical CPU. Each box renders a pixel-rasterized area chart of that core's last-N-seconds utilization (60s default, configurable via `[chart] history_seconds`), with live util% centered on the top border. Grid columns auto-fit to the rect (target ~2.5:1 cell aspect); high-core-count systems fall into scroll mode at minimum cell height. Same monotone-cubic AA rasterizer and Kitty/Sixel emit path as the right-column charts. Right column (charts or SYSTEM focus) is unaffected by the toggle.
 
 ## Installation
 
@@ -263,13 +273,14 @@ The trace subsystem runs as a parallel pipeline with its own lock-free seqlock d
 - While open: `j`/`k` scroll one line, `d`/`Space` page down, `u` page up, `g`/`G` jump to top/bottom, `q`/`?`/`Esc` close
 
 **Modes:**
-- `s` — Toggle SYSTEM focus mode (shows detailed system information in right column)
+- `s` — Toggle SYSTEM focus mode (right column: chart stack ↔ text-detail panel)
+- `C` (Shift+C) — Toggle CPU TOPOLOGY view (left column: PROCESS MONITOR ↔ per-core grid; arrows + PageUp/PageDown scroll on high-core systems; Esc or `C` again returns)
 - `i` — Toggle CPU scale (machine-share ↔ per-core)
 - `u` — Toggle GPU scale (capacity ↔ utilization)
 - `R` — Reset UI to defaults
 - `+/-` — Increase/decrease refresh rate
 
-**Note:** Default mode shows pixel-rendered area charts (PROCESSOR, GPU, VRAM, GPU MEM, ENC, DEC, MEMORY, NETWORK) in the right column via the terminal graphics protocol — Kitty primary, Sixel fallback. SYSTEM focus mode (`s`) replaces the chart stack with a comprehensive text panel covering identity, runtime, CPU, GPU, memory, disk, network, thermal, and process statistics.
+**Note:** Three views, each on its own column. Default — pixel-rendered area charts (PROCESSOR, GPU, VRAM, GPU MEM, ENC, DEC, MEMORY, NETWORK) on the right, PROCESS MONITOR on the left — both via the terminal graphics protocol (Kitty primary, Sixel fallback). `s` swaps the right column to a comprehensive text panel covering identity, runtime, CPU, GPU, memory, disk, network, thermal, and process statistics. `Shift+C` swaps the left column to a per-core CPU TOPOLOGY grid, one mini area-chart per logical CPU, with auto-fit geometry and scroll fallback for high-core systems. The two toggles are orthogonal — left and right column states are independent.
 
 ## Configuration
 

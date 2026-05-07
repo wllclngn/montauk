@@ -4,6 +4,7 @@
 #include "util/History.hpp"
 #include <cstddef>
 #include <mutex>
+#include <vector>
 
 namespace montauk::app {
 
@@ -32,6 +33,12 @@ struct ChartHistories {
   // rasterizing so RX and TX share a scale.
   montauk::util::History<float> net_rx;
   montauk::util::History<float> net_tx;
+
+  // Per-logical-CPU utilization (each in [0, 1]). Sized at first push to
+  // match snapshot.cpu.per_core_pct.size(); resized on the fly if cores
+  // hotplug. CpuGrid widget renders one mini chart per entry. Same
+  // capacity as the singleton's other histories.
+  std::vector<montauk::util::History<float>> cpu_per_core;
 
   explicit ChartHistories(std::size_t capacity);
 

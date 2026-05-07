@@ -1,4 +1,4 @@
-.TH MONTAUK 1 "April 2026" "montauk 6.3.0" "User Commands"
+.TH MONTAUK 1 "April 2026" "montauk 6.4.0" "User Commands"
 .SH NAME
 montauk \- high-performance Linux system monitor with kernel module support
 .SH SYNOPSIS
@@ -268,6 +268,14 @@ Go to top/bottom of process list
 .TP
 .B s
 Toggle system focus (condensed view)
+.TP
+.B C
+Toggle CPU TOPOLOGY view. Replaces PROCESS MONITOR in the left column with a
+dynamic grid of bordered boxes, one per logical CPU. Each box renders a
+pixel-rasterized area chart of that core's utilization history (last
+\fBchart.history_seconds\fR seconds, default 60s). Grid columns adapt to
+the available width; high-core-count systems scroll with arrow keys and
+\fBPageUp\fR/\fBPageDown\fR. Press \fBC\fR or \fBEsc\fR to return to PROCESS MONITOR.
 .TP
 .B c
 Toggle CPU scale (per-core vs total)
@@ -558,6 +566,6 @@ Report issues at: https://github.com/wllclngn/montauk/issues
 .SH COPYRIGHT
 MIT License. See LICENSE file in repository.
 .SH VERSION
-montauk 6.3.0
+montauk 6.4.0
 .br
 April 2026
