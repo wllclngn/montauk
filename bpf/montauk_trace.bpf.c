@@ -808,6 +808,14 @@ int handle_sys_exit(struct trace_event_raw_sys_exit *ctx) {
         } else if (s->op != NTS_CREATE_SEM && s->op != NTS_CREATE_MUTEX &&
                    s->op != NTS_CREATE_EVENT) {
           evt->obj_ptr = montauk_fd_obj(s->fd);
+        } else if (ctx->ret >= 0) {
+          // Create ops: s->fd is the /dev/ntsync device fd, not the object. The
+          // new object fd is the ioctl return value (also recorded in
+          // evt->result). Resolve its kernel object pointer so every object gets
+          // a (pid, fd)->obj_ptr binding at birth — joinable even if the daemon
+          // never signals it within the trace window. Consumers key creates on
+          // result, signals/reads on fd.
+          evt->obj_ptr = montauk_fd_obj((int)ctx->ret);
         }
         bpf_get_current_comm(evt->comm, sizeof(evt->comm));
 
@@ -928,6 +936,35 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
     }
     next->wake_ns = 0;
     // comm is already set by handle_sys_enter via bpf_get_current_comm()
+  }
+
+  // PER-CPU IDLE BOUNDARY. Emitted for EVERY CPU's idle transitions, not just
+  // the traced comm group -- the only event here that is. The traced-group gate
+  // above (thread_map/is_tracked) drops swapper, so without this the analyzer
+  // can only INFER idleness from coarse PICK gaps and cannot answer "was a CPU
+  // idle at this wake instant." A wakee landing on a busy CPU while another sat
+  // idle is the placement-race signature; this is the signal that proves it.
+  // pid 0 = swapper: next_pid==0 -> CPU enters idle; prev_pid==0 -> CPU leaves
+  // idle. One tiny ringbuf event per boundary, gated on sched_stream (binary
+  // --trace-out only), so off the always-on hot path.
+  if (sched_stream && (next_tid == 0 || prev_tid == 0)) {
+    u32 idle_cpu = (u32)bpf_get_smp_processor_id();
+    struct montauk_sched_event *ie =
+        bpf_ringbuf_reserve(&events, sizeof(*ie), 0);
+    if (ie) {
+      ie->type          = TRACE_EVT_SCHED;
+      ie->op            = SCHED_OP_CPU_IDLE;
+      ie->cpu           = idle_cpu;
+      ie->pid           = 0;
+      ie->secondary_pid = -1;
+      ie->last_cpu      = -1;
+      ie->sub_idx       = (next_tid == 0) ? 1u : 0u;  // 1 = entering idle
+      ie->score         = 0;
+      ie->runtime_ns    = 0;
+      ie->budget_ns     = 0;
+      ie->timestamp_ns  = now;
+      bpf_ringbuf_submit(ie, 0);
+    }
   }
 
   return 0;
@@ -1402,6 +1439,7 @@ struct trace_event_raw_sched_pick {
   int pid;
   int cpu;
   u64 score;
+  u32 lane;   // dispatch lane that served this pick (0=mirror fast path, else sub+1)
 };
 
 struct trace_event_raw_sched_pick_empty {
@@ -1459,7 +1497,7 @@ int handle_sched_pick(struct trace_event_raw_sched_pick *ctx) {
   e->pid           = ctx->pid;
   e->secondary_pid = -1;
   e->last_cpu      = -1;
-  e->sub_idx       = 0;
+  e->sub_idx       = ctx->lane;   // dispatch lane (0=mirror, else sub+1)
   e->score         = ctx->score;
   e->runtime_ns    = 0;
   e->budget_ns     = 0;

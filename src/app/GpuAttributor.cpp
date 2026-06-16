@@ -1,4 +1,5 @@
 #include "app/GpuAttributor.hpp"
+#include "util/Log.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -87,10 +88,10 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
               }
               last_nvml_sample_tp_ = now_tp;
             } else if (log_nvml) {
-              ::fprintf(stderr, "NVML: GetProcessUtilization failed on device %u (ret=%d)\n", di, (int)ret);
+              montauk::util::log_error("NVML: GetProcessUtilization failed on device %u (ret=%d)", di, (int)ret);
             }
           } else if (log_nvml) {
-            ::fprintf(stderr, "NVML: no process samples on device %u (ret=%d, count=%u, last_ts=%llu)\n", di, (int)ret, count, (unsigned long long)last_ts);
+            montauk::util::log_info("NVML: no process samples on device %u (ret=%d, count=%u, last_ts=%llu)", di, (int)ret, count, (unsigned long long)last_ts);
           }
         }
       }

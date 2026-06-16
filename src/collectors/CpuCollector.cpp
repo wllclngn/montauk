@@ -75,15 +75,12 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
       // trim spaces
       auto trim = [](std::string s){ while(!s.empty() && (s.front()==' '||s.front()=='\t')) s.erase(s.begin()); while(!s.empty() && (s.back()==' '||s.back()=='\t'||s.back()=='\r')) s.pop_back(); return s; };
       cpu_model_ = trim(model);
-      // compute physical cores (best effort)
+      // Physical cores (best effort): sum of per-socket "cpu cores". Persist on
+      // the collector so the snapshot block below reads it -- the cpuinfo parse
+      // only runs on the first sample.
       int phys_total = 0;
       for (const auto& kv : socket_cores) { phys_total += kv.second; }
-      // store as a side-effect in model string? we'll attach to snapshot later using members below
-      // We cannot set out here; keep in member variables? Simpler: reuse socket_cores later? Not persisted; so pass via snapshot below using computed values from per_core size.
-      // We'll stash phys_total in a static for this run
-      static int g_phys_cache = 0; if (g_phys_cache==0) g_phys_cache = phys_total;
-      // Use g_phys_cache in snapshot below
-      (void)g_phys_cache;
+      physical_cores_ = phys_total;
     }
   }
   auto txt_opt = montauk::util::read_file_string("/proc/stat");
@@ -164,11 +161,24 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
   if (!cpu_model_.empty()) out.model = cpu_model_;
   // Set logical threads from per-core count
   out.logical_threads = (int)out.per_core_pct.size(); if (out.logical_threads<=0) out.logical_threads = 1;
-  // best-effort physical core count
+  // best-effort physical core count (0 = unknown), parsed once from cpuinfo
+  out.physical_cores = physical_cores_;
+  // Average current frequency (MHz) across online CPUs from cpufreq sysfs.
   {
-    static int g_phys_cache = 0; // filled during first cpuinfo parse
-    if (g_phys_cache > 0) out.physical_cores = g_phys_cache;
-    else out.physical_cores = 0; // unknown
+    double mhz_sum = 0.0;
+    int nfreq = 0;
+    const int ncpu = (int)out.per_core_pct.size();
+    for (int c = 0; c < ncpu; ++c) {
+      auto f = montauk::util::read_file_string(
+          "/sys/devices/system/cpu/cpu" + std::to_string(c) +
+          "/cpufreq/scaling_cur_freq");
+      if (!f) continue;
+      try {
+        mhz_sum += std::stoul(*f) / 1000.0;
+        ++nfreq;
+      } catch (...) {}
+    }
+    if (nfreq > 0) { out.has_freq = true; out.freq_avg_mhz = mhz_sum / nfreq; }
   }
   return true;
 }

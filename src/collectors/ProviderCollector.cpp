@@ -1,4 +1,5 @@
 #include "collectors/ProviderCollector.hpp"
+#include "app/ProviderEmitter.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -124,6 +125,9 @@ bool ProviderCollector::sample(std::vector<montauk::model::Provider>& out) {
 
     montauk::model::Provider p;
     p.name = std::string(fname.substr(0, fname.size() - suffix.size()));
+    // Skip montauk's own emitter socket — montauk must not ingest its own
+    // snapshot (self-scrape feedback). See app/ProviderEmitter.
+    if (p.name == montauk::app::ProviderEmitter::kSelfName) continue;
     if (!read_provider_socket(dir + "/" + std::string(fname), p.raw_text)) continue;
     if (parse_prometheus(p.raw_text, p.metrics) == 0) continue; // garbled: skip
     out.push_back(std::move(p));

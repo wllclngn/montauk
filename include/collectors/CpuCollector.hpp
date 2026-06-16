@@ -13,6 +13,7 @@ private:
   std::vector<montauk::model::CpuTimes> last_per_{};
   bool has_last_{false};
   std::string cpu_model_{};
+  int physical_cores_{0};   // summed per-socket "cpu cores" from /proc/cpuinfo
   uint64_t last_ctxt_{0};
   uint64_t last_intr_{0};
   std::chrono::steady_clock::time_point last_sample_time_{};

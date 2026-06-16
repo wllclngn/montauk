@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 7.0.0 LANGUAGES C CXX)
+project(montauk VERSION 7.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,6 +61,7 @@ add_library(montauk_core
     src/util/Churn.cpp
     src/util/SortDispatch.cpp
     src/util/BoyerMoore.cpp
+    src/util/Log.cpp
     src/util/ThompsonNFA.cpp
     src/util/NvmlDyn.cpp
     src/model/TraceReader.cpp
@@ -77,6 +78,7 @@ add_library(montauk_core
     src/app/Alerts.cpp
     src/app/Filter.cpp
     src/app/PrometheusSerializer.cpp
+    src/app/ProviderEmitter.cpp
     src/app/LogWriter.cpp
     src/collectors/MemoryCollector.cpp
     src/collectors/GpuCollector.cpp
@@ -215,7 +217,12 @@ install(TARGETS montauk RUNTIME DESTINATION bin)
 # Trace-analysis report suite (trace-only; the old live /proc analyzer is
 # gone). Same dependency footprint as the decoder: event headers + the
 # TraceReader record walk, no montauk_core link, no BPF.
-add_executable(montauk_analyze src/tools/trace_analyze.cpp src/model/TraceReader.cpp)
+add_executable(montauk_analyze
+    src/tools/trace_analyze.cpp
+    src/tools/prom_stats.cpp
+    src/tools/prom_population.cpp
+    src/model/TraceReader.cpp
+    src/util/Log.cpp)
 target_include_directories(montauk_analyze PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/bpf)

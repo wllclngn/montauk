@@ -1,4 +1,5 @@
 #include "app/LogWriter.hpp"
+#include "util/Log.hpp"
 #include "app/MetricsServer.hpp"
 #include <cstdio>
 #include <cstring>
@@ -15,7 +16,7 @@ LogWriter::LogWriter(const SnapshotBuffers& buffers, std::filesystem::path log_d
   std::error_code ec;
   std::filesystem::create_directories(log_dir_, ec);
   if (ec) {
-    std::fprintf(stderr, "montauk: LogWriter: failed to create %s: %s\n",
+    montauk::util::log_error("LogWriter: failed to create %s: %s",
                  log_dir_.c_str(), ec.message().c_str());
   }
 }
@@ -37,7 +38,7 @@ void LogWriter::run(std::stop_token st) {
   std::ofstream file;
   std::filesystem::path current_path;
 
-  std::fprintf(stderr, "montauk: LogWriter: writing to %s/ (interval %lldms)\n",
+  montauk::util::log_info("LogWriter: writing to %s/ (interval %lldms)",
                log_dir_.c_str(), static_cast<long long>(interval_.count()));
 
   // Wait for first real publish to avoid writing all-zeros cold-start block
@@ -57,7 +58,7 @@ void LogWriter::run(std::stop_token st) {
       }
       file.open(required_path, std::ios::app);
       if (!file) {
-        std::fprintf(stderr, "montauk: LogWriter: failed to open %s: %s\n",
+        montauk::util::log_error("LogWriter: failed to open %s: %s",
                      required_path.c_str(), std::strerror(errno));
         std::this_thread::sleep_for(std::chrono::seconds(1));
         continue;

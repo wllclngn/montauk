@@ -1,8 +1,10 @@
 #include "app/MetricsServer.hpp"
 #include "model/Trace.hpp"
+#include "ui/Formatting.hpp"
 #include <charconv>
 #include <cstdio>
 #include <algorithm>
+#include <string>
 
 namespace {
 
@@ -152,6 +154,37 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
   std::string out;
   out.reserve(8192);
 
+  // System specs, emitted first so a report leads with the PC it ran on. This
+  // is data montauk already collects (cpu model/cores, mem, gpu) plus the
+  // kernel + active scheduler; hostname is intentionally omitted (identity,
+  // not spec). Value 1, everything in labels -- one capture carries the specs.
+  {
+    auto san = [](std::string v) {
+      for (char& c : v)
+        if (c == '"' || c == '\\' || c == '\n') c = ' ';
+      return v;
+    };
+    std::string gpu = s.vram.name;
+    if (gpu.empty() && !s.vram.devices.empty()) gpu = s.vram.devices.front().name;
+    char mem[32];
+    std::snprintf(mem, sizeof(mem), "%.1f",
+                  static_cast<double>(s.mem.total_kb) / (1024.0 * 1024.0));
+    emit_header(out, "montauk_system_info",
+                "System specs: cpu model, cores, memory, gpu, kernel, scheduler",
+                "gauge");
+    out += "montauk_system_info{cpu_model=\""; out += san(s.cpu.model);
+    out += "\",physical_cores=\""; out += std::to_string(s.cpu.physical_cores);
+    out += "\",logical_cpus=\""; out += std::to_string(s.cpu.logical_threads);
+    out += "\",mem_total_gib=\""; out += mem;
+    out += "\",gpu=\""; out += san(gpu);
+    out += "\",kernel=\""; out += san(montauk::ui::read_kernel_version());
+    out += "\",sched=\""; out += san(montauk::ui::read_scheduler());
+    if (!s.pmu.l3_per_ccx.empty()) {
+      out += "\",ccx=\""; out += std::to_string(s.pmu.l3_per_ccx.size());
+    }
+    out += "\"} 1\n";
+  }
+
   // ---- CPU ----
   emit_header(out, "montauk_cpu_usage_percent", "Aggregate CPU utilization", "gauge");
   emit_gauge_d(out, "montauk_cpu_usage_percent", s.cpu.usage_pct);
@@ -176,6 +209,11 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
   emit_gauge_d(out, "montauk_cpu_irq_percent", s.cpu.pct_irq);
   emit_header(out, "montauk_cpu_steal_percent", "CPU steal percent", "gauge");
   emit_gauge_d(out, "montauk_cpu_steal_percent", s.cpu.pct_steal);
+  if (s.cpu.has_freq) {
+    emit_header(out, "montauk_cpu_frequency_mhz_avg",
+                "Average current CPU frequency across online cores (MHz)", "gauge");
+    emit_gauge_d(out, "montauk_cpu_frequency_mhz_avg", s.cpu.freq_avg_mhz);
+  }
 
   emit_header(out, "montauk_cpu_context_switches_per_second", "Context switches per second", "gauge");
   emit_gauge_d(out, "montauk_cpu_context_switches_per_second", s.cpu.ctxt_per_sec);
@@ -194,7 +232,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
   emit_header(out, "montauk_pmu_available", "Core PMU counters available", "gauge");
   emit_gauge_i(out, "montauk_pmu_available", s.pmu.available ? 1 : 0);
   if (s.pmu.available) {
-    emit_header(out, "montauk_pmu_l2_misses_per_second", "L2 cache misses per second (raw 0x077e)", "gauge");
+    emit_header(out, "montauk_pmu_l2_misses_per_second", "L2 cache misses per second (sysfs cache-misses event)", "gauge");
     emit_gauge_d(out, "montauk_pmu_l2_misses_per_second", s.pmu.l2_misses_per_sec);
     emit_header(out, "montauk_pmu_l2_miss_percent", "L2 misses as percent of L2 references", "gauge");
     emit_gauge_d(out, "montauk_pmu_l2_miss_percent", s.pmu.l2_miss_pct);
@@ -206,6 +244,47 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
     emit_gauge_u(out, "montauk_pmu_l2_misses_interval", s.pmu.l2_misses);
     emit_header(out, "montauk_pmu_instructions_per_second", "Instructions per second (interval)", "gauge");
     emit_gauge_d(out, "montauk_pmu_instructions_per_second", s.pmu.instructions_per_sec);
+    emit_header(out, "montauk_pmu_context_switches_per_second", "Context switches per second", "gauge");
+    emit_gauge_d(out, "montauk_pmu_context_switches_per_second", s.pmu.context_switches_per_sec);
+    emit_header(out, "montauk_pmu_cpu_migrations_per_second", "CPU migrations per second", "gauge");
+    emit_gauge_d(out, "montauk_pmu_cpu_migrations_per_second", s.pmu.cpu_migrations_per_sec);
+    emit_header(out, "montauk_pmu_branch_misses_per_second", "Branch mispredictions per second", "gauge");
+    emit_gauge_d(out, "montauk_pmu_branch_misses_per_second", s.pmu.branch_misses_per_sec);
+    // Energy per instruction (pJ) -- derived from RAPL power + retired instr.
+    if (s.thermal.has_power && s.pmu.instructions_per_sec > 0.0) {
+      emit_header(out, "montauk_energy_per_instruction_pj",
+                  "Energy per retired instruction (picojoules), RAPL power / IPS",
+                  "gauge");
+      emit_gauge_d(out, "montauk_energy_per_instruction_pj",
+                   s.thermal.power_watts / s.pmu.instructions_per_sec * 1e12);
+    }
+
+    // Per-CPU L2 this interval. cpu label = actual logical CPU id (per_cpu_ids),
+    // so misses localize to the right core/CCX even on a sparse online set.
+    emit_header(out, "montauk_pmu_l2_misses_per_cpu", "L2 misses this interval, per logical CPU", "gauge");
+    for (size_t i = 0; i < s.pmu.per_cpu_l2_misses.size(); ++i) {
+      char cb[12], vb[20];
+      int cpu = i < s.pmu.per_cpu_ids.size() ? s.pmu.per_cpu_ids[i]
+                                             : static_cast<int>(i);
+      auto [c1, ce] = std::to_chars(cb, cb + sizeof(cb), cpu);
+      auto [v1, ve] = std::to_chars(vb, vb + sizeof(vb), s.pmu.per_cpu_l2_misses[i]);
+      out += "montauk_pmu_l2_misses_per_cpu{cpu=\""; out.append(cb, c1);
+      out += "\"} "; out.append(vb, v1); out += '\n';
+    }
+    emit_header(out, "montauk_pmu_l2_miss_percent_per_cpu", "L2 miss percent, per logical CPU", "gauge");
+    for (size_t i = 0; i < s.pmu.per_cpu_l2_misses.size(); ++i) {
+      char cb[12];
+      int cpu = i < s.pmu.per_cpu_ids.size() ? s.pmu.per_cpu_ids[i]
+                                             : static_cast<int>(i);
+      auto [c1, ce] = std::to_chars(cb, cb + sizeof(cb), cpu);
+      double refs = i < s.pmu.per_cpu_l2_refs.size()
+                        ? static_cast<double>(s.pmu.per_cpu_l2_refs[i]) : 0.0;
+      double pct = refs > 0.0
+                       ? 100.0 * static_cast<double>(s.pmu.per_cpu_l2_misses[i]) / refs
+                       : 0.0;
+      out += "montauk_pmu_l2_miss_percent_per_cpu{cpu=\""; out.append(cb, c1);
+      out += "\"} "; append_double(out, pct); out += '\n';
+    }
 
     emit_header(out, "montauk_pmu_l3_available", "amd_l3 uncore PMU available", "gauge");
     emit_gauge_i(out, "montauk_pmu_l3_available", s.pmu.l3_available ? 1 : 0);
@@ -451,6 +530,25 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
   if (s.thermal.has_fan) {
     emit_header(out, "montauk_thermal_fan_speed_rpm", "CPU fan speed RPM", "gauge");
     emit_gauge_d(out, "montauk_thermal_fan_speed_rpm", s.thermal.fan_rpm);
+  }
+  if (s.thermal.has_power) {
+    emit_header(out, "montauk_power_watts",
+                "Package power draw from RAPL/powercap (energy delta per interval)",
+                "gauge");
+    emit_gauge_d(out, "montauk_power_watts", s.thermal.power_watts);
+  }
+  if (!s.thermal.cstates.empty()) {
+    emit_header(out, "montauk_cstate_residency_percent",
+                "Idle-state residency this interval, per state (across CPUs)",
+                "gauge");
+    char vb[32];
+    for (const auto& cs : s.thermal.cstates) {
+      auto [v1, ve] = std::to_chars(vb, vb + sizeof(vb), cs.residency_pct,
+                                    std::chars_format::fixed, 3);
+      out += "montauk_cstate_residency_percent{state=\"";
+      out += cs.name;
+      out += "\"} "; out.append(vb, v1); out += '\n';
+    }
   }
 
   return out;

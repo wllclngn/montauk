@@ -17,13 +17,25 @@ struct PmuSnapshot {
   uint64_t l2_refs{};        // PERF_TYPE_RAW 0x077d (L2 references, Zen2)
   uint64_t instructions{};   // PERF_COUNT_HW_INSTRUCTIONS
   uint64_t cycles{};         // PERF_COUNT_HW_CPU_CYCLES
+  uint64_t context_switches{}; // PERF_COUNT_SW_CONTEXT_SWITCHES
+  uint64_t cpu_migrations{};   // PERF_COUNT_SW_CPU_MIGRATIONS
+  uint64_t branch_misses{};    // PERF_COUNT_HW_BRANCH_MISSES
+
+  // Per-second rates for the scheduler-relevant counters.
+  double context_switches_per_sec{};
+  double cpu_migrations_per_sec{};
+  double branch_misses_per_sec{};
 
   // Derived aggregate metrics.
   double ipc{};               // instructions / cycles
   double l2_miss_pct{};       // 100 * l2_misses / l2_refs
   double cycles_per_l2_miss{};// cycles / l2_misses
 
-  // Per-logical-CPU interval deltas (index == logical CPU id order).
+  // Per-logical-CPU interval deltas. Index is the online-CPU slot (0..nr_cpus);
+  // per_cpu_ids[i] is that slot's actual logical CPU id (NOT equal to i on a
+  // sparse online set, e.g. a restrict_cpus core-count sweep), so a consumer
+  // can map a miss back to the right CPU/CCX.
+  std::vector<int>      per_cpu_ids;
   std::vector<uint64_t> per_cpu_l2_misses;
   std::vector<uint64_t> per_cpu_l2_refs;
   std::vector<uint64_t> per_cpu_instructions;

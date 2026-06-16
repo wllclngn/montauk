@@ -232,6 +232,10 @@ enum sched_trace_op {
   SCHED_OP_WAKEUP         = 6,  // generic kernel tp/sched/sched_wakeup: woken pid + target_cpu
   SCHED_OP_WAKE2RUN       = 7,  // wake-to-run (runqueue) latency: pid=wakee, cpu=run CPU,
                                 //   runtime_ns=delta ns (became-runnable -> ran), sub_idx=cross_ccx(0|1)
+  SCHED_OP_CPU_IDLE       = 8,  // per-CPU idle boundary (pid 0 in/out of sched_switch),
+                                //   cpu=CPU, sub_idx=1 entering idle / 0 leaving idle. Emitted
+                                //   UNCONDITIONALLY (not gated to the traced comm group) so the
+                                //   analyzer can reconstruct exact per-CPU occupancy at any instant.
 };
 
 // Per-CPU aggregation of scheduler-decision counts, indexed by sched_trace_op.
@@ -239,7 +243,7 @@ enum sched_trace_op {
 // (one bump, no shared ringbuf reserve) keeps tracing near-zero-overhead there.
 // Userspace sums across CPUs at snapshot time. Per-event streaming is opt-in
 // (binary --trace-out only); the contract struct above is the streamed form.
-#define MONTAUK_SCHED_OP_MAX 8   /* index by sched_trace_op (1..7); 0 unused */
+#define MONTAUK_SCHED_OP_MAX 9   /* index by sched_trace_op (1..8); 0 unused */
 struct sched_op_counters {
   __u64 op[MONTAUK_SCHED_OP_MAX];
 };

@@ -1,4 +1,5 @@
 #include "util/NvmlDyn.hpp"
+#include "util/Log.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <dlfcn.h>
@@ -46,7 +47,7 @@ bool NvmlDyn::load_once() {
     if (valid) {
       candidates.emplace_back(path);
     } else {
-      std::fprintf(stderr, "Warning: MONTAUK_NVML_PATH rejected (invalid prefix): %s\n", p);
+      montauk::util::log_error("Warning: MONTAUK_NVML_PATH rejected (invalid prefix): %s", p);
     }
   }
   

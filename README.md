@@ -7,9 +7,34 @@
 ╚═╝     ╚═╝  ╚═════╝  ╚═╝  ╚═══╝    ╚═╝    ╚═╝  ╚═╝  ╚═════╝  ╚═╝  ╚═╝
 ```
 
+**montauk · sublimation** — a Linux system monitor, tracer, and analyzer, built on an in-tree flow-model sort.
+
 ## Overview
 
-A standalone, offline-friendly C++23 system monitor for Linux with comprehensive GPU support, event-driven process monitoring, and Prometheus metrics export. sublimation — montauk's sort algorithm — is an in-tree sub-system (`montauk/sublimation/`), built with montauk; NVML and liburing are auto-detected and optional.
+montauk is a Linux **system monitor, tracer, and analyzer** — three tools in one offline-friendly C++23 binary — built on **sublimation**, an in-tree flow-model sort that does the ordering, the disorder classification, and the entropy detection. The monitor (plain `montauk`) is an event-driven TUI with deep GPU attribution and Prometheus export. The tracer (`--trace`) is an eBPF flight recorder over a whole process tree — sync objects, heap, signals, scheduler decisions, hardware counters. The analyzer (`montauk_analyze` / `montauk_trace_decode`) folds a capture once into diagnostic reports.
+
+sublimation is not a dependency montauk fetches — it is a **sub-system montauk builds**, vendored in `montauk/sublimation/`, and it is montauk's sort *everywhere*: the process table, every ordering the analyzer emits, and the latency-structure classification the reports read. Two systems, one tree. No system packages, no fetch step — NVML and liburing are auto-detected and optional; everything else lives in the repo.
+
+```
+montauk — one C++23 binary, three tools, one in-tree sort
+  ├─ monitor  (plain `montauk`)
+  │    ├─ collectors — CPU, memory, GPU (NVML / AMD sysfs / Intel fdinfo), disk, net, thermal, process
+  │    ├─ UI — OUROBOROS-derived Canvas / Component / FlexLayout, cell-clipped, no rubberbanding
+  │    ├─ charts — pixel-rendered area charts (Kitty t=t /dev/shm transport, Sixel fallback)
+  │    └─ /metrics — Prometheus endpoint over io_uring (optional)
+  ├─ tracer  (`--trace PATTERN`)
+  │    ├─ eBPF on kernel tracepoints + libc/ntdll uprobes — no ptrace
+  │    ├─ capture — ntsync / keyed-event / futex sync, heap, signal, abort, mmap
+  │    ├─ scheduler decisions + wake-to-run latency, hardware PMU (perf_event_open)
+  │    └─ binary trace log (`--trace-out`) — batched writes, near-zero observer effect
+  ├─ analyzer  (`montauk_analyze`, `montauk_trace_decode`)
+  │    └─ single-pass reports — waits, spins, pairing, abortpm, endstate,
+  │       heapstk, doublefree, futex, keyedevt, sched (wake-to-run latency + structure)
+  └─ sublimation  (in-tree flow-model sort sub-system)
+       ├─ disorder classifier — builds a level graph, routes the sort; the analyzer reads its verdict
+       ├─ index sorts (32-bit pack / 64-bit LSD radix) + hybrid prefix-pack / MSD-radix string sort
+       └─ randomness battery — six orthogonal entropy lenses → a single max-entropy confidence
+```
 
 **Key Features:**
 - **Event-Driven Monitoring**: Kernel-based process event tracking with 90%+ reduction in system overhead
@@ -28,7 +53,7 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **Thermal Monitoring**: Multi-sensor temperature tracking (edge, hotspot, memory) with vendor-specific thresholds
 - **Process Tracking**: Up to 256 processes with full command-line enrichment for accurate identification
 - **Atomic Snapshots**: Minimal CPU overhead with lock-free snapshot publication
-- **Lean Dependencies**: sublimation (montauk's sort algorithm) is an in-tree sub-system, built with montauk — no fetch, no system package; NVML and liburing auto-detected and optional
+- **sublimation Sort Sub-System**: montauk's own flow-model adaptive sort — it classifies an input's disorder and routes to the matching path instead of running one fixed algorithm, and it exposes the disorder profile montauk's analyzer reads. Vendored in-tree (`montauk/sublimation/`) with its own README and tests — no system package, no fetch. See the dedicated section below. (NVML and liburing are likewise auto-detected and optional.)
 - **Churn Resilient**: Real-time churn detection and dynamic display during heavy system activity
 - **ANSI Color Support**: Intelligent escape sequence handling with full truecolor support
 - **TOML Configuration**: Unified `~/.config/montauk/config.toml` with palette detection, configurable keybindings, and env var fallback
@@ -38,6 +63,28 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **Cell-Based UI Architecture**: OUROBOROS-derived Canvas/Component/FlexLayout pipeline — every cell is structurally clipped, no padded-string rendering, no rubberbanding on resize
 - **Pixel-Rendered Charts**: Monotone cubic Hermite area charts with anti-aliased line + fill, transmitted via Kitty `t=t` /dev/shm temp-file (no PTY saturation) or Sixel fallback
 - **Per-Core Topology View**: Shift+C replaces PROCESS MONITOR with a dynamic grid of bordered boxes — one per logical CPU — each rendering a pixel-rasterized area chart of that core's last-N-seconds utilization (with live util% in every box title). Grid geometry auto-fills both axes; high-core-count systems fall into a scrollable layout at minimum cell height. Same Kitty/Sixel substrate as the right-column charts.
+
+## sublimation — montauk's Sort Sub-System
+
+sublimation is montauk's sort. Not a library montauk depends on — a **sub-system montauk builds**, vendored under `montauk/sublimation/` with its own README and tests. It is a **flow-model adaptive sort**: before sorting, it classifies the input's disorder — already sorted, reversed, nearly-sorted, few-unique, phased, or random — by building a *level graph* over the data (the same maximum-flow / level-graph machinery that gives the family its name), then routes to the path that disorder warrants. Structured data sorts fast because the structure is *detected*, not assumed away; random data is handled as random. The classifier is not a side effect — it is the front door, and montauk reads its verdict directly.
+
+| | conventional comparison sort | sublimation |
+|---|---|---|
+| strategy | one fixed algorithm for every input | classifies input disorder, routes to the matching path |
+| structured input | sorted / reversed / few-unique not special-cased | detected up front and exploited |
+| equal keys | unstable unless you reach for `stable_sort` | stable by construction (packed-index tiebreak) |
+| beyond a sorted array | nothing — output is the order | exposes the disorder profile: Young-tableau shape, longest increasing subsequence, inversion ratio, phase boundary |
+
+**What the sub-system provides:**
+
+- **Index sorts** — order a `uint32_t` index array by a numeric key without moving rows. 32-bit keys pack with their index into one `uint64_t`; 64-bit keys (timestamps, addresses) use a stable LSD radix carrying the index as a satellite. Stable on equal keys, so the UI never reshuffles rows that tie.
+- **Hybrid string sort** — prefix-pack + MSD radix for the name column.
+- **Disorder classifier** — the flow-model front end profiles a sequence's structure (RSK / Young-tableau shape, runs, inversions, phase boundary). montauk's analyzer `sched` report reads it to label a latency sequence's temporal structure (a mid-trace regime change, quantization onto a few values).
+- **Randomness battery** — fuses six orthogonal entropy detectors (representation-theoretic hook-length entropy, longest-increasing-subsequence vs `2√n`, inversion ratio, distinct ratio, horizontal-visibility mean degree, ordinal permutation entropy) into a single max-entropy *confidence* — the determination of "pure randomness" stated honestly: a meet over independent bases that approaches but never reaches certainty.
+
+**Where montauk uses it:** the process-table sort, **every ordering the analyzer emits** (latency quantiles and report rows alike — no `std::sort` fallback anywhere), and the `sched` report's structure classification.
+
+**Build:** compiled as a static library with montauk — no system package, no fetch step. Requires a Haswell-or-newer CPU (BMI2 + AVX2) and gcc 13+ (C23). The prior C++23 TimSort/Powersort sort is retired (preserved under `[0] ARCHIVE/montauk-timsort-cpp/`). Full detail — the flow model, the lineage, the benchmarks — lives in [`montauk/sublimation/README.md`](montauk/sublimation/README.md).
 
 ## Kernel Module (Optional)
 
@@ -281,9 +328,17 @@ Two tools read the binary log offline, sharing one record-walk (validate magic+v
   - `keyedevt` — ntdll keyed-event (critical-section) waits vs releases, keyed on the critical-section address, to spot a section a holder never released
   - `sched` — wake-to-run (runqueue) latency distribution with percentiles, plus a flow-model classification of the latency sequence (a mid-trace regime change, quantization onto a few values) sorted and classified through sublimation
 
+**Over a recording directory.** Beyond a single binary log, `montauk_analyze` reads a whole `--trace` recording — the `montauk_*.prom` scrapes beside the sibling `.events`:
+
+- `RECORDING_DIR --digest [--redact]` — the one-call shareable report: `SYSTEM` specs, the ranked `POORLY-BEHAVING ITEMS` (a consolidated `montauk_offender{}` view over the spin / pairing / idle-strand detectors and the L2 hot-CPU), a `THERMAL/POWER` block (temp, fan, package power, clock, idle-state residency, scheduler churn), then `KEY METRICS` (the wake-to-run verdict). Specs-first and KB-scale; `--redact` swaps process comms for stable FNV-1a hash handles for public sharing. With no `.events` present it still reports specs, thermal/power, and the offenders derivable from the scrapes.
+- `RECORDING_DIR --l2-by-cpu` — per-CPU L2-miss localization over the busy (storm) window: which cores eat the misses, and how concentrated.
+- `DIR | *.prom [--by version|scheduler] [--metric SUBSTR] [--full]` — population statistics across many runs: cross-version / cross-scheduler inference (Cliff's delta, permutation test, Monte-Carlo power) over the `.prom` archives, the inferential unit being one run.
+
 **Hardware Performance Counters (PMU):**
 
-Trace mode additionally samples hardware counters via `perf_event_open`: per-CPU L2 cache misses/references (AMD Zen raw events), instructions, cycles, and — where the `amd_uncore` module exposes the `amd_l3` PMU — per-CCX L3 accesses/misses. Derived rates (IPC, L2 miss percent, cycles-per-L2-miss, misses/sec) export as the `montauk_pmu_*` gauge families. The `amd_l3` event encoding is read entirely from sysfs, nothing hardcoded but the documented Zen2 fallback. This is the cache-placement signal that pairs with the CCX-migration counters: misses explain why cross-CCX moves hurt.
+Trace mode additionally samples hardware counters via `perf_event_open`: per-CPU L2 cache misses/references (AMD Zen raw events), instructions, cycles, context-switches, CPU-migrations, branch-misses, and — where the `amd_uncore` module exposes the `amd_l3` PMU — per-CCX L3 accesses/misses. Derived rates (IPC, L2 miss percent, cycles-per-L2-miss, misses/sec, per-second context-switch/migration/branch-miss rates) export as the `montauk_pmu_*` gauge families. The `amd_l3` event encoding is read entirely from sysfs, nothing hardcoded but the documented Zen2 fallback. This is the cache-placement signal that pairs with the CCX-migration counters: misses explain why cross-CCX moves hurt.
+
+Alongside the counters, montauk derives the efficiency picture from sysfs on the same recording stream: package power from the powercap RAPL energy counters (`montauk_power_watts`), average CPU frequency across online cores (`montauk_cpu_frequency_mhz_avg`), per-state idle residency (`montauk_cstate_residency_percent{state}`), and energy-per-instruction (`montauk_energy_per_instruction_pj`, power over the instruction rate). One capture carries temperature, power, clock, idle depth, scheduler churn, and the efficiency they imply.
 
 PMU sampling requires `kernel.perf_event_paranoid <= 0` or `CAP_PERFMON`, and is exclusive to trace mode by design — the plain monitor never calls `perf_event_open` and never requires elevated perf permissions. If the permission check fails in trace mode, PMU is disabled with a one-line notice and tracing continues without counter data.
 
@@ -844,21 +899,10 @@ montauk supports three collection backends (auto-selected by availability):
 - Auto-clears when churn subsides
 - Zero performance impact when no churn active
 
-**Sort (sublimation):**
-
-sublimation IS montauk's sort algorithm — the flow-model adaptive sort, linked unconditionally (no runtime backend choice and no fallback). The process table and **every ordering the analyzer emits** — latency quantiles and report rows alike — sort through it; the analyzer no longer falls back to `std::sort` anywhere.
-
-- **Pack-key index sort** for numeric keys (CPU%, memory, PID, GPU%, GMEM): keys pack with their index and sort as a unit, so montauk permutes a `uint32_t` index array rather than moving rows. Stable for equal keys — the packed index, initialized from input order, is the tiebreak, which keeps the UI from reshuffling rows that share a CPU%. 32-bit keys pack into one `uint64_t`; 64-bit keys (timestamps, addresses) use a stable LSD radix carrying the index as a satellite.
-- **Hybrid string sort** (prefix-pack + MSD radix) for the name column.
-- **Disorder classifier** — the same flow-model front end that picks the sort path also profiles a sequence's structure (Young-tableau shape, longest increasing subsequence, inversion ratio, phase boundary). The analyzer's `sched` report reads this to label a latency sequence's temporal structure.
-- **In-tree sub-system:** sublimation lives at `montauk/sublimation/` and CMake builds it as a static library, linked into montauk and the analyzer — no system package, no fetch step. Requires a Haswell-or-newer CPU (BMI2 + AVX2) and gcc 13+ (C23).
-
-> montauk's prior C++23 TimSort/Powersort implementation is retired and preserved under `[0] ARCHIVE/montauk-timsort-cpp/`.
-
 ## Policy
 
 **sublimation is an in-tree sub-system:** montauk's sort algorithm lives at `montauk/sublimation/` and is compiled into the montauk build — no system package, no fetch, no runtime fallback. NVML and liburing are auto-detected and gracefully disabled when unavailable. No FetchContent, no ExternalProject — the sublimation source is vendored in the tree, not pulled at build time.
 
 ## License
 
-GPL-2.0. See LICENSE file in repository.
+GPL-2.0 — see the [`LICENSE`](LICENSE) file. sublimation, montauk's in-tree sort sub-system, is covered by the same license: it carried its own GPL-2.0 before coming home, and that duplicate is gone. One license, one tree.

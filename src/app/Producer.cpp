@@ -1,4 +1,5 @@
 #include "app/Producer.hpp"
+#include "util/Log.hpp"
 #include "app/ChartHistories.hpp"
 #include <unistd.h>
 #include <cstdio>
@@ -41,7 +42,7 @@ Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
     if (kpc->init()) {
       proc_ = std::move(kpc);
     } else {
-      std::fprintf(stderr, "Kernel module unavailable. Falling back to netlink.\n");
+      montauk::util::log_error("Kernel module unavailable. Falling back to netlink.");
       auto netlink = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::NetlinkProcessCollector((size_t)max_procs, (size_t)enrich_top));
       if (netlink->init()) {
         proc_ = std::move(netlink);
@@ -53,7 +54,7 @@ Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
   } else if (collector == "netlink") {
     auto netlink = std::unique_ptr<montauk::collectors::IProcessCollector>(new montauk::collectors::NetlinkProcessCollector((size_t)max_procs, (size_t)enrich_top));
     if (!netlink->init()) {
-      std::fprintf(stderr, "Netlink collector unavailable (need CAP_NET_ADMIN?). Falling back to traditional.\n");
+      montauk::util::log_error("Netlink collector unavailable (need CAP_NET_ADMIN?). Falling back to traditional.");
       proc_ = make_traditional();
     } else {
       proc_ = std::move(netlink);

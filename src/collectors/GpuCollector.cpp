@@ -1,4 +1,5 @@
 #include "collectors/GpuCollector.hpp"
+#include "util/Log.hpp"
 #include "util/Procfs.hpp"
 #include "ui/Config.hpp"
 
@@ -316,7 +317,7 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out) {
 static bool read_nvml_compiled(montauk::model::GpuVram& out) {
   if (nvmlInit_v2() != NVML_SUCCESS) {
     if (montauk::ui::config().nvidia.log_nvml) {
-      ::fprintf(stderr, "NVML: init failed in collector (device-level metrics disabled)\n");
+      montauk::util::log_error("NVML: init failed in collector (device-level metrics disabled)");
     }
     return false;
   }
@@ -450,7 +451,7 @@ static void log_backend_once(const char* tag) {
   static bool done = false;
   if (done) return;
   if (montauk::ui::config().nvidia.gpu_debug) {
-    ::fprintf(stderr, "GPU backend: %s\n", tag);
+    montauk::util::log_info("GPU backend: %s", tag);
     done = true;
   }
 }

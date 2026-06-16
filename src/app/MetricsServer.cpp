@@ -1,4 +1,5 @@
 #include "app/MetricsServer.hpp"
+#include "util/Log.hpp"
 #include <liburing.h>
 #include <sys/socket.h>
 #include <sys/eventfd.h>
@@ -46,7 +47,7 @@ void MetricsServer::run(std::stop_token st) {
   // Create listening socket
   listen_fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
   if (listen_fd_ < 0) {
-    std::fprintf(stderr, "montauk: metrics server: socket() failed: %s\n", std::strerror(errno));
+    montauk::util::log_error("metrics server: socket() failed: %s", std::strerror(errno));
     return;
   }
 
@@ -59,14 +60,14 @@ void MetricsServer::run(std::stop_token st) {
   addr.sin_addr.s_addr = INADDR_ANY;
 
   if (::bind(listen_fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-    std::fprintf(stderr, "montauk: metrics server: bind(:%d) failed: %s\n", port_, std::strerror(errno));
+    montauk::util::log_error("metrics server: bind(:%d) failed: %s", port_, std::strerror(errno));
     ::close(listen_fd_);
     listen_fd_ = -1;
     return;
   }
 
   if (::listen(listen_fd_, 4) < 0) {
-    std::fprintf(stderr, "montauk: metrics server: listen() failed: %s\n", std::strerror(errno));
+    montauk::util::log_error("metrics server: listen() failed: %s", std::strerror(errno));
     ::close(listen_fd_);
     listen_fd_ = -1;
     return;
@@ -75,7 +76,7 @@ void MetricsServer::run(std::stop_token st) {
   // Create eventfd for clean shutdown
   stop_eventfd_ = ::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
   if (stop_eventfd_ < 0) {
-    std::fprintf(stderr, "montauk: metrics server: eventfd() failed: %s\n", std::strerror(errno));
+    montauk::util::log_error("metrics server: eventfd() failed: %s", std::strerror(errno));
     ::close(listen_fd_);
     listen_fd_ = -1;
     return;
@@ -84,7 +85,7 @@ void MetricsServer::run(std::stop_token st) {
   // Initialize io_uring
   struct io_uring ring{};
   if (io_uring_queue_init(16, &ring, 0) < 0) {
-    std::fprintf(stderr, "montauk: metrics server: io_uring_queue_init() failed: %s\n", std::strerror(errno));
+    montauk::util::log_error("metrics server: io_uring_queue_init() failed: %s", std::strerror(errno));
     ::close(stop_eventfd_);
     stop_eventfd_ = -1;
     ::close(listen_fd_);
@@ -103,7 +104,7 @@ void MetricsServer::run(std::stop_token st) {
   submit_poll(stop_eventfd_, UringTag::StopPoll);
   io_uring_submit(&ring);
 
-  std::fprintf(stderr, "montauk: metrics server listening on :%d\n", port_);
+  montauk::util::log_info("metrics server listening on :%d", port_);
 
   // Event loop
   while (!st.stop_requested()) {

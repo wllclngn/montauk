@@ -1,4 +1,5 @@
 #include "collectors/PmuCollector.hpp"
+#include "util/Log.hpp"
 
 #include <linux/perf_event.h>
 #include <sys/syscall.h>
@@ -209,7 +210,7 @@ void PmuCollector::init() {
   // Core PMU: read the dynamic type (4 on x86, but never hardcode).
   uint32_t cpu_type = 0;
   if (!read_sysfs_u32("/sys/bus/event_source/devices/cpu/type", cpu_type)) {
-    std::fprintf(stderr, "montauk: core PMU type unavailable; disabling PMU collector\n");
+    montauk::util::log_error("core PMU type unavailable; disabling PMU collector");
     available_ = false;
     return;
   }
@@ -223,15 +224,28 @@ void PmuCollector::init() {
     return;
   }
 
-  // L2 raw event encodings (AMD Zen 2 core PMU). The perf generic
-  // "cache-misses"/"cache-references" map to DC-side events on this hardware
-  // (observed sysfs: cache-misses=event=0x64,umask=0x09), but the L2 unit is
-  // the meaningful cache-placement signal, so we use the L2 raw events:
-  //   0x077e = umask 0x07, event 0x7e -> "L2 cache misses (all)"
-  //   0x077d = umask 0x07, event 0x7d -> "L2 cache requests/references (all)"
-  // The raw config maps directly onto the low bits of the AMD PERF_CTL MSR.
-  constexpr uint64_t kL2MissConfig = 0x077e;
-  constexpr uint64_t kL2RefConfig  = 0x077d;
+  // Cache miss/reference event encodings. perf_event_open(PERF_TYPE_RAW)
+  // accepts ANY config and silently counts zero on an encoding the running
+  // uarch does not implement -- so a hardcoded raw value that is wrong for the
+  // hardware (the previous 0x077e/0x077d "L2 raw events" read 0 forever on
+  // family 17h) is worse than useless: it looks live but never counts. Resolve
+  // the authoritative per-box encoding from sysfs instead, exactly like the
+  // amd_l3 path: the kernel publishes events/cache-{misses,references} and the
+  // format/ bitfield map. On AMD these aliases ARE the L2-unit events
+  // (cache-misses = event=0x64,umask=0x09 = l2_cache_req_stat misses;
+  // cache-references = event=0x60,umask=0xff = l2_request_g1 all). Fall back to
+  // the family-17h raw encodings only if the sysfs aliases are absent.
+  const std::string cpu_dir = "/sys/bus/event_source/devices/cpu";
+  std::vector<L3Format> cpu_fmts = read_l3_formats(cpu_dir);
+  uint64_t kL2MissConfig = 0x0964;  // event=0x64,umask=0x09
+  uint64_t kL2RefConfig  = 0xff60;  // event=0x60,umask=0xff
+  std::string miss_spec, ref_spec;
+  if (!cpu_fmts.empty()) {
+    if (read_sysfs_str(cpu_dir + "/events/cache-misses", miss_spec))
+      kL2MissConfig = encode_l3_event(miss_spec, cpu_fmts);
+    if (read_sysfs_str(cpu_dir + "/events/cache-references", ref_spec))
+      kL2RefConfig = encode_l3_event(ref_spec, cpu_fmts);
+  }
 
   for (int cpu : cpus) {
     int fd_m = open_one(PERF_TYPE_RAW, kL2MissConfig, cpu);
@@ -250,9 +264,9 @@ void PmuCollector::init() {
       // System-wide per-CPU opens (pid=-1, cpu=N) require paranoid < 1 —
       // i.e. 0 or -1 — or CAP_PERFMON. paranoid=1 only permits own-process
       // measurement and would still fail here.
-      std::fprintf(stderr,
-                   "montauk: perf_event_open denied (errno=%d %s); PMU disabled. "
-                   "Need perf_event_paranoid<=0 or CAP_PERFMON.\n",
+      montauk::util::log_warn(
+                   "perf_event_open denied (errno=%d %s); PMU disabled. "
+                   "Need perf_event_paranoid<=0 or CAP_PERFMON.",
                    first_open_errno_, std::strerror(first_open_errno_));
       return;
     }
@@ -260,6 +274,18 @@ void PmuCollector::init() {
     l2_ref_.push_back(Counter{fd_r, cpu, 0, false});
     instr_.push_back(Counter{fd_i, cpu, 0, false});
     cycles_.push_back(Counter{fd_c, cpu, 0, false});
+    // Best-effort scheduler counters: do NOT bail the core PMU if these fail
+    // (fd -1 just reads 0). SW ctx-switch/migrations always open; HW branch
+    // miss is standard on x86.
+    ctxsw_.push_back(Counter{
+        open_one(PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CONTEXT_SWITCHES, cpu),
+        cpu, 0, false});
+    migr_.push_back(Counter{
+        open_one(PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_MIGRATIONS, cpu),
+        cpu, 0, false});
+    branch_.push_back(Counter{
+        open_one(PERF_TYPE_HARDWARE, PERF_COUNT_HW_BRANCH_MISSES, cpu),
+        cpu, 0, false});
   }
   available_ = true;
 
@@ -301,6 +327,9 @@ void PmuCollector::init() {
   for (auto& c : l2_ref_)  enable(c);
   for (auto& c : instr_)   enable(c);
   for (auto& c : cycles_)  enable(c);
+  for (auto& c : ctxsw_)   enable(c);
+  for (auto& c : migr_)    enable(c);
+  for (auto& c : branch_)  enable(c);
   for (auto& d : l3_) { enable(d.access); enable(d.miss); }
 }
 
@@ -310,8 +339,12 @@ void PmuCollector::close_all() {
   for (auto& c : l2_ref_)  cl(c);
   for (auto& c : instr_)   cl(c);
   for (auto& c : cycles_)  cl(c);
+  for (auto& c : ctxsw_)   cl(c);
+  for (auto& c : migr_)    cl(c);
+  for (auto& c : branch_)  cl(c);
   for (auto& d : l3_) { cl(d.access); cl(d.miss); }
   l2_miss_.clear(); l2_ref_.clear(); instr_.clear(); cycles_.clear();
+  ctxsw_.clear(); migr_.clear(); branch_.clear();
   l3_.clear();
 }
 
@@ -349,27 +382,36 @@ bool PmuCollector::sample(montauk::model::PmuSnapshot& out) {
   out.interval_s = interval_s;
 
   const size_t n = l2_miss_.size();
+  out.per_cpu_ids.assign(n, 0);
   out.per_cpu_l2_misses.assign(n, 0);
   out.per_cpu_l2_refs.assign(n, 0);
   out.per_cpu_instructions.assign(n, 0);
   out.per_cpu_cycles.assign(n, 0);
 
   uint64_t agg_miss = 0, agg_ref = 0, agg_instr = 0, agg_cyc = 0;
+  uint64_t agg_cs = 0, agg_mig = 0, agg_br = 0;
   for (size_t i = 0; i < n; ++i) {
     uint64_t dm = read_delta(l2_miss_[i]);
     uint64_t dr = read_delta(l2_ref_[i]);
     uint64_t di = read_delta(instr_[i]);
     uint64_t dc = read_delta(cycles_[i]);
+    out.per_cpu_ids[i]          = l2_miss_[i].cpu;
     out.per_cpu_l2_misses[i]    = dm;
     out.per_cpu_l2_refs[i]      = dr;
     out.per_cpu_instructions[i] = di;
     out.per_cpu_cycles[i]       = dc;
     agg_miss += dm; agg_ref += dr; agg_instr += di; agg_cyc += dc;
+    if (i < ctxsw_.size())  agg_cs  += read_delta(ctxsw_[i]);
+    if (i < migr_.size())   agg_mig += read_delta(migr_[i]);
+    if (i < branch_.size()) agg_br  += read_delta(branch_[i]);
   }
   out.l2_misses    = agg_miss;
   out.l2_refs      = agg_ref;
   out.instructions = agg_instr;
   out.cycles       = agg_cyc;
+  out.context_switches = agg_cs;
+  out.cpu_migrations   = agg_mig;
+  out.branch_misses    = agg_br;
 
   out.ipc = (agg_cyc > 0) ? (double)agg_instr / (double)agg_cyc : 0.0;
   out.l2_miss_pct = (agg_ref > 0)
@@ -381,10 +423,16 @@ bool PmuCollector::sample(montauk::model::PmuSnapshot& out) {
     out.instructions_per_sec = (double)agg_instr / interval_s;
     out.cycles_per_sec       = (double)agg_cyc   / interval_s;
     out.l2_misses_per_sec    = (double)agg_miss  / interval_s;
+    out.context_switches_per_sec = (double)agg_cs  / interval_s;
+    out.cpu_migrations_per_sec   = (double)agg_mig / interval_s;
+    out.branch_misses_per_sec    = (double)agg_br  / interval_s;
   } else {
     out.instructions_per_sec = 0.0;
     out.cycles_per_sec = 0.0;
     out.l2_misses_per_sec = 0.0;
+    out.context_switches_per_sec = 0.0;
+    out.cpu_migrations_per_sec = 0.0;
+    out.branch_misses_per_sec = 0.0;
   }
 
   // Per-CCX L3: keep per-domain (do NOT collapse) so cross-CCX traffic shows.

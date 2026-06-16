@@ -664,21 +664,33 @@ def cmd_clean(args, source_dir: Path) -> bool:
 
 
 def cmd_uninstall(args, source_dir: Path) -> bool:
-    """Remove installed binary and kernel module."""
+    """Remove everything install placed: the binary, the trace tools, and the
+    manpage -- plus the kernel module."""
     prefix = Path(args.prefix) if args.prefix else Path("/usr/local")
     install_path = prefix / "bin" / "montauk"
 
     log_info("UNINSTALLING")
 
-    if install_path.exists():
-        log_info(f"Removing {install_path}")
-        ret = run_cmd_sudo(["rm", str(install_path)])
-        if ret != 0:
-            log_error("Failed to remove binary")
-            return False
-        log_info("Binary removed")
+    # The trace tools ship beside montauk (cmd_install copies them), so uninstall
+    # must take them too -- otherwise a stale montauk_analyze/decode is left to
+    # drift out of sync with a later montauk.
+    targets = [install_path,
+               prefix / "bin" / "montauk_analyze",
+               prefix / "bin" / "montauk_trace_decode",
+               prefix / "share" / "man" / "man1" / "montauk.1"]
+    removed = 0
+    for t in targets:
+        if t.exists():
+            if run_cmd_sudo(["rm", str(t)]) == 0:
+                log_info(f"Removed {t}")
+                removed += 1
+            else:
+                log_error(f"Failed to remove {t}")
+                return False
+    if removed:
+        run_cmd_sudo(["mandb", "-q"])  # refresh man index after dropping the page
     else:
-        log_warn(f"{install_path} not found")
+        log_warn(f"nothing to remove under {prefix} (montauk not installed?)")
 
     # Check for kernel module
     kver = get_kernel_version()

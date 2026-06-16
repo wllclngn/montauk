@@ -52,6 +52,11 @@ private:
   std::vector<Counter> l2_ref_;
   std::vector<Counter> instr_;
   std::vector<Counter> cycles_;
+  // Optional scheduler-relevant counters (SW ctx-switch/migrations, HW branch
+  // miss). Opened best-effort; an fd of -1 (unsupported) just reads 0.
+  std::vector<Counter> ctxsw_;
+  std::vector<Counter> migr_;
+  std::vector<Counter> branch_;
 
   // amd_l3 uncore: one (access, miss) pair per CCX/L3 domain cpu.
   struct L3Domain {

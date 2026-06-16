@@ -21,6 +21,9 @@ struct CpuSnapshot {
   std::string model;               // CPU model name (static)
   int physical_cores{0};           // best-effort physical core count (per socket sum)
   int logical_threads{0};          // total logical CPUs (threads)
+  // Average current frequency across online CPUs (MHz), from cpufreq sysfs.
+  bool   has_freq{false};
+  double freq_avg_mhz{0.0};
   // Optional breakdown of utilization over last interval (percent of total time)
   double pct_user{0.0};
   double pct_system{0.0};

@@ -1,6 +1,8 @@
 #include "collectors/BpfTraceCollector.hpp"
 #include "montauk_trace.h"
 #include "model/TraceBinary.hpp"
+#include "app/MetricsServer.hpp"
+#include "util/Log.hpp"
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include "montauk_trace.skel.h"
@@ -49,7 +51,7 @@ void populate_cpu_ccx_map(int map_fd) {
     uint32_t key = static_cast<uint32_t>(cpu);
     bpf_map_update_elem(map_fd, &key, &ccx, BPF_ANY);
   }
-  std::fprintf(stderr, "montauk: cpu_ccx populated (%d cpus, %zu CCX domains)\n",
+  montauk::util::log_info("cpu_ccx populated (%d cpus, %zu CCX domains)",
                ncpu, list_to_ccx.empty() ? size_t{1} : list_to_ccx.size());
 }
 }
@@ -106,7 +108,40 @@ const char* BpfTraceCollector::syscall_name(int nr) {
 // ---------------------------------------------------------------------------
 BpfTraceCollector::BpfTraceCollector(montauk::app::TraceBuffers& buffers,
                                      std::string pattern)
-    : buffers_(buffers), pattern_(std::move(pattern)), matcher_(pattern_) {}
+    : buffers_(buffers), pattern_(std::move(pattern)) {
+  // --trace accepts a comma-separated list of comm substrings (e.g.
+  // "triskelion,Wedding Witch") — match if ANY token matches. The first token
+  // is the primary: written to the BPF .rodata fast-path for instant exec-time
+  // tracking. The rest are matched only by the userspace rescan (sub-second),
+  // which is sufficient for long-lived processes such as the triskelion daemon
+  // (montauk attaches long after it is up, so instant exec capture is moot).
+  size_t start = 0;
+  while (start <= pattern_.size()) {
+    size_t comma = pattern_.find(',', start);
+    if (comma == std::string::npos) comma = pattern_.size();
+    std::string tok = pattern_.substr(start, comma - start);
+    size_t b = tok.find_first_not_of(" \t");
+    size_t e = tok.find_last_not_of(" \t");
+    if (b != std::string::npos) {
+      tok = tok.substr(b, e - b + 1);
+      if (!tok.empty()) {
+        if (primary_pattern_.empty()) primary_pattern_ = tok;
+        matchers_.emplace_back(tok);
+      }
+    }
+    start = comma + 1;
+  }
+  if (matchers_.empty()) {  // no usable token — fall back to the whole string
+    primary_pattern_ = pattern_;
+    matchers_.emplace_back(pattern_);
+  }
+}
+
+bool BpfTraceCollector::matches_any(const std::string& s) const {
+  for (const auto& m : matchers_)
+    if (m.search(s) >= 0) return true;
+  return false;
+}
 
 BpfTraceCollector::~BpfTraceCollector() {
   stop();
@@ -140,7 +175,7 @@ void BpfTraceCollector::set_binary_output(const std::string& path) {
   if (path.empty()) return;
   int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (fd < 0) {
-    std::fprintf(stderr, "montauk: --trace-out: cannot open '%s'\n", path.c_str());
+    montauk::util::log_error("--trace-out: cannot open '%s'", path.c_str());
     return;
   }
 
@@ -343,6 +378,7 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
           case SCHED_OP_PICK_EMPTY:     op = "PICK_EMPTY"; break;
           case SCHED_OP_PREEMPT_TICK:   op = "PREEMPT_TICK"; break;
           case SCHED_OP_PREEMPT_WAKEUP: op = "PREEMPT_WAKEUP"; break;
+          case SCHED_OP_CPU_IDLE:       op = "CPU_IDLE"; break;
         }
         if (s->op == SCHED_OP_ENQUEUE) {
           std::fprintf(stderr, "montauk: SCHED %s pid=%d cpu=%u last_cpu=%d sub=%u score=%llu ts=%llu\n",
@@ -394,9 +430,9 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
         default: signame = "?";       break;
       }
       const char* kind = (sig->kind == SIGEVT_DELIVER) ? "DELIVER" : "EXIT_ABNL";
-      std::fprintf(stderr,
-                   "montauk: SIGNAL %s pid=%u tid=%u sig=%s(%d) sender=%d "
-                   "exit_code=0x%x comm='%.16s' stack_depth=%u\n",
+      montauk::util::log_warn(
+                   "SIGNAL %s pid=%u tid=%u sig=%s(%d) sender=%d "
+                   "exit_code=0x%x comm='%.16s' stack_depth=%u",
                    kind, sig->pid, sig->tid, signame, sig->signal_nr,
                    sig->sender_pid, (unsigned)sig->exit_code,
                    sig->comm, sig->stack_depth);
@@ -404,8 +440,8 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
       // this thread executing when it got killed?" Critical when stack
       // capture is shallow (frame pointer omitted, DWARF unwind fails).
       if (sig->syscall_nr >= 0) {
-        std::fprintf(stderr,
-                     "montauk:   in_syscall=%d fd=%d arg0=0x%016llx arg1=0x%016llx\n",
+        montauk::util::log_warn(
+                     "  in_syscall=%d fd=%d arg0=0x%016llx arg1=0x%016llx",
                      sig->syscall_nr, sig->io_fd,
                      (unsigned long long)sig->syscall_arg0,
                      (unsigned long long)sig->syscall_arg1);
@@ -493,10 +529,10 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
         uint64_t ip = sig->stack_user[i];
         std::string sym = resolve(ip);
         if (!sym.empty()) {
-          std::fprintf(stderr, "montauk:   #%u 0x%016llx  %s\n",
+          montauk::util::log_warn("  #%u 0x%016llx  %s",
                        i, (unsigned long long)ip, sym.c_str());
         } else {
-          std::fprintf(stderr, "montauk:   #%u 0x%016llx\n",
+          montauk::util::log_warn("  #%u 0x%016llx",
                        i, (unsigned long long)ip);
         }
       }
@@ -515,15 +551,15 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
                      : ab->func == ABORT_FN_LIBC_MESSAGE ? "__libc_message"
                      : ab->func == ABORT_FN_ABORT        ? "abort"
                      : "?";
-      std::fprintf(stderr,
-                   "montauk: ABORT %s pid=%u tid=%u comm='%.16s' "
-                   "msg='%.128s' loc='%.128s' line=%u stack_depth=%u\n",
+      montauk::util::log_error(
+                   "ABORT %s pid=%u tid=%u comm='%.16s' "
+                   "msg='%.128s' loc='%.128s' line=%u stack_depth=%u",
                    fn, ab->pid, ab->tid, ab->comm, ab->msg, ab->loc,
                    ab->line, ab->stack_depth);
       unsigned n = ab->stack_depth;
       if (n > 8) n = 8;
       for (unsigned i = 0; i < n; ++i)
-        std::fprintf(stderr, "montauk:   #%u 0x%016llx\n",
+        montauk::util::log_error("  #%u 0x%016llx",
                      i, (unsigned long long)ab->stack_user[i]);
       return 0;
     }
@@ -560,11 +596,10 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
   auto* evt = static_cast<struct montauk_ring_event*>(data);
   int32_t pid = static_cast<int32_t>(evt->pid);
 
-  // Debug: log all events to stderr
   if (evt->type == TRACE_EVT_COMM_CHANGE) {
-    std::fprintf(stderr, "montauk: COMM_CHANGE pid=%d comm='%.16s'\n", pid, evt->comm);
+    montauk::util::log_info("COMM_CHANGE pid=%d comm='%.16s'", pid, evt->comm);
   } else if (evt->type == TRACE_EVT_EXEC) {
-    std::fprintf(stderr, "montauk: EXEC pid=%d comm='%.16s' file='%.64s'\n",
+    montauk::util::log_info("EXEC pid=%d comm='%.16s' file='%.64s'",
                  pid, evt->comm, evt->filename);
   }
 
@@ -577,13 +612,13 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
     bool matched = false;
     if (evt->filename[0] != '\0') {
       std::string fname(evt->filename);
-      if (self->matcher_.search(fname) >= 0)
+      if (self->matches_any(fname))
         matched = true;
     }
     // Also match against comm
     if (!matched && evt->comm[0] != '\0') {
       std::string comm(evt->comm);
-      if (self->matcher_.search(comm) >= 0)
+      if (self->matches_any(comm))
         matched = true;
     }
     if (matched) {
@@ -603,7 +638,7 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
     // Not tracked yet — check if new comm matches pattern
     if (evt->comm[0] != '\0') {
       std::string comm(evt->comm);
-      if (self->matcher_.search(comm) >= 0) {
+      if (self->matches_any(comm)) {
         self->track_pid(pid, 0, true, evt->comm);
       }
     }
@@ -722,8 +757,8 @@ void BpfTraceCollector::rescan_comms() {
       // Check comm against pattern
       if (de.comm[0] != '\0') {
         std::string comm(de.comm, strnlen(de.comm, sizeof(de.comm)));
-        if (matcher_.search(comm) >= 0) {
-          std::fprintf(stderr, "montauk: DISCOVERED pid=%d comm='%s' via discovery_map\n",
+        if (matches_any(comm)) {
+          montauk::util::log_info("DISCOVERED pid=%d comm='%s' via discovery_map",
                        de.pid, comm.c_str());
           track_pid(static_cast<int32_t>(de.pid), 0, true, de.comm);
         }
@@ -968,7 +1003,7 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
 void BpfTraceCollector::run(std::stop_token st) {
   skel_ = montauk_trace_bpf__open();
   if (!skel_) {
-    std::fprintf(stderr, "montauk: failed to open BPF skeleton\n");
+    montauk::util::log_error("failed to open BPF skeleton");
     load_failed_.store(true);
     return;
   }
@@ -976,14 +1011,16 @@ void BpfTraceCollector::run(std::stop_token st) {
   // Write pattern to .rodata BEFORE load — libbpf freezes .rodata at load time.
   // bpf_strncmp requires a readonly (frozen + BPF_F_RDONLY_PROG) map pointer.
   {
-    auto len = pattern_.size();
+    // Only the primary (first) token goes to the BPF fast-path; the remaining
+    // tokens are matched by the userspace rescan (see matches_any).
+    auto len = primary_pattern_.size();
     if (len > TRACE_PATTERN_MAX - 1) len = TRACE_PATTERN_MAX - 1;
     for (size_t i = 0; i < len; ++i) {
-      char c = pattern_[i];
+      char c = primary_pattern_[i];
       skel_->rodata->trace_pat.pattern[i] = (c >= 'A' && c <= 'Z') ? c + 32 : c;
     }
     skel_->rodata->trace_pat.len = static_cast<uint8_t>(len);
-    std::fprintf(stderr, "montauk: BPF pattern set in .rodata (%zu bytes: %s)\n",
+    montauk::util::log_info("BPF pattern set in .rodata (%zu bytes: %s)",
                  len, pattern_.c_str());
   }
 
@@ -1001,13 +1038,13 @@ void BpfTraceCollector::run(std::stop_token st) {
   if (const char* hss = std::getenv("MONTAUK_HEAP_STACK_SIZE")) {
     skel_->rodata->heap_stack_size = std::strtoull(hss, nullptr, 0);
     if (skel_->rodata->heap_stack_size)
-      std::fprintf(stderr, "montauk: heap caller-stack capture armed for size=%llu\n",
+      montauk::util::log_info("heap caller-stack capture armed for size=%llu",
                    (unsigned long long)skel_->rodata->heap_stack_size);
   }
 
   int err = montauk_trace_bpf__load(skel_);
   if (err) {
-    std::fprintf(stderr, "montauk: failed to load BPF programs (need root or CAP_BPF)\n");
+    montauk::util::log_error("failed to load BPF programs (need root or CAP_BPF)");
     montauk_trace_bpf__destroy(skel_);
     skel_ = nullptr;
     load_failed_.store(true);
@@ -1059,7 +1096,7 @@ void BpfTraceCollector::run(std::stop_token st) {
   // present, so this cannot fail on a missing scheduler tracepoint.
   err = montauk_trace_bpf__attach(skel_);
   if (err) {
-    std::fprintf(stderr, "montauk: failed to attach BPF programs: %d\n", err);
+    montauk::util::log_error("failed to attach BPF programs: %d", err);
     montauk_trace_bpf__destroy(skel_);
     skel_ = nullptr;
     load_failed_.store(true);
@@ -1095,7 +1132,7 @@ void BpfTraceCollector::run(std::stop_token st) {
     }
   }
   if (sched_tp > 0)
-    std::fprintf(stderr, "montauk: attached %d scheduler-decision tracepoint(s)\n", sched_tp);
+    montauk::util::log_info("attached %d scheduler-decision tracepoint(s)", sched_tp);
 
   // Task-iterator thread enrollment: attach the iterator once; we drive it each
   // scan (snapshot_from_maps) to enroll every tracked process's threads, however
@@ -1103,14 +1140,14 @@ void BpfTraceCollector::run(std::stop_token st) {
   // still covers the common case.
   enroll_iter_link_ = bpf_program__attach_iter(skel_->progs.enroll_threads, nullptr);
   if (!enroll_iter_link_ || libbpf_get_error(enroll_iter_link_)) {
-    std::fprintf(stderr, "montauk: thread-enrollment iterator did not attach (reactive path only)\n");
+    montauk::util::log_warn("thread-enrollment iterator did not attach (reactive path only)");
     enroll_iter_link_ = nullptr;
   }
 
   rb_ = ring_buffer__new(bpf_map__fd(skel_->maps.events), handle_event,
                           this, nullptr);
   if (!rb_) {
-    std::fprintf(stderr, "montauk: failed to create ring buffer\n");
+    montauk::util::log_error("failed to create ring buffer");
     if (enroll_iter_link_) { bpf_link__destroy(enroll_iter_link_); enroll_iter_link_ = nullptr; }
     montauk_trace_bpf__destroy(skel_);
     skel_ = nullptr;
@@ -1176,13 +1213,13 @@ void BpfTraceCollector::run(std::stop_token st) {
           ++heap_attached;
         }
       }
-      std::fprintf(stderr,
-                   "montauk: libc uprobes attached: %d/%zu to %s\n",
+      montauk::util::log_info(
+                   "libc uprobes attached: %d/%zu to %s",
                    heap_attached, sizeof(attaches) / sizeof(attaches[0]),
                    libc_path);
     } else {
-      std::fprintf(stderr,
-                   "montauk: libc not found — heap/abort uprobes disabled\n");
+      montauk::util::log_warn(
+                   "libc not found — heap/abort uprobes disabled");
     }
   }
 
@@ -1215,23 +1252,28 @@ void BpfTraceCollector::run(std::stop_token st) {
           ++kattached;
         }
       }
-      std::fprintf(stderr,
-                   "montauk: keyed-event uprobes attached: %d/2 to %s\n",
+      montauk::util::log_info(
+                   "keyed-event uprobes attached: %d/2 to %s",
                    kattached, ntdll_path);
     } else {
-      std::fprintf(stderr,
-                   "montauk: MONTAUK_NTDLL_PATH unset/unreadable — "
-                   "keyed-event (critical-section) uprobes disabled\n");
+      montauk::util::log_info(
+                   "MONTAUK_NTDLL_PATH unset/unreadable — "
+                   "keyed-event (critical-section) uprobes disabled");
     }
   }
 
-  std::fprintf(stderr, "montauk: eBPF trace attached (pattern: %s)\n",
+  montauk::util::log_info("eBPF trace attached (pattern: %s)",
                pattern_.c_str());
 
   // Pattern already loaded via .rodata before __load() above.
 
   // Self-exclusion via getpid/getppid — no /proc
   build_self_exclusion();
+
+  // Expose montauk's own state on the provider mesh (montauk.sock), updated
+  // each snapshot cycle below. Non-fatal if the bind fails.
+  if (!emitter_.start())
+    montauk::util::log_warn("provider emitter bind failed (continuing)");
 
   // No initial_scan. No /proc reads. BPF tracepoints populate maps
   // as processes fork/exec/syscall/switch. Userspace pattern matching
@@ -1256,7 +1298,7 @@ void BpfTraceCollector::run(std::stop_token st) {
     if (snap.procs_count == 0) {
       snap.waiting_for_match = true;
       if (!printed_waiting_) {
-        std::fprintf(stderr, "montauk: waiting for '%s'...\n",
+        montauk::util::log_info("waiting for '%s'...",
                      pattern_.c_str());
         printed_waiting_ = true;
       }
@@ -1270,6 +1312,9 @@ void BpfTraceCollector::run(std::stop_token st) {
     // Embed provider snapshots into the binary log once per cycle so the
     // trace carries the providers' view of the same time window.
     append_provider_snapshots();
+
+    // Publish montauk's own state to the provider mesh (montauk.sock).
+    emitter_.update(montauk::app::trace_to_prometheus(snap));
 
     // Drain the event ring DURING the inter-snapshot sleep. Previously this
     // loop slept the full ~400ms with the ring untouched, so the ring filled
