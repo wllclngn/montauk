@@ -1,15 +1,18 @@
 #pragma once
 #include "app/TraceBuffers.hpp"
+#include "collectors/ProviderCollector.hpp"
 #include "util/BoyerMoore.hpp"
 #include <thread>
 #include <string>
 #include <vector>
 #include <atomic>
+#include <cstdint>
 #include <unordered_set>
 
 // Forward-declare libbpf types (avoid pulling in libbpf headers here)
 struct montauk_trace_bpf;
 struct ring_buffer;
+struct bpf_link;
 
 namespace montauk::collectors {
 
@@ -23,11 +26,32 @@ public:
   void start();
   void stop();
 
+  // Enable raw binary event logging to `path` (the --trace-out target).
+  // Must be called before start(). Opens the file and writes the format
+  // header; every ring event is then appended verbatim and flushed in
+  // batches. No-op if path is empty.
+  void set_binary_output(const std::string& path);
+
 private:
   void run(std::stop_token st);
 
+  // Append one raw ring record ([len][payload]) to the binary log buffer;
+  // flush if the buffer crosses the batch threshold. No-op when binary
+  // output is disabled.
+  void trace_append(const void* data, size_t len);
+  // Write the accumulated buffer to the trace fd in one (retried) write
+  // and clear it. No-op when disabled or empty.
+  void trace_flush();
+
+  // Scrape metrics providers and append one TRACE_EVT_PROVIDER record per
+  // provider to the binary log. No-op when binary output is disabled.
+  void append_provider_snapshots();
+
   // Add a PID to the BPF proc_map (tracked set)
   void track_pid(int32_t pid, int32_t ppid, bool is_root, const char* comm);
+  // Snapshot /proc/<pid>/maps to the per-incident sidecar while the process
+  // is alive (death-time snapshots race the reap and land empty).
+  void snapshot_maps(uint32_t pid);
 
   // Read BPF maps and fill TraceSnapshot — zero /proc
   void snapshot_from_maps(montauk::model::TraceSnapshot& snap);
@@ -51,6 +75,7 @@ private:
 
   struct montauk_trace_bpf* skel_{nullptr};
   struct ring_buffer* rb_{nullptr};
+  struct bpf_link* enroll_iter_link_{nullptr};  // task-iterator thread enrollment
 
   uint64_t last_snapshot_ns_{};
 
@@ -60,6 +85,16 @@ private:
   bool printed_waiting_{false};
   std::atomic<bool> load_failed_{false};
   std::unordered_set<int32_t> excluded_pids_;
+  // Pids whose /proc/<pid>/maps sidecar has been snapshotted (first HEAP
+  // event), so heapstack/abort IPs resolve to module+offset. Once per pid.
+  std::unordered_set<uint32_t> maps_snapshotted_;
+
+  // Binary trace log (--trace-out). -1 fd = disabled. Buffer is owned by
+  // the collector thread (ring callback + run loop are the only writers),
+  // so no lock is needed.
+  int trace_fd_{-1};
+  std::vector<uint8_t> trace_buf_;
+  ProviderCollector providers_{};
 
 public:
   [[nodiscard]] bool failed() const { return load_failed_.load(); }

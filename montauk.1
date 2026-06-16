@@ -1,4 +1,4 @@
-.TH MONTAUK 1 "April 2026" "montauk 6.4.0" "User Commands"
+.TH MONTAUK 1 "April 2026" "montauk 7.0.0" "User Commands"
 .SH NAME
 montauk \- high-performance Linux system monitor with kernel module support
 .SH SYNOPSIS
@@ -33,7 +33,7 @@ Three-tier process collection: Kernel Module > Netlink proc_connector > /proc po
 .IP \(bu 2
 Lock-free snapshot pipeline with churn detection (PROC CHURN alerts)
 .IP \(bu 2
-C++23 TimSort keeping 4K+ processes deterministically ordered in <1ms
+sublimation (flow-model adaptive sort) keeping 4K+ processes deterministically ordered in <1ms
 .IP \(bu 2
 GPU attribution across NVIDIA (NVML/nvidia-smi), AMD, and Intel via DRM fdinfo
 .IP \(bu 2
@@ -89,6 +89,14 @@ on most kernel configurations). Build requires libbpf, bpftool, and clang
 Composes with \-\-metrics and \-\-log to export trace data as Prometheus
 metrics (montauk_trace_* family) or write it to flight recorder logs for
 post-mortem analysis.
+.TP
+.BI \-\-trace\-out " FILE"
+Write a raw binary event log to FILE (requires \-\-trace). Records are the
+ring-buffer events verbatim, batched into large writes for near-zero
+trace-time overhead \(em suited to high-rate scheduler-decision tracing
+where text formatting would perturb the workload. Decode offline with
+.BR montauk_trace_decode (1).
+See TRACE MODE for details.
 .TP
 .B \-\-init\-theme
 Detect terminal palette and write ~/.config/montauk/config.toml with
@@ -221,8 +229,47 @@ montauk --trace myapp --log /tmp/trace
 
 # Trace with both
 montauk --trace myapp --metrics 9101 --log /tmp/trace
+
+# Raw binary event log (low-overhead; decode offline)
+montauk --trace myapp --trace-out /tmp/myapp.mtktrace
+montauk_trace_decode /tmp/myapp.mtktrace        # human-readable text
+montauk_trace_decode /tmp/myapp.mtktrace --csv  # CSV for tooling
 .RE
 .fi
+.SS Binary Event Log (\-\-trace-out)
+The periodic Prometheus snapshot (above) is the right data path for
+aggregate per-thread state. For high-rate event streams \(em particularly
+scheduler-decision tracepoints (enqueue / pick / preempt) under heavy
+workloads \(em formatting each event to text at trace time is a
+syscall-per-event firehose that perturbs the very workload being measured.
+.PP
+\-\-trace-out FILE writes the raw ring-buffer event records verbatim to a
+binary log, batched into large writes (one syscall per ~256 KB rather than
+per event). All formatting is deferred to the
+.B montauk_trace_decode
+tool, which reads the log offline and renders text or CSV. The log header
+captures both CLOCK_MONOTONIC and CLOCK_REALTIME anchors at trace start, so
+the decoder reconstructs absolute wall-clock time per event and lets you
+correlate against external traces (schbench output, scheduler logs, etc.).
+.PP
+\-\-trace-out is independent of MONTAUK_TRACE_VERBOSE (the per-event stderr
+firehose, a human-eyeball aid for low-rate single-app debugging) and of
+\-\-log (the Prometheus flight recorder). Use whichever fits: stderr for
+watching live, \-\-log for aggregate post-mortem, \-\-trace-out for
+full-fidelity per-event capture without measurement distortion.
+.SS Hardware PMU Counters
+Trace mode additionally samples hardware performance counters via
+perf_event_open: per-CPU L2 cache misses/references (AMD Zen raw events),
+instructions, cycles, and \(em where the amd_uncore module exposes the
+amd_l3 PMU \(em per-CCX L3 accesses/misses. Derived rates (IPC, L2 miss
+percent, misses/sec) are exported as the montauk_pmu_* gauge families in
+\-\-metrics and \-\-log output for offline analysis.
+.PP
+PMU sampling requires kernel.perf_event_paranoid <= 0 or CAP_PERFMON. It
+is exclusive to trace mode by design: the plain monitor never calls
+perf_event_open and never requires elevated perf permissions. If the
+permission check fails in trace mode, PMU is disabled with a one-line
+notice and tracing continues without counter data.
 .SS Prometheus Metrics
 When combined with \-\-metrics, the following metric families are appended:
 .TP
@@ -255,6 +302,28 @@ Total threads across the traced group
 .TP
 .B montauk_trace_waiting
 1 if waiting for pattern match, 0 if actively tracing
+.TP
+.B montauk_trace_thread_cpu
+Core a thread currently runs on (labels: pid, tid, comm)
+.TP
+.B montauk_trace_thread_migrations
+Cumulative cross-core moves per thread (labels: pid, tid, comm)
+.TP
+.B montauk_trace_migrations_intra_ccx / _cross_ccx / _unknown_ccx
+Migration totals bucketed by L3/CCX locality (topology from sysfs; cross-CCX
+moves carry the L3-refill penalty)
+.TP
+.B montauk_trace_ntsync
+ntsync ioctl operations from traced processes (Wine/Proton sync primitives)
+.TP
+.B montauk_sched_op_total
+Scheduler decision counts by op: enqueue, pick, pick_empty, preempt_tick,
+preempt_wakeup (aggregated per-CPU in BPF; per-event streaming only with
+\-\-trace-out)
+.TP
+.B montauk_pmu_*
+Hardware counter gauges when PMU access is available: IPC, L2 miss percent
+and rate, instructions/cycles per second, per-CCX L3 accesses/misses
 .SH KEYBINDINGS
 .TP
 .B q
@@ -410,8 +479,8 @@ Real-world benchmarks on typical desktop hardware:
 .B Traditional mode
 ~2-5% CPU, 250-1000ms polling interval, race-prone
 .TP
-.B TimSort (4K processes)
-<1ms deterministic ordering
+.B Sort (4K processes)
+<1ms deterministic ordering via sublimation (pack-key index sort)
 .TP
 .B GPU attribution
 <5ms per snapshot with NVML, <50ms with nvidia-smi fallback
@@ -437,8 +506,13 @@ DRM /proc/[pid]/fdinfo stats (AMD, Intel, NVIDIA)
 .PP
 Automatically identifies MIG partitions, containers, and browser GPU processes.
 .SS Sorting
-C++23 TimSort implementation with O(n) best case on pre-sorted data,
-galloping merge optimization, and stable ordering guarantee.
+sublimation — montauk's sort algorithm, a flow-model adaptive sort and an
+in-tree sub-system (montauk/sublimation), built with montauk and linked
+unconditionally (no fallback). Numeric columns use a
+pack-key index sort (keys pack with their index; montauk permutes a uint32_t
+index array, stable on the packed index); the name column uses a hybrid
+prefix-pack + MSD radix string sort. Requires a Haswell-or-newer CPU
+(BMI2 + AVX2).
 .SH TROUBLESHOOTING
 .SS Kernel Module Not Detected
 .nf
@@ -566,6 +640,6 @@ Report issues at: https://github.com/wllclngn/montauk/issues
 .SH COPYRIGHT
 MIT License. See LICENSE file in repository.
 .SH VERSION
-montauk 6.4.0
+montauk 7.0.0
 .br
 April 2026

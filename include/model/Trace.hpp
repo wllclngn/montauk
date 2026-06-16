@@ -24,6 +24,10 @@ struct ThreadSample {
   uint32_t io_whence{};
   int64_t  io_result{};
   uint64_t io_timestamp_ns{};
+
+  // On-CPU placement / migration (from BPF cur_cpu / migrations)
+  int32_t  cur_cpu{-1};
+  uint64_t migrations{};
 };
 
 struct FdSample {
@@ -80,6 +84,19 @@ struct TraceSnapshot {
 
   std::array<NtsyncSample, MAX_NTSYNC> ntsync_events{};
   int ntsync_count{};
+
+  // Scheduler-decision counts, indexed by sched_trace_op (1..6), summed across
+  // CPUs. Non-zero only when the active scheduler binds decision tracepoints;
+  // index 6 (wakeup) comes from the generic kernel sched_wakeup tracepoint.
+  std::array<uint64_t, 7> sched_op_total{};
+
+  // Migration classification (cumulative since attach, summed across CPUs from
+  // the BPF mig_ccx_counts map): a fork-storm's core-hopping split by whether
+  // the move stayed within an L3/CCX domain or crossed Infinity Fabric. The
+  // intra-heavy signature is the intra-CCX L2-refill cost; cross is the c2c cost.
+  uint64_t mig_intra_ccx{};
+  uint64_t mig_cross_ccx{};
+  uint64_t mig_unknown_ccx{};
 
   bool     waiting_for_match{false};
   uint64_t seq{};

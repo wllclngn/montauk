@@ -2,7 +2,6 @@
 #include "ui/Config.hpp"
 #include "ui/Terminal.hpp"
 #include "ui/Formatting.hpp"
-#include "util/TimSort.hpp"
 #include "util/SortDispatch.hpp"
 #include "util/ThompsonNFA.hpp"
 #include "app/Filter.hpp"
@@ -195,8 +194,9 @@ void ProcessTable::render(widget::Canvas& canvas,
         scale_proc_cpu(p.cpu_pct), 0.35);
   }
 
-  // Sort dispatch — sublimation switch path is a hard-pinned constraint.
-  if (montauk::util::resolve_backend() == montauk::util::SortBackend::Sublimation) {
+  // Sort via sublimation (montauk's only sort backend). Build a uint32_t
+  // index permutation and sort it by the active mode's key.
+  {
     const size_t n = order.size();
     std::vector<uint32_t> idx32(n);
     for (size_t i = 0; i < n; ++i) idx32[i] = static_cast<uint32_t>(i);
@@ -233,22 +233,6 @@ void ProcessTable::render(widget::Canvas& canvas,
       }
     }
     for (size_t i = 0; i < n; ++i) order[i] = static_cast<size_t>(idx32[i]);
-  } else {
-    montauk::util::timsort(order.begin(), order.end(), [&](size_t a, size_t b) {
-      const auto& A = s.procs.processes[a];
-      const auto& B = s.procs.processes[b];
-      switch (sort_mode_) {
-        case SortMode::CPU:  if (sm[a] != sm[b]) return sm[a] > sm[b]; break;
-        case SortMode::MEM:  if (A.rss_kb != B.rss_kb) return A.rss_kb > B.rss_kb; break;
-        case SortMode::PID:  if (A.pid != B.pid) return A.pid < B.pid; break;
-        case SortMode::NAME: if (A.cmd != B.cmd) return A.cmd < B.cmd; break;
-        case SortMode::GPU:  if (A.gpu_util_pct != B.gpu_util_pct) return A.gpu_util_pct > B.gpu_util_pct; break;
-        case SortMode::GMEM: if (A.gpu_mem_kb != B.gpu_mem_kb) return A.gpu_mem_kb > B.gpu_mem_kb; break;
-      }
-      if (sm[a] != sm[b]) return sm[a] > sm[b];
-      if (A.rss_kb != B.rss_kb) return A.rss_kb > B.rss_kb;
-      return A.pid < B.pid;
-    });
   }
 
   if (!filter_query_.empty()) {

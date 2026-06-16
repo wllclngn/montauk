@@ -8,9 +8,11 @@
 #include "collectors/MemoryCollector.hpp"
 #include "collectors/GpuCollector.hpp"
 #include "collectors/CpuCollector.hpp"
+#include "collectors/PmuCollector.hpp"
 #include "collectors/NetCollector.hpp"
 #include "collectors/DiskCollector.hpp"
 #include "collectors/FsCollector.hpp"
+#include "collectors/ProviderCollector.hpp"
 #include "collectors/IProcessCollector.hpp"
 #include "app/Alerts.hpp"
 #include "collectors/ThermalCollector.hpp"
@@ -25,6 +27,13 @@ public:
   void start();
   void stop();
   ~Producer();
+
+  // Opt into hardware PMU sampling (perf_event_open: L2 miss/ref, IPC,
+  // per-CCX L3). PMU data exists for the trace→analyze pipeline, not the
+  // monitor — it needs CAP_PERFMON or perf_event_paranoid<=0, which the
+  // plain TUI must never demand. main.cpp calls this only when --trace
+  // is active. Must be called before start().
+  void enable_pmu() { pmu_enabled_ = true; }
 
 #ifdef MONTAUK_TESTING
   // Test-only helper: apply a set of per-process GPU samples (pid->util%)
@@ -41,11 +50,14 @@ private:
   std::jthread thread_{};
   // collectors
   montauk::collectors::CpuCollector cpu_{};
+  montauk::collectors::PmuCollector pmu_{};
+  bool pmu_enabled_{false};  // see enable_pmu()
   montauk::collectors::MemoryCollector mem_{};
   montauk::collectors::GpuCollector gpu_{};
   montauk::collectors::NetCollector net_{};
   montauk::collectors::DiskCollector disk_{};
   montauk::collectors::FsCollector fs_{};
+  montauk::collectors::ProviderCollector providers_{};
   // Process collector (event-driven if available, else traditional)
   std::unique_ptr<montauk::collectors::IProcessCollector> proc_;
   montauk::app::AlertEngine alerts_{};

@@ -187,6 +187,56 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
   emit_header(out, "montauk_cpu_logical_threads", "Logical CPU threads", "gauge");
   emit_gauge_i(out, "montauk_cpu_logical_threads", s.cpu.logical_threads);
 
+  // ---- PMU hardware counters (interval deltas / rates). All values are over
+  // the last sample interval. L2 = per-physical-core private cache (the
+  // migration-cost signal on Zen2); L3 is kept per-CCX so cross-CCX traffic
+  // stays visible. Emitted only when the core PMU opened (root / paranoid<=1).
+  emit_header(out, "montauk_pmu_available", "Core PMU counters available", "gauge");
+  emit_gauge_i(out, "montauk_pmu_available", s.pmu.available ? 1 : 0);
+  if (s.pmu.available) {
+    emit_header(out, "montauk_pmu_l2_misses_per_second", "L2 cache misses per second (raw 0x077e)", "gauge");
+    emit_gauge_d(out, "montauk_pmu_l2_misses_per_second", s.pmu.l2_misses_per_sec);
+    emit_header(out, "montauk_pmu_l2_miss_percent", "L2 misses as percent of L2 references", "gauge");
+    emit_gauge_d(out, "montauk_pmu_l2_miss_percent", s.pmu.l2_miss_pct);
+    emit_header(out, "montauk_pmu_ipc", "Instructions per cycle (interval)", "gauge");
+    emit_gauge_d(out, "montauk_pmu_ipc", s.pmu.ipc);
+    emit_header(out, "montauk_pmu_cycles_per_l2_miss", "Cycles per L2 miss (interval)", "gauge");
+    emit_gauge_d(out, "montauk_pmu_cycles_per_l2_miss", s.pmu.cycles_per_l2_miss);
+    emit_header(out, "montauk_pmu_l2_misses_interval", "L2 misses this interval", "gauge");
+    emit_gauge_u(out, "montauk_pmu_l2_misses_interval", s.pmu.l2_misses);
+    emit_header(out, "montauk_pmu_instructions_per_second", "Instructions per second (interval)", "gauge");
+    emit_gauge_d(out, "montauk_pmu_instructions_per_second", s.pmu.instructions_per_sec);
+
+    emit_header(out, "montauk_pmu_l3_available", "amd_l3 uncore PMU available", "gauge");
+    emit_gauge_i(out, "montauk_pmu_l3_available", s.pmu.l3_available ? 1 : 0);
+    if (s.pmu.l3_available) {
+      // Per-CCX L3 traffic this interval. ccx label = the L3-domain owner CPU.
+      emit_header(out, "montauk_pmu_l3_misses_interval", "L3 misses this interval, per CCX domain", "gauge");
+      for (const auto& d : s.pmu.l3_per_ccx) {
+        char cb[12], vb[20];
+        auto [c1, ce] = std::to_chars(cb, cb + sizeof(cb), d.domain_cpu);
+        auto [v1, ve] = std::to_chars(vb, vb + sizeof(vb), d.misses);
+        out += "montauk_pmu_l3_misses_interval{ccx=\""; out.append(cb, c1);
+        out += "\"} "; out.append(vb, v1); out += '\n';
+      }
+      emit_header(out, "montauk_pmu_l3_accesses_interval", "L3 accesses this interval, per CCX domain", "gauge");
+      for (const auto& d : s.pmu.l3_per_ccx) {
+        char cb[12], vb[20];
+        auto [c1, ce] = std::to_chars(cb, cb + sizeof(cb), d.domain_cpu);
+        auto [v1, ve] = std::to_chars(vb, vb + sizeof(vb), d.accesses);
+        out += "montauk_pmu_l3_accesses_interval{ccx=\""; out.append(cb, c1);
+        out += "\"} "; out.append(vb, v1); out += '\n';
+      }
+      emit_header(out, "montauk_pmu_l3_miss_percent", "L3 miss percent, per CCX domain", "gauge");
+      for (const auto& d : s.pmu.l3_per_ccx) {
+        char cb[12];
+        auto [c1, ce] = std::to_chars(cb, cb + sizeof(cb), d.domain_cpu);
+        out += "montauk_pmu_l3_miss_percent{ccx=\""; out.append(cb, c1);
+        out += "\"} "; append_double(out, d.miss_pct); out += '\n';
+      }
+    }
+  }
+
   // ---- Memory (KB * 1024 -> bytes) ----
   emit_header(out, "montauk_memory_total_bytes", "Total physical memory", "gauge");
   emit_gauge_u(out, "montauk_memory_total_bytes", s.mem.total_kb * 1024ULL);
@@ -250,6 +300,13 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
     emit_header(out, "montauk_filesystem_used_percent", "Filesystem utilization percent", "gauge");
     for (const auto& m : s.fs.mounts)
       emit_labeled_3d(out, "montauk_filesystem_used_percent", "device", m.device, "mountpoint", m.mountpoint, "fstype", m.fstype, m.used_pct);
+  }
+
+  // Providers already speak Prometheus text; pass each snapshot through
+  // verbatim so their metric names and HELP/TYPE lines are preserved.
+  for (const auto& p : s.providers) {
+    out += p.raw_text;
+    if (!p.raw_text.empty() && p.raw_text.back() != '\n') out += '\n';
   }
 
   // ---- Process summary ----
@@ -459,6 +516,30 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
     out += "\"} 1\n";
   }
 
+  // ---- Scheduler-decision counts (per op, summed across CPUs) ----
+  {
+    static const char* const op_name[7] = {
+      "", "enqueue", "pick", "pick_empty", "preempt_tick", "preempt_wakeup", "wakeup"
+    };
+    bool any = false;
+    for (int o = 1; o < 7; ++o)
+      if (t.sched_op_total[o]) { any = true; break; }
+    if (any) {
+      emit_header(out, "montauk_sched_op_total",
+                  "Scheduler-decision tracepoint counts (per op, summed across CPUs)",
+                  "counter");
+      for (int o = 1; o < 7; ++o) {
+        char v[24];
+        auto [pv, ev] = std::to_chars(v, v + sizeof(v), t.sched_op_total[o]);
+        out += "montauk_sched_op_total{op=\"";
+        out += op_name[o];
+        out += "\"} ";
+        out.append(v, pv);
+        out += '\n';
+      }
+    }
+  }
+
   // ---- Per-thread state ----
   if (t.thread_count > 0) {
     emit_header(out, "montauk_trace_thread_state", "Per-thread state for traced group", "gauge");
@@ -491,6 +572,66 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
       out += "\"} ";
       append_double(out, th.cpu_pct);
       out += '\n';
+    }
+
+    // ---- Per-thread current on-CPU core ----
+    emit_header(out, "montauk_trace_thread_cpu", "Per-thread current on-CPU core", "gauge");
+    for (int i = 0; i < t.thread_count; ++i) {
+      const auto& th = t.threads[i];
+      char pid_buf[12], tid_buf[12];
+      auto [p1, e1] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), th.pid);
+      auto [p2, e2] = std::to_chars(tid_buf, tid_buf + sizeof(tid_buf), th.tid);
+      out += "montauk_trace_thread_cpu{pid=\"";
+      out.append(pid_buf, p1);
+      out += "\",tid=\"";
+      out.append(tid_buf, p2);
+      out += "\",comm=\"";
+      append_escaped(out, std::string_view(th.comm));
+      out += "\"} ";
+      char cpu_buf[12];
+      auto [c1, ce] = std::to_chars(cpu_buf, cpu_buf + sizeof(cpu_buf), th.cur_cpu);
+      out.append(cpu_buf, c1);
+      out += '\n';
+    }
+
+    // ---- Per-thread cross-CPU migrations (fork-storm thrash signal) ----
+    emit_header(out, "montauk_trace_thread_migrations", "Per-thread cross-CPU migration count", "counter");
+    for (int i = 0; i < t.thread_count; ++i) {
+      const auto& th = t.threads[i];
+      char pid_buf[12], tid_buf[12];
+      auto [p1, e1] = std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), th.pid);
+      auto [p2, e2] = std::to_chars(tid_buf, tid_buf + sizeof(tid_buf), th.tid);
+      out += "montauk_trace_thread_migrations{pid=\"";
+      out.append(pid_buf, p1);
+      out += "\",tid=\"";
+      out.append(tid_buf, p2);
+      out += "\",comm=\"";
+      append_escaped(out, std::string_view(th.comm));
+      out += "\"} ";
+      char mig_buf[20];
+      auto [m1, me] = std::to_chars(mig_buf, mig_buf + sizeof(mig_buf), th.migrations);
+      out.append(mig_buf, m1);
+      out += '\n';
+    }
+
+    // ---- Global migration classification by CCX (cumulative since attach) ----
+    // The decisive fork-storm signal: intra-CCX moves are the per-core L2-refill
+    // cost (warm L3, cold L2 — what the Zen2 "cache-misses" counter measures);
+    // cross-CCX moves are the Infinity-Fabric c2c cost.
+    {
+      char b[20];
+      emit_header(out, "montauk_trace_migrations_intra_ccx",
+                  "Cross-core migrations within one CCX/L3 domain", "counter");
+      auto [p1, e1] = std::to_chars(b, b + sizeof(b), t.mig_intra_ccx);
+      out += "montauk_trace_migrations_intra_ccx "; out.append(b, p1); out += '\n';
+      emit_header(out, "montauk_trace_migrations_cross_ccx",
+                  "Cross-core migrations across CCX/L3 domains (Infinity-Fabric c2c)", "counter");
+      auto [p2, e2] = std::to_chars(b, b + sizeof(b), t.mig_cross_ccx);
+      out += "montauk_trace_migrations_cross_ccx "; out.append(b, p2); out += '\n';
+      emit_header(out, "montauk_trace_migrations_unknown_ccx",
+                  "Cross-core migrations with unmapped CCX (topology not pushed)", "counter");
+      auto [p3, e3] = std::to_chars(b, b + sizeof(b), t.mig_unknown_ccx);
+      out += "montauk_trace_migrations_unknown_ccx "; out.append(b, p3); out += '\n';
     }
 
     // ---- Per-thread syscall ----

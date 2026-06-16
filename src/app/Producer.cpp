@@ -102,6 +102,7 @@ void Producer::run(std::stop_token st) {
 
   // per-collector cadence
   auto next_cpu = steady_clock::now();
+  auto next_pmu = steady_clock::now();
   auto next_mem = steady_clock::now();
   auto next_gpu = steady_clock::now();
   auto next_net = steady_clock::now();
@@ -109,7 +110,9 @@ void Producer::run(std::stop_token st) {
   auto next_fs = steady_clock::now();
   auto next_proc = steady_clock::now();
   auto next_therm = steady_clock::now();
+  auto next_prov = steady_clock::now();
   const auto cpu_interval = 500ms;
+  const auto pmu_interval = 500ms;
   const auto mem_interval = 500ms;
   const auto gpu_interval = 1000ms;
   const auto net_interval = 1000ms;
@@ -117,6 +120,9 @@ void Producer::run(std::stop_token st) {
   const auto fs_interval = 5000ms;
   const auto proc_interval = 1000ms;
   const auto therm_interval = 2000ms;
+  // Provider scrapes hit unix sockets with a bounded timeout; keep them off
+  // the fast path
+  const auto prov_interval = 1000ms;
   // Publish cadence to smooth UI updates (stable rhythm independent of collector jitter)
   const auto pub_interval = 250ms;
   auto next_pub = steady_clock::now() + pub_interval;
@@ -133,11 +139,13 @@ void Producer::run(std::stop_token st) {
     // (e.g., /proc unavailable), but we continue with stale data for resilience.
     if (proc_) { s.collector_name = proc_->name(); }
     (void)cpu_.sample(s.cpu);
+    if (pmu_enabled_) (void)pmu_.sample(s.pmu);
     (void)mem_.sample(s.mem);
     (void)gpu_.sample(s.vram);
     (void)net_.sample(s.net);
     (void)disk_.sample(s.disk);
     (void)fs_.sample(s.fs);
+    (void)providers_.sample(s.providers);
     if (proc_) (void)proc_->sample(s.procs);
     (void)thermal_.sample(s.thermal);
 
@@ -189,6 +197,7 @@ void Producer::run(std::stop_token st) {
     bool ran = false;
     auto& s = buffers_.back();
     if (now >= next_cpu) { (void)cpu_.sample(s.cpu); next_cpu = now + cpu_interval; ran = true; }
+    if (now >= next_pmu) { if (pmu_enabled_) { (void)pmu_.sample(s.pmu); ran = true; } next_pmu = now + pmu_interval; }
     if (now >= next_mem) { (void)mem_.sample(s.mem); next_mem = now + mem_interval; ran = true; }
     if (now >= next_gpu) { (void)gpu_.sample(s.vram); next_gpu = now + gpu_interval; ran = true; }
     if (now >= next_net) { (void)net_.sample(s.net); next_net = now + net_interval; ran = true; }
@@ -196,6 +205,7 @@ void Producer::run(std::stop_token st) {
     if (now >= next_fs)  { (void)fs_.sample(s.fs);     next_fs  = now + fs_interval; ran = true; }
     if (now >= next_proc){ if (proc_) (void)proc_->sample(s.procs); next_proc = now + proc_interval; ran = true; }
     if (now >= next_therm){ (void)thermal_.sample(s.thermal); next_therm = now + therm_interval; ran = true; }
+    if (now >= next_prov){ (void)providers_.sample(s.providers); next_prov = now + prov_interval; ran = true; }
     bool time_to_publish = false;
     if (now >= next_pub) { time_to_publish = true; next_pub = now + pub_interval; }
     bool nvml_ran = false;
@@ -221,7 +231,7 @@ void Producer::run(std::stop_token st) {
       buffers_.publish();
     }
     // sleep until the earliest next_due or next_pub, bounded
-    auto next_due = std::min({next_cpu, next_mem, next_gpu, next_net, next_disk, next_proc, next_therm, next_pub});
+    auto next_due = std::min({next_cpu, next_pmu, next_mem, next_gpu, next_net, next_disk, next_proc, next_therm, next_prov, next_pub});
     auto sleep_for = duration_cast<milliseconds>(next_due - steady_clock::now());
     if (sleep_for < 20ms) {
       sleep_for = 20ms;

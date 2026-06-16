@@ -47,7 +47,8 @@ struct {
 // Ring buffer for lifecycle events → userspace
 struct {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
-  __uint(max_entries, 256 * 1024); // 256KB (ntsync events are 128 bytes, high-frequency)
+  __uint(max_entries, 1024 * 1024); // 1MB (ntsync events 128B; headroom so a brief
+                                    // flush stall can't overflow before the next drain)
 } events SEC(".maps");
 
 // Per-CPU scratch for ntsync ioctl enter → exit state passing
@@ -66,6 +67,32 @@ struct {
   __type(value, struct fd_bpf_entry);
 } open_scratch SEC(".maps");
 
+// Per-CPU scratch for mmap arg passing (sys_enter_mmap -> sys_exit_mmap).
+// Captures fd/length/prot/flags/offset on enter; emit fires on exit using
+// the syscall return value as the mapped address.
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, u32);
+  __type(value, struct mmap_scratch);
+} mmap_scratch_map SEC(".maps");
+
+// Per-thread scratch for libc heap uprobes (entry → uretprobe).
+// malloc/calloc need to pair size (entry) with addr (return); realloc
+// needs to pair old_addr+size (entry) with new_addr (return). Keyed by
+// tid so concurrent calls from different threads don't collide.
+struct heap_scratch {
+  __u64 size;
+  __u64 old_addr;
+  __u32 op;
+};
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, 4096);
+  __type(key, u32);
+  __type(value, struct heap_scratch);
+} heap_inflight SEC(".maps");
+
 // Discovery map: ALL processes that make syscalls get comm recorded here.
 // Userspace scans this periodically for pattern matching.
 // This is how processes get found — they clone() (no exec), then
@@ -77,7 +104,7 @@ struct {
   __type(value, struct discovery_entry);
 } discovery_map SEC(".maps");
 
-// BPF-side pattern for immediate exec matching — PANDEMONIUM-style.
+// BPF-side pattern for immediate exec matching.
 // const volatile in .rodata: libbpf creates a frozen BPF_F_RDONLY_PROG array,
 // which satisfies bpf_strncmp's requirement for a readonly map pointer.
 // Userspace sets values via skel->rodata->trace_pat before load.
@@ -96,6 +123,57 @@ struct {
   __type(key, u32);
   __type(value, struct match_scratch);
 } match_buf SEC(".maps");
+
+// Per-CPU scheduler-decision counters. The decision tracepoints fire on the
+// dispatch hot path, so aggregating per-CPU (one counter bump, no shared
+// ringbuf reserve) keeps tracing near-zero-overhead there. Userspace sums
+// across CPUs at snapshot time.
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, u32);
+  __type(value, struct sched_op_counters);
+} sched_op_counts SEC(".maps");
+
+// cpu → CCX/L3-domain id. Userspace populates from sysfs L3 shared_cpu_list
+// before attach: CPUs sharing an L3 (one CCX) get the same id. On a monolithic
+// single-L3 part every CPU maps to 0, so every move classifies intra (correct).
+struct {
+  __uint(type, BPF_MAP_TYPE_ARRAY);
+  __uint(max_entries, TRACE_MAX_CPUS);
+  __type(key, u32);
+  __type(value, u32);
+} cpu_ccx SEC(".maps");
+
+// Per-CPU migration classification counters (intra/cross/unknown CCX), bumped on
+// the sched_switch migration path and summed in userspace. Churn-proof, unlike
+// the per-thread thread_bpf_state.migrations that a short-lived thread takes with
+// it when it exits.
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, u32);
+  __type(value, struct mig_ccx_counters);
+} mig_ccx_counts SEC(".maps");
+
+// Per-event streaming of sched-decision events to the ringbuf is a firehose on
+// a hot path; OFF by default. Userspace sets this true only when the binary
+// --trace-out log is active. The per-CPU counters above are always maintained.
+const volatile unsigned char sched_stream = 0;  /* base type: portable into the C++ skeleton (u8 is BPF-only) */
+
+// Heap caller-stack size filter (bytes). Loaded from MONTAUK_HEAP_STACK_SIZE
+// before skeleton load; 0 disables. Non-zero: every malloc/calloc whose
+// requested size equals this also emits a TRACE_EVT_HEAPSTACK carrying the
+// user stack, alongside the normal TRACE_EVT_HEAP record.
+const volatile __u64 heap_stack_size = 0;
+
+static __always_inline void sched_op_bump(u32 op)
+{
+  u32 z = 0;
+  struct sched_op_counters *c = bpf_map_lookup_elem(&sched_op_counts, &z);
+  if (c && op < MONTAUK_SCHED_OP_MAX)
+    c->op[op]++;
+}
 
 // ---- HELPERS ----
 
@@ -206,6 +284,101 @@ static __always_inline void emit_io_event(u32 pid, u32 tid, s32 syscall_nr,
   evt->count = count;
   evt->whence = whence;
   bpf_get_current_comm(evt->comm, sizeof(evt->comm));
+  evt->timestamp_ns = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(evt, 0);
+}
+
+static __always_inline void emit_mmap_event(u32 pid, u32 tid, s32 fd, u64 addr,
+                                            u64 length, u64 offset, u32 prot, u32 flags) {
+  struct montauk_mmap_event *evt;
+  evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
+  if (!evt)
+    return;
+  evt->type = TRACE_EVT_MMAP;
+  evt->pid = pid;
+  evt->tid = tid;
+  evt->fd = fd;
+  evt->addr = addr;
+  evt->length = length;
+  evt->offset = offset;
+  evt->prot = prot;
+  evt->flags = flags;
+  evt->timestamp_ns = bpf_ktime_get_ns();
+  bpf_get_current_comm(evt->comm, sizeof(evt->comm));
+  bpf_ringbuf_submit(evt, 0);
+}
+
+// Emit a keyed-event record (critical-section wait/release by lock identity).
+static __always_inline void emit_keyedevt(u32 op, u64 key) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  struct montauk_keyedevt_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e)
+    return;
+  e->type = TRACE_EVT_KEYEDEVT;
+  e->pid = pid_tgid >> 32;
+  e->tid = (u32)pid_tgid;
+  e->op = op;
+  e->key = key;
+  e->timestamp_ns = bpf_ktime_get_ns();
+  bpf_get_current_comm(e->comm, sizeof(e->comm));
+  bpf_ringbuf_submit(e, 0);
+}
+
+// Emit a SIGNAL event with the current task's user-mode stack snapshot.
+// kind distinguishes synchronous deliver (sig is the actual signal) from
+// post-mortem exit capture (sig = low 7 bits of exit_code, may be 0).
+//
+// bpf_get_stack with BPF_F_USER_STACK walks the userspace stack via either
+// frame pointers (cheap, accurate if -fno-omit-frame-pointer) or DWARF
+// unwind (libbpf installs a CORE-relocated helper for stripped binaries).
+// Wine PE-side code is built without frame pointers in some DLLs; the
+// captured frames may be partial but always include the innermost IP,
+// which is the load-bearing datum for "what was executing when this died."
+static __always_inline void emit_signal_event(void *ctx, u32 kind, u32 pid,
+                                              u32 tid, s32 sig, s32 sender_pid,
+                                              s32 exit_code) {
+  struct montauk_signal_event *evt;
+  evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
+  if (!evt)
+    return;
+  evt->type        = TRACE_EVT_SIGNAL;
+  evt->pid         = pid;
+  evt->tid         = tid;
+  evt->kind        = kind;
+  evt->signal_nr   = sig;
+  evt->sender_pid  = sender_pid;
+  evt->exit_code   = exit_code;
+  evt->timestamp_ns = bpf_ktime_get_ns();
+  bpf_get_current_comm(evt->comm, sizeof(evt->comm));
+
+  // Per-thread state lookup: what syscall was this thread in when the
+  // signal fired? thread_map is keyed by tid and is updated on every
+  // sys_enter/sys_exit. If the entry exists (we've seen this thread
+  // before), copy syscall_nr and the first two args plus io_fd.
+  evt->syscall_nr  = -1;
+  evt->io_fd       = -1;
+  evt->syscall_arg0 = 0;
+  evt->syscall_arg1 = 0;
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (ts) {
+    evt->syscall_nr   = ts->syscall_nr;
+    evt->io_fd        = ts->io_fd;
+    evt->syscall_arg0 = ts->syscall_arg0;
+    evt->syscall_arg1 = ts->syscall_arg1;
+  }
+
+  // bpf_get_stack returns size in bytes; convert to frame count.
+  // BPF_F_USER_STACK walks user-mode stack; without it we'd get kernel stack.
+  // ctx is the tracepoint context (or pt_regs for uprobes); required by
+  // the verifier so the helper can reach pt_regs->ip/sp for the unwinder.
+  long stack_bytes = bpf_get_stack(ctx, evt->stack_user,
+                                   sizeof(evt->stack_user),
+                                   BPF_F_USER_STACK);
+  if (stack_bytes > 0)
+    evt->stack_depth = (u32)(stack_bytes / sizeof(__u64));
+  else
+    evt->stack_depth = 0;
+
   bpf_ringbuf_submit(evt, 0);
 }
 
@@ -286,20 +459,72 @@ int handle_exit(struct trace_event_raw_sched_process_exit *ctx) {
   // Do NOT delete from proc_map — userspace needs to read the exit data.
   // Userspace is responsible for cleaning up after scraping.
   struct proc_bpf_info *info = bpf_map_lookup_elem(&proc_map, &pid);
+  int code = 0;
   if (info) {
     info->exited = 1;
     info->exit_ts = bpf_ktime_get_ns();
     // Exit code from task_struct: (exit_code >> 8) = status, (exit_code & 0x7f) = signal
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
     if (task) {
-      int code = 0;
       bpf_probe_read_kernel(&code, sizeof(code), &task->exit_code);
       info->exit_code = code;
     }
   }
 
+  // Abnormal-exit stack snapshot: if the task died via signal OR with a
+  // non-zero status, emit a SIGEVT_EXIT_ABNL with the user stack at the
+  // point of death. The low 7 bits of exit_code are the signal that killed
+  // the task (or 0 if a clean exit(N)); the high byte is the status.
+  // This complements signal_deliver — for SIGKILL the kernel doesn't always
+  // dispatch a signal_deliver event (the task may never re-enter user mode),
+  // so capturing at sched_process_exit catches what signal_deliver misses.
+  s32 sig_low = code & 0x7f;
+  s32 status  = (code >> 8) & 0xff;
+  if (sig_low != 0 || status != 0) {
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 tid = (u32)pid_tgid;
+    emit_signal_event(ctx, SIGEVT_EXIT_ABNL, pid, tid,
+                      sig_low, 0 /* sender unknown at exit */, code);
+  }
+
   // Thread cleanup: delete this tid from thread_map
   bpf_map_delete_elem(&thread_map, &pid);
+  return 0;
+}
+
+// signal_deliver fires when the kernel is about to dispatch a signal to a
+// user-mode task. Captures the signal number + sender + user stack so the
+// next userspace digest can answer "what was thread X doing when it got
+// SIGSEGV?" without WINEDEBUG. Only emits for signals we care about (the
+// fatal/anomaly class); arbitrary SIGCHLD / SIGURG noise is filtered.
+SEC("tp/signal/signal_deliver")
+int handle_signal_deliver(struct trace_event_raw_signal_deliver *ctx) {
+  u32 pid = bpf_get_current_pid_tgid() >> 32;
+  if (!is_tracked(pid))
+    return 0;
+
+  s32 sig = ctx->sig;
+  // Whitelist of "interesting" signals — the ones that mean death or
+  // memory/state corruption. SIGTERM included because games sometimes use
+  // it as a graceful shutdown trigger we want logged.
+  switch (sig) {
+    case 4:   // SIGILL
+    case 6:   // SIGABRT
+    case 7:   // SIGBUS
+    case 8:   // SIGFPE
+    case 9:   // SIGKILL (rarely dispatched here, but try)
+    case 11:  // SIGSEGV
+    case 5:   // SIGTRAP (INT 3, __debugbreak)
+    case 15:  // SIGTERM
+      break;
+    default:
+      return 0;
+  }
+
+  u32 tid = (u32)bpf_get_current_pid_tgid();
+  emit_signal_event(ctx, SIGEVT_DELIVER, pid, tid, sig,
+                    0 /* sender filled by signal_generate if interleaved */,
+                    0 /* exit_code irrelevant on deliver */);
   return 0;
 }
 
@@ -332,6 +557,21 @@ static __always_inline u8 ntsync_cmd_to_op(u32 cmd) {
 }
 
 // ---- SYSCALL TRACING ----
+
+// Resolve an fd in the current task to its kernel object identity
+// (file->private_data). This pointer is the same struct on both sides of an
+// SCM_RIGHTS fd pass, so it lets a thread's wait object be matched to the
+// thread that signals it — even though the two hold different fd numbers.
+static __always_inline __u64 montauk_fd_obj(int fd) {
+  if (fd < 0 || fd >= 65536) return 0;
+  struct task_struct *t = (struct task_struct *)bpf_get_current_task();
+  struct file **fdarr = BPF_CORE_READ(t, files, fdt, fd);
+  if (!fdarr) return 0;
+  struct file *f = NULL;
+  bpf_probe_read_kernel(&f, sizeof(f), &fdarr[fd]);
+  if (!f) return 0;
+  return (__u64)BPF_CORE_READ(f, private_data);
+}
 
 SEC("tp/raw_syscalls/sys_enter")
 int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
@@ -402,6 +642,14 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
   if (!is_tracked(pid))
     return 0;
 
+  /* FUTEX (x86_64 syscall 202): capture op (arg1: FUTEX_WAIT=0 / FUTEX_WAKE=1
+   * plus PRIVATE/CLOCK flags), val (arg2), and uaddr (arg0) for tracked
+   * threads. Answers the lost-wakeup question: is a FUTEX_WAKE issued against
+   * a blocked worker that then never re-enqueues? Reuses the IO event slots
+   * (op->fd, val->result, uaddr->count). */
+  if (syscall_id == 202)
+    emit_io_event(pid, tid, 202, (s32)arg1, (s64)arg2, arg0, 0);
+
   struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
   if (ts) {
     ts->syscall_nr = syscall_id;
@@ -416,6 +664,7 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
     new_ts.syscall_arg1 = arg1;
     new_ts.state = 0; // R
     new_ts.io_fd = -1;
+    new_ts.cur_cpu = -1; // not yet scheduled -> first sched-in is not a migration
     bpf_get_current_comm(new_ts.comm, sizeof(new_ts.comm));
     bpf_map_update_elem(&thread_map, &tid, &new_ts, BPF_ANY);
   }
@@ -478,6 +727,20 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
                 we->wait_owner = s->wait_owner;
                 we->wait_alert = s->wait_alert;
                 __builtin_memcpy(we->wait_fds, s->wait_fds, sizeof(we->wait_fds));
+                // Resolve object identities at entry too: a parked wait never
+                // reaches sys_exit, so this is the only place the stuck object
+                // gets a real pointer.
+                we->obj_ptr = 0;
+                __builtin_memset(we->wait_objs, 0, sizeof(we->wait_objs));
+                {
+                  u32 wn = s->wait_count;
+                  if (wn > NTSYNC_MAX_WAIT_FDS) wn = NTSYNC_MAX_WAIT_FDS;
+                  #pragma unroll
+                  for (u32 wi = 0; wi < NTSYNC_MAX_WAIT_FDS; wi++) {
+                    if (wi >= wn) break;
+                    we->wait_objs[wi] = montauk_fd_obj((int)s->wait_fds[wi]);
+                  }
+                }
                 bpf_get_current_comm(we->comm, sizeof(we->comm));
                 bpf_ringbuf_submit(we, 0);
               }
@@ -530,6 +793,22 @@ int handle_sys_exit(struct trace_event_raw_sys_exit *ctx) {
         evt->wait_owner = s->wait_owner;
         evt->wait_alert = s->wait_alert;
         __builtin_memcpy(evt->wait_fds, s->wait_fds, sizeof(evt->wait_fds));
+        // Kernel object identities for cross-fd matching (lost-wakeup resolver):
+        // waits resolve each object fd; signal/read ops resolve their own fd.
+        evt->obj_ptr = 0;
+        __builtin_memset(evt->wait_objs, 0, sizeof(evt->wait_objs));
+        if (s->op == NTS_WAIT_ANY || s->op == NTS_WAIT_ALL) {
+          u32 wn = s->wait_count;
+          if (wn > NTSYNC_MAX_WAIT_FDS) wn = NTSYNC_MAX_WAIT_FDS;
+          #pragma unroll
+          for (u32 wi = 0; wi < NTSYNC_MAX_WAIT_FDS; wi++) {
+            if (wi >= wn) break;
+            evt->wait_objs[wi] = montauk_fd_obj((int)s->wait_fds[wi]);
+          }
+        } else if (s->op != NTS_CREATE_SEM && s->op != NTS_CREATE_MUTEX &&
+                   s->op != NTS_CREATE_EVENT) {
+          evt->obj_ptr = montauk_fd_obj(s->fd);
+        }
         bpf_get_current_comm(evt->comm, sizeof(evt->comm));
 
         // WAIT ops: read back index (OUT param at offset 20)
@@ -580,9 +859,12 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
 
     // Map prev_state to our state encoding
     long prev_state = ctx->prev_state;
-    if (prev_state == 0)
+    if (prev_state == 0) {
       prev->state = 0; // R (preempted, still runnable)
-    else if (prev_state & 0x01) // TASK_INTERRUPTIBLE
+      // Involuntary preempt: runnable but lost the CPU. Stamp so the next
+      // sched-in measures the runqueue wait (bcc runqlat re-enqueue case).
+      prev->wake_ns = now;
+    } else if (prev_state & 0x01) // TASK_INTERRUPTIBLE
       prev->state = 1; // S
     else if (prev_state & 0x02) // TASK_UNINTERRUPTIBLE
       prev->state = 2; // D
@@ -600,9 +882,101 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
   if (next) {
     next->enter_ns = now;
     next->state = 0; // R (running)
+    // ON-CPU + MIGRATION: count a cross-CPU move when the running core changes,
+    // and classify it intra- vs cross-CCX by the L3 domain of src/dst core.
+    int cpu = (int)bpf_get_smp_processor_id();
+    int cross_ccx = 0;  // did this sched-in land on a different CCX than last run
+    if (next->cur_cpu >= 0 && next->cur_cpu != cpu) {
+      next->migrations += 1;
+      u32 src = (u32)next->cur_cpu, dst = (u32)cpu;
+      u32 *sc = (src < TRACE_MAX_CPUS) ? bpf_map_lookup_elem(&cpu_ccx, &src) : NULL;
+      u32 *dc = (dst < TRACE_MAX_CPUS) ? bpf_map_lookup_elem(&cpu_ccx, &dst) : NULL;
+      u32 zero = 0;
+      struct mig_ccx_counters *m = bpf_map_lookup_elem(&mig_ccx_counts, &zero);
+      if (sc && dc) {
+        if (*sc == *dc) { if (m) m->intra += 1; }
+        else { cross_ccx = 1; if (m) m->cross += 1; }
+      } else if (m) {
+        m->unknown += 1;
+      }
+    }
+    next->cur_cpu = cpu;
+
+    // WAKE-TO-RUN: drain a pending became-runnable stamp into one latency
+    // sample. The timestamps are kernel-side (sched_wakeup / preempt -> here),
+    // so no userspace measurer is in the path -- the artifact that made wall-
+    // clock IPC timing unusable is structurally absent. Tagged cross_ccx so the
+    // tail can be attributed to cross-CCX placement.
+    if (sched_stream && next->wake_ns) {
+      u64 d = (now > next->wake_ns) ? (now - next->wake_ns) : 0;
+      struct montauk_sched_event *we =
+          bpf_ringbuf_reserve(&events, sizeof(*we), 0);
+      if (we) {
+        we->type          = TRACE_EVT_SCHED;
+        we->op            = SCHED_OP_WAKE2RUN;
+        we->cpu           = (u32)cpu;
+        we->pid           = (int)next_tid;
+        we->secondary_pid = -1;
+        we->last_cpu      = -1;
+        we->sub_idx       = (u32)cross_ccx;
+        we->score         = 0;
+        we->runtime_ns    = d;
+        we->budget_ns     = 0;
+        we->timestamp_ns  = now;
+        bpf_ringbuf_submit(we, 0);
+      }
+    }
+    next->wake_ns = 0;
     // comm is already set by handle_sys_enter via bpf_get_current_comm()
   }
 
+  return 0;
+}
+
+// Generic kernel wakeup tracepoint. Field layout mirrors the stable
+// sched:sched_wakeup ABI: 8-byte common header, then comm/pid/prio/target_cpu.
+// ctx->pid is the woken thread's TID; ctx->target_cpu is the CPU it's being
+// made runnable on. Lets us distinguish woken-but-not-dispatched from
+// never-woken when a thread strands. Scoped to the traced group (thread_map
+// for enrolled threads, proc_map for a main thread where tid==tgid) so this
+// high-frequency tracepoint stays near-zero-overhead for everything else.
+struct trace_event_raw_sched_wakeup_compat {
+  unsigned long long pad;
+  char comm[16];
+  int  pid;        // woken TID
+  int  prio;
+  int  target_cpu;
+};
+
+SEC("tp/sched/sched_wakeup")
+int handle_sched_wakeup(struct trace_event_raw_sched_wakeup_compat *ctx) {
+  sched_op_bump(SCHED_OP_WAKEUP);
+  if (!sched_stream)
+    return 0;
+
+  u32 woken = (u32)ctx->pid;
+  struct thread_bpf_state *wt = bpf_map_lookup_elem(&thread_map, &woken);
+  // Gate to the traced group: enrolled thread, or a tracked tgid (main thread).
+  if (!wt && !is_tracked(woken))
+    return 0;
+  // Stamp became-runnable time; sched-in drains it into a wake-to-run sample.
+  if (wt)
+    wt->wake_ns = bpf_ktime_get_ns();
+
+  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return 0;
+  e->type          = TRACE_EVT_SCHED;
+  e->op            = SCHED_OP_WAKEUP;
+  e->cpu           = (u32)ctx->target_cpu;
+  e->pid           = ctx->pid;
+  e->secondary_pid = -1;
+  e->last_cpu      = -1;
+  e->sub_idx       = 0;
+  e->score         = 0;
+  e->runtime_ns    = 0;
+  e->budget_ns     = 0;
+  e->timestamp_ns  = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
 
@@ -891,6 +1265,67 @@ int handle_pread64_exit(struct trace_event_raw_sys_exit *ctx) {
   return 0;
 }
 
+// -- mmap (syscall 9) --
+//
+// File-backed mmap is the path Unity-style asset loaders use when they call
+// MapViewOfFile (or, on Linux, mmap directly on a file fd). It bypasses
+// pread/read entirely so without this tracepoint a Unity bundle access is
+// invisible. We filter out anonymous mappings at BPF (flags & MAP_ANONYMOUS)
+// so the ring buffer doesn't get drowned by malloc-arena mmaps.
+
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS 0x20
+#endif
+
+SEC("tp/syscalls/sys_enter_mmap")
+int handle_mmap_enter(struct trace_event_raw_sys_enter *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  u32 flags = (u32)ctx->args[3];
+  if (flags & MAP_ANONYMOUS)
+    return 0; // skip anon mappings (malloc arenas, stacks)
+
+  u32 zero = 0;
+  struct mmap_scratch *s = bpf_map_lookup_elem(&mmap_scratch_map, &zero);
+  if (!s)
+    return 0;
+
+  s->length = ctx->args[1];
+  s->prot   = (u32)ctx->args[2];
+  s->flags  = flags;
+  s->fd     = (s32)ctx->args[4];
+  s->offset = ctx->args[5];
+  return 0;
+}
+
+SEC("tp/syscalls/sys_exit_mmap")
+int handle_mmap_exit(struct trace_event_raw_sys_exit *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  u32 zero = 0;
+  struct mmap_scratch *s = bpf_map_lookup_elem(&mmap_scratch_map, &zero);
+  if (!s)
+    return 0;
+
+  // Filter again on exit — if enter was skipped (anon) the scratch holds
+  // stale data from a previous mmap; skip if flags shows anon.
+  if (s->flags & MAP_ANONYMOUS)
+    return 0;
+
+  emit_mmap_event(pid, tid, s->fd, (u64)ctx->ret, s->length, s->offset,
+                  s->prot, s->flags);
+  return 0;
+}
+
 // -- fstat / newfstat (syscall 5) --
 
 SEC("tp/syscalls/sys_enter_newfstat")
@@ -941,3 +1376,416 @@ int handle_fstat_exit(struct trace_event_raw_sys_exit *ctx) {
 // ntsync ioctl handlers are integrated into handle_sys_enter/handle_sys_exit
 // above via the raw_syscalls tracepoints (sys_enter_ioctl doesn't exist on
 // all kernels). The ntsync filter checks syscall_nr == 16 and magic 'N'.
+
+// ============================================================================
+// Scheduler-decision tracepoints (generic). Captures the universal scheduler
+// decision points -- enqueue, pick, pick_empty, preempt_tick, preempt_wakeup.
+// These programs carry a neutral placeholder SEC and are NOT auto-attached;
+// the collector attaches them at runtime to the active scheduler's tracepoints
+// (category:name from config), so montauk names no scheduler in source. The
+// structs below are the generic decision-event field contract a scheduler
+// emits to. Emitted unconditionally (no pid filter) so the scheduler's
+// mechanism is visible even before any process group is tracked.
+// ============================================================================
+
+struct trace_event_raw_sched_enqueue {
+  unsigned long long pad;
+  int          pid;
+  int          cpu;
+  int          last_cpu;
+  unsigned int sub_idx;
+  u64          score;
+};
+
+struct trace_event_raw_sched_pick {
+  unsigned long long pad;
+  int pid;
+  int cpu;
+  u64 score;
+};
+
+struct trace_event_raw_sched_pick_empty {
+  unsigned long long pad;
+  int cpu;
+};
+
+struct trace_event_raw_sched_preempt_tick {
+  unsigned long long pad;
+  int pid;
+  int cpu;
+  u64 runtime_ns;
+  u64 budget_ns;
+};
+
+struct trace_event_raw_sched_preempt_wakeup {
+  unsigned long long pad;
+  int waker;
+  int wakee;
+  int cpu;
+};
+
+SEC("tp/sched_decision/enqueue")
+int handle_sched_enqueue(struct trace_event_raw_sched_enqueue *ctx) {
+  sched_op_bump(SCHED_OP_ENQUEUE);
+  if (!sched_stream)
+    return 0;
+  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return 0;
+  e->type          = TRACE_EVT_SCHED;
+  e->op            = SCHED_OP_ENQUEUE;
+  e->cpu           = (u32)ctx->cpu;
+  e->pid           = ctx->pid;
+  e->secondary_pid = -1;
+  e->last_cpu      = ctx->last_cpu;
+  e->sub_idx       = ctx->sub_idx;
+  e->score         = ctx->score;
+  e->runtime_ns    = 0;
+  e->budget_ns     = 0;
+  e->timestamp_ns  = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(e, 0);
+  return 0;
+}
+
+SEC("tp/sched_decision/pick")
+int handle_sched_pick(struct trace_event_raw_sched_pick *ctx) {
+  sched_op_bump(SCHED_OP_PICK);
+  if (!sched_stream)
+    return 0;
+  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return 0;
+  e->type          = TRACE_EVT_SCHED;
+  e->op            = SCHED_OP_PICK;
+  e->cpu           = (u32)ctx->cpu;
+  e->pid           = ctx->pid;
+  e->secondary_pid = -1;
+  e->last_cpu      = -1;
+  e->sub_idx       = 0;
+  e->score         = ctx->score;
+  e->runtime_ns    = 0;
+  e->budget_ns     = 0;
+  e->timestamp_ns  = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(e, 0);
+  return 0;
+}
+
+SEC("tp/sched_decision/pick_empty")
+int handle_sched_pick_empty(struct trace_event_raw_sched_pick_empty *ctx) {
+  sched_op_bump(SCHED_OP_PICK_EMPTY);
+  if (!sched_stream)
+    return 0;
+  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return 0;
+  e->type          = TRACE_EVT_SCHED;
+  e->op            = SCHED_OP_PICK_EMPTY;
+  e->cpu           = (u32)ctx->cpu;
+  e->pid           = -1;
+  e->secondary_pid = -1;
+  e->last_cpu      = -1;
+  e->sub_idx       = 0;
+  e->score         = 0;
+  e->runtime_ns    = 0;
+  e->budget_ns     = 0;
+  e->timestamp_ns  = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(e, 0);
+  return 0;
+}
+
+SEC("tp/sched_decision/preempt_tick")
+int handle_sched_preempt_tick(struct trace_event_raw_sched_preempt_tick *ctx) {
+  sched_op_bump(SCHED_OP_PREEMPT_TICK);
+  if (!sched_stream)
+    return 0;
+  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return 0;
+  e->type          = TRACE_EVT_SCHED;
+  e->op            = SCHED_OP_PREEMPT_TICK;
+  e->cpu           = (u32)ctx->cpu;
+  e->pid           = ctx->pid;
+  e->secondary_pid = -1;
+  e->last_cpu      = -1;
+  e->sub_idx       = 0;
+  e->score         = 0;
+  e->runtime_ns    = ctx->runtime_ns;
+  e->budget_ns     = ctx->budget_ns;
+  e->timestamp_ns  = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(e, 0);
+  return 0;
+}
+
+SEC("tp/sched_decision/preempt_wakeup")
+int handle_sched_preempt_wakeup(struct trace_event_raw_sched_preempt_wakeup *ctx) {
+  sched_op_bump(SCHED_OP_PREEMPT_WAKEUP);
+  if (!sched_stream)
+    return 0;
+  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return 0;
+  e->type          = TRACE_EVT_SCHED;
+  e->op            = SCHED_OP_PREEMPT_WAKEUP;
+  e->cpu           = (u32)ctx->cpu;
+  e->pid           = ctx->wakee;
+  e->secondary_pid = ctx->waker;
+  e->last_cpu      = -1;
+  e->sub_idx       = 0;
+  e->score         = 0;
+  e->runtime_ns    = 0;
+  e->budget_ns     = 0;
+  e->timestamp_ns  = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(e, 0);
+  return 0;
+}
+
+// ============================================================================
+// Thread enrollment via task iterator. The reactive sys_enter path only learns
+// a thread on its FIRST syscall; a process that spawns a burst of threads can
+// outrun that and leave most of them untracked. This iterator sweeps every task
+// and enrolls each thread whose process is tracked into thread_map, so coverage
+// is COMPLETE regardless of how fast threads appear. Driven from userspace each
+// scan; scoped purely by proc_map membership -- fully process-agnostic, no /proc.
+// ============================================================================
+SEC("iter/task")
+int enroll_threads(struct bpf_iter__task *ctx) {
+  struct task_struct *task = ctx->task;
+  if (!task)
+    return 0;
+
+  u32 tgid = BPF_CORE_READ(task, tgid);
+  if (!is_tracked(tgid))
+    return 0;
+
+  u32 tid = BPF_CORE_READ(task, pid);   // kernel 'pid' field = thread id
+  if (bpf_map_lookup_elem(&thread_map, &tid))
+    return 0;                            // already enrolled
+
+  struct thread_bpf_state ts = {};
+  ts.pid        = tgid;
+  ts.tid        = tid;
+  ts.syscall_nr = -1;                    // unknown until first syscall
+  ts.state      = 0;                     // R; sched_switch refines
+  ts.io_fd      = -1;
+  BPF_CORE_READ_STR_INTO(&ts.comm, task, comm);
+  bpf_map_update_elem(&thread_map, &tid, &ts, BPF_ANY);
+  return 0;
+}
+
+// ============================================================================
+// HEAP UPROBES — libc malloc/free/realloc/calloc
+// ============================================================================
+// Attached at runtime by BpfTraceCollector to /usr/lib/libc.so.6 symbols.
+// Pairs entry (size) with uretprobe (return ptr) via per-thread scratch
+// keyed by tid in heap_inflight.
+//
+// Per-event overhead: ~1 hash map insert + 1 lookup + 1 ringbuf reserve.
+// Negligible for non-traced threads (is_tracked() check first).
+//
+// Why heap visibility matters: glibc's "double free or corruption (!prev)"
+// abort happens at a malloc/free call site, but the corrupting WRITE can
+// be much earlier. With the full allocation timeline we can:
+//   - Identify the chunk address that was reported corrupt (from coredump)
+//   - Find the malloc that returned that address (its size + return-IP)
+//   - Find any free of the same address (double-free detection)
+//   - Find any write to addr+N that crosses chunk boundaries
+
+static __always_inline void emit_heap(u32 op, u64 addr, u64 size, u64 new_addr) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+  if (!is_tracked(pid)) return;
+  struct montauk_heap_event *e =
+      bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return;
+  e->type         = TRACE_EVT_HEAP;
+  e->pid          = pid;
+  e->tid          = tid;
+  e->op           = op;
+  e->addr         = addr;
+  e->size         = size;
+  e->new_addr     = new_addr;
+  e->timestamp_ns = bpf_ktime_get_ns();
+  bpf_get_current_comm(e->comm, sizeof(e->comm));
+  bpf_ringbuf_submit(e, 0);
+}
+
+// Caller-stack companion to emit_heap, gated on the .rodata size filter.
+static __always_inline void emit_heapstack(void *ctx, u32 op, u64 addr, u64 size) {
+  if (!heap_stack_size || size != heap_stack_size) return;
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  if (!is_tracked(pid)) return;
+  struct montauk_heapstack_event *e =
+      bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return;
+  e->type         = TRACE_EVT_HEAPSTACK;
+  e->pid          = pid;
+  e->tid          = (u32)pid_tgid;
+  e->op           = op;
+  e->addr         = addr;
+  e->size         = size;
+  e->_pad         = 0;
+  e->timestamp_ns = bpf_ktime_get_ns();
+  bpf_get_current_comm(e->comm, sizeof(e->comm));
+  long stack_bytes = bpf_get_stack(ctx, e->stack_user, sizeof(e->stack_user),
+                                   BPF_F_USER_STACK);
+  e->stack_depth = stack_bytes > 0 ? (u32)(stack_bytes / sizeof(__u64)) : 0;
+  bpf_ringbuf_submit(e, 0);
+}
+
+SEC("uprobe")
+int BPF_KPROBE(uprobe_malloc, size_t size) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  if (!is_tracked(pid)) return 0;
+  u32 tid = (u32)pid_tgid;
+  struct heap_scratch s = { .size = size, .old_addr = 0, .op = HEAP_OP_MALLOC };
+  bpf_map_update_elem(&heap_inflight, &tid, &s, BPF_ANY);
+  return 0;
+}
+
+SEC("uretprobe")
+int BPF_KRETPROBE(uretprobe_malloc, void *ret) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 tid = (u32)pid_tgid;
+  struct heap_scratch *s = bpf_map_lookup_elem(&heap_inflight, &tid);
+  if (!s) return 0;
+  emit_heap(HEAP_OP_MALLOC, (u64)ret, s->size, 0);
+  emit_heapstack(ctx, HEAP_OP_MALLOC, (u64)ret, s->size);
+  bpf_map_delete_elem(&heap_inflight, &tid);
+  return 0;
+}
+
+SEC("uprobe")
+int BPF_KPROBE(uprobe_free, void *ptr) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  if (!is_tracked(pid)) return 0;
+  /* free has no return value worth recording — emit at entry directly. */
+  emit_heap(HEAP_OP_FREE, (u64)ptr, 0, 0);
+  return 0;
+}
+
+SEC("uprobe")
+int BPF_KPROBE(uprobe_realloc, void *old_ptr, size_t size) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  if (!is_tracked(pid)) return 0;
+  u32 tid = (u32)pid_tgid;
+  struct heap_scratch s = { .size = size, .old_addr = (u64)old_ptr,
+                            .op = HEAP_OP_REALLOC };
+  bpf_map_update_elem(&heap_inflight, &tid, &s, BPF_ANY);
+  return 0;
+}
+
+SEC("uretprobe")
+int BPF_KRETPROBE(uretprobe_realloc, void *ret) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 tid = (u32)pid_tgid;
+  struct heap_scratch *s = bpf_map_lookup_elem(&heap_inflight, &tid);
+  if (!s) return 0;
+  /* addr = old pointer (input), new_addr = return value, size = requested */
+  emit_heap(HEAP_OP_REALLOC, s->old_addr, s->size, (u64)ret);
+  bpf_map_delete_elem(&heap_inflight, &tid);
+  return 0;
+}
+
+SEC("uprobe")
+int BPF_KPROBE(uprobe_calloc, size_t nmemb, size_t size) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  if (!is_tracked(pid)) return 0;
+  u32 tid = (u32)pid_tgid;
+  struct heap_scratch s = { .size = nmemb * size, .old_addr = 0,
+                            .op = HEAP_OP_CALLOC };
+  bpf_map_update_elem(&heap_inflight, &tid, &s, BPF_ANY);
+  return 0;
+}
+
+SEC("uretprobe")
+int BPF_KRETPROBE(uretprobe_calloc, void *ret) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 tid = (u32)pid_tgid;
+  struct heap_scratch *s = bpf_map_lookup_elem(&heap_inflight, &tid);
+  if (!s) return 0;
+  emit_heap(HEAP_OP_CALLOC, (u64)ret, s->size, 0);
+  emit_heapstack(ctx, HEAP_OP_CALLOC, (u64)ret, s->size);
+  bpf_map_delete_elem(&heap_inflight, &tid);
+  return 0;
+}
+
+// ============================================================================
+// ABORT-PATH UPROBES — libc __assert_fail / __libc_message / abort
+// ============================================================================
+// Attached at runtime by BpfTraceCollector to libc, same best-effort path as
+// the heap uprobes. glibc prints its fatal diagnostics (assert text, "double
+// free or corruption", fortify/stack-smash reports via __libc_message) to the
+// dying process's stderr and then raises SIGABRT. The SIGNAL event already
+// records the death; these record WHY — the abort text and the caller stack
+// at the abort call site, before SEH/signal handling can smear it.
+// __libc_message is internal and may not resolve on a stripped libc; abort()
+// still fires for that path (malloc_printerr → __libc_message → abort) and
+// carries the caller stack.
+
+static __always_inline void emit_abort(void *ctx, u32 func, u32 line,
+                                       const char *msg, const char *loc) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  if (!is_tracked(pid)) return;
+  struct montauk_abort_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return;
+  e->type         = TRACE_EVT_ABORT;
+  e->pid          = pid;
+  e->tid          = (u32)pid_tgid;
+  e->func         = func;
+  e->line         = line;
+  e->timestamp_ns = bpf_ktime_get_ns();
+  bpf_get_current_comm(e->comm, sizeof(e->comm));
+  e->msg[0] = 0;
+  e->loc[0] = 0;
+  if (msg) bpf_probe_read_user_str(e->msg, sizeof(e->msg), msg);
+  if (loc) bpf_probe_read_user_str(e->loc, sizeof(e->loc), loc);
+  long stack_bytes = bpf_get_stack(ctx, e->stack_user, sizeof(e->stack_user),
+                                   BPF_F_USER_STACK);
+  e->stack_depth = stack_bytes > 0 ? (u32)(stack_bytes / sizeof(__u64)) : 0;
+  bpf_ringbuf_submit(e, 0);
+}
+
+SEC("uprobe")
+int BPF_KPROBE(uprobe_assert_fail, const char *assertion, const char *file,
+               unsigned int line) {
+  emit_abort(ctx, ABORT_FN_ASSERT_FAIL, line, assertion, file);
+  return 0;
+}
+
+// __libc_message(fmt, ...): glibc's fatal-error printer (malloc_printerr,
+// __fortify_fail, ...). Callers pass the human-readable text as the first
+// vararg of a "%s\n"-style fmt — capture both fmt and that first vararg.
+SEC("uprobe")
+int BPF_KPROBE(uprobe_libc_message, const char *fmt, const char *arg1) {
+  emit_abort(ctx, ABORT_FN_LIBC_MESSAGE, 0, arg1, fmt);
+  return 0;
+}
+
+SEC("uprobe")
+int BPF_KPROBE(uprobe_abort) {
+  emit_abort(ctx, ABORT_FN_ABORT, 0, NULL, NULL);
+  return 0;
+}
+
+// Keyed-event uprobes on ntdll.so. Critical sections (loader_section, etc.)
+// block/wake here with the CRITICAL_SECTION address as arg1 ("key"):
+//   NtWaitForKeyedEvent(HANDLE handle, const void *key, BOOLEAN, const LARGE_INTEGER*)
+//   NtReleaseKeyedEvent(HANDLE handle, const void *key, BOOLEAN, const LARGE_INTEGER*)
+// Capturing the key reveals who waits on / releases each lock by identity.
+SEC("uprobe")
+int BPF_KPROBE(uprobe_keyed_wait, void *handle, void *key) {
+  u32 pid = bpf_get_current_pid_tgid() >> 32;
+  if (!is_tracked(pid)) return 0;
+  emit_keyedevt(KEVT_WAIT, (u64)key);
+  return 0;
+}
+
+SEC("uprobe")
+int BPF_KPROBE(uprobe_keyed_release, void *handle, void *key) {
+  u32 pid = bpf_get_current_pid_tgid() >> 32;
+  if (!is_tracked(pid)) return 0;
+  emit_keyedevt(KEVT_RELEASE, (u64)key);
+  return 0;
+}

@@ -1,12 +1,58 @@
 #include "collectors/BpfTraceCollector.hpp"
 #include "montauk_trace.h"
+#include "model/TraceBinary.hpp"
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include "montauk_trace.skel.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <charconv>
+#include <ctime>
+#include <fcntl.h>
 #include <unistd.h>
+#include <fstream>
+#include <string>
+#include <map>
+
+namespace {
+// Flush the binary trace buffer once it crosses this size — one write()
+// per ~256 KB instead of per event.
+constexpr size_t kTraceFlushThreshold = 256 * 1024;
+
+// Build cpu -> CCX/L3-domain id from sysfs and push it into the BPF cpu_ccx map.
+// CPUs sharing an L3 (one CCX) get the same id; a monolithic single-L3 part maps
+// every CPU to 0. Same grouping the scheduler's own topology layer derives, so
+// sched_switch can classify each migration as intra- vs cross-CCX.
+void populate_cpu_ccx_map(int map_fd) {
+  if (map_fd < 0) return;
+  int ncpu = libbpf_num_possible_cpus();
+  if (ncpu <= 0) ncpu = 1;
+  if (ncpu > TRACE_MAX_CPUS) ncpu = TRACE_MAX_CPUS;
+  std::map<std::string, uint32_t> list_to_ccx;
+  uint32_t next_ccx = 0;
+  for (int cpu = 0; cpu < ncpu; ++cpu) {
+    char path[128];
+    std::snprintf(path, sizeof(path),
+        "/sys/devices/system/cpu/cpu%d/cache/index3/shared_cpu_list", cpu);
+    std::ifstream f(path);
+    std::string list;
+    if (f) std::getline(f, list);
+    uint32_t ccx;
+    if (list.empty()) {
+      ccx = 0;  // no L3 info (monolithic / offline) -> single domain
+    } else {
+      auto it = list_to_ccx.find(list);
+      if (it == list_to_ccx.end()) { ccx = next_ccx++; list_to_ccx[list] = ccx; }
+      else ccx = it->second;
+    }
+    uint32_t key = static_cast<uint32_t>(cpu);
+    bpf_map_update_elem(map_fd, &key, &ccx, BPF_ANY);
+  }
+  std::fprintf(stderr, "montauk: cpu_ccx populated (%d cpus, %zu CCX domains)\n",
+               ncpu, list_to_ccx.empty() ? size_t{1} : list_to_ccx.size());
+}
+}
 
 namespace montauk::collectors {
 
@@ -66,6 +112,8 @@ BpfTraceCollector::~BpfTraceCollector() {
   stop();
   if (rb_)
     ring_buffer__free(rb_);
+  if (enroll_iter_link_)
+    bpf_link__destroy(enroll_iter_link_);
   if (skel_)
     montauk_trace_bpf__destroy(skel_);
 }
@@ -78,6 +126,93 @@ void BpfTraceCollector::stop() {
   if (thread_.joinable()) {
     thread_.request_stop();
     thread_.join();
+  }
+  // Final flush + close after the collector thread is joined, so no
+  // concurrent appends race the close.
+  if (trace_fd_ >= 0) {
+    trace_flush();
+    ::close(trace_fd_);
+    trace_fd_ = -1;
+  }
+}
+
+void BpfTraceCollector::set_binary_output(const std::string& path) {
+  if (path.empty()) return;
+  int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) {
+    std::fprintf(stderr, "montauk: --trace-out: cannot open '%s'\n", path.c_str());
+    return;
+  }
+
+  // Capture both clocks at the same instant so the decoder can map event
+  // timestamps (CLOCK_MONOTONIC, from bpf_ktime_get_ns) to absolute wall
+  // time. Read mono first, real second; the tiny skew between them is
+  // sub-microsecond and irrelevant at trace granularity.
+  timespec mono{}, real{};
+  clock_gettime(CLOCK_MONOTONIC, &mono);
+  clock_gettime(CLOCK_REALTIME, &real);
+
+  montauk::model::TraceFileHeader hdr{};
+  std::memcpy(hdr.magic, montauk::model::kTraceMagic, sizeof(hdr.magic));
+  hdr.version        = montauk::model::kTraceFormatVersion;
+  hdr.flags          = 0;
+  hdr.mono_anchor_ns = static_cast<uint64_t>(mono.tv_sec) * 1000000000ull + mono.tv_nsec;
+  hdr.real_anchor_ns = static_cast<uint64_t>(real.tv_sec) * 1000000000ull + real.tv_nsec;
+  std::snprintf(hdr.pattern, sizeof(hdr.pattern), "%s", pattern_.c_str());
+
+  size_t off = 0;
+  const auto* p = reinterpret_cast<const uint8_t*>(&hdr);
+  while (off < sizeof(hdr)) {
+    ssize_t n = ::write(fd, p + off, sizeof(hdr) - off);
+    if (n <= 0) { ::close(fd); return; }
+    off += static_cast<size_t>(n);
+  }
+
+  trace_fd_ = fd;
+  trace_buf_.reserve(kTraceFlushThreshold + 4096);
+}
+
+void BpfTraceCollector::trace_append(const void* data, size_t len) {
+  if (trace_fd_ < 0) return;
+  montauk::model::TraceRecordLen l = static_cast<montauk::model::TraceRecordLen>(len);
+  const auto* lp = reinterpret_cast<const uint8_t*>(&l);
+  trace_buf_.insert(trace_buf_.end(), lp, lp + sizeof(l));
+  const auto* dp = reinterpret_cast<const uint8_t*>(data);
+  trace_buf_.insert(trace_buf_.end(), dp, dp + len);
+  if (trace_buf_.size() >= kTraceFlushThreshold) trace_flush();
+}
+
+void BpfTraceCollector::trace_flush() {
+  if (trace_fd_ < 0 || trace_buf_.empty()) return;
+  size_t off = 0;
+  while (off < trace_buf_.size()) {
+    ssize_t n = ::write(trace_fd_, trace_buf_.data() + off, trace_buf_.size() - off);
+    if (n <= 0) break;  // best-effort: drop on error rather than spin
+    off += static_cast<size_t>(n);
+  }
+  trace_buf_.clear();
+}
+
+void BpfTraceCollector::append_provider_snapshots() {
+  if (trace_fd_ < 0) return;
+  std::vector<montauk::model::Provider> provs;
+  if (!providers_.sample(provs) || provs.empty()) return;
+  timespec mono{};
+  clock_gettime(CLOCK_MONOTONIC, &mono);
+  uint64_t now_ns = static_cast<uint64_t>(mono.tv_sec) * 1000000000ull + mono.tv_nsec;
+  std::vector<uint8_t> rec;
+  for (const auto& p : provs) {
+    montauk_provider_event ev{};
+    ev.type = TRACE_EVT_PROVIDER;
+    ev.timestamp_ns = now_ns;
+    std::snprintf(ev.name, sizeof(ev.name), "%s", p.name.c_str());
+    ev.payload_len = static_cast<__u32>(p.raw_text.size());
+    rec.clear();
+    const auto* hp = reinterpret_cast<const uint8_t*>(&ev);
+    rec.insert(rec.end(), hp, hp + sizeof(ev));
+    const auto* tp = reinterpret_cast<const uint8_t*>(p.raw_text.data());
+    rec.insert(rec.end(), tp, tp + p.raw_text.size());
+    trace_append(rec.data(), rec.size());
   }
 }
 
@@ -107,31 +242,68 @@ static const char* ntsync_op_name(uint8_t op) {
 // ---------------------------------------------------------------------------
 // Ring buffer event handler — NO /proc reads
 // ---------------------------------------------------------------------------
+
+// Per-event stderr printing is a single-app debugging aid (e.g. --trace firefox).
+// For a high-rate workload it is a firehose that dominates overhead and slows the
+// traced workload itself. Off by default: the periodic snapshot already records
+// per-thread syscall / io / state into the .prom flight recorder, which is the
+// data path. Set MONTAUK_TRACE_VERBOSE=1 to stream every event to stderr.
+static bool trace_event_verbose() {
+  static const bool v = [] {
+    const char* e = std::getenv("MONTAUK_TRACE_VERBOSE");
+    return e && *e && std::strcmp(e, "0") != 0;
+  }();
+  return v;
+}
+
 int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
   auto* self = static_cast<BpfTraceCollector*>(ctx);
+
+  // Binary trace log (--trace-out): append the raw record verbatim before
+  // any per-type interpretation. This is the fast path — a memcpy into a
+  // batched buffer, no formatting. The verbose-stderr branches below are
+  // the orthogonal human-eyeball aid (MONTAUK_TRACE_VERBOSE).
+  self->trace_append(data, len);
+
+  // Lazy per-pid maps snapshot. track_pid only fires for pattern-matched
+  // ROOTS (wine-preloader); the game/aborting process is a fork-inherited
+  // DESCENDANT tracked in-BPF, so it never hit track_pid's snapshot and the
+  // death-time snapshot races the reap (empty file). Snapshot on the first
+  // HEAP event from any pid — the process is provably alive and allocating,
+  // and its module mappings are loaded. Once per pid (cheap set guard).
+  if (len >= sizeof(uint32_t)) {
+    uint32_t etype = *static_cast<const uint32_t*>(data);
+    if (etype == TRACE_EVT_HEAP && len >= sizeof(struct montauk_heap_event)) {
+      uint32_t hpid = static_cast<const struct montauk_heap_event*>(data)->pid;
+      if (hpid && self->maps_snapshotted_.insert(hpid).second)
+        self->snapshot_maps(hpid);
+    }
+  }
 
   // ntsync events
   if (len >= sizeof(struct montauk_ntsync_event)) {
     auto* hdr = static_cast<const uint32_t*>(data);
     if (*hdr == TRACE_EVT_NTSYNC) {
       auto* nts = static_cast<const struct montauk_ntsync_event*>(data);
-      const char* op = ntsync_op_name(nts->op);
 
-      if (nts->op == NTS_WAIT_ANY || nts->op == NTS_WAIT_ALL) {
-        const char* tag = (nts->result == -999) ? "ENTER" : "EXIT";
-        std::fprintf(stderr, "montauk: NTSYNC %s pid=%d tid=%d %s(fds=[",
-                     tag, nts->pid, nts->tid, op);
-        unsigned n = nts->wait_count;
-        if (n > NTSYNC_MAX_WAIT_FDS) n = NTSYNC_MAX_WAIT_FDS;
-        for (unsigned i = 0; i < n; ++i)
-          std::fprintf(stderr, "%s%d", i ? "," : "", nts->wait_fds[i]);
-        std::fprintf(stderr, "], count=%u, alert=%u) = %ld idx=%u\n",
-                     nts->wait_count, nts->wait_alert,
-                     (long)nts->result, nts->wait_index);
-      } else {
-        std::fprintf(stderr, "montauk: NTSYNC pid=%d tid=%d %s(fd=%d) = %ld arg0=%u arg1=%u\n",
-                     nts->pid, nts->tid, op, nts->fd,
-                     (long)nts->result, nts->arg0, nts->arg1);
+      if (trace_event_verbose()) {
+        const char* op = ntsync_op_name(nts->op);
+        if (nts->op == NTS_WAIT_ANY || nts->op == NTS_WAIT_ALL) {
+          const char* tag = (nts->result == -999) ? "ENTER" : "EXIT";
+          std::fprintf(stderr, "montauk: NTSYNC %s pid=%d tid=%d %s(fds=[",
+                       tag, nts->pid, nts->tid, op);
+          unsigned n = nts->wait_count;
+          if (n > NTSYNC_MAX_WAIT_FDS) n = NTSYNC_MAX_WAIT_FDS;
+          for (unsigned i = 0; i < n; ++i)
+            std::fprintf(stderr, "%s%d", i ? "," : "", nts->wait_fds[i]);
+          std::fprintf(stderr, "], count=%u, alert=%u) = %ld idx=%u\n",
+                       nts->wait_count, nts->wait_alert,
+                       (long)nts->result, nts->wait_index);
+        } else {
+          std::fprintf(stderr, "montauk: NTSYNC pid=%d tid=%d %s(fd=%d) = %ld arg0=%u arg1=%u\n",
+                       nts->pid, nts->tid, op, nts->fd,
+                       (long)nts->result, nts->arg0, nts->arg1);
+        }
       }
 
       // Accumulate for snapshot
@@ -158,25 +330,226 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
     }
   }
 
+  // Scheduler-decision events (generic decision tracepoints)
+  if (len >= sizeof(struct montauk_sched_event)) {
+    auto* hdr = static_cast<const uint32_t*>(data);
+    if (*hdr == TRACE_EVT_SCHED) {
+      if (trace_event_verbose()) {
+        auto* s = static_cast<const struct montauk_sched_event*>(data);
+        const char* op = "?";
+        switch (s->op) {
+          case SCHED_OP_ENQUEUE:        op = "ENQUEUE"; break;
+          case SCHED_OP_PICK:           op = "PICK"; break;
+          case SCHED_OP_PICK_EMPTY:     op = "PICK_EMPTY"; break;
+          case SCHED_OP_PREEMPT_TICK:   op = "PREEMPT_TICK"; break;
+          case SCHED_OP_PREEMPT_WAKEUP: op = "PREEMPT_WAKEUP"; break;
+        }
+        if (s->op == SCHED_OP_ENQUEUE) {
+          std::fprintf(stderr, "montauk: SCHED %s pid=%d cpu=%u last_cpu=%d sub=%u score=%llu ts=%llu\n",
+                       op, s->pid, s->cpu, s->last_cpu, s->sub_idx,
+                       (unsigned long long)s->score, (unsigned long long)s->timestamp_ns);
+        } else if (s->op == SCHED_OP_PICK) {
+          std::fprintf(stderr, "montauk: SCHED %s pid=%d cpu=%u score=%llu ts=%llu\n",
+                       op, s->pid, s->cpu,
+                       (unsigned long long)s->score, (unsigned long long)s->timestamp_ns);
+        } else if (s->op == SCHED_OP_PICK_EMPTY) {
+          std::fprintf(stderr, "montauk: SCHED %s cpu=%u ts=%llu\n",
+                       op, s->cpu, (unsigned long long)s->timestamp_ns);
+        } else if (s->op == SCHED_OP_PREEMPT_TICK) {
+          std::fprintf(stderr, "montauk: SCHED %s pid=%d cpu=%u runtime=%llu budget=%llu ts=%llu\n",
+                       op, s->pid, s->cpu,
+                       (unsigned long long)s->runtime_ns,
+                       (unsigned long long)s->budget_ns,
+                       (unsigned long long)s->timestamp_ns);
+        } else if (s->op == SCHED_OP_PREEMPT_WAKEUP) {
+          std::fprintf(stderr, "montauk: SCHED %s waker=%d wakee=%d cpu=%u ts=%llu\n",
+                       op, s->secondary_pid, s->pid, s->cpu,
+                       (unsigned long long)s->timestamp_ns);
+        }
+      }
+      return 0;
+    }
+  }
+
+  // Signal events — fatal signal delivery + abnormal exits, with user-stack
+  // snapshot. The actual "what killed this process" record. trace_append above
+  // already wrote it to the binary trace log; here we surface it to verbose
+  // stderr (always, regardless of trace_event_verbose, since signal events
+  // are by definition rare and load-bearing).
+  if (len >= sizeof(struct montauk_signal_event)) {
+    auto* hdr = static_cast<const uint32_t*>(data);
+    if (*hdr == TRACE_EVT_SIGNAL) {
+      auto* sig = static_cast<const struct montauk_signal_event*>(data);
+      const char* signame;
+      switch (sig->signal_nr) {
+        case 4:  signame = "SIGILL";  break;
+        case 5:  signame = "SIGTRAP"; break;
+        case 6:  signame = "SIGABRT"; break;
+        case 7:  signame = "SIGBUS";  break;
+        case 8:  signame = "SIGFPE";  break;
+        case 9:  signame = "SIGKILL"; break;
+        case 11: signame = "SIGSEGV"; break;
+        case 15: signame = "SIGTERM"; break;
+        case 0:  signame = "(none)";  break;
+        default: signame = "?";       break;
+      }
+      const char* kind = (sig->kind == SIGEVT_DELIVER) ? "DELIVER" : "EXIT_ABNL";
+      std::fprintf(stderr,
+                   "montauk: SIGNAL %s pid=%u tid=%u sig=%s(%d) sender=%d "
+                   "exit_code=0x%x comm='%.16s' stack_depth=%u\n",
+                   kind, sig->pid, sig->tid, signame, sig->signal_nr,
+                   sig->sender_pid, (unsigned)sig->exit_code,
+                   sig->comm, sig->stack_depth);
+      // Per-thread context at signal time — answers "what syscall was
+      // this thread executing when it got killed?" Critical when stack
+      // capture is shallow (frame pointer omitted, DWARF unwind fails).
+      if (sig->syscall_nr >= 0) {
+        std::fprintf(stderr,
+                     "montauk:   in_syscall=%d fd=%d arg0=0x%016llx arg1=0x%016llx\n",
+                     sig->syscall_nr, sig->io_fd,
+                     (unsigned long long)sig->syscall_arg0,
+                     (unsigned long long)sig->syscall_arg1);
+      }
+      // Print up to the first 8 frames inline. The binary trace log has
+      // all of them — this is the "eyeball it in stderr" view.
+      unsigned n = sig->stack_depth;
+      if (n > 8) n = 8;
+
+      // Snapshot /proc/<pid>/maps NOW so we can resolve each stack IP to
+      // a loaded module + offset. Race window: the kernel may have already
+      // reaped the dying task by the time we get the ringbuf event. For
+      // SIGSEGV/SIGABRT the core-dump/exit path usually gives us time;
+      // for SIGKILL or fast-exit we'll get ENOENT and just print raw IPs.
+      //
+      // Also dump the full maps to a sidecar file. Wine PE-loaded DLLs use
+      // anonymous mmap regions whose path in /proc/maps is empty, so
+      // inline resolution returns just an offset for them. The sidecar
+      // lets the operator manually correlate after the fact via the maps
+      // contents (and via /proc/PID/map_files/ symlinks while the process
+      // is still alive).
+      struct MapEntry { uint64_t start, end, file_off; std::string path; };
+      std::vector<MapEntry> maps;
+      {
+        char maps_path[64];
+        std::snprintf(maps_path, sizeof(maps_path),
+                      "/proc/%u/maps", sig->pid);
+        FILE* mf = std::fopen(maps_path, "r");
+        if (mf) {
+          // NOTE: do NOT write the .maps sidecar here. At death the process
+          // is being reaped, so this read often comes back empty — and a
+          // truncating sidecar write would CLOBBER the good live snapshot the
+          // lazy heap-event path already wrote. The sidecar is owned solely
+          // by snapshot_maps() (first-HEAP-event, delete-on-empty). This
+          // block only reads /proc for the inline stderr resolution below.
+          char line[1024];
+          while (std::fgets(line, sizeof(line), mf)) {
+            MapEntry e{};
+            char perms[8];
+            char path[768] = {0};
+            // Format: addr_start-addr_end perms file_off dev inode path
+            int parsed = std::sscanf(line, "%lx-%lx %7s %lx %*s %*s %767[^\n]",
+                                     &e.start, &e.end, perms, &e.file_off, path);
+            if (parsed >= 4 && perms[2] == 'x') {  // executable only
+              // strip leading whitespace from path
+              char* p = path;
+              while (*p == ' ' || *p == '\t') p++;
+              e.path = p;
+              // Fallback for anonymous mappings: try /proc/PID/map_files/
+              // which has symlinks even when /proc/maps has no path.
+              if (e.path.empty()) {
+                char link_path[96], target[768];
+                std::snprintf(link_path, sizeof(link_path),
+                              "/proc/%u/map_files/%lx-%lx",
+                              sig->pid, e.start, e.end);
+                ssize_t r = readlink(link_path, target, sizeof(target) - 1);
+                if (r > 0) {
+                  target[r] = '\0';
+                  e.path = target;
+                }
+              }
+              maps.push_back(std::move(e));
+            }
+          }
+          std::fclose(mf);
+        }
+      }
+
+      auto resolve = [&maps](uint64_t ip) -> std::string {
+        for (const auto& m : maps) {
+          if (ip >= m.start && ip < m.end) {
+            const char* base = m.path.c_str();
+            const char* slash = std::strrchr(base, '/');
+            std::string name = slash ? (slash + 1) : base;
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "%s+0x%lx", name.c_str(),
+                          (unsigned long)(ip - m.start + m.file_off));
+            return buf;
+          }
+        }
+        return "";
+      };
+
+      for (unsigned i = 0; i < n; ++i) {
+        uint64_t ip = sig->stack_user[i];
+        std::string sym = resolve(ip);
+        if (!sym.empty()) {
+          std::fprintf(stderr, "montauk:   #%u 0x%016llx  %s\n",
+                       i, (unsigned long long)ip, sym.c_str());
+        } else {
+          std::fprintf(stderr, "montauk:   #%u 0x%016llx\n",
+                       i, (unsigned long long)ip);
+        }
+      }
+      return 0;
+    }
+  }
+
+  // Abort-path events — libc __assert_fail/__libc_message/abort uprobes.
+  // Like SIGNAL events: rare, load-bearing, always surfaced to stderr.
+  // The abort text otherwise only exists on the dying process's stderr.
+  if (len >= sizeof(struct montauk_abort_event)) {
+    auto* hdr = static_cast<const uint32_t*>(data);
+    if (*hdr == TRACE_EVT_ABORT) {
+      auto* ab = static_cast<const struct montauk_abort_event*>(data);
+      const char* fn = ab->func == ABORT_FN_ASSERT_FAIL  ? "__assert_fail"
+                     : ab->func == ABORT_FN_LIBC_MESSAGE ? "__libc_message"
+                     : ab->func == ABORT_FN_ABORT        ? "abort"
+                     : "?";
+      std::fprintf(stderr,
+                   "montauk: ABORT %s pid=%u tid=%u comm='%.16s' "
+                   "msg='%.128s' loc='%.128s' line=%u stack_depth=%u\n",
+                   fn, ab->pid, ab->tid, ab->comm, ab->msg, ab->loc,
+                   ab->line, ab->stack_depth);
+      unsigned n = ab->stack_depth;
+      if (n > 8) n = 8;
+      for (unsigned i = 0; i < n; ++i)
+        std::fprintf(stderr, "montauk:   #%u 0x%016llx\n",
+                     i, (unsigned long long)ab->stack_user[i]);
+      return 0;
+    }
+  }
+
   // I/O events have a different struct layout
   if (len >= sizeof(struct montauk_io_event)) {
     auto* hdr = static_cast<const uint32_t*>(data);
     if (*hdr == TRACE_EVT_IO) {
-      auto* io = static_cast<struct montauk_io_event*>(data);
-      const char* name;
-      switch (io->syscall_nr) {
-        case 0:  name = "read"; break;
-        case 1:  name = "write"; break;
-        case 5:  name = "fstat"; break;
-        case 8:  name = "lseek"; break;
-        case 17: name = "pread64"; break;
-        case 257: name = "openat"; break;
-        default: name = "?"; break;
+      if (trace_event_verbose()) {
+        auto* io = static_cast<struct montauk_io_event*>(data);
+        const char* name;
+        switch (io->syscall_nr) {
+          case 0:  name = "read"; break;
+          case 1:  name = "write"; break;
+          case 5:  name = "fstat"; break;
+          case 8:  name = "lseek"; break;
+          case 17: name = "pread64"; break;
+          case 257: name = "openat"; break;
+          default: name = "?"; break;
+        }
+        std::fprintf(stderr, "montauk: IO pid=%d tid=%d %s(fd=%d, count=%lu) = %ld whence=%u comm='%.16s'\n",
+                     io->pid, io->tid, name, io->fd,
+                     (unsigned long)io->count, (long)io->result,
+                     io->whence, io->comm);
       }
-      std::fprintf(stderr, "montauk: IO pid=%d tid=%d %s(fd=%d, count=%lu) = %ld whence=%u comm='%.16s'\n",
-                   io->pid, io->tid, name, io->fd,
-                   (unsigned long)io->count, (long)io->result,
-                   io->whence, io->comm);
       return 0;
     }
   }
@@ -258,6 +631,47 @@ void BpfTraceCollector::track_pid(int32_t pid, int32_t ppid, bool is_root,
   uint32_t key = static_cast<uint32_t>(pid);
   bpf_map__update_elem(skel_->maps.proc_map, &key, sizeof(key),
                         &info, sizeof(info), BPF_ANY);
+
+  // Snapshot /proc/<pid>/maps NOW, while the process is provably alive.
+  // The death-time snapshot in handle_event races the reap (fast abort ->
+  // SIGABRT -> exit, plus the launcher's SIGKILL backstop) and lands an
+  // empty file, leaving heapstack/abort IPs unresolvable. A module's
+  // mappings are stable once loaded, so an early snapshot resolves them;
+  // refreshed on each (re)track so late dlopens get folded in. Once per
+  // pid is enough for the common case, but re-tracking is cheap.
+  snapshot_maps(static_cast<uint32_t>(pid));
+}
+
+// Snapshot /proc/<pid>/maps to the per-incident sidecar. Called repeatedly
+// (first heap event + periodic refresh) so the sidecar tracks the LATEST
+// live address space — the game maps DXVK/PE DLLs/late heap arenas well
+// after its first allocation, so an early-only snapshot misses the modules
+// that own the abort IPs. Writes to a temp and renames over the sidecar
+// ONLY when the read was non-empty, so a reap-time empty read can never
+// destroy the last good snapshot.
+void BpfTraceCollector::snapshot_maps(uint32_t pid) {
+  char maps_path[64];
+  std::snprintf(maps_path, sizeof(maps_path), "/proc/%u/maps", pid);
+  FILE* mf = std::fopen(maps_path, "r");
+  if (!mf) return;
+  char sidecar_path[96], tmp_path[112];
+  std::snprintf(sidecar_path, sizeof(sidecar_path),
+                "/tmp/quark/incidents/%u.maps", pid);
+  std::snprintf(tmp_path, sizeof(tmp_path),
+                "/tmp/quark/incidents/.%u.maps.tmp", pid);
+  FILE* tmp = std::fopen(tmp_path, "w");
+  if (tmp) {
+    char line[1024];
+    size_t bytes = 0;
+    while (std::fgets(line, sizeof(line), mf))
+      bytes += std::fputs(line, tmp) >= 0 ? std::strlen(line) : 0;
+    std::fclose(tmp);
+    if (bytes > 0)
+      ::rename(tmp_path, sidecar_path);   // atomic replace, keeps last-good
+    else
+      ::remove(tmp_path);                 // empty read: leave existing intact
+  }
+  std::fclose(mf);
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +731,13 @@ void BpfTraceCollector::rescan_comms() {
     }
     key = next_key;
   }
+
+  // Refresh the maps sidecar for every pid we have snapshotted, so it tracks
+  // the LATEST live address space — the abort IPs live in modules (DXVK, PE
+  // DLLs) loaded long after the first-heap-event snapshot. rename-on-non-empty
+  // (snapshot_maps) keeps the last good copy when a pid finally dies.
+  for (uint32_t pid : maps_snapshotted_)
+    snapshot_maps(pid);
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +775,18 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
         snap.procs_count++;
       }
       key = next_key;
+    }
+  }
+
+  // Drive the task iterator first, so every tracked process's threads are
+  // enrolled into thread_map before we read it -- complete coverage even for a
+  // burst of freshly-spawned threads the reactive path hasn't met yet.
+  if (enroll_iter_link_) {
+    int it_fd = bpf_iter_create(bpf_link__fd(enroll_iter_link_));
+    if (it_fd >= 0) {
+      char it_buf[256];
+      while (read(it_fd, it_buf, sizeof(it_buf)) > 0) { }
+      close(it_fd);
     }
   }
 
@@ -403,6 +836,8 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
         th.utime = ts.runtime_ns;
         th.stime = 0;
         th.cpu_pct = 0.0;
+        th.cur_cpu = ts.cur_cpu;
+        th.migrations = ts.migrations;
 
         // Comm from BPF thread_map — no /proc
         std::memcpy(th.comm, ts.comm, sizeof(ts.comm));
@@ -480,6 +915,50 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
   }
   pending_ntsync_.clear();
 
+  // Scheduler-decision counters: per-CPU array, summed across CPUs. The BPF
+  // side only bumps a per-CPU counter per decision, so the hot dispatch path
+  // stays near-zero; the cost here is one map lookup of a small per-CPU array.
+  if (skel_ && skel_->maps.sched_op_counts) {
+    int fd = bpf_map__fd(skel_->maps.sched_op_counts);
+    int ncpu = libbpf_num_possible_cpus();
+    if (fd >= 0 && ncpu > 0) {
+      std::vector<struct sched_op_counters> per(static_cast<size_t>(ncpu));
+      uint32_t key = 0;
+      if (bpf_map_lookup_elem(fd, &key, per.data()) == 0) {
+        for (int o = 0; o < MONTAUK_SCHED_OP_MAX &&
+                        o < static_cast<int>(snap.sched_op_total.size()); ++o) {
+          uint64_t sum = 0;
+          for (int c = 0; c < ncpu; ++c)
+            sum += per[static_cast<size_t>(c)].op[o];
+          snap.sched_op_total[o] = sum;
+        }
+      }
+    }
+  }
+
+  // Migration classification counters (intra/cross/unknown CCX): same per-CPU
+  // array sum pattern. Cumulative since attach — churn-proof globals that a
+  // fork-storm's short-lived threads cannot carry off when they exit.
+  if (skel_ && skel_->maps.mig_ccx_counts) {
+    int fd = bpf_map__fd(skel_->maps.mig_ccx_counts);
+    int ncpu = libbpf_num_possible_cpus();
+    if (fd >= 0 && ncpu > 0) {
+      std::vector<struct mig_ccx_counters> per(static_cast<size_t>(ncpu));
+      uint32_t key = 0;
+      if (bpf_map_lookup_elem(fd, &key, per.data()) == 0) {
+        uint64_t in = 0, cr = 0, un = 0;
+        for (int c = 0; c < ncpu; ++c) {
+          in += per[static_cast<size_t>(c)].intra;
+          cr += per[static_cast<size_t>(c)].cross;
+          un += per[static_cast<size_t>(c)].unknown;
+        }
+        snap.mig_intra_ccx = in;
+        snap.mig_cross_ccx = cr;
+        snap.mig_unknown_ccx = un;
+      }
+    }
+  }
+
   last_snapshot_ns_ = now_ns;
 }
 
@@ -508,6 +987,24 @@ void BpfTraceCollector::run(std::stop_token st) {
                  len, pattern_.c_str());
   }
 
+  // Per-event sched streaming to the ringbuf is a firehose on a hot dispatch
+  // path; keep it off unless the binary --trace-out log is active. The per-CPU
+  // sched_op counters are maintained regardless, so the snapshot always sees
+  // the decision rates.
+  skel_->rodata->sched_stream = (trace_fd_ >= 0) ? 1 : 0;
+
+  // Heap caller-stack capture: MONTAUK_HEAP_STACK_SIZE=<bytes> makes every
+  // malloc/calloc of exactly that size emit a TRACE_EVT_HEAPSTACK with the
+  // allocator's user stack. Targets the top-chunk/!prev corruption class:
+  // once forensics name the victim allocation's size, one run with this set
+  // names the allocation site. .rodata, so it must be set before load.
+  if (const char* hss = std::getenv("MONTAUK_HEAP_STACK_SIZE")) {
+    skel_->rodata->heap_stack_size = std::strtoull(hss, nullptr, 0);
+    if (skel_->rodata->heap_stack_size)
+      std::fprintf(stderr, "montauk: heap caller-stack capture armed for size=%llu\n",
+                   (unsigned long long)skel_->rodata->heap_stack_size);
+  }
+
   int err = montauk_trace_bpf__load(skel_);
   if (err) {
     std::fprintf(stderr, "montauk: failed to load BPF programs (need root or CAP_BPF)\n");
@@ -517,6 +1014,49 @@ void BpfTraceCollector::run(std::stop_token st) {
     return;
   }
 
+  // Push the cpu->CCX topology so sched_switch can classify each migration as
+  // intra- vs cross-CCX (a fork-storm's core-hopping surfaces in mig_ccx_counts).
+  if (skel_->maps.cpu_ccx)
+    populate_cpu_ccx_map(bpf_map__fd(skel_->maps.cpu_ccx));
+
+  // Generic scheduler-decision programs, attached at RUNTIME to the active
+  // scheduler's tracepoints. The bindings come from MONTAUK_SCHED_TRACEPOINTS as
+  // up to 5 comma-separated category:name entries, in role order:
+  //   enqueue, pick, pick_empty, preempt_tick, preempt_wakeup
+  // montauk names no scheduler in source; unset or missing bindings are simply
+  // skipped, so the universal sched_switch/fork/exec/syscall trace always
+  // attaches regardless of which scheduler (if any) is loaded. System-agnostic.
+  struct DecisionProg { bpf_program *prog; bpf_link **link; };
+  const DecisionProg decision_progs[] = {
+    {skel_->progs.handle_sched_enqueue,        &skel_->links.handle_sched_enqueue},
+    {skel_->progs.handle_sched_pick,           &skel_->links.handle_sched_pick},
+    {skel_->progs.handle_sched_pick_empty,     &skel_->links.handle_sched_pick_empty},
+    {skel_->progs.handle_sched_preempt_tick,   &skel_->links.handle_sched_preempt_tick},
+    {skel_->progs.handle_sched_preempt_wakeup, &skel_->links.handle_sched_preempt_wakeup},
+  };
+  // Neutral placeholder SECs never auto-attach; we bind them by hand below.
+  for (const auto &dp : decision_progs)
+    bpf_program__set_autoattach(dp.prog, false);
+  // The task iterator is driven on demand from snapshot_from_maps, not auto-attached.
+  bpf_program__set_autoattach(skel_->progs.enroll_threads, false);
+
+  // Heap uprobes (libc malloc/free/realloc/calloc) have neutral
+  // SEC("uprobe"/"uretprobe") declarations — libbpf can't auto-attach
+  // them without knowing the target binary + symbol. We bind them by
+  // hand to libc below, after the universal attach succeeds.
+  bpf_program__set_autoattach(skel_->progs.uprobe_malloc,    false);
+  bpf_program__set_autoattach(skel_->progs.uretprobe_malloc, false);
+  bpf_program__set_autoattach(skel_->progs.uprobe_free,      false);
+  bpf_program__set_autoattach(skel_->progs.uprobe_realloc,   false);
+  bpf_program__set_autoattach(skel_->progs.uretprobe_realloc,false);
+  bpf_program__set_autoattach(skel_->progs.uprobe_calloc,    false);
+  bpf_program__set_autoattach(skel_->progs.uretprobe_calloc, false);
+  bpf_program__set_autoattach(skel_->progs.uprobe_assert_fail,  false);
+  bpf_program__set_autoattach(skel_->progs.uprobe_libc_message, false);
+  bpf_program__set_autoattach(skel_->progs.uprobe_abort,        false);
+
+  // Atomic skeleton attach now covers only the universal handlers -- always
+  // present, so this cannot fail on a missing scheduler tracepoint.
   err = montauk_trace_bpf__attach(skel_);
   if (err) {
     std::fprintf(stderr, "montauk: failed to attach BPF programs: %d\n", err);
@@ -526,14 +1066,163 @@ void BpfTraceCollector::run(std::stop_token st) {
     return;
   }
 
+  // Bind the decision programs to the configured scheduler tracepoints, if any.
+  // Each entry is category:name; a tracepoint that doesn't exist is skipped, not
+  // fatal -- a scheduler opts in by emitting the generic decision-event layout.
+  int sched_tp = 0;
+  const char *tp_cfg = std::getenv("MONTAUK_SCHED_TRACEPOINTS");
+  if (tp_cfg && *tp_cfg) {
+    char buf[256];
+    std::strncpy(buf, tp_cfg, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char *saveptr = nullptr;
+    size_t role = 0;
+    for (char *tok = strtok_r(buf, ",", &saveptr);
+         tok && role < 5;
+         tok = strtok_r(nullptr, ",", &saveptr), ++role) {
+      char *colon = std::strchr(tok, ':');
+      if (!colon) continue;
+      *colon = '\0';
+      const char *cat = tok;
+      const char *name = colon + 1;
+      if (*cat == '\0' || *name == '\0') continue;
+      struct bpf_link *link =
+          bpf_program__attach_tracepoint(decision_progs[role].prog, cat, name);
+      if (link && libbpf_get_error(link) == 0) {
+        *decision_progs[role].link = link;
+        ++sched_tp;
+      }
+    }
+  }
+  if (sched_tp > 0)
+    std::fprintf(stderr, "montauk: attached %d scheduler-decision tracepoint(s)\n", sched_tp);
+
+  // Task-iterator thread enrollment: attach the iterator once; we drive it each
+  // scan (snapshot_from_maps) to enroll every tracked process's threads, however
+  // fast they spawn. Non-fatal if it can't attach -- the reactive sys_enter path
+  // still covers the common case.
+  enroll_iter_link_ = bpf_program__attach_iter(skel_->progs.enroll_threads, nullptr);
+  if (!enroll_iter_link_ || libbpf_get_error(enroll_iter_link_)) {
+    std::fprintf(stderr, "montauk: thread-enrollment iterator did not attach (reactive path only)\n");
+    enroll_iter_link_ = nullptr;
+  }
+
   rb_ = ring_buffer__new(bpf_map__fd(skel_->maps.events), handle_event,
                           this, nullptr);
   if (!rb_) {
     std::fprintf(stderr, "montauk: failed to create ring buffer\n");
+    if (enroll_iter_link_) { bpf_link__destroy(enroll_iter_link_); enroll_iter_link_ = nullptr; }
     montauk_trace_bpf__destroy(skel_);
     skel_ = nullptr;
     load_failed_.store(true);
     return;
+  }
+
+  // ── Heap uprobes ──────────────────────────────────────────────
+  // Attach malloc/free/realloc/calloc uprobes to libc. Without these,
+  // syscall-level traces miss ~99% of allocations (libc's arena services
+  // most malloc calls without touching the kernel). Best-effort: a libc
+  // without these symbols just logs and continues without heap events.
+  {
+    struct HeapAttach {
+      bpf_program *prog;
+      bpf_link    **link;
+      const char  *func;
+      bool         retprobe;
+    };
+    const HeapAttach attaches[] = {
+      { skel_->progs.uprobe_malloc,     &skel_->links.uprobe_malloc,     "malloc",  false },
+      { skel_->progs.uretprobe_malloc,  &skel_->links.uretprobe_malloc,  "malloc",  true  },
+      { skel_->progs.uprobe_free,       &skel_->links.uprobe_free,       "free",    false },
+      { skel_->progs.uprobe_realloc,    &skel_->links.uprobe_realloc,    "realloc", false },
+      { skel_->progs.uretprobe_realloc, &skel_->links.uretprobe_realloc, "realloc", true  },
+      { skel_->progs.uprobe_calloc,     &skel_->links.uprobe_calloc,     "calloc",  false },
+      { skel_->progs.uretprobe_calloc,  &skel_->links.uretprobe_calloc,  "calloc",  true  },
+      // Abort-path uprobes: record the abort text + caller stack at the
+      // glibc abort site itself. __libc_message is GLIBC-internal (not in
+      // .dynsym on a stripped libc) — its attach failing is expected and
+      // harmless; abort() covers that path with the caller stack.
+      { skel_->progs.uprobe_assert_fail,  &skel_->links.uprobe_assert_fail,  "__assert_fail",  false },
+      { skel_->progs.uprobe_libc_message, &skel_->links.uprobe_libc_message, "__libc_message", false },
+      { skel_->progs.uprobe_abort,        &skel_->links.uprobe_abort,        "abort",          false },
+    };
+    // Common libc paths — pick the first that exists.
+    const char *libc_candidates[] = {
+      "/usr/lib/libc.so.6",
+      "/usr/lib64/libc.so.6",
+      "/lib/x86_64-linux-gnu/libc.so.6",
+      "/lib64/libc.so.6",
+      nullptr,
+    };
+    const char *libc_path = nullptr;
+    for (int i = 0; libc_candidates[i]; ++i) {
+      if (access(libc_candidates[i], R_OK) == 0) {
+        libc_path = libc_candidates[i];
+        break;
+      }
+    }
+    int heap_attached = 0;
+    if (libc_path) {
+      for (const auto &a : attaches) {
+        LIBBPF_OPTS(bpf_uprobe_opts, opts,
+                    .retprobe  = a.retprobe,
+                    .func_name = a.func);
+        struct bpf_link *link =
+            bpf_program__attach_uprobe_opts(a.prog, /*pid=*/-1,
+                                             libc_path, /*func_offset=*/0,
+                                             &opts);
+        if (link && libbpf_get_error(link) == 0) {
+          *a.link = link;
+          ++heap_attached;
+        }
+      }
+      std::fprintf(stderr,
+                   "montauk: libc uprobes attached: %d/%zu to %s\n",
+                   heap_attached, sizeof(attaches) / sizeof(attaches[0]),
+                   libc_path);
+    } else {
+      std::fprintf(stderr,
+                   "montauk: libc not found — heap/abort uprobes disabled\n");
+    }
+  }
+
+  // ── Keyed-event (critical-section) uprobes ────────────────────
+  // Wine critical sections (loader_section, etc.) wait/wake via
+  // NtWaitForKeyedEvent/NtReleaseKeyedEvent in ntdll.so, passing the
+  // CRITICAL_SECTION address as the key. Capturing it makes CS contention
+  // traceable by lock identity (the layer futex/ntsync capture misses). The
+  // ntdll.so path is install-specific (Proton/Wine), so it's provided at
+  // runtime via MONTAUK_NTDLL_PATH; unset → silently skipped (best-effort).
+  {
+    struct KevtAttach { bpf_program *prog; bpf_link **link; const char *func; };
+    const KevtAttach kattaches[] = {
+      { skel_->progs.uprobe_keyed_wait,    &skel_->links.uprobe_keyed_wait,    "NtWaitForKeyedEvent" },
+      { skel_->progs.uprobe_keyed_release, &skel_->links.uprobe_keyed_release, "NtReleaseKeyedEvent" },
+    };
+    const char *ntdll_path = getenv("MONTAUK_NTDLL_PATH");
+    if (ntdll_path && access(ntdll_path, R_OK) == 0) {
+      int kattached = 0;
+      for (const auto &a : kattaches) {
+        LIBBPF_OPTS(bpf_uprobe_opts, opts,
+                    .retprobe  = false,
+                    .func_name = a.func);
+        struct bpf_link *link =
+            bpf_program__attach_uprobe_opts(a.prog, /*pid=*/-1,
+                                             ntdll_path, /*func_offset=*/0,
+                                             &opts);
+        if (link && libbpf_get_error(link) == 0) {
+          *a.link = link;
+          ++kattached;
+        }
+      }
+      std::fprintf(stderr,
+                   "montauk: keyed-event uprobes attached: %d/2 to %s\n",
+                   kattached, ntdll_path);
+    } else {
+      std::fprintf(stderr,
+                   "montauk: MONTAUK_NTDLL_PATH unset/unreadable — "
+                   "keyed-event (critical-section) uprobes disabled\n");
+    }
   }
 
   std::fprintf(stderr, "montauk: eBPF trace attached (pattern: %s)\n",
@@ -550,6 +1239,11 @@ void BpfTraceCollector::run(std::stop_token st) {
 
   while (!st.stop_requested()) {
     ring_buffer__poll(rb_, 100);
+
+    // Latency-bound the binary log: flush whatever the poll drained so a
+    // low-rate trace still lands on disk promptly (the size threshold only
+    // fires under bursts).
+    trace_flush();
 
     // Periodic re-scan for comm changes (catches Wine prctl PR_SET_NAME)
     rescan_comms();
@@ -573,8 +1267,22 @@ void BpfTraceCollector::run(std::stop_token st) {
 
     buffers_.publish();
 
-    for (int i = 0; i < 40 && !st.stop_requested(); ++i)
+    // Embed provider snapshots into the binary log once per cycle so the
+    // trace carries the providers' view of the same time window.
+    append_provider_snapshots();
+
+    // Drain the event ring DURING the inter-snapshot sleep. Previously this
+    // loop slept the full ~400ms with the ring untouched, so the ring filled
+    // at the trace's event rate (~290ms to fill the 256KB ring) and dropped a
+    // burst every cycle -- the ~390ms holes in the captured stream, identical
+    // whether the machine was idle or loaded because the cause was montauk's
+    // own nap, not the workload. Consume every 10ms so the ring can never fill
+    // between snapshots; trace_flush() lands the drained bytes promptly.
+    for (int i = 0; i < 40 && !st.stop_requested(); ++i) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      ring_buffer__consume(rb_);
+      trace_flush();
+    }
   }
 }
 

@@ -15,11 +15,13 @@ namespace montauk::app {
 // Fixed-size top_procs array: no heap allocation during seqlock copy.
 struct MetricsSnapshot {
   montauk::model::CpuSnapshot cpu;
+  montauk::model::PmuSnapshot pmu;
   montauk::model::Memory mem;
   montauk::model::GpuVram vram;
   montauk::model::NetSnapshot net;
   montauk::model::DiskSnapshot disk;
   montauk::model::FsSnapshot fs;
+  std::vector<montauk::model::Provider> providers;
   montauk::model::Thermal thermal;
   size_t total_processes{}, running_processes{};
   size_t state_sleeping{}, state_zombie{}, total_threads{};
@@ -54,11 +56,13 @@ struct MetricsSnapshot {
     seq_before = buffers.seq();
     const auto& s = buffers.front();
     ms.cpu = s.cpu;
+    ms.pmu = s.pmu;
     ms.mem = s.mem;
     ms.vram = s.vram;
     ms.net = s.net;
     ms.disk = s.disk;
     ms.fs = s.fs;
+    ms.providers = s.providers;
     ms.thermal = s.thermal;
     ms.total_processes = s.procs.total_processes;
     ms.running_processes = s.procs.running_processes;

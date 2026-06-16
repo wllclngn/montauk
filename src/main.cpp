@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
   int log_interval_ms = 1000;    // default 1s write interval
   bool headless = false;     // --headless: skip TUI, daemon mode
   std::string trace_pattern; // --trace PATTERN: trace process group
+  std::string trace_out;     // --trace-out FILE: raw binary event log
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--iterations" && i + 1 < argc) iterations = std::stoi(argv[++i]);
@@ -55,6 +56,7 @@ int main(int argc, char** argv) {
     else if (a == "--log-interval-ms" && i + 1 < argc) log_interval_ms = std::stoi(argv[++i]);
     else if (a == "--headless") headless = true;
     else if (a == "--trace" && i + 1 < argc) trace_pattern = argv[++i];
+    else if (a == "--trace-out" && i + 1 < argc) trace_out = argv[++i];
     else if (a == "--init-theme") {
       auto colors = montauk::ui::detect_palette();
       montauk::util::TomlReader toml;
@@ -135,13 +137,14 @@ int main(int argc, char** argv) {
     else if (a == "-h" || a == "--help") {
       std::cout << "Usage: montauk [--self-test-seconds S] [--iterations N]\n";
       std::cout << "               [--metrics PORT] [--log DIR] [--log-interval-ms MS] [--headless]\n";
-      std::cout << "               [--trace PATTERN] [--init-theme]\n";
+      std::cout << "               [--trace PATTERN] [--trace-out FILE] [--init-theme]\n";
       std::cout << "Notes: Text UI runs until Ctrl+C by default.\n";
       std::cout << "       --metrics PORT        Enable Prometheus endpoint on PORT\n";
       std::cout << "       --log DIR             Write timestamped snapshots to DIR\n";
       std::cout << "       --log-interval-ms MS  Write interval in ms (default: 1000)\n";
       std::cout << "       --headless            Daemon mode (no TUI, requires --metrics or --log)\n";
       std::cout << "       --trace PATTERN       Trace process group matching PATTERN (headless)\n";
+      std::cout << "       --trace-out FILE      Write raw binary event log; decode with montauk_trace_decode\n";
       std::cout << "       --init-theme          Detect terminal palette and write config.toml\n";
       return 0;
     }
@@ -157,6 +160,11 @@ int main(int argc, char** argv) {
   try {
     montauk::app::SnapshotBuffers buffers;
     montauk::app::Producer producer(buffers);
+    // PMU counters (perf_event_open) belong to the trace→analyze pipeline,
+    // not the monitor: they need CAP_PERFMON or perf_event_paranoid<=0,
+    // which a plain `montauk` TUI run must never demand. Only trace mode
+    // opts in.
+    if (!trace_pattern.empty()) producer.enable_pmu();
     producer.start();
 
     // Trace subsystem (optional, parallel to main pipeline)
@@ -167,6 +175,7 @@ int main(int argc, char** argv) {
       trace_buffers = std::make_unique<montauk::app::TraceBuffers>();
       trace_collector = std::make_unique<montauk::collectors::BpfTraceCollector>(
           *trace_buffers, trace_pattern);
+      if (!trace_out.empty()) trace_collector->set_binary_output(trace_out);
       trace_collector->start();
     }
 #else

@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
-project(montauk VERSION 6.4.0 LANGUAGES CXX)
+# C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
+# montauk itself.
+project(montauk VERSION 7.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,16 +24,46 @@ endif()
 # Build options
 option(MONTAUK_BUILD_TESTS "Build unit tests" OFF)
 option(MONTAUK_KERNEL "Build with kernel module collector support (requires montauk-kernel loaded)" OFF)
-option(USE_SUBLIMATION "Build with sublimation sort backend available at runtime" OFF)
+
+# ── sublimation ─────────────────────────────────────────────────────────────
+# montauk's sort algorithm, now an in-tree sub-system (sublimation/). Built
+# as a C23 static library from its own sources with its own flags — NOT
+# montauk's -Werror/-Wshadow (third-party warnings must not fail montauk's
+# build). No system install, no find_package, no fetch: the code lives here.
+add_library(sublimation STATIC
+    sublimation/src/classify.c
+    sublimation/src/merge.c
+    sublimation/src/pack.c
+    sublimation/src/randomness.c
+    sublimation/src/small.c
+    sublimation/src/sort.c
+    sublimation/src/spectral.c
+    sublimation/src/parallel/pool.c
+    sublimation/src/strings/msd_radix.c
+    sublimation/src/strings/sort_strings.c
+)
+set_target_properties(sublimation PROPERTIES
+    C_STANDARD 23
+    C_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON)
+# Public headers (sublimation.h / _pack.h / _strings.h) on the include path
+# for consumers; src/ is private for the implementation's internal includes.
+target_include_directories(sublimation
+    PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src/include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src)
+target_compile_options(sublimation PRIVATE
+    -O2 -march=native -fvisibility=hidden
+    -fstack-protector-strong -fstack-clash-protection -fcf-protection)
+target_link_libraries(sublimation PUBLIC pthread m)
 
 add_library(montauk_core
     src/util/Procfs.cpp
     src/util/Churn.cpp
-    src/util/TimSort.cpp
     src/util/SortDispatch.cpp
     src/util/BoyerMoore.cpp
     src/util/ThompsonNFA.cpp
     src/util/NvmlDyn.cpp
+    src/model/TraceReader.cpp
     src/ui/Terminal.cpp
     src/ui/Config.cpp
     src/ui/Formatting.cpp
@@ -50,9 +82,11 @@ add_library(montauk_core
     src/collectors/GpuCollector.cpp
     src/collectors/FdinfoProcessCollector.cpp
     src/collectors/CpuCollector.cpp
+    src/collectors/PmuCollector.cpp
     src/collectors/NetCollector.cpp
     src/collectors/DiskCollector.cpp
     src/collectors/FsCollector.cpp
+    src/collectors/ProviderCollector.cpp
     src/collectors/ProcessCollector.cpp
     src/collectors/NetlinkProcessCollector.cpp
     src/collectors/ThermalCollector.cpp
@@ -164,19 +198,11 @@ else()
   message(STATUS "eBPF trace disabled by MONTAUK_NO_BPF")
 endif()
 
-# Sublimation sort backend (opt-in, runtime default stays TimSort).
-# install.py fetches and installs libsublimation system-wide; this section
-# locates it via pkg-config and links it in. When USE_SUBLIMATION=OFF the
-# dispatcher falls through to TimSort and zero sublimation symbols land in
-# the final binary.
-if(USE_SUBLIMATION)
-  find_package(Sublimation 1.2 REQUIRED)
-  target_link_libraries(montauk_core PUBLIC Sublimation::sublimation)
-  target_compile_definitions(montauk_core PUBLIC HAVE_SUBLIMATION=1)
-  message(STATUS "Sublimation backend: enabled (libsublimation ${Sublimation_VERSION})")
-else()
-  message(STATUS "Sublimation backend: disabled")
-endif()
+# Link the in-tree sublimation sort sub-system into montauk_core (built
+# above). PUBLIC so its include dir propagates to montauk_core's consumers
+# (e.g. the trace tools' sched-latency percentile sort).
+target_link_libraries(montauk_core PUBLIC sublimation)
+message(STATUS "Sublimation: in-tree sub-system (montauk/sublimation)")
 
 add_executable(montauk src/main.cpp)
 target_link_libraries(montauk PRIVATE montauk_core)
@@ -186,12 +212,31 @@ set_target_properties(montauk PROPERTIES OUTPUT_NAME montauk)
 
 install(TARGETS montauk RUNTIME DESTINATION bin)
 
-# Lightweight on-box process analyzer (no external deps)
-add_executable(montauk_analyze src/tools/analyze_proc.cpp)
-target_include_directories(montauk_analyze PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(montauk_analyze PRIVATE montauk_core)
+# Trace-analysis report suite (trace-only; the old live /proc analyzer is
+# gone). Same dependency footprint as the decoder: event headers + the
+# TraceReader record walk, no montauk_core link, no BPF.
+add_executable(montauk_analyze src/tools/trace_analyze.cpp src/model/TraceReader.cpp)
+target_include_directories(montauk_analyze PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/bpf)
+# sublimation is montauk's sort -- the sched report sorts wake2run latencies
+# through its direct u64 entry. Links the in-tree sub-system.
+target_link_libraries(montauk_analyze PRIVATE sublimation)
+# Stamp the project version into the analysis .prom _info metric (house style).
+target_compile_definitions(montauk_analyze PRIVATE MONTAUK_VERSION="${PROJECT_VERSION}")
 target_compile_options(montauk_analyze PRIVATE -Wall -Wextra -Werror -Wshadow)
 set_target_properties(montauk_analyze PROPERTIES OUTPUT_NAME montauk_analyze)
+
+# Binary trace-log decoder (no external deps, no BPF link). Reads --trace-out
+# files and renders them to text/CSV. Pure struct decoding — only needs the
+# shared event headers (model/TraceBinary.hpp + bpf/montauk_trace.h) and the
+# TraceReader record walk, so it builds even when BPF tracing isn't compiled
+# into montauk itself.
+add_executable(montauk_trace_decode src/tools/trace_decode.cpp src/model/TraceReader.cpp)
+target_include_directories(montauk_trace_decode PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/bpf)
+target_compile_options(montauk_trace_decode PRIVATE -Wall -Wextra -Werror -Wshadow)
 
 if(MONTAUK_BUILD_TESTS)
   # Lightweight unit tests without external deps
@@ -211,7 +256,6 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_alerts.cpp
     tests/test_thermal.cpp
     tests/test_netlink_smoke.cpp
-    tests/test_timsort.cpp
     tests/test_prometheus.cpp
     tests/test_logwriter.cpp
     tests/test_security.cpp
@@ -219,6 +263,7 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_thompson_nfa.cpp
     tests/test_toml_reader.cpp
     tests/test_canvas.cpp
+    tests/test_provider_collector.cpp
   )
   target_include_directories(montauk_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(montauk_tests PRIVATE montauk_core)

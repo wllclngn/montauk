@@ -3,11 +3,13 @@
 #include <string>
 #include <vector>
 #include "model/Cpu.hpp"
+#include "model/Pmu.hpp"
 #include "model/Net.hpp"
 #include "model/Disk.hpp"
 #include "model/Process.hpp"
 #include "model/Thermal.hpp"
 #include "model/Fs.hpp"
+#include "model/Provider.hpp"
 
 namespace montauk::model {
 
@@ -92,11 +94,13 @@ struct NvmlDiag {
 struct Snapshot {
   uint64_t seq{};
   montauk::model::CpuSnapshot cpu;
+  PmuSnapshot pmu;
   Memory   mem;
   GpuVram  vram;
   NetSnapshot net;
   DiskSnapshot disk;
   FsSnapshot fs;
+  std::vector<Provider> providers;
   ProcessSnapshot procs;
   std::vector<AlertItem> alerts; // latest generated alerts with severity
   Thermal thermal;

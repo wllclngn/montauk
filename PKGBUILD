@@ -30,7 +30,7 @@ if [[ $BUILDDIR -ef "$startdir" && "$startdir" == *" "* ]]; then
     BUILDDIR=/tmp/makepkg-$pkgname
 fi
 
-pkgver=6.4.0
+pkgver=7.0.0
 pkgrel=1
 pkgdesc='High-performance Linux system monitor with kernel module, eBPF tracing, GPU attribution, and pixel-rendered area charts'
 arch=('x86_64')
@@ -51,7 +51,6 @@ makedepends=(
 optdepends=(
     'nvidia-utils: NVML-based per-process GPU attribution'
     'linux-headers: build the optional kernel module via ./install.py --kernel'
-    'sublimation: opt-in C23 sort backend (run ./install.py --sublimation to fetch and install before makepkg)'
 )
 
 # Coexistence with a future stable AUR `montauk` package.
@@ -87,20 +86,12 @@ pkgver() {
 build() {
     cd "$srcdir/$_pkgname"
 
-    # Sublimation is only available via the upstream GitHub repo (no
-    # pacman provider); install.py fetches and installs it system-wide
-    # on demand. Probe via pkg-config — if present, link it in;
-    # otherwise build the TimSort-only path. Either way produces a
-    # working binary.
-    local _use_sublimation=OFF
-    if pkg-config --exists sublimation 2>/dev/null; then
-        _use_sublimation=ON
-    fi
-
+    # sublimation is montauk's sort algorithm — an in-tree sub-system at
+    # montauk/sublimation/. CMake builds it as a static library and links it
+    # into montauk; there is no fallback and no build-time toggle.
     cmake -B build -S . \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
-        -DUSE_SUBLIMATION="$_use_sublimation" \
         -DMONTAUK_KERNEL=OFF \
         -DMONTAUK_BUILD_TESTS=OFF
 
@@ -113,8 +104,9 @@ package() {
     cd "$srcdir/$_pkgname"
 
     # Binaries.
-    install -Dm755 build/montauk             "$pkgdir/usr/bin/montauk"
-    install -Dm755 build/montauk_analyze     "$pkgdir/usr/bin/montauk_analyze"
+    install -Dm755 build/montauk              "$pkgdir/usr/bin/montauk"
+    install -Dm755 build/montauk_analyze      "$pkgdir/usr/bin/montauk_analyze"
+    install -Dm755 build/montauk_trace_decode "$pkgdir/usr/bin/montauk_trace_decode"
 
     # Manpage — the in-app help overlay loads it at runtime via `man montauk`.
     install -Dm644 montauk.1                 "$pkgdir/usr/share/man/man1/montauk.1"

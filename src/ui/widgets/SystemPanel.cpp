@@ -6,7 +6,6 @@
 #include "app/Security.hpp"
 #include "util/Churn.hpp"
 #include "util/AsciiLower.hpp"
-#include "util/SortDispatch.hpp"
 
 #include <algorithm>
 #include <climits>
@@ -53,13 +52,9 @@ void section_identity(std::vector<Row>& out, const Snapshot&) {
 void section_runtime(std::vector<Row>& out, const Snapshot& s) {
   if (!s.collector_name.empty()) out.push_back(Row::kv("COLLECTOR", s.collector_name));
 
-  // SORT: which sort backend is currently active. resolve_backend() reads
-  // MONTAUK_SORT_BACKEND env on first call and caches; reflects build-time
-  // HAVE_SUBLIMATION too (TimSort when sublimation isn't compiled in).
-  out.push_back(Row::kv("SORT",
-      montauk::util::resolve_backend() == montauk::util::SortBackend::Sublimation
-          ? std::string("sublimation")
-          : std::string("TimSort")));
+  // SORT: montauk's sort backend. sublimation is the only one — linked
+  // unconditionally, no runtime choice.
+  out.push_back(Row::kv("SORT", std::string("sublimation")));
 
   std::ostringstream procs;
   procs << "ENRICHED:" << s.procs.enriched_count << "  TOTAL:" << s.procs.total_processes;

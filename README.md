@@ -9,7 +9,7 @@
 
 ## Overview
 
-A standalone, offline-friendly C++23 system monitor for Linux with comprehensive GPU support, event-driven process monitoring, and Prometheus metrics export. No external dependencies required for the default build.
+A standalone, offline-friendly C++23 system monitor for Linux with comprehensive GPU support, event-driven process monitoring, and Prometheus metrics export. sublimation — montauk's sort algorithm — is an in-tree sub-system (`montauk/sublimation/`), built with montauk; NVML and liburing are auto-detected and optional.
 
 **Key Features:**
 - **Event-Driven Monitoring**: Kernel-based process event tracking with 90%+ reduction in system overhead
@@ -17,7 +17,10 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **Multi-vendor Support**: NVIDIA (NVML + fallbacks), AMD (sysfs), Intel (fdinfo)
 - **Sophisticated Attribution**: Multiple fallback mechanisms for GPU metrics when vendor APIs are unavailable
 - **Prometheus Metrics Endpoint**: Optional HTTP `/metrics` endpoint serving Prometheus exposition format over io_uring, enabling integration with Prometheus, Grafana, and Kubernetes monitoring stacks
-- **eBPF Process Group Tracing**: `--trace PATTERN` attaches eBPF programs to kernel tracepoints for real-time per-thread syscall, scheduler state, fd tracking, and file I/O profiling (read/write/lseek/fstat with byte counts, offsets, and return values) across an entire process tree — event-driven, non-invasive, no ptrace, with continuous flight recording via Prometheus logs
+- **eBPF Process Group Tracing**: `--trace PATTERN` attaches eBPF programs to kernel tracepoints and libc uprobes for real-time per-thread syscall, scheduler state and decision, fd tracking, file I/O, heap allocation, mmap, and signal/abort capture across an entire process tree — event-driven, non-invasive, no ptrace, with continuous flight recording via Prometheus logs
+- **Hardware Performance Counters**: Trace mode samples per-CPU L2 cache misses/references, instructions, cycles (IPC), and per-CCX L3 access/miss via `perf_event_open`, exported as `montauk_pmu_*` gauges for cache-placement analysis. Trace-gated — the plain monitor never opens a counter and needs no perf permissions
+- **External Metrics Providers**: Scrapes Prometheus-text from external programs over unix sockets in `$XDG_RUNTIME_DIR/montauk/providers/` — their self-reported internals pass through montauk's own exposition and embed inline in trace captures, correlating an app's own view against the kernel events montauk observes
+- **Binary Trace Log + Analysis Suite**: `--trace-out FILE` records raw events with near-zero observer effect (batched writes, no per-event formatting); `montauk_trace_decode` renders them to text/CSV and `montauk_analyze` runs single-pass diagnostic reports — heap double-free, livelock/spin, abort post-mortem, end-state stall — over captures reaching 450 MB+
 - **Headless Daemon Mode**: Run without TUI as a pure metrics exporter (`--headless --metrics PORT`)
 - **Structured Logging**: Timestamped Prometheus exposition snapshots to disk (`--log DIR`)
 - **Live Process Search**: Boyer-Moore-Horspool substring search with branchless ASCII lowercasing via `/` or `Ctrl+F`
@@ -25,7 +28,7 @@ A standalone, offline-friendly C++23 system monitor for Linux with comprehensive
 - **Thermal Monitoring**: Multi-sensor temperature tracking (edge, hotspot, memory) with vendor-specific thresholds
 - **Process Tracking**: Up to 256 processes with full command-line enrichment for accurate identification
 - **Atomic Snapshots**: Minimal CPU overhead with lock-free snapshot publication
-- **Zero Dependencies**: Builds with standard library only; NVML and liburing auto-detected and optional
+- **Lean Dependencies**: sublimation (montauk's sort algorithm) is an in-tree sub-system, built with montauk — no fetch, no system package; NVML and liburing auto-detected and optional
 - **Churn Resilient**: Real-time churn detection and dynamic display during heavy system activity
 - **ANSI Color Support**: Intelligent escape sequence handling with full truecolor support
 - **TOML Configuration**: Unified `~/.config/montauk/config.toml` with palette detection, configurable keybindings, and env var fallback
@@ -178,6 +181,9 @@ montauk --headless                     # Error: requires --metrics or --log
 montauk --trace firefox                # Trace mode: per-thread diagnostics for process group
 montauk --trace myapp --metrics 9101   # Trace mode + Prometheus endpoint
 montauk --trace myapp --log /tmp/trace # Trace mode + flight recorder
+montauk --trace myapp --trace-out t.bin # Trace mode + raw binary event log
+montauk_trace_decode t.bin             # Decode a binary log to text (--csv for CSV)
+montauk_analyze t.bin --report waits   # Run an analysis report over a binary log
 montauk --init-theme                   # Detect terminal palette, write config.toml
 ```
 
@@ -205,7 +211,7 @@ No additional dependencies required. Works independently of or alongside `--metr
 
 **Trace Mode (eBPF):**
 
-When `--trace PATTERN` is specified, montauk enters headless trace mode powered by eBPF. It attaches BPF programs to kernel tracepoints (`sched_process_fork`, `sched_process_exec`, `sched_process_exit`, `raw_syscalls/sys_enter`, `raw_syscalls/sys_exit`, `sched_switch`, and syscall-specific tracepoints for fd tracking) for real-time, event-driven instrumentation. No `/proc` scanning, no text parsing, no TOCTOU races.
+When `--trace PATTERN` is specified, montauk enters headless trace mode powered by eBPF. It attaches BPF programs to kernel tracepoints (`sched_process_fork`, `sched_process_exec`, `sched_process_exit`, `raw_syscalls/sys_enter`, `raw_syscalls/sys_exit`, `sched_switch`, `sched_wakeup`, `signal_deliver`, scheduler-decision tracepoints, and syscall-specific tracepoints for fd/mmap tracking) and to libc uprobes (heap allocation, abort path) for real-time, event-driven instrumentation. No `/proc` scanning, no text parsing, no TOCTOU races.
 
 montauk discovers and tracks processes through a four-layer approach, all event-driven with zero userspace roundtrip for the critical path:
 
@@ -226,6 +232,13 @@ Per-thread data collected via eBPF:
 - Per-thread CPU time via `sched_switch` on-CPU duration tracking
 - Open file descriptors tracked via `sys_enter_openat`, `sys_enter_close`, `sys_exit_socket`, `sys_exit_eventfd2` tracepoints
 - **File I/O details** (v5.1.0): per-thread `read`, `write`, `lseek`, `pread64`, and `fstat` tracking with full argument capture (fd, byte count, seek offset/whence) and return values. Enables diagnosing file I/O divergences between implementations — e.g., comparing a custom wineserver against stock to find exactly where file operations differ
+- **futex** (v6.5.0): `futex` (202) captured through the I/O event — op (WAIT/WAKE plus PRIVATE/CLOCK flags), val, and uaddr — so a trace shows a `FUTEX_WAKE` against a waiter and the op/uaddr to correlate wait/wake pairs
+- **Heap allocation** (v6.5.0): `malloc`/`free`/`realloc`/`calloc` via libc uprobes, pairing size with returned address per-thread; realloc moves tracked. The event stream the heap-corruption reports fold over — no debugger attached to the workload
+- **Signals and aborts** (v6.5.0): `tp/signal/signal_deliver` with a user-mode stack snapshot, abnormal-exit (`exit_code != 0`) postmortem stacks, and libc abort-path uprobes (`__assert_fail`/`__libc_message`/`abort`) marking the point a glibc consistency check fires
+- **File-backed mmap** (v6.5.0): `mmap` (anonymous mappings filtered) to distinguish arena growth from file mapping
+- **Scheduler decisions** (v6.5.0): enqueue / pick / preempt / wakeup / wake-to-run latency, bound by generic role to whatever decision tracepoints the active scheduler exposes — montauk names no scheduler in source. Aggregated per-CPU by default (one counter increment, near-zero overhead); full per-event streaming is opt-in via `--trace-out`
+- **On-CPU and migrations** (v6.5.0): current core per thread and a cross-core migration count, bucketed intra / cross / unknown-CCX against a sysfs-derived L3-domain map — cross-CCX moves (the L3-refill penalty) separated from cheap within-CCX shuffling, no PMU required
+- **ntsync** (v6.5.0): Wine/Proton NT synchronization ioctls (semaphore/mutex/event create, signal, wait) with the waited-on object fds — the substrate for the sync-contention reports
 
 Requires root at runtime (kernel tracepoint attachment requires `CAP_SYS_ADMIN` on most configurations). Build requires `libbpf`, `bpftool`, and `clang` (BPF target). Auto-detected by CMake; if unavailable, `--trace` prints an error.
 
@@ -236,11 +249,49 @@ Trace mode composes with `--metrics` and `--log`. When combined with `--metrics 
 - `montauk_trace_thread_syscall{pid,tid,comm,syscall,wchan}` — current syscall and wait channel
 - `montauk_trace_thread_io{pid,tid,comm,syscall,fd,count,result,whence}` — file I/O details: last read/write/lseek/pread64/fstat per thread with fd, byte count or seek offset, return value, and seek whence. Correlate with `fd_target` to see full file I/O sequences per file
 - `montauk_trace_fd_target{pid,fd,target}` — open file descriptors (pipes, devices, sockets)
+- `montauk_trace_thread_cpu{pid,tid,comm}` — core a thread currently runs on
+- `montauk_trace_thread_migrations{pid,tid,comm}` — cumulative cross-core moves per thread
+- `montauk_trace_migrations_intra_ccx` / `_cross_ccx` / `_unknown_ccx` — migration totals bucketed by L3/CCX locality
+- `montauk_trace_ntsync{...}` — ntsync ioctl operations from traced processes
+- `montauk_sched_op_total{op}` — scheduler decision counts (enqueue, pick, pick_empty, preempt_tick, preempt_wakeup, wakeup, wake2run), aggregated per-CPU in BPF
+- `montauk_pmu_*` — hardware counter gauges (see Hardware Performance Counters below)
 - `montauk_trace_group_size`, `montauk_trace_thread_total`, `montauk_trace_waiting` — group metadata
 
 When combined with `--log DIR`, trace metrics are written alongside standard metrics in the hourly `.prom` files, creating a flight recorder for post-mortem analysis.
 
 The trace subsystem runs as a parallel pipeline with its own lock-free seqlock double buffer, independent of the main monitoring pipeline. BPF programs maintain per-thread state maps and a global discovery map in the kernel; userspace reads these maps every 500ms to publish snapshots. Zero `/proc` reads after eBPF attach — all data comes from BPF maps and ring buffer events. No impact on existing TUI or system-wide metrics when `--trace` is not used.
+
+**Binary Event Log (`--trace-out`):**
+
+The periodic Prometheus snapshot is the data path for aggregate per-thread state. For high-rate event streams — scheduler decisions, heap traffic — formatting each event to text at trace time is a syscall-per-event firehose that perturbs the very workload being measured. `--trace-out FILE` writes the raw ring records verbatim to a binary log, batched into ~256 KB writes (one syscall per batch, not per event); trace-time cost per event drops to a memcpy. The header captures `CLOCK_MONOTONIC` and `CLOCK_REALTIME` anchors at trace start, so the readers reconstruct absolute wall-clock per event and correlate against external traces (schbench output, scheduler logs, the embedded provider snapshots). It is independent of `MONTAUK_TRACE_VERBOSE` (the per-event stderr aid) and `--log` (the Prometheus flight recorder) — three orthogonal output paths.
+
+Two tools read the binary log offline, sharing one record-walk (validate magic+version, length-authoritative iteration so an older decoder skips newer event types cleanly), with no `montauk_core` or BPF link:
+
+- `montauk_trace_decode FILE [--csv]` — renders one line per event with elapsed and absolute timestamps. Text by default, CSV for tooling.
+- `montauk_analyze FILE [--report name[,name...]]` — single-pass diagnostic reports (default: all). Each folds events once over the file:
+  - `summary` — header, duration, throughput, per type+subtype counts
+  - `waits` — per `(tid,fd)` NTSYNC wait-completion stats
+  - `spins` — livelock detector: streaks of sub-tick wait completions on one `(tid,fd)` sustained past a threshold, with a verdict
+  - `pairing` — per object fd, waits vs signal-side ops, to find a signal that never reaches a waiter
+  - `abortpm` — per-abort arena post-mortem: replays the heap stream up to each abort and names the glibc top-chunk overrun victim allocation, plus the aborting thread's last events
+  - `endstate` — who was parked in what wait when the trace ended, and for how long, to name a wedge/stall
+  - `heapstk` — unique allocation sites of a size-filtered `malloc`/`calloc` (`MONTAUK_HEAP_STACK_SIZE`), ranked by count
+  - `doublefree` — an address freed while not live, with the last size and both freeing tids/comms (same tid = logic double-destroy; two tids = concurrent free race); realloc moves tracked so a moved chunk isn't mis-flagged
+  - `futex` — per-uaddr futex wait/wake stats: which threads block on which futex and whether a wake ever reached a waiter
+  - `keyedevt` — ntdll keyed-event (critical-section) waits vs releases, keyed on the critical-section address, to spot a section a holder never released
+  - `sched` — wake-to-run (runqueue) latency distribution with percentiles, plus a flow-model classification of the latency sequence (a mid-trace regime change, quantization onto a few values) sorted and classified through sublimation
+
+**Hardware Performance Counters (PMU):**
+
+Trace mode additionally samples hardware counters via `perf_event_open`: per-CPU L2 cache misses/references (AMD Zen raw events), instructions, cycles, and — where the `amd_uncore` module exposes the `amd_l3` PMU — per-CCX L3 accesses/misses. Derived rates (IPC, L2 miss percent, cycles-per-L2-miss, misses/sec) export as the `montauk_pmu_*` gauge families. The `amd_l3` event encoding is read entirely from sysfs, nothing hardcoded but the documented Zen2 fallback. This is the cache-placement signal that pairs with the CCX-migration counters: misses explain why cross-CCX moves hurt.
+
+PMU sampling requires `kernel.perf_event_paranoid <= 0` or `CAP_PERFMON`, and is exclusive to trace mode by design — the plain monitor never calls `perf_event_open` and never requires elevated perf permissions. If the permission check fails in trace mode, PMU is disabled with a one-line notice and tracing continues without counter data.
+
+**External Metrics Providers:**
+
+montauk ingests external programs' own metrics. `ProviderCollector` scrapes unix sockets named `<name>.sock` in `$XDG_RUNTIME_DIR/montauk/providers/` (fallback `/run/montauk/providers/`): connect, read one full Prometheus-text snapshot to EOF. Providers self-identify by socket filename; montauk names none in source. A missing directory or unreachable/garbled provider is a silent per-scrape no-op — providers come and go at runtime.
+
+Provider text passes through montauk's own Prometheus exposition verbatim (so a scheduler or application exporting its internals appears alongside `montauk_*` in `--metrics`/`--log`), and is embedded into the binary trace stream as provider-snapshot records, so a capture carries the external program's self-reported state inline with the kernel events — correlate an app's own counters against the migrations montauk observed, in one file. Export-only: not shown in the TUI.
 
 ## UI Controls
 
@@ -625,26 +676,28 @@ Monitor with montauk while running stress tests (press 's' for SYSTEM focus to s
 
 **Note:** Tests are disabled by default in packaging builds.
 
-## Process Analyzer
+## Trace Analysis Tools
 
-montauk includes a standalone on-box process analyzer (`montauk_analyze`) for targeted CPU attribution. It matches processes by command-line substring, tracks per-thread CPU usage over a sampling window, and reports hot threads with Chromium process type classification.
+Two standalone tools consume a binary trace log (`--trace-out`) offline — no privileges, no live target, no external dependencies. Both share one length-authoritative record walk and build without a `montauk_core` or BPF link, so they decode a capture anywhere. They are installed alongside `montauk` and must track its version: a newer `montauk` emits event types an older decoder would silently drop.
+
+**`montauk_trace_decode`** — render a log to a human-readable event stream:
 
 ```bash
-montauk_analyze <pattern> [seconds] [interval_ms]
-
-# Examples:
-montauk_analyze helium 10 100    # Analyze "helium" processes for 10s at 100ms intervals
-montauk_analyze firefox 30       # Analyze Firefox for 30s (default 100ms interval)
-montauk_analyze chrome 5 50      # Quick 5s analysis at 50ms resolution
+montauk_trace_decode trace.bin          # one line per event, elapsed + wall timestamps
+montauk_trace_decode trace.bin --csv    # CSV for tooling
 ```
 
-Output includes:
-- Total CPU% across matched processes
-- CPU% breakdown by Chromium process type (renderer, gpu-process, utility, etc.)
-- Top PIDs by aggregate CPU%
-- Hot threads by individual thread CPU% with thread names
+**`montauk_analyze`** — run single-pass diagnostic reports over a log:
 
-No external dependencies. Built alongside montauk as `montauk_analyze`.
+```bash
+montauk_analyze trace.bin                       # all reports
+montauk_analyze trace.bin --report doublefree   # one report
+montauk_analyze trace.bin --report waits,spins  # several
+```
+
+The report suite (`summary`, `waits`, `spins`, `pairing`, `abortpm`, `endstate`, `heapstk`, `doublefree`, `futex`, `keyedevt`, `sched`) is described under **Trace Mode → Binary Event Log** above. Each report folds the file in a single pass, so analysis scales to captures of 450 MB+. These answer the questions that come up debugging sync contention and heap corruption — a wedged thread, a livelock spin, a double-free race, a glibc abort's victim allocation — post-hoc from one capture, no rerun.
+
+> The old live `/proc` CPU-attribution analyzer was removed in v6.5.0; `montauk_analyze` is now trace-only.
 
 ## Uninstall (CMake)
 
@@ -683,6 +736,9 @@ makepkg -si
 - `ThermalCollector` — Multi-sensor temps with vendor thresholds
 - `FsCollector` — Filesystem usage (mountpoint, used, total)
 - `FdinfoProcessCollector` — Per-process GPU metrics via /proc/*/fdinfo (DRM)
+- `PmuCollector` — Hardware PMU counters via perf_event_open: per-CPU L2 miss/ref, IPC, per-CCX L3 (trace-gated)
+- `ProviderCollector` — Scrapes external programs' Prometheus-text over unix sockets in `$XDG_RUNTIME_DIR/montauk/providers/`
+- `BpfTraceCollector` — eBPF tracepoint/uprobe instrumentation for `--trace`: per-thread state, syscalls, heap, signals, scheduler decisions, ntsync
 
 **Core Components:**
 - `Security` — Process security analysis (privilege escalation, suspicious patterns)
@@ -694,10 +750,11 @@ makepkg -si
 - `ThompsonNFA` — RE2-style Thompson NFA regex engine with UTF-8 byte lowering (Parser → Lowering → Builder → Simulator); 256-bit bitmask character classes, shunting-yard construction, zero-allocation simulation
 - `BoyerMoore` — Boyer-Moore-Horspool substring search with 256-byte bad character table
 - `AsciiLower` — Constexpr 256-byte ASCII lowercase lookup table (branchless, no locale)
-- `TimSort` — TimSort with pattern detection and galloping mode
+- `SortDispatch` — typed adapters onto sublimation (montauk's sort algorithm): pack-key index sort for numerics, hybrid prefix-pack + MSD radix for strings
 - `LogWriter` — Prometheus exposition snapshot logging with hourly file rotation
 - `MetricsServer` — io_uring HTTP server for Prometheus endpoint (optional, requires liburing)
-- `PrometheusSerializer` — Serializes MetricsSnapshot to Prometheus text exposition format via `std::to_chars()`
+- `PrometheusSerializer` — Serializes MetricsSnapshot to Prometheus text exposition format via `std::to_chars()` (system + trace + PMU families, with provider passthrough)
+- `TraceReader` — Shared open/validate/iterate over a binary `--trace-out` log; linked by `montauk_trace_decode` and `montauk_analyze` with no BPF dependency
 
 **UI Components (cell-based, OUROBOROS-derived):**
 - `widget::Canvas` — Cell-grid rendering surface with structural clipping and image-mask support for pixel blits
@@ -787,33 +844,20 @@ montauk supports three collection backends (auto-selected by availability):
 - Auto-clears when churn subsides
 - Zero performance impact when no churn active
 
-**TimSort with Galloping Mode:**
+**Sort (sublimation):**
 
-Process table sorting uses a C++23 TimSort implementation (`src/util/TimSort.cpp`) with pattern detection and galloping mode:
+sublimation IS montauk's sort algorithm — the flow-model adaptive sort, linked unconditionally (no runtime backend choice and no fallback). The process table and **every ordering the analyzer emits** — latency quantiles and report rows alike — sort through it; the analyzer no longer falls back to `std::sort` anywhere.
 
-- **O(n) Pattern Detection:** Single-pass analysis before sorting:
-  - `AlreadySorted` — Instant return, no work needed
-  - `Reversed` — O(n) in-place reversal
-  - `NearlySorted` — Delegates to `std::stable_sort` (< 5% inversions)
-  - `Random` — Full TimSort with run detection and galloping merges
+- **Pack-key index sort** for numeric keys (CPU%, memory, PID, GPU%, GMEM): keys pack with their index and sort as a unit, so montauk permutes a `uint32_t` index array rather than moving rows. Stable for equal keys — the packed index, initialized from input order, is the tiebreak, which keeps the UI from reshuffling rows that share a CPU%. 32-bit keys pack into one `uint64_t`; 64-bit keys (timestamps, addresses) use a stable LSD radix carrying the index as a satellite.
+- **Hybrid string sort** (prefix-pack + MSD radix) for the name column.
+- **Disorder classifier** — the same flow-model front end that picks the sort path also profiles a sequence's structure (Young-tableau shape, longest increasing subsequence, inversion ratio, phase boundary). The analyzer's `sched` report reads this to label a latency sequence's temporal structure.
+- **In-tree sub-system:** sublimation lives at `montauk/sublimation/` and CMake builds it as a static library, linked into montauk and the analyzer — no system package, no fetch step. Requires a Haswell-or-newer CPU (BMI2 + AVX2) and gcc 13+ (C23).
 
-- **Galloping Mode:** Exponential search optimization for clustered data:
-  - `gallop_left` / `gallop_right` — Find insertion points in O(log k) where k is distance from hint
-  - Pre-merge trimming eliminates entire merges when blocks don't overlap
-  - Adaptive threshold (MIN_GALLOP=7) — Backs off when galloping doesn't pay off
-  - Ideal for process data: sequential PIDs, idle/active CPU clusters
-
-- **Verified to Kernel Limits:**
-  - Tested with 10M elements; scales to any process count the kernel allows (`pid_max` caps at 4M)
-  - Disjoint PID blocks: 90% fewer comparisons vs std::stable_sort
-  - CPU%-sorted data: 73% fewer comparisons
-  - Random data: Tested with `getrandom()` syscall for cryptographic randomness; no regression vs std::stable_sort
-
-- **Stability Guarantee:** Maintains relative order of equal elements (critical for consistent UI when processes have identical CPU%)
+> montauk's prior C++23 TimSort/Powersort implementation is retired and preserved under `[0] ARCHIVE/montauk-timsort-cpp/`.
 
 ## Policy
 
-**No external dependencies** for default build. NVML and liburing are auto-detected and gracefully disabled when unavailable. No vendoring, no FetchContent, no ExternalProject.
+**sublimation is an in-tree sub-system:** montauk's sort algorithm lives at `montauk/sublimation/` and is compiled into the montauk build — no system package, no fetch, no runtime fallback. NVML and liburing are auto-detected and gracefully disabled when unavailable. No FetchContent, no ExternalProject — the sublimation source is vendored in the tree, not pulled at build time.
 
 ## License
 
