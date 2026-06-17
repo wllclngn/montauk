@@ -273,7 +273,7 @@ automatically. The soname major version bumps only on ABI break.
 
 ## Project Status
 
-4,559 lines of C across `src/` (5 source files, 4 type-template impl headers, 5 internal/public headers). 3,727 lines of test harness across 15 C test files plus the bench driver. 843,240 tests across all 6 numeric types pass on every `python3 tests/test.py` invocation. ThreadSanitizer clean (0 races). AddressSanitizer clean (0 errors). Cross-language roundtrip clean.
+5,894 lines of C across `src/` (11 source files, 6 type-template impl headers, 9 internal/public headers). 4,202 lines of test harness across 18 C test files plus the bench driver. 843,240 tests across all 6 numeric types pass on every `python3 tests/test.py` invocation. ThreadSanitizer clean (0 races). AddressSanitizer clean (0 errors). Cross-language roundtrip clean.
 
 ## License
 

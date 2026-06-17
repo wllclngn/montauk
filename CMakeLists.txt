@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 7.1.0 LANGUAGES C CXX)
+project(montauk VERSION 7.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -35,6 +35,7 @@ add_library(sublimation STATIC
     sublimation/src/merge.c
     sublimation/src/pack.c
     sublimation/src/randomness.c
+    sublimation/src/search.c
     sublimation/src/small.c
     sublimation/src/sort.c
     sublimation/src/spectral.c
@@ -239,7 +240,7 @@ set_target_properties(montauk_analyze PROPERTIES OUTPUT_NAME montauk_analyze)
 # shared event headers (model/TraceBinary.hpp + bpf/montauk_trace.h) and the
 # TraceReader record walk, so it builds even when BPF tracing isn't compiled
 # into montauk itself.
-add_executable(montauk_trace_decode src/tools/trace_decode.cpp src/model/TraceReader.cpp)
+add_executable(montauk_trace_decode src/tools/trace_decode.cpp src/model/TraceReader.cpp src/util/Log.cpp)
 target_include_directories(montauk_trace_decode PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/bpf)

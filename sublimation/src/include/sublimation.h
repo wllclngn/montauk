@@ -26,9 +26,9 @@ extern "C" {
 
 // Release version (source-of-truth for the library tag, pkgbuild, tests).
 #define SUBLIMATION_VERSION_MAJOR  1
-#define SUBLIMATION_VERSION_MINOR  4
+#define SUBLIMATION_VERSION_MINOR  5
 #define SUBLIMATION_VERSION_PATCH  0
-#define SUBLIMATION_VERSION_STRING "1.4.0"
+#define SUBLIMATION_VERSION_STRING "1.5.0"
 
 // ABI version. Bumped only when the library ABI breaks; independent from
 // the release version above. Readers should compare this value at runtime

@@ -508,7 +508,7 @@ def cmd_build(args, source_dir: Path) -> bool:
     else:
         log_info("eBPF trace: enabled (--trace mode)")
 
-    log_info("Sublimation: in-tree sub-system (montauk/sublimation), built with montauk")
+    log_info("sublimation: in-tree sub-system (montauk/sublimation), built with montauk")
 
     # Test binary (montauk_tests) is opt-in. The --test flag on install/build
     # adds it; otherwise we explicitly pass OFF so any stale CMakeCache from
@@ -559,6 +559,19 @@ def cmd_build(args, source_dir: Path) -> bool:
     return True
 
 
+def install_atomic(src: Path, dst: Path) -> int:
+    """Install src -> dst atomically. Copy to a temp name in dst's directory,
+    then rename over dst. rename(2) swaps the directory entry without touching
+    the old inode, so it succeeds even while the old binary is still running --
+    a plain `cp` over a live executable fails with ETXTBSY ("text file busy").
+    The temp lives in the same directory as dst so the rename stays on one
+    filesystem (atomic, not a cross-device copy). Returns 0 on success."""
+    tmp = dst.with_name(dst.name + ".new")
+    if run_cmd_sudo(["cp", str(src), str(tmp)]) != 0:
+        return 1
+    return run_cmd_sudo(["mv", "-f", str(tmp), str(dst)])
+
+
 def cmd_install(args, source_dir: Path) -> bool:
     """Build and install montauk."""
     if not cmd_build(args, source_dir):
@@ -574,7 +587,7 @@ def cmd_install(args, source_dir: Path) -> bool:
 
     run_cmd_sudo(["mkdir", "-p", str(prefix / "bin")])
 
-    ret = run_cmd_sudo(["cp", str(binary), str(install_path)])
+    ret = install_atomic(binary, install_path)
     if ret != 0:
         log_error("Failed to install binary!")
         return False
@@ -588,7 +601,7 @@ def cmd_install(args, source_dir: Path) -> bool:
     for tool in ("montauk_trace_decode", "montauk_analyze"):
         tool_bin = binary.parent / tool
         if tool_bin.exists():
-            if run_cmd_sudo(["cp", str(tool_bin), str(prefix / "bin" / tool)]) == 0:
+            if install_atomic(tool_bin, prefix / "bin" / tool) == 0:
                 log_info(f"Installed {prefix / 'bin' / tool}")
             else:
                 log_warn(f"Failed to install {tool}")
@@ -642,7 +655,7 @@ def cmd_install(args, source_dir: Path) -> bool:
         log_info("Kernel module is loaded and will auto-load on boot.")
         log_warn("Re-run this installer after kernel upgrades!")
 
-    log_info("Sublimation is montauk's sort algorithm — built in-tree (montauk/sublimation).")
+    log_info("sublimation is montauk's sort algorithm — built in-tree (montauk/sublimation).")
 
     return True
 

@@ -11,6 +11,7 @@
 #include "ui/Renderer.hpp"
 #include "ui/Config.hpp"
 #include "util/TomlReader.hpp"
+#include "util/Log.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -61,7 +62,7 @@ int main(int argc, char** argv) {
       auto colors = montauk::ui::detect_palette();
       montauk::util::TomlReader toml;
       auto cfg_path = montauk::ui::config_file_path();
-      if (cfg_path.empty()) { std::cerr << "Error: cannot determine config path (no HOME)\n"; return 1; }
+      if (cfg_path.empty()) { montauk::util::log_error("cannot determine config path (no HOME)"); return 1; }
       // Load existing config if present (preserve user edits)
       (void)toml.load(cfg_path);
       // Write detected palette
@@ -131,7 +132,7 @@ int main(int argc, char** argv) {
       if (toml.save(cfg_path))
         std::cout << "Wrote " << cfg_path << "\n";
       else
-        std::cerr << "Error: failed to write " << cfg_path << "\n";
+        montauk::util::log_error("failed to write %s", cfg_path.c_str());
       return 0;
     }
     else if (a == "-h" || a == "--help") {
@@ -153,7 +154,7 @@ int main(int argc, char** argv) {
   if (!trace_pattern.empty()) headless = true;
 
   if (headless && metrics_port == 0 && log_dir.empty() && trace_pattern.empty()) {
-    std::cerr << "Error: --headless requires --metrics PORT or --log DIR\n";
+    montauk::util::log_error("--headless requires --metrics PORT or --log DIR");
     return 1;
   }
 
@@ -180,8 +181,8 @@ int main(int argc, char** argv) {
     }
 #else
     if (!trace_pattern.empty()) {
-      std::cerr << "Error: --trace requires eBPF support (libbpf + bpftool + clang)\n";
-      std::cerr << "Rebuild with libbpf installed: pacman -S libbpf bpf\n";
+      montauk::util::log_error("--trace requires eBPF support (libbpf + bpftool + clang)");
+      montauk::util::log_error("rebuild with libbpf installed: pacman -S libbpf bpf");
       return 1;
     }
 #endif
@@ -208,7 +209,7 @@ int main(int argc, char** argv) {
       if (trace_collector) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         if (trace_collector->failed()) {
-          std::cerr << "Error: --trace requires root or CAP_BPF + CAP_PERFMON\n";
+          montauk::util::log_error("--trace requires root or CAP_BPF + CAP_PERFMON");
           trace_collector->stop();
           producer.stop();
           return 1;
@@ -303,16 +304,14 @@ int main(int argc, char** argv) {
   } catch (const std::exception& e) {
     // Safety net: catch any unhandled exceptions to prevent crashes
     restore_terminal_minimal();
-    std::cerr << "\nFATAL ERROR: Unhandled exception: " << e.what() << "\n";
-    std::cerr << "This is likely caused by a transient filesystem issue (proc/sys files disappearing).\n";
-    std::cerr << "Please report this error if it persists.\n";
+    montauk::util::log_error("FATAL: unhandled exception: %s", e.what());
+    montauk::util::log_error("likely a transient filesystem issue (proc/sys files disappearing); please report if it persists");
     return 1;
   } catch (...) {
     // Catch-all for non-standard exceptions
     restore_terminal_minimal();
-    std::cerr << "\nFATAL ERROR: Unknown exception caught.\n";
-    std::cerr << "This is likely caused by a transient filesystem issue (proc/sys files disappearing).\n";
-    std::cerr << "Please report this error if it persists.\n";
+    montauk::util::log_error("FATAL: unknown exception caught");
+    montauk::util::log_error("likely a transient filesystem issue (proc/sys files disappearing); please report if it persists");
     return 1;
   }
 

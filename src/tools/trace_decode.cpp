@@ -13,6 +13,7 @@
 
 #include "model/TraceReader.hpp"
 #include "montauk_trace.h"
+#include "util/Log.hpp"
 
 #include <cinttypes>
 #include <cstdint>
@@ -94,18 +95,17 @@ int main(int argc, char** argv) {
     case montauk::model::TraceReadStatus::Ok:
       break;
     case montauk::model::TraceReadStatus::OpenFailed:
-      std::fprintf(stderr, "montauk_trace_decode: cannot open '%s'\n", path);
+      montauk::util::log_error("cannot open '%s'", path);
       return 1;
     case montauk::model::TraceReadStatus::ShortHeader:
-      std::fprintf(stderr, "montauk_trace_decode: short read on header\n");
+      montauk::util::log_error("short read on header");
       return 1;
     case montauk::model::TraceReadStatus::BadMagic:
-      std::fprintf(stderr, "montauk_trace_decode: bad magic (not a montauk trace log)\n");
+      montauk::util::log_error("bad magic (not a montauk trace log)");
       return 1;
     default:
-      std::fprintf(stderr,
-                   "montauk_trace_decode: format version %u, this build expects %u\n",
-                   reader.header().version, montauk::model::kTraceFormatVersion);
+      montauk::util::log_error("format version %u, this build expects %u",
+                               reader.header().version, montauk::model::kTraceFormatVersion);
       return 1;
   }
   const auto& hdr = reader.header();
@@ -338,11 +338,10 @@ int main(int argc, char** argv) {
   });
 
   if (status == montauk::model::TraceReadStatus::CorruptLength) {
-    std::fprintf(stderr, "montauk_trace_decode: corrupt record length %u at event %" PRIu64 "\n",
-                 reader.corrupt_len(), reader.events_read());
+    montauk::util::log_error("corrupt record length %u at event %" PRIu64,
+                             reader.corrupt_len(), reader.events_read());
   } else if (status == montauk::model::TraceReadStatus::TruncatedRecord) {
-    std::fprintf(stderr, "montauk_trace_decode: truncated record at event %" PRIu64 "\n",
-                 reader.events_read());
+    montauk::util::log_error("truncated record at event %" PRIu64, reader.events_read());
   }
 
   if (!csv) std::printf("# %" PRIu64 " events\n", reader.events_read());

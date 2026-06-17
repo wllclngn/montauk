@@ -42,6 +42,7 @@ static std::string redact_comm(const char* comm) {
 
 #include "sublimation.h"        // in-tree sub-system: flow-model sort, classify
 #include "sublimation_pack.h"   // index-by-key sorts (u64/f64) for report rows
+#include "sublimation_search.h" // structural locator: where a disorder pattern sits
 
 #include <algorithm>
 #include <chrono>
@@ -1771,6 +1772,9 @@ struct SchedLatencyReport final : Report {
   std::vector<uint64_t> lat_;        // wake2run latencies (ns)
   std::vector<uint64_t> cross_lat_;  // cross-CCX subset (ns)
   sub_profile_t prof_{};             // flow-model profile of lat_ in arrival order
+  struct Region { size_t start, end; sub_disorder_t cls; };
+  std::vector<Region> regions_;      // where structure sits in the timeline (locator)
+  double structured_frac_ = 0.0;     // fraction of windows carrying structure
 
   const char* name() const override { return "sched"; }
 
@@ -1804,6 +1808,30 @@ struct SchedLatencyReport final : Report {
     // drift (NEARLY_SORTED). Must run before the in-place sort destroys the
     // timeline. classify is pure (reads, never writes), so lat_ is untouched.
     prof_ = sublimation_classify_u64(lat_.data(), lat_.size());
+
+    // Locate WHERE structure sits in the arrival-order timeline (the third
+    // sublimation primitive: search). classify above says WHAT the whole
+    // sequence is; the locator slides it across the stream and names the
+    // stretches that carry exploitable structure. Also runs before the sort.
+    if (lat_.size() >= 1024) {
+      const size_t win = std::min<size_t>(512, lat_.size() / 8);
+      std::vector<sub_match_t> wins(lat_.size() / win + 2);
+      size_t nw = sublimation_profile_u64(lat_.data(), lat_.size(), win, win,
+                                          wins.data(), wins.size());
+      size_t structured = 0;
+      for (size_t i = 0; i < nw; ++i)
+        if (wins[i].disorder != SUB_RANDOM) ++structured;
+      structured_frac_ = nw ? static_cast<double>(structured) / static_cast<double>(nw) : 0.0;
+      // Coalesce adjacent same-class non-random windows into regions.
+      for (size_t i = 0; i < nw;) {
+        if (wins[i].disorder == SUB_RANDOM) { ++i; continue; }
+        sub_disorder_t cls = wins[i].disorder;
+        size_t start = wins[i].start, j = i;
+        while (j < nw && wins[j].disorder == cls) ++j;
+        regions_.push_back({start, wins[j - 1].start + wins[j - 1].len, cls});
+        i = j;
+      }
+    }
 
     // Flow-model sort, in place: direct u64 entry (not the u32 index-pack path).
     sublimation_u64(lat_.data(), lat_.size());
@@ -1844,7 +1872,20 @@ struct SchedLatencyReport final : Report {
     if (prof_.inversion_ratio > 0.0f)
       std::printf("; inversion ratio %.2f",
                   static_cast<double>(prof_.inversion_ratio));
-    std::printf("\n\n");
+    std::printf("\n");
+    // Where that structure sits in the timeline (the locator).
+    if (!regions_.empty()) {
+      std::printf("LOCATED: %zu structured region(s) —", regions_.size());
+      size_t shown = 0;
+      for (const auto& r : regions_) {
+        if (shown++ >= 5) { std::printf(" +%zu more", regions_.size() - 5); break; }
+        std::printf(" %s[%.0f%%..%.0f%%]", disorder_name(r.cls),
+                    100.0 * static_cast<double>(r.start) / dn,
+                    100.0 * static_cast<double>(r.end) / dn);
+      }
+      std::printf("\n");
+    }
+    std::printf("\n");
   }
 
   void prom(std::vector<PromMetric>& out) override {
@@ -1868,6 +1909,9 @@ struct SchedLatencyReport final : Report {
     // latency is quantized onto a few values (a fixed timer/quantum).
     out.push_back({"montauk_analysis_wake2run_distinct", "",
                    static_cast<double>(prof_.distinct_estimate)});
+    // Locator: fraction of the timeline carrying exploitable structure.
+    out.push_back({"montauk_analysis_wake2run_structured_pct", "",
+                   100.0 * structured_frac_});
   }
 };
 
