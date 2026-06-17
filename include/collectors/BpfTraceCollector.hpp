@@ -2,7 +2,7 @@
 #include "app/TraceBuffers.hpp"
 #include "app/ProviderEmitter.hpp"
 #include "collectors/ProviderCollector.hpp"
-#include "util/BoyerMoore.hpp"
+#include "sublimation_text.hpp"
 #include <thread>
 #include <string>
 #include <vector>
@@ -75,7 +75,7 @@ private:
   montauk::app::TraceBuffers& buffers_;
   std::string pattern_;            // full --trace value (comma-separated list)
   std::string primary_pattern_;    // first token: the BPF .rodata fast-path
-  std::vector<montauk::util::BoyerMooreSearch> matchers_;  // one per token; OR
+  std::vector<sublimation::BMH> matchers_;  // one per token; OR
   // montauk's own producer endpoint in the provider mesh: serves the trace
   // snapshot as Prometheus text so montauk is a peer, not a stderr dumper.
   montauk::app::ProviderEmitter emitter_{montauk::app::ProviderEmitter::kSelfName};

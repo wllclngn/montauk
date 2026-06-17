@@ -1,5 +1,6 @@
 #include "app/Security.hpp"
 
+#include "sublimation_order.hpp"
 #include "util/AsciiLower.hpp"
 #include <algorithm>
 #include <cmath>
@@ -195,9 +196,8 @@ std::vector<SecurityFinding> collect_security_findings(const montauk::model::Sna
     }
   }
 
-  std::stable_sort(findings.begin(), findings.end(), [](const SecurityFinding& a, const SecurityFinding& b){
-    return a.severity > b.severity;
-  });
+  // Severity desc, through sublimation (stable: equal-severity findings keep order).
+  sublimation_order_u64(findings, true, [](const SecurityFinding& f){ return (uint64_t)f.severity; });
 
   return findings;
 }

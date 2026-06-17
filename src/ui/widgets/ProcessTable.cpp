@@ -3,7 +3,7 @@
 #include "ui/Terminal.hpp"
 #include "ui/Formatting.hpp"
 #include "util/SortDispatch.hpp"
-#include "util/ThompsonNFA.hpp"
+#include "sublimation_text.hpp"
 #include "app/Filter.hpp"
 
 #include <algorithm>
@@ -45,7 +45,7 @@ void draw_command_classified(widget::Canvas& canvas, int x, int y,
                              int max_width, std::string_view cmd,
                              const UIConfig& ui, int row_severity) {
   if (max_width <= 0 || cmd.empty()) return;
-  static const montauk::util::ThompsonNFA kernel_re("^\\[.+\\]$");
+  static const sublimation::NFA kernel_re("^\\[.+\\]$");
   const widget::Style muted_style  = widget::parse_sgr_style(ui.muted);
   const widget::Style binary_style = widget::parse_sgr_style(ui.binary);
   const widget::Style row_style    = severity_to_style(row_severity);

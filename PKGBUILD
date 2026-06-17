@@ -30,7 +30,7 @@ if [[ $BUILDDIR -ef "$startdir" && "$startdir" == *" "* ]]; then
     BUILDDIR=/tmp/makepkg-$pkgname
 fi
 
-pkgver=7.2.0
+pkgver=7.3.0
 pkgrel=1
 pkgdesc='High-performance Linux system monitor with kernel module, eBPF tracing, GPU attribution, and pixel-rendered area charts'
 arch=('x86_64')
@@ -107,6 +107,7 @@ package() {
     install -Dm755 build/montauk              "$pkgdir/usr/bin/montauk"
     install -Dm755 build/montauk_analyze      "$pkgdir/usr/bin/montauk_analyze"
     install -Dm755 build/montauk_trace_decode "$pkgdir/usr/bin/montauk_trace_decode"
+    install -Dm755 build/sublimation          "$pkgdir/usr/bin/sublimation"
 
     # Manpage — the in-app help overlay loads it at runtime via `man montauk`.
     install -Dm644 montauk.1                 "$pkgdir/usr/share/man/man1/montauk.1"

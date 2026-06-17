@@ -7,7 +7,7 @@
 #include <chrono>
 #include <vector>
 #include <cstdio>
-#include <regex>
+#include "sublimation_text.hpp"
 #include <string_view>
 #include <fstream>
 #include <sstream>
@@ -153,11 +153,13 @@ static bool read_nvidia_proc(montauk::model::GpuVram& out) {
       if (colon == std::string::npos) continue;
       size_t end = txt->find('\n', colon + 1);
       std::string_view val(txt->data() + colon + 1, (end == std::string::npos ? txt->size() : end) - (colon + 1));
-      // Extract integer before optional MiB
-      std::string s(val);
-      std::smatch m; std::regex r(R"((\d+))");
-      if (std::regex_search(s, m, r)) {
-        uint64_t v = std::stoull(m[1].str());
+      // Extract the integer (before an optional MiB) with montauk's own regex
+      // engine -- the Thompson NFA, leftmost-longest, so [0-9]+ grabs the whole
+      // run. No std::regex.
+      static const sublimation::NFA digits("[0-9]+");
+      auto span = digits.find(val);
+      if (span.first >= 0) {
+        uint64_t v = std::stoull(std::string(val.substr(span.first, span.second - span.first)));
         if (line == "Total") total_mb = v;
         else used_mb = v;
       }

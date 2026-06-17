@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 7.2.0 LANGUAGES C CXX)
+project(montauk VERSION 7.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,9 +36,12 @@ add_library(sublimation STATIC
     sublimation/src/pack.c
     sublimation/src/randomness.c
     sublimation/src/search.c
+    sublimation/src/select.c
     sublimation/src/small.c
     sublimation/src/sort.c
     sublimation/src/spectral.c
+    sublimation/src/text/bmh.c
+    sublimation/src/text/nfa.c
     sublimation/src/parallel/pool.c
     sublimation/src/strings/msd_radix.c
     sublimation/src/strings/sort_strings.c
@@ -61,9 +64,7 @@ add_library(montauk_core
     src/util/Procfs.cpp
     src/util/Churn.cpp
     src/util/SortDispatch.cpp
-    src/util/BoyerMoore.cpp
     src/util/Log.cpp
-    src/util/ThompsonNFA.cpp
     src/util/NvmlDyn.cpp
     src/model/TraceReader.cpp
     src/ui/Terminal.cpp
@@ -245,6 +246,16 @@ target_include_directories(montauk_trace_decode PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/bpf)
 target_compile_options(montauk_trace_decode PRIVATE -Wall -Wextra -Werror -Wshadow)
+
+# ── sublimation CLI ─────────────────────────────────────────────────────────
+# The command-line front door to the sort sub-system: pipe a numeric stream in,
+# get sort / quantile / select / searchsorted / classify / locate / rand out.
+# Output name is `sublimation` (the static lib is libsublimation.a -- no clash).
+add_executable(sublimation_cli sublimation/cli.c)
+set_target_properties(sublimation_cli PROPERTIES
+    OUTPUT_NAME sublimation
+    C_STANDARD 23 C_STANDARD_REQUIRED ON)
+target_link_libraries(sublimation_cli PRIVATE sublimation)
 
 if(MONTAUK_BUILD_TESTS)
   # Lightweight unit tests without external deps

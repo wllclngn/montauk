@@ -1,7 +1,6 @@
 #pragma once
 #include "model/Snapshot.hpp"
-#include "util/BoyerMoore.hpp"
-#include <regex>
+#include "sublimation_text.hpp"
 #include <optional>
 
 namespace montauk::app {
@@ -21,8 +20,8 @@ public:
   [[nodiscard]] std::vector<size_t> apply(const montauk::model::ProcessSnapshot& ps) const;
 private:
   ProcessFilterSpec spec_;
-  std::optional<std::regex> compiled_;
-  std::optional<montauk::util::BoyerMooreSearch> bmh_;
+  std::optional<sublimation::NFA> compiled_;
+  std::optional<sublimation::BMH> bmh_;
 };
 
 } // namespace montauk::app

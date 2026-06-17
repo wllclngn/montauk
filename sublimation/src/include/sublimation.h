@@ -119,6 +119,29 @@ sub_profile_t sublimation_classify_f32(const float  *arr, size_t n) SUB_PURE;
 SUB_NODISCARD SUB_API
 sub_profile_t sublimation_classify_f64(const double *arr, size_t n) SUB_PURE;
 
+// Selection: the k-th smallest element (0-based) via quickselect on the same
+// partition machinery the sort uses -- O(n) average, no full sort. Partitions
+// `arr` in place like std::nth_element (arr[k] ends holding the result; the left
+// side <= it, the right side >= it) and returns arr[k]. The 1:1 replacement for
+// std::nth_element. k is clamped to n-1; n == 0 returns 0.
+SUB_API int32_t  sublimation_select_i32(int32_t  *SUB_RESTRICT arr, size_t n, size_t k);
+SUB_API int64_t  sublimation_select_i64(int64_t  *SUB_RESTRICT arr, size_t n, size_t k);
+SUB_API uint32_t sublimation_select_u32(uint32_t *SUB_RESTRICT arr, size_t n, size_t k);
+SUB_API uint64_t sublimation_select_u64(uint64_t *SUB_RESTRICT arr, size_t n, size_t k);
+SUB_API float    sublimation_select_f32(float    *SUB_RESTRICT arr, size_t n, size_t k);
+SUB_API double   sublimation_select_f64(double   *SUB_RESTRICT arr, size_t n, size_t k);
+
+// Binary search into an already-sorted array: the insertion index of `value`.
+// side 0 = lower_bound (first i with sorted[i] >= value); side 1 = upper_bound
+// (first i with sorted[i] > value). Returns n when value sits past the end. The
+// 1:1 replacement for std::lower_bound / std::upper_bound.
+SUB_API size_t sublimation_searchsorted_i32(const int32_t  *sorted, size_t n, int32_t  value, int side);
+SUB_API size_t sublimation_searchsorted_i64(const int64_t  *sorted, size_t n, int64_t  value, int side);
+SUB_API size_t sublimation_searchsorted_u32(const uint32_t *sorted, size_t n, uint32_t value, int side);
+SUB_API size_t sublimation_searchsorted_u64(const uint64_t *sorted, size_t n, uint64_t value, int side);
+SUB_API size_t sublimation_searchsorted_f32(const float    *sorted, size_t n, float    value, int side);
+SUB_API size_t sublimation_searchsorted_f64(const double   *sorted, size_t n, double   value, int side);
+
 // _Generic dispatch macros: route to the correct type-specific function at
 // compile time. Three variants: plain sort, sort+stats, classify.
 #define sublimation_typed(arr, n) _Generic((arr),        \
@@ -153,6 +176,30 @@ sub_profile_t sublimation_classify_f64(const double *arr, size_t n) SUB_PURE;
     float *:    sublimation_classify_f32,                \
     double *:   sublimation_classify_f64                 \
 )(arr, n)
+
+#define sublimation_typed_select(arr, n, k) _Generic((arr), \
+    int32_t *:  sublimation_select_i32,                  \
+    int64_t *:  sublimation_select_i64,                  \
+    uint32_t *: sublimation_select_u32,                  \
+    uint64_t *: sublimation_select_u64,                  \
+    float *:    sublimation_select_f32,                  \
+    double *:   sublimation_select_f64                   \
+)(arr, n, k)
+
+#define sublimation_typed_searchsorted(sorted, n, value, side) _Generic((sorted), \
+    const int32_t *:  sublimation_searchsorted_i32,      \
+    const int64_t *:  sublimation_searchsorted_i64,      \
+    const uint32_t *: sublimation_searchsorted_u32,      \
+    const uint64_t *: sublimation_searchsorted_u64,      \
+    const float *:    sublimation_searchsorted_f32,      \
+    const double *:   sublimation_searchsorted_f64,      \
+    int32_t *:  sublimation_searchsorted_i32,            \
+    int64_t *:  sublimation_searchsorted_i64,            \
+    uint32_t *: sublimation_searchsorted_u32,            \
+    uint64_t *: sublimation_searchsorted_u64,            \
+    float *:    sublimation_searchsorted_f32,            \
+    double *:   sublimation_searchsorted_f64             \
+)(sorted, n, value, side)
 
 // Parallel sort (explicit thread count). i64-only in v1.2.0 -- the IPS4o
 // bucket pool is hard-coded for int64_t. Other types will be added in a

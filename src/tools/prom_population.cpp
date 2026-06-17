@@ -1,5 +1,6 @@
 // prom_population — implementation. See prom_population.hpp.
 #include "prom_population.hpp"
+#include "sublimation_order.hpp"
 
 #include "prom_stats.hpp"
 #include "util/Log.hpp"
@@ -82,7 +83,7 @@ std::string cell_key(const LabelVec& labels,
   std::vector<std::string> parts;
   for (const auto& kv : labels)
     if (!drop.count(kv.first)) parts.push_back(kv.first + "=" + kv.second);
-  std::sort(parts.begin(), parts.end());
+  sublimation_order_strings(parts, false, [](const std::string& s){ return s.c_str(); });
   std::string s;
   for (const auto& p : parts) {
     if (!s.empty()) s += ",";
@@ -124,7 +125,7 @@ std::vector<std::string> glob_proms(const std::string& dir) {
     out.push_back(dir + "/" + name);
   }
   ::closedir(d);
-  std::sort(out.begin(), out.end());
+  sublimation_order_strings(out, false, [](const std::string& s){ return s.c_str(); });
   return out;
 }
 
@@ -163,6 +164,7 @@ void parse_file(const std::string& path, const PopOptions& opt,
   }
   std::set<std::string> hist_families;
   std::string version = "unknown";
+  std::string commit = "unknown";
   // TYPE lines precede their series in the bench .prom, so a single pass works.
   // family -> cellkey -> axis value -> cumulative-bucket histogram.
   std::map<std::string, std::map<std::string, std::map<std::string, Hist>>> file_hist;
@@ -213,10 +215,12 @@ void parse_file(const std::string& path, const PopOptions& opt,
 
     LabelVec labels = parse_labels(labelstr);
 
-    // version: any *_info family carrying a version label.
+    // version/commit: any *_info family carrying the label.
     if (name.size() > 5 && name.compare(name.size() - 5, 5, "_info") == 0) {
       std::string v = label_get(labels, "version");
       if (!v.empty()) version = v;
+      std::string c = label_get(labels, "git_commit");
+      if (!c.empty()) commit = c;
       continue;
     }
 
@@ -233,6 +237,7 @@ void parse_file(const std::string& path, const PopOptions& opt,
     bool is_count = !is_hist_part("_count").empty();
     if (!hb.empty()) {
       labels.emplace_back("version", version);
+      labels.emplace_back("commit", commit);
       std::string axv = label_get(labels, opt.compare_axis);
       if (axv.empty()) continue;
       std::string ck = cell_key(labels, drop_for_cell);  // drops le + axis
@@ -246,6 +251,7 @@ void parse_file(const std::string& path, const PopOptions& opt,
 
     // Plain gauge: one per-run scalar for (family, full labels).
     labels.emplace_back("version", version);
+    labels.emplace_back("commit", commit);
     std::string axis = label_get(labels, opt.compare_axis);
     if (axis.empty()) continue;  // cannot place without the compare axis
     std::string ck = cell_key(labels, drop_for_cell);
@@ -386,6 +392,18 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
 
   util::log_info("population: %zu file(s), compare by '%s', %s",
                  files.size(), opt.compare_axis.c_str(), better);
+
+  // Underpowered guard: the inferential unit is one run. If no cell has more
+  // than one run per axis value, every comparison is single-shot -- say so
+  // loudly once, before the numbers tempt a verdict they cannot support.
+  int max_group_n = 0;
+  for (auto& fam_kv : data)
+    for (auto& cell_kv : fam_kv.second.cells)
+      for (auto& g : cell_kv.second.runs)
+        max_group_n = std::max(max_group_n, static_cast<int>(g.second.size()));
+  if (max_group_n <= 1)
+    util::log_warn("N=1 per group -- inference underpowered; collect >=3 runs "
+                   "per '%s' value for a verdict", opt.compare_axis.c_str());
 
   for (auto& fam_kv : data) {
     const std::string& metric = fam_kv.first;
@@ -742,10 +760,7 @@ L2Shares compute_l2_shares(const std::string& dir) {
   if (per_cpu.empty() || r.grand <= 0.0) return r;
 
   r.rows.assign(per_cpu.begin(), per_cpu.end());
-  std::sort(r.rows.begin(), r.rows.end(),
-            [](const std::pair<int, double>& a, const std::pair<int, double>& b) {
-              return a.second > b.second;
-            });
+  sublimation_order_f64(r.rows, true, [](const std::pair<int, double>& p) { return p.second; });
   r.ok = true;
   return r;
 }

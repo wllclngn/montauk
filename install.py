@@ -5,12 +5,12 @@ montauk installer
 Builds and installs montauk system monitor, optionally with kernel module
 and/or eBPF trace support.
 
+The kernel module and eBPF trace are part of montauk -- always built, no prompt,
+no opt-out. They require kernel headers and the eBPF toolchain (clang, bpftool,
+libbpf, kernel BTF); a missing prereq aborts the install with the fix to run.
+
 Usage:
-    ./install.py              # Build and install (prompts for kernel/bpf if deps found)
-    ./install.py --kernel     # Build with kernel module (no prompt)
-    ./install.py --no-kernel  # Skip kernel module (no prompt)
-    ./install.py --bpf        # Build with eBPF trace support (no prompt)
-    ./install.py --no-bpf     # Skip eBPF trace support (no prompt)
+    ./install.py              # Build and install (kernel module + eBPF trace, mandatory)
     ./install.py --debug      # Debug build
     ./install.py --prefix /usr # Install to /usr instead of /usr/local
     ./install.py build        # Build only, don't install
@@ -321,102 +321,30 @@ def check_bpf_deps() -> dict:
     return deps
 
 
-def prompt_bpf() -> bool:
-    """Prompt user for eBPF trace support. Returns True if yes."""
-    log_info("eBPF tracing dependencies found.")
-    log_info("montauk can build with eBPF support for --trace mode:")
-    log_info("  - Real-time per-thread syscall/state tracking via kernel tracepoints")
-    log_info("  - Event-driven process tree discovery (no /proc polling)")
-    log_info("  - Per-thread CPU%, wait channel, fd targets — all from eBPF maps")
-    log_info("  - Requires root or CAP_BPF + CAP_PERFMON at runtime")
-    print()
-    try:
-        while True:
-            response = input(
-                "Build with eBPF trace support? [Y/N]: "
-            ).strip().lower()
-            if response in ("y", "yes"):
-                return True
-            elif response in ("n", "no"):
-                return False
-    except EOFError:
-        print()
-        log_info("No input (non-interactive). Skipping eBPF trace support.")
-        return False
-
-
 def resolve_bpf(args) -> bool:
-    """Determine whether to build with eBPF trace support.
-    --bpf: yes, no prompt.
-    --no-bpf: no, no prompt.
-    Neither: check for deps, prompt if found.
-    """
-    if args.bpf:
-        deps = check_bpf_deps()
-        missing = []
-        if not deps["clang"]:
-            missing.append("clang")
-        if not deps["bpftool"]:
-            missing.append("bpftool")
-        if not deps["libbpf"]:
-            missing.append("libbpf")
-        if not deps["btf"]:
-            missing.append("kernel BTF (/sys/kernel/btf/vmlinux)")
-        if missing:
-            log_error("eBPF dependencies not found: " + ", ".join(missing))
-            print()
-            log_info("Install them first:")
-            print("         Arch Linux:    sudo pacman -S libbpf bpf clang")
-            print("         Debian/Ubuntu: sudo apt install libbpf-dev bpftool clang linux-tools-$(uname -r)")
-            print("         Fedora:        sudo dnf install libbpf-devel bpftool clang")
-            print()
-            return False
-        return True
-
-    if args.no_bpf:
-        return False
-
-    # Auto-detect
+    """eBPF trace support is MANDATORY -- montauk IS its tracer, not a monitor
+    that optionally traces. Verify the toolchain (clang, bpftool, libbpf, kernel
+    BTF); fail with the install command if any piece is missing. There is no
+    prompt and no opt-out: --no-bpf is accepted but ignored with a warning."""
+    if getattr(args, "no_bpf", False):
+        log_warn("eBPF trace is part of montauk now; --no-bpf ignored")
     deps = check_bpf_deps()
-    if deps["clang"] and deps["bpftool"] and deps["libbpf"] and deps["btf"]:
-        return prompt_bpf()
-
-    # Some deps missing -- mention it
-    log_info("eBPF trace support (--trace mode) is available but requires:")
-    log_info("  clang, bpftool, libbpf, kernel BTF")
-    missing = [k for k in ["clang", "bpftool", "libbpf", "btf"] if not deps.get(k)]
-    log_info(f"  Missing: {', '.join(missing)}")
-    print()
-    log_info("To enable:  sudo pacman -S libbpf bpf clang  (Arch)")
-    log_info("Then re-run:  ./install.py --bpf")
-    print()
-    log_info("Continuing without eBPF trace support...")
-    print()
-    return False
-
-
-def prompt_kernel() -> bool:
-    """Prompt user for kernel module support. Returns True if yes."""
-    kver = get_kernel_version()
-    log_info(f"Linux kernel headers found (kernel {kver}).")
-    log_info("montauk can install an optional kernel module for best performance:")
-    log_info("  - ~0.1% CPU overhead (vs ~2-5% without)")
-    log_info("  - Zero /proc reads (data comes directly from the kernel)")
-    log_info("  - Sub-millisecond process detection")
-    print()
-    try:
-        while True:
-            response = input(
-                "Install the montauk kernel module? [Y/N]: "
-            ).strip().lower()
-            if response in ("y", "yes"):
-                return True
-            elif response in ("n", "no"):
-                return False
-    except EOFError:
+    missing = [name for name, ok in (
+        ("clang", deps["clang"]),
+        ("bpftool", deps["bpftool"]),
+        ("libbpf", deps["libbpf"]),
+        ("kernel BTF (/sys/kernel/btf/vmlinux)", deps["btf"]),
+    ) if not ok]
+    if missing:
+        log_error("eBPF dependencies not found: " + ", ".join(missing))
         print()
-        log_info("No input (non-interactive). Skipping kernel module.")
+        log_info("montauk requires them. Install, then re-run:")
+        print("         Arch Linux:    sudo pacman -S libbpf bpf clang")
+        print("         Debian/Ubuntu: sudo apt install libbpf-dev bpftool clang linux-tools-$(uname -r)")
+        print("         Fedora:        sudo dnf install libbpf-devel bpftool clang")
+        print()
         return False
+    return True
 
 
 # =============================================================================
@@ -424,63 +352,45 @@ def prompt_kernel() -> bool:
 # =============================================================================
 
 def resolve_kernel(args, source_dir: Path) -> bool:
-    """Determine whether to build with kernel support.
-    --kernel: yes, no prompt.
-    --no-kernel: no, no prompt.
-    Neither: check for headers, prompt if found.
-    """
-    if args.kernel:
-        kver = get_kernel_version()
-        if not check_kernel_headers(kver):
-            log_error("Kernel headers not found!")
-            print()
-            log_info("Install them first:")
-            print("         Arch Linux:    sudo pacman -S linux-headers")
-            print("         Debian/Ubuntu: sudo apt install linux-headers-$(uname -r)")
-            print("         Fedora:        sudo dnf install kernel-devel")
-            print()
-            return False
-        return True
-
-    if args.no_kernel:
-        return False
-
-    # Auto-detect
+    """The kernel module is MANDATORY -- it is part of montauk now, not an
+    option. Verify the running kernel's headers; fail with the install command
+    if they're missing. There is no prompt and no opt-out: --no-kernel is
+    accepted but ignored with a warning."""
+    if getattr(args, "no_kernel", False):
+        log_warn("the kernel module is part of montauk now; --no-kernel ignored")
     kver = get_kernel_version()
     kernel_src = source_dir / "montauk-kernel"
-
     if not kernel_src.exists():
+        log_error(f"kernel module source missing at {kernel_src}")
         return False
-
-    if check_kernel_headers(kver):
-        return prompt_kernel()
-
-    # Headers missing but kernel source exists -- tell them about it
-    log_info("montauk includes an optional Linux kernel module for best performance")
-    log_info("(~0.1% CPU, zero /proc reads, sub-millisecond process detection).")
-    print()
-    log_info("To enable it, install your Linux kernel's development headers:")
-    print(f"         Arch Linux:    sudo pacman -S linux-headers  (kernel {kver})")
-    print(f"         Debian/Ubuntu: sudo apt install linux-headers-{kver}")
-    print(f"         Fedora:        sudo dnf install kernel-devel")
-    print()
-    log_info("Then re-run:  ./install.py --kernel")
-    print()
-    log_info("Continuing without kernel module support...")
-    print()
-    return False
+    if not check_kernel_headers(kver):
+        log_error("Kernel headers not found -- montauk's kernel module needs them.")
+        print()
+        log_info("montauk requires them. Install, then re-run:")
+        print(f"         Arch Linux:    sudo pacman -S linux-headers  (kernel {kver})")
+        print(f"         Debian/Ubuntu: sudo apt install linux-headers-{kver}")
+        print("         Fedora:        sudo dnf install kernel-devel")
+        print()
+        return False
+    return True
 
 
 def cmd_build(args, source_dir: Path) -> bool:
     """Build montauk (and optionally the kernel module, eBPF trace)."""
     build_dir = source_dir / "build"
+    # Kernel module and eBPF trace are MANDATORY -- part of montauk, not options.
+    # resolve_* verify the prereqs and print the exact fix; a miss aborts here
+    # rather than silently building a lesser montauk.
     use_kernel = resolve_kernel(args, source_dir)
+    if not use_kernel:
+        return False
     use_bpf = resolve_bpf(args)
+    if not use_bpf:
+        return False
 
-    # Build kernel module first if requested
-    if use_kernel:
-        if not build_and_install_kernel_module(source_dir):
-            return False
+    # Build the kernel module first (always).
+    if not build_and_install_kernel_module(source_dir):
+        return False
 
     # sublimation (montauk's sort algorithm) is an in-tree sub-system at
     # montauk/sublimation/ — CMake builds it as part of the montauk build.
@@ -595,10 +505,11 @@ def cmd_install(args, source_dir: Path) -> bool:
     size = binary.stat().st_size
     log_info(f"Installed {install_path} ({size} bytes)")
 
-    # The trace tools ship with the tracer. A montauk newer than the deployed
-    # decoder silently drops newer event types (ABORT, HEAPSTK) from decoded
-    # output — decode/analyze MUST track the installed montauk version.
-    for tool in ("montauk_trace_decode", "montauk_analyze"):
+    # The trace tools ship with the tracer (a montauk newer than the deployed
+    # decoder silently drops newer event types from decoded output, so they MUST
+    # track the installed montauk version), and `sublimation` is the CLI front
+    # door to the in-tree sort sub-system -- it ships beside them.
+    for tool in ("montauk_trace_decode", "montauk_analyze", "sublimation"):
         tool_bin = binary.parent / tool
         if tool_bin.exists():
             if install_atomic(tool_bin, prefix / "bin" / tool) == 0:
@@ -690,6 +601,7 @@ def cmd_uninstall(args, source_dir: Path) -> bool:
     targets = [install_path,
                prefix / "bin" / "montauk_analyze",
                prefix / "bin" / "montauk_trace_decode",
+               prefix / "bin" / "sublimation",
                prefix / "share" / "man" / "man1" / "montauk.1"]
     removed = 0
     for t in targets:
@@ -774,31 +686,32 @@ Commands:
   test        Run tests
 
 Examples:
-  ./install.py                    # Build and install (prompts for kernel/bpf if available)
-  ./install.py --kernel           # Build with kernel module support (no prompt)
-  ./install.py --no-kernel        # Build without kernel module (no prompt)
-  ./install.py --bpf              # Build with eBPF trace support (no prompt)
-  ./install.py --no-bpf           # Build without eBPF trace support (no prompt)
+  ./install.py                    # Build and install (kernel module + eBPF trace, mandatory)
   ./install.py --test             # Also build montauk_tests alongside
   ./install.py --prefix /usr      # Install to /usr/bin
   ./install.py build              # Build only
   ./install.py clean              # Clean build
+
+The kernel module and eBPF trace are always built -- no prompt, no opt-out.
 """
     )
 
     parser.add_argument("command", nargs="?", default="install",
                        choices=["install", "build", "clean", "uninstall", "test"],
                        help="Command to run (default: install)")
+    # Kernel module and eBPF trace are mandatory now. These flags are kept so
+    # existing callers don't break: --kernel/--bpf are no-ops (the default), and
+    # --no-kernel/--no-bpf are accepted but ignored with a warning.
     kernel_group = parser.add_mutually_exclusive_group()
     kernel_group.add_argument("--kernel", action="store_true",
-                              help="Build and install kernel module (no prompt)")
+                              help="(default; kept for compatibility) build the kernel module")
     kernel_group.add_argument("--no-kernel", action="store_true",
-                              help="Skip kernel module (no prompt)")
+                              help="ignored -- the kernel module is mandatory")
     bpf_group = parser.add_mutually_exclusive_group()
     bpf_group.add_argument("--bpf", action="store_true",
-                            help="Build with eBPF trace support (no prompt)")
+                            help="(default; kept for compatibility) build eBPF trace support")
     bpf_group.add_argument("--no-bpf", action="store_true",
-                            help="Skip eBPF trace support (no prompt)")
+                            help="ignored -- eBPF trace is mandatory")
     parser.add_argument("--debug", action="store_true",
                        help="Build with debug symbols")
     parser.add_argument("--test", action="store_true",

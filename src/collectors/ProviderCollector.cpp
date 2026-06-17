@@ -1,5 +1,6 @@
 #include "collectors/ProviderCollector.hpp"
 #include "app/ProviderEmitter.hpp"
+#include "sublimation_order.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -134,9 +135,8 @@ bool ProviderCollector::sample(std::vector<montauk::model::Provider>& out) {
   }
   ::closedir(d);
 
-  // readdir order is arbitrary; sort for stable panel/serialization order
-  std::sort(out.begin(), out.end(),
-            [](const auto& a, const auto& b) { return a.name < b.name; });
+  // readdir order is arbitrary; sort by name (through sublimation) for stable order
+  sublimation_order_strings(out, false, [](const auto& p) { return p.name.c_str(); });
   return true;
 }
 

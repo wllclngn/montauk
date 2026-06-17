@@ -42,6 +42,7 @@ static std::string redact_comm(const char* comm) {
 
 #include "sublimation.h"        // in-tree sub-system: flow-model sort, classify
 #include "sublimation_pack.h"   // index-by-key sorts (u64/f64) for report rows
+#include "sublimation_order.hpp" // sublimation_order_u64/_f64: struct-by-key ordering
 #include "sublimation_search.h" // structural locator: where a disorder pattern sits
 
 #include <algorithm>
@@ -222,40 +223,9 @@ std::string fmt_count(double n) {
   return buf;
 }
 
-// Order a vector of report rows through sublimation instead of std::sort: pull
-// a numeric key from each element, index-sort it with the flow-model pack
-// (sublimation_pack_sort_u64/f64), then gather into key order. This is the
-// row-ordering counterpart to the numeric-vector sorts (gaps_ns, wake2run) --
-// every ordering the analyzer emits now runs through sublimation. Stable:
-// equal keys keep input order (the pack tiebreaks on the original index), so
-// the output is deterministic where std::sort's tie order was not.
-template <class T, class KeyFn>
-void sublimation_order_u64(std::vector<T>& v, bool descending, KeyFn key) {
-  const size_t n = v.size();
-  if (n < 2) return;
-  std::vector<uint64_t> keys(n);
-  std::vector<uint32_t> idx(n);
-  for (size_t i = 0; i < n; ++i) { keys[i] = key(v[i]); idx[i] = static_cast<uint32_t>(i); }
-  sublimation_pack_sort_u64(keys.data(), idx.data(), n, descending);
-  std::vector<T> out;
-  out.reserve(n);
-  for (size_t i = 0; i < n; ++i) out.push_back(std::move(v[idx[i]]));
-  v = std::move(out);
-}
-
-template <class T, class KeyFn>
-void sublimation_order_f64(std::vector<T>& v, bool descending, KeyFn key) {
-  const size_t n = v.size();
-  if (n < 2) return;
-  std::vector<double> keys(n);
-  std::vector<uint32_t> idx(n);
-  for (size_t i = 0; i < n; ++i) { keys[i] = key(v[i]); idx[i] = static_cast<uint32_t>(i); }
-  sublimation_pack_sort_f64(keys.data(), idx.data(), n, descending);
-  std::vector<T> out;
-  out.reserve(n);
-  for (size_t i = 0; i < n; ++i) out.push_back(std::move(v[idx[i]]));
-  v = std::move(out);
-}
+// Struct/row ordering by one key runs through sublimation_order_u64 / _f64
+// (sublimation_order.hpp): index-sort via the flow-model pack, gather into key
+// order, stable on ties -- deterministic where std::sort's tie order was not.
 
 // PROMETHEUS RE-EMISSION. Analysis results are written back out as
 // montauk_analysis_* gauges so the loop stays inside Prometheus (the
@@ -288,6 +258,10 @@ const char* prom_help(const char* name) {
      "1 if the fd's waits exceed 100x its signals (no plausible signaler)"},
     {"montauk_analysis_wake2run_us",
      "Wake-to-run (runqueue) latency quantile in us over WAKE2RUN events"},
+    {"montauk_analysis_wake2run_fast_pct",
+     "Percent of wake2run latencies in the cache-hot fast mode (<100us)"},
+    {"montauk_analysis_wake2run_mid_pct",
+     "Percent of wake2run latencies between fast mode and the tick floor"},
     {"montauk_analysis_wake2run_tickfloor_pct",
      "Percent of wake2run latencies on the CONFIG_HZ tick floor (>=900us)"},
     {"montauk_analysis_wake2run_crossccx_pct",
@@ -1899,10 +1873,20 @@ struct SchedLatencyReport final : Report {
     push("0.999", q_us(lat_, 0.999));
     push("worst", us(lat_.back()));
     const double dn = static_cast<double>(lat_.size());
-    size_t tick = 0;
-    for (uint64_t v : lat_) if (v >= 900000) ++tick;
-    out.push_back({"montauk_analysis_wake2run_tickfloor_pct", "",
-                   100.0 * static_cast<double>(tick) / dn});
+    // Same bands as the VERDICT line: fast <100us, tick-floor >=900us, mid
+    // between. Emitting all three (not just the floor) lets the population pass
+    // score the fast-mode share -- the clearest under-load discriminator.
+    size_t fast = 0, tick = 0;
+    for (uint64_t v : lat_) {
+      if (v < 100000) ++fast;
+      else if (v >= 900000) ++tick;
+    }
+    const double fastpct = 100.0 * static_cast<double>(fast) / dn;
+    const double tickpct = 100.0 * static_cast<double>(tick) / dn;
+    out.push_back({"montauk_analysis_wake2run_fast_pct", "", fastpct});
+    out.push_back({"montauk_analysis_wake2run_mid_pct", "",
+                   100.0 - fastpct - tickpct});
+    out.push_back({"montauk_analysis_wake2run_tickfloor_pct", "", tickpct});
     out.push_back({"montauk_analysis_wake2run_crossccx_pct", "",
                    100.0 * static_cast<double>(cross_lat_.size()) / dn});
     // Flow-model distinct-value estimate: a low count on a large trace means
@@ -2080,7 +2064,8 @@ struct PlacementRaceReport final : Report {
       return;
     }
     for (auto& kv : idle_evt_)
-      std::sort(kv.second.begin(), kv.second.end());
+      sublimation_order_u64(kv.second, false,
+                            [](const std::pair<uint64_t, uint8_t>& p) { return p.first; });
 
     uint64_t miss = 0, saturated = 0, idle_cpu_sum = 0;
     for (auto& fw : floored_) {
@@ -2175,8 +2160,7 @@ struct DispatchStallReport final : Report {
       return;
     }
     for (auto& kv : picks_)
-      std::sort(kv.second.begin(), kv.second.end(),
-                [](const Pk& a, const Pk& b) { return a.ts < b.ts; });
+      sublimation_order_u64(kv.second, false, [](const Pk& e) { return e.ts; });
 
     uint64_t preempt = 0, order = 0, inter_sum = 0;
     uint64_t po_total = 0, po_mirror = 0;        // pass-over picks, of which mirror-lane
@@ -2307,6 +2291,150 @@ struct DispatchStallReport final : Report {
     out.push_back({"montauk_analysis_dispatch_served_mirror_pct", "", served_mirror_pct_});
     out.push_back({"montauk_analysis_dispatch_passover_higher_class_pct", "", po_higher_pct_});
     out.push_back({"montauk_analysis_dispatch_passover_same_class_pct", "", po_same_pct_});
+  }
+};
+
+// REPORT slice: per-CPU dispatched-slice length = the interval between
+// consecutive PICKs on one CPU (how long the picked task ran before the CPU
+// picked again). If the saturation tail is "wakee waits behind N tasks each
+// running a long slice," this is the per-slice multiplier: tail ~ pass-overs x
+// slice. Idle strands (gap > 10ms) are excluded -- those are not slices.
+struct SliceReport final : Report {
+  std::unordered_map<uint32_t, std::vector<uint64_t>> pick_ts_;  // cpu -> pick timestamps
+  std::vector<uint64_t> slices_;
+
+  const char* name() const override { return "slice"; }
+
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
+    const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    if (s->op != SCHED_OP_PICK) return;
+    pick_ts_[s->cpu].push_back(s->timestamp_ns);
+  }
+
+  static double us(uint64_t ns) { return (double)ns / 1000.0; }
+  static double q_us(const std::vector<uint64_t>& v, double f) {
+    if (v.empty()) return 0.0;
+    size_t i = (size_t)((double)v.size() * f);
+    if (i >= v.size()) i = v.size() - 1;
+    return us(v[i]);
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    std::printf("REPORT slice\n");
+    static constexpr uint64_t kStrandNs = 10000000ULL;  // >10ms gap = idle, not a slice
+    for (auto& kv : pick_ts_) {
+      auto& v = kv.second;
+      sublimation_u64(v.data(), v.size());
+      for (size_t i = 1; i < v.size(); ++i) {
+        uint64_t d = v[i] - v[i - 1];
+        if (d > 0 && d < kStrandNs) slices_.push_back(d);
+      }
+    }
+    if (slices_.empty()) {
+      std::printf("VERDICT: no slices (PICK stream absent)\n\n");
+      return;
+    }
+    sublimation_u64(slices_.data(), slices_.size());
+    double mean = 0;
+    for (uint64_t s : slices_) mean += (double)s;
+    mean /= (double)slices_.size();
+    std::printf("VERDICT: %s dispatched slices; p50 %.1fus p90 %.1fus p99 %.1fus "
+                "worst %.1fus; mean %.1fus\n",
+                fmt_count((double)slices_.size()).c_str(),
+                q_us(slices_, 0.50), q_us(slices_, 0.90), q_us(slices_, 0.99),
+                us(slices_.back()), mean / 1000.0);
+    std::printf("  (long slices x pass-over depth = the saturation tail; a "
+                "shorter effective slice drains a deep runqueue faster)\n\n");
+  }
+
+  void prom(std::vector<PromMetric>& out) override {
+    if (slices_.empty()) return;
+    auto push = [&](const char* ql, double v) {
+      out.push_back({"montauk_analysis_slice_us",
+                     std::string("quantile=\"") + ql + "\"", v});
+    };
+    push("0.5", q_us(slices_, 0.50));
+    push("0.99", q_us(slices_, 0.99));
+    push("worst", us(slices_.back()));
+  }
+};
+
+// REPORT service: per-PID CPU service (sum of dispatched slices from the PICK
+// stream) and its SKEW. The cliff is the legit backlog -- a wakee waiting behind
+// others. The fix is a fair-share / lag term ONLY IF service is skewed (a few
+// tasks over-consume, so deprioritizing them frees the starved wakee). If
+// service is uniform (every task gets ~equal CPU), a fair-share term has nothing
+// to redistribute and won't move the tail. This measures which: top-k share +
+// sublimation-sorted per-PID service distribution. Per-PID service = sum of
+// (next_pick_ts - this_pick_ts) on the CPU while this PID was the picked task
+// (idle strands > 10ms excluded).
+struct ServiceReport final : Report {
+  std::unordered_map<uint32_t, std::vector<std::pair<uint64_t, int>>> picks_;  // cpu->(ts,pid)
+  std::vector<uint64_t> svc_;  // per-pid total service, filled in emit()
+
+  const char* name() const override { return "service"; }
+
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
+    const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    if (s->op != SCHED_OP_PICK) return;
+    picks_[s->cpu].push_back({s->timestamp_ns, s->pid});
+  }
+
+  static double ms(uint64_t ns) { return (double)ns / 1e6; }
+  static double q_ms(const std::vector<uint64_t>& v, double f) {
+    if (v.empty()) return 0.0;
+    size_t i = (size_t)((double)v.size() * f);
+    if (i >= v.size()) i = v.size() - 1;
+    return ms(v[i]);
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    std::printf("REPORT service\n");
+    static constexpr uint64_t kStrandNs = 10000000ULL;
+    std::unordered_map<int, uint64_t> by_pid;
+    for (auto& kv : picks_) {
+      auto& v = kv.second;
+      sublimation_order_u64(v, false, [](const std::pair<uint64_t, int>& p) { return p.first; });
+      for (size_t i = 1; i < v.size(); ++i) {
+        uint64_t d = v[i].first - v[i - 1].first;
+        if (d > 0 && d < kStrandNs) by_pid[v[i - 1].second] += d;
+      }
+    }
+    if (by_pid.empty()) {
+      std::printf("VERDICT: no service (PICK stream absent)\n\n");
+      return;
+    }
+    uint64_t total = 0;
+    for (auto& kv : by_pid) { svc_.push_back(kv.second); total += kv.second; }
+    sublimation_u64(svc_.data(), svc_.size());  // ascending
+    size_t np = svc_.size();
+    uint64_t top1 = svc_.back();
+    uint64_t top5 = 0;
+    for (size_t i = 0; i < 5 && i < np; ++i) top5 += svc_[np - 1 - i];
+    double top1_pct = total ? 100.0 * (double)top1 / (double)total : 0.0;
+    double top5_pct = total ? 100.0 * (double)top5 / (double)total : 0.0;
+    // fair share = total / npids; a uniform distribution has every pid ~= fair.
+    double fair = np ? (double)total / (double)np : 0.0;
+    double p99_over_fair = fair > 0 ? q_ms(svc_, 0.99) * 1e6 / fair : 0.0;
+    std::printf("VERDICT: %s PIDs ran; per-PID service p50 %.1fms p99 %.1fms "
+                "max %.1fms; fair-share %.1fms\n",
+                fmt_count((double)np).c_str(), q_ms(svc_, 0.50), q_ms(svc_, 0.99),
+                ms(top1), fair / 1e6);
+    std::printf("  SKEW: top-1 PID %.1f%% of all CPU / top-5 %.1f%%; p99 PID ran "
+                "%.1fx its fair share\n", top1_pct, top5_pct, p99_over_fair);
+    std::printf("  (high skew -> a few tasks over-consume; a fair-share/lag term "
+                "frees the starved wakee = the cliff lever. uniform -> symmetric "
+                "load, fair-share has nothing to redistribute)\n\n");
+  }
+
+  void prom(std::vector<PromMetric>& out) override {
+    if (svc_.empty()) return;
+    uint64_t total = 0; for (uint64_t s : svc_) total += s;
+    out.push_back({"montauk_analysis_service_top1_pct", "",
+                   total ? 100.0 * (double)svc_.back() / (double)total : 0.0});
+    out.push_back({"montauk_analysis_service_pids", "", (double)svc_.size()});
   }
 };
 
@@ -2674,6 +2802,8 @@ std::vector<std::unique_ptr<Report>> make_reports() {
   reports.push_back(std::make_unique<WorkConservationReport>());
   reports.push_back(std::make_unique<PlacementRaceReport>());
   reports.push_back(std::make_unique<DispatchStallReport>());
+  reports.push_back(std::make_unique<SliceReport>());
+  reports.push_back(std::make_unique<ServiceReport>());
   reports.push_back(std::make_unique<WaitsReport>());
   reports.push_back(std::make_unique<SpinsReport>());
   reports.push_back(std::make_unique<PairingReport>());
@@ -2781,15 +2911,18 @@ int run_digest(const std::string& dir, bool redact) {
 } // namespace
 
 int main(int argc, char** argv) {
-  if (argc < 2) {
-    std::fprintf(stderr,
+  bool want_help = argc >= 2 &&
+                   (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h");
+  if (argc < 2 || want_help) {
+    std::fprintf(want_help ? stdout : stderr,
         "usage: montauk_analyze TRACE [--report name[,name...]]\n"
         "       montauk_analyze DIR|FILE.prom [more.prom...] [--by axis]\n"
         "                       [--metric substr] [--full] [--higher-better]\n"
         "                       [--seed n] [--quantile q] [--no-emit]\n"
+        "                       (axis: scheduler | version | commit)\n"
         "       montauk_analyze RECORDING_DIR --digest [--redact]\n"
         "       montauk_analyze RECORDING_DIR --l2-by-cpu\n");
-    return 2;
+    return want_help ? 0 : 2;
   }
   const char* path = argv[1];
 

@@ -164,8 +164,8 @@ double cliffs_delta(const std::vector<double>& a, const std::vector<double>& b) 
   long long acc = 0;
   const size_t nb = bs.size();
   for (double x : a) {
-    size_t less = std::lower_bound(bs.begin(), bs.end(), x) - bs.begin();
-    size_t gt = nb - (std::upper_bound(bs.begin(), bs.end(), x) - bs.begin());
+    size_t less = sublimation_searchsorted_f64(bs.data(), bs.size(), x, 0);  // lower_bound
+    size_t gt = nb - sublimation_searchsorted_f64(bs.data(), bs.size(), x, 1);  // upper_bound
     acc += static_cast<long long>(less) - static_cast<long long>(gt);
   }
   return static_cast<double>(acc) /
