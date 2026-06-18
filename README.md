@@ -7,13 +7,13 @@
 ╚═╝     ╚═╝  ╚═════╝  ╚═╝  ╚═══╝    ╚═╝    ╚═╝  ╚═╝  ╚═════╝  ╚═╝  ╚═╝
 ```
 
-**montauk · sublimation** — a Linux system monitor, metrics generator, tracer and analyzer, built on an in-tree flow-model sort.
+**montauk · sublimation** — a Linux system monitor, metrics generator, tracer and analyzer, built on sublimation, its in-tree search, sort, and match core.
 
 ## Overview
 
-montauk is a Linux **system monitor, tracer, and analyzer** — three tools in one offline-friendly C++23 binary — built on **sublimation**, an in-tree flow-model sort that does the ordering, the disorder classification, and the entropy detection. The monitor (plain `montauk`) is an event-driven TUI with deep GPU attribution and Prometheus export. The tracer (`--trace`) is an eBPF flight recorder over a whole process tree — sync objects, heap, signals, scheduler decisions, hardware counters. The analyzer (`montauk_analyze` / `montauk_trace_decode`) folds a capture once into diagnostic reports.
+montauk is a Linux **system monitor, metrics generator, tracer and analyzer** — three tools in one offline-friendly C++23 binary — built on **sublimation**, its in-tree search, sort, and match core: the ordering, the disorder classification, the entropy detection, and every substring and regex match montauk makes. The monitor (plain `montauk`) is an event-driven TUI with deep GPU attribution and Prometheus export. The tracer (`--trace`) is an eBPF flight recorder over a whole process tree — sync objects, heap, signals, scheduler decisions, hardware counters. The analyzer (`montauk_analyze` / `montauk_trace_decode`) folds a capture once into diagnostic reports.
 
-sublimation is a **sub-system montauk builds**, vendored in `montauk/sublimation/`, and it is montauk's sort *everywhere*: the process table, every ordering the analyzer emits, and the latency-structure classification the reports read. Two systems, one tree. No system packages, no fetch step — NVML and liburing are auto-detected and optional; everything else lives in the repo.
+sublimation is a **sub-system montauk builds**, vendored in `montauk/sublimation/`, and it is montauk's search and sort *everywhere*: the process table, every ordering the analyzer emits, the latency-structure classification the reports read, and the kernel-thread, `/`-search, and `--trace` text matching. Two systems, one tree. No system packages, no fetch step — NVML and liburing are auto-detected and optional; everything else lives in the repo.
 
 ```
 montauk — one C++23 binary, three tools, one in-tree sort
@@ -31,10 +31,11 @@ montauk — one C++23 binary, three tools, one in-tree sort
   │    └─ single-pass reports — waits, spins, pairing, abortpm, endstate,
   │       heapstk, doublefree, futex, keyedevt, sched (wake-to-run latency + structure),
   │       slice (per-CPU dispatched-slice length)
-  └─ sublimation  (in-tree flow-model sort sub-system)
+  └─ sublimation  (in-tree search / sort / match core)
        ├─ disorder classifier — builds a level graph, routes the sort; the analyzer reads its verdict
        ├─ index sorts (32-bit pack / 64-bit LSD radix) + hybrid prefix-pack / MSD-radix string sort
-       └─ randomness battery — six orthogonal entropy lenses → a single max-entropy confidence
+       ├─ randomness battery — six orthogonal entropy lenses → a single max-entropy confidence
+       └─ text engines — Boyer-Moore substring + Thompson NFA regex; value search (select, searchsorted)
 ```
 
 ## Components
@@ -46,32 +47,17 @@ montauk is one binary that wears three faces, plus the sort beneath them. Each f
 | **monitor** | `montauk` | Event-driven TUI. Per-process CPU and multi-vendor GPU attribution (NVIDIA NVML + `nvidia-smi` fallbacks, AMD sysfs, Intel fdinfo), thermal margins, security findings, live Boyer-Moore search and Thompson-NFA classification. OUROBOROS-derived cell-clipped UI, pixel-rendered area charts (Kitty `t=t` /dev/shm transport, Sixel fallback), three column-swappable views. Optional Prometheus `/metrics` over io_uring and hourly `.prom` logging. |
 | **tracer** | `montauk --trace PATTERN` | eBPF flight recorder over a whole process tree — event-driven discovery, no ptrace, no `/proc`. Per-thread state and syscalls, ntsync / futex / keyed-event sync, heap traffic, signals and aborts, file I/O, file-backed mmap, scheduler decisions with wake-to-run latency, CCX-bucketed migrations, and hardware PMU counters via `perf_event_open`. Composes with `--metrics`, `--log`, and a near-zero-overhead binary log (`--trace-out`). |
 | **analyzer** | `montauk_analyze`, `montauk_trace_decode` | Folds a capture once into single-pass diagnostic reports — `waits`, `spins`, `pairing`, `abortpm`, `endstate`, `heapstk`, `doublefree`, `futex`, `keyedevt`, `sched`, `slice` — over logs reaching 450 MB+, plus recording-directory digests and cross-run population statistics. No live target, no privileges. |
-| **sublimation** | in-tree sub-system + `sublimation` CLI | montauk's flow-model adaptive sort, used everywhere: the process table, every ordering the analyzer emits, and the disorder classification its reports read. It sorts, classifies, and locates structure, and the `sublimation` CLI exposes those primitives on the command line (sort / quantile / select / searchsorted / classify / locate / rand). See the dedicated section below. |
+| **sublimation** | in-tree sub-system + `sublimation` CLI | montauk's search, sort, and match core, used everywhere: the process table, every ordering the analyzer emits, the disorder classification its reports read, and all of montauk's text matching. It sorts, classifies, locates structure, and greps text (Boyer-Moore substring + Thompson NFA regex); the `sublimation` CLI exposes all of them (sort / quantile / select / searchsorted / classify / locate / rand / grep / contains). See the dedicated section below. |
 
-An optional kernel module (`montauk-kernel`) and the external-metrics provider sockets are the only seams to the outside; everything else is one statically-linked C++23 binary. sublimation is not a dependency montauk fetches — it is vendored under `montauk/sublimation/` with its own tests, and carried its own GPL-2.0 before coming home (now one license, one tree; this README is the single home for both). NVML and liburing are auto-detected and optional; no system packages, no fetch step.
+An optional kernel module (`montauk-kernel`) and the external-metrics provider sockets are the only seams to the outside; everything else is one statically-linked C++23 binary. sublimation is vendored under `montauk/sublimation/` with its own tests — one license, one tree, one README for both. NVML and liburing are auto-detected and optional; no system packages, no fetch step.
 
-## sublimation — montauk's Sort Sub-System
+## sublimation — montauk's search, sort, and match core
 
-sublimation is montauk's sort — and, now, montauk's whole **search / match / order core**. Not a library montauk depends on — a **sub-system montauk builds**, vendored under `montauk/sublimation/` (source, the `sublimation` CLI, and its tests). It is a **flow-model adaptive sort**: before sorting, it classifies the input's disorder — already sorted, reversed, nearly-sorted, few-unique, phased, or random — by building a *level graph* over the data (the same maximum-flow / level-graph machinery that gives the family its name), then routes to the path that disorder warrants. Structured data sorts fast because the structure is *detected*, not assumed away; random data is handled as random. The classifier is not a side effect — it is the front door, and montauk reads its verdict directly. From the one engine fall **sort**, **classify**, and **locate**; beside it in the same sub-system live montauk's text engines — **substring** search (Boyer-Moore) and **regex** (Thompson NFA) — and the **value-search** leg (`select`, `searchsorted`). So sublimation is montauk's single search/match/order core: order and structure by the flow model, text membership by the engines housed next to it (the flow model can't grep text; the library that holds it can).
+sublimation is montauk's search, match and order core, vendored in-tree under `montauk/sublimation/` (source, the `sublimation` CLI, tests). It classifies every input's disorder — sorted, reversed, nearly-sorted, few-unique, phased, random — by building a level graph over the data, the maximum-flow machinery the family is named for, then routes to the path that disorder warrants: **100 million random int64, sorted flat at ~17 ns/element, under the AVX2 comparison-sort floor.** Structured input is detected and exploited; equal keys stay stable by construction through a packed-index tiebreak; the classifier's verdict — Young-tableau shape, longest increasing subsequence, inversion ratio, phase boundary — montauk reads straight. From the one engine come **sort**, **classify**, and **locate**; beside it run montauk's text engines — Boyer-Moore substring search and a Thompson NFA regex — and the value-search leg, **select** and **searchsorted**. Order and structure by the flow model, text by the engines next to it: one core for everything montauk sorts, searches, or measures.
 
-| | conventional comparison sort | sublimation |
-|---|---|---|
-| strategy | one fixed algorithm for every input | classifies input disorder, routes to the matching path |
-| structured input | sorted / reversed / few-unique not special-cased | detected up front and exploited |
-| equal keys | unstable unless you reach for `stable_sort` | stable by construction (packed-index tiebreak) |
-| beyond a sorted array | nothing — output is the order | exposes the disorder profile: Young-tableau shape, longest increasing subsequence, inversion ratio, phase boundary |
+It carries index sorts that order a `uint32_t` index array by a numeric key without moving rows (32-bit keys packed with their index into one `uint64_t`, 64-bit keys carried as a stable LSD-radix satellite), a prefix-pack + MSD-radix string sort for the name column, the disorder classifier the analyzer's `sched` report reads to label a latency timeline's structure, a structural locator that slides that classifier across a stream to find where a disorder pattern sits, a randomness battery fusing six orthogonal entropy detectors (hook-length entropy, LIS against `2√n`, inversion ratio, distinct ratio, horizontal-visibility degree, ordinal permutation entropy) into one max-entropy confidence that approaches but never reaches certainty, the value-search pair `select` (quickselect, replacing `std::nth_element`) and `searchsorted` (binary search, lower/upper bound), and the text engines — Boyer-Moore and a UTF-8-aware leftmost-longest Thompson NFA, 1:1 C23 ports verified byte-identical across 403 + 1748 cases — which carry every regex and substring match montauk makes.
 
-**What the sub-system provides:**
-
-- **Index sorts** — order a `uint32_t` index array by a numeric key without moving rows. 32-bit keys pack with their index into one `uint64_t`; 64-bit keys (timestamps, addresses) use a stable LSD radix carrying the index as a satellite. Stable on equal keys, so the UI never reshuffles rows that tie.
-- **Hybrid string sort** — prefix-pack + MSD radix for the name column.
-- **Disorder classifier** — the flow-model front end profiles a sequence's structure (RSK / Young-tableau shape, runs, inversions, phase boundary). montauk's analyzer `sched` report reads it to label a latency sequence's temporal structure (a mid-trace regime change, quantization onto a few values).
-- **Structural locator** — slides the classifier across a stream and returns *where* a disorder pattern sits (`sublimation_locate`): grep for structure instead of text — the window is the line, the disorder class is the pattern. The `sched` report uses it to name the stretches of a latency timeline that carry structure even when the whole sequence reads random.
-- **Randomness battery** — fuses six orthogonal entropy detectors (representation-theoretic hook-length entropy, longest-increasing-subsequence vs `2√n`, inversion ratio, distinct ratio, horizontal-visibility mean degree, ordinal permutation entropy) into a single max-entropy *confidence* — the determination of "pure randomness" stated honestly: a meet over independent bases that approaches but never reaches certainty.
-- **Value search** — `select` (the k-th smallest via quickselect on the partition machinery — the `std::nth_element` replacement) and `searchsorted` (binary search, lower/upper bound — the `std::lower_bound`/`upper_bound` replacement). The value-lookup leg beside sort; the analyzer's permutation-test bucket scans read `searchsorted`.
-- **Substring + regex** — Boyer-Moore-Horspool substring search and a Thompson NFA regex engine (UTF-8-aware, leftmost-longest), 1:1 C23 ports of montauk's former `util::` versions (verified byte-identical across 403 + 1748 cases). montauk's kernel-thread classification, live `/`-search, `--regex` filter, and `--trace` token matching all run on these — `std::regex` is gone. The `sublimation` CLI exposes them as `grep` and `contains`.
-
-**On the command line — the `sublimation` CLI.** sublimation is reachable from the shell, not just by linking. Numeric commands pipe a value stream in (with `--field N` to pull a delimited column, folding in awk's extraction) and emit a flow-model answer; `grep` and `contains` read whole lines and print the matches.
+**On the command line.** The `sublimation` CLI puts the engine a shell pipe away. Numeric commands read a value stream (`--field N` pulls a delimited column, folding in awk's extraction) and emit a flow-model answer; `grep` and `contains` filter whole lines.
 
 | command | does |
 |---|---|
@@ -85,27 +71,40 @@ sublimation is montauk's sort — and, now, montauk's whole **search / match / o
 | `sublimation grep PATTERN` | print stdin lines matching the regex (Thompson NFA) |
 | `sublimation contains STR` | print stdin lines containing STR (Boyer-Moore, case-insensitive) |
 
-e.g. `cat dump | sublimation quantile 0.99 --field 2` in place of `awk '{print $2}' | sort -n | awk 'NR==int(.99*c)'`, and `dmesg | sublimation grep '\[.+\]'` in place of grep. sublimation stands in for **grep** (regex + substring) and **awk/sort** (order, percentile, selection, lookup) alike — one tool, the same engines montauk runs internally.
+e.g. `cat dump | sublimation quantile 0.99 --field 2` for a column's 99th percentile, `dmesg | sublimation grep '\[.+\]'` for a regex line filter. Order, percentile, selection, value lookup, and text matching from one tool — the same engines montauk runs internally, on the command line.
 
 **How it works.** Classification is one O(n) pass (run count, monotone runs, max descent gap); only ambiguous inputs pay for sampled inversions, distinct-value estimation, and the full Young-tableau shape via patience sorting. The hook-length formula (Frame-Robinson-Thrall) gives the information-theoretic comparison bound, and the tableau shape routes: counting sort for few-unique (k ≤ 64), an R_eff merge tree (effective resistance on the run-boundary Laplacian) for structured runs, an O(n) rotation fix for rotated-sorted, binary insertion for low-displacement nearly-sorted, and for random data a four-layer pipeline — PCF bucketing → AVX2/BMI2 block quicksort → pdqsort fat-pivot → AVX2 sorting networks at the leaves. A Jacobi-eigendecomposition spectral fallback (Fiedler seriation) catches partition degradation, gated by a CUSUM whose threshold rides a critically-damped oscillator. Type-generic across i32/i64/u32/u64/f32/f64; IPS4o-style parallel sort at n ≥ 250K.
 
-**Performance** (Zen 3, `-O2 -march=native`, ns/element at 100K, best of 11):
+**Performance** (AMD Ryzen 5 3600, Zen 2, `-O2 -march=native`, powersave governor, ns/element at 100K, best of 5):
 
 | pattern | sublimation | introsort | qsort | Rust ipnsort |
 |---|--:|--:|--:|--:|
-| sorted | 0.13 | 4.17 | 22.64 | 0.24 |
-| pipe_organ | 2.53 | 43.57 | 25.12 | 11.44 |
-| few_unique | 10.96 | 12.18 | 47.66 | 1.81 |
-| random | 18.64 | 36.84 | 77.92 | 9.32 |
-| zipfian | 16.88 | 23.87 | 60.37 | 9.33 |
+| sorted | 0.2 | 6.1 | 25.3 | 0.3 |
+| pipe_organ | 3.4 | 55.1 | 28.7 | 17.0 |
+| few_unique | 14.5 | 18.6 | 54.8 | 2.7 |
+| phased | 23.9 | 52.3 | 102.9 | 15.9 |
+| random | 23.7 | 51.6 | 102.4 | 19.4 |
 
-Beats libstdc++ introsort on 8/10 patterns and glibc qsort on 10/10 (2.25–226×); trails Rust ipnsort (the AVX2 comparison-sort floor) on uniform random by ~1.7× at scale, ahead of it on sorted / equal / pipe-organ / nearly-sorted. String sort runs 2.0–4.5× over `qsort + strcmp`.
+Beats libstdc++ introsort on 7/8 patterns and glibc qsort on 8/8 (1.3–65×); trails Rust ipnsort (the AVX2 comparison-sort floor) on uniform random by only ~1.2× on this Zen 2 part, ahead of it on sorted / equal / pipe-organ / nearly-sorted. The same AVX2+BMI2 paths the Zen 3 reference runs — no AVX-512 on either. String sort runs 2.0–4.5× over `qsort + strcmp`.
+
+**Random-data size sweep** (same machine, ns/element, best of 5; 100M best of 3, sortedness-validated): the comparison sorts pay an O(n log n) tax at every step while the learned PCF pipeline stays ~flat. The gap to Rust ipnsort closes through 100K, **crosses ahead at 1M, and holds the lead clear out to 100 million** — no L2 cliff, the dynamic-B bucketing stays flat across a 100× range.
+
+| n | sublimation | introsort | qsort | Rust ipnsort |
+|---|--:|--:|--:|--:|
+| 1K | 24.9 | 30.7 | 62.7 | 8.4 |
+| 10K | 21.7 | 41.2 | 83.5 | 11.8 |
+| 100K | 23.1 | 51.4 | 102.4 | 14.6 |
+| 1M | **15.6** | 61.3 | 123.7 | 17.5 |
+| 10M | 16.6 | 71.2 | 143.2 | 20.1 |
+| 100M | **17.6** | 80.8 | 163.7 | 21.8 |
+
+From 1M to 100M sublimation holds ~16–18 ns/element while Rust ipnsort rises 17.5 → 21.8 and introsort and qsort rise faster still — the linear PCF pipeline pulling away from the O(n log n) comparison floor as n grows. At **100 million** random int64, sublimation sorts **1.24× faster than Rust ipnsort** (the AVX2 comparison-sort floor), **4.6× over introsort**, and **9.3× over glibc qsort**.
 
 **Lineage.** Robinson-Schensted correspondence (sorting ↔ Young tableaux), Dinic / Kyng maximum flow (the level-graph model), Fiedler spectral seriation (Atkins-Boman-Hendrickson), CoDel + damped-oscillator adaptive control, and AlphaDev-shaped AVX2 sorting networks.
 
 **Build.** Compiled as a static library with montauk — no system package, no fetch step. Requires a Haswell-or-newer CPU (BMI2 + AVX2) and gcc 13+ (C23). The prior C++23 TimSort/Powersort sort is retired (archived under `[0] ARCHIVE/montauk-timsort-cpp/`).
 
-**Where montauk uses it:** the process-table sort and **the analyzer's orderings** (latency quantiles, report rows, struct-by-key sorts via `sublimation_order_*`, value lookups via `searchsorted`); the `sched` report's structure classification (`STRUCTURE`) and locator (`LOCATED`); and **all of montauk's text matching** — kernel-thread classification, the live `/`-search, the `--regex` filter, and `--trace` token matching, on the in-house substring and regex engines. A handful of multi-key and hot-path partial-selection sorts stay on `std::` by design (no single-key sublimation primitive fits); they're the named exceptions, not an oversight.
+**Where montauk uses it:** the process-table sort and **the analyzer's orderings** (latency quantiles, report rows, struct-by-key sorts via `sublimation_order_*`, value lookups via `searchsorted`); the `sched` report's structure classification (`STRUCTURE`) and locator (`LOCATED`); and **all of montauk's text matching** — kernel-thread classification, the live `/`-search, the `--regex` filter, and `--trace` token matching, on the in-house substring and regex engines. A handful of multi-key and hot-path partial-selection sorts stay on `std::` by design, where no single-key sublimation primitive fits.
 
 ## Kernel Module (Optional)
 
@@ -412,99 +411,7 @@ Provider text passes through montauk's own Prometheus exposition verbatim (so a 
 
 ## Configuration
 
-montauk uses a unified TOML configuration file at `~/.config/montauk/config.toml`. Every value follows a three-tier resolution chain: **TOML -> environment variable -> compiled default**. If no config file exists, compiled defaults apply with zero overhead.
-
-### Quick Start
-
-Generate a config file with your terminal's palette auto-detected:
-```bash
-montauk --init-theme
-```
-
-This writes `~/.config/montauk/config.toml` with all defaults and your terminal's 16 ANSI colors.
-
-### TOML Schema
-
-```toml
-[palette]
-color0  = "#2E2E2E"
-color1  = "#CC0000"
-# ... color2-color15 (populated by --init-theme)
-
-[roles]
-# Integer = palette index, string "#RRGGBB" = hex override
-accent  = 11
-caution = 9
-warning = 1
-normal  = 2
-muted   = "#787878"
-border  = "#383838"
-binary  = "#8F00FF"
-
-[thresholds]
-proc_caution_pct = 60
-proc_warning_pct = 80
-cpu_temp_warning_c = 90
-temp_caution_delta_c = 10
-gpu_temp_warning_c = 90
-alert_frames = 5
-
-[ui]
-alt_screen = true
-system_focus = false
-cpu_scale = "total"
-gpu_scale = "utilization"
-time_format = ""
-
-[process]
-max_procs = 256
-enrich_top_n = 256
-collector = "auto"
-
-[nvidia]
-smi_path = "auto"
-smi_dev = true
-smi_min_interval_ms = 0
-pmon = true
-mem = true
-log_nvml = false
-gpu_debug = false
-disable_nvml = false
-nvml_path = ""
-
-[keybinds]
-quit = "q"
-help = "h"
-fps_up = "+"
-fps_down = "-"
-sort_cpu = "c"
-sort_mem = "m"
-sort_pid = "p"
-sort_name = "n"
-sort_gpu = "g"
-sort_gmem = "v"
-toggle_gpu = "G"
-toggle_thermal = "t"
-toggle_disk = "d"
-toggle_net = "N"
-toggle_cpu_scale = "i"
-toggle_gpu_scale = "u"
-toggle_system_focus = "s"
-reset_ui = "R"
-search = "/"
-```
-
-### Process Settings
-
-- `max_procs` — Maximum processes tracked and rendered (default: `256`, range: `32–4096`).
-- `enrich_top_n` — Processes enriched with full command line (default: `256`, up to `max_procs`).
-- `collector` — Collection backend: `"auto"`, `"kernel"`, `"netlink"`, or `"traditional"`.
-
-With the kernel module, enrichment has zero /proc overhead (cmdline comes from kernel). With userspace collectors, enrichment reads `/proc/[pid]/cmdline` and `/proc/[pid]/status`. Reduce `enrich_top_n` below `max_procs` for lower-powered systems without the kernel module.
-
-### Environment Variable Fallback
-
-All settings accept `MONTAUK_*` or `montauk_*` environment variables as a fallback when not set in TOML. For example, `MONTAUK_MAX_PROCS=1024` works if `[process] max_procs` is absent from the TOML.
+montauk reads a unified TOML file at `~/.config/montauk/config.toml`, resolving each value **TOML → `MONTAUK_*` environment variable → compiled default** — no file means compiled defaults at zero overhead. `montauk --init-theme` writes a starter with your terminal's 16-color palette detected. The full schema (`[palette]`, `[roles]`, `[thresholds]`, `[ui]`, `[process]`, `[nvidia]`, `[keybinds]`), the process-collector settings, and the complete `MONTAUK_*` environment-variable reference live in [`CONFIG.md`](CONFIG.md).
 
 ## CPU Scale Modes
 
@@ -571,64 +478,9 @@ MONTAUK_DISABLE_NVML=1    # [nvidia] disable_nvml = true
 MONTAUK_NVML_PATH=…       # [nvidia] nvml_path = "…"
 ```
 
-## Display Details
+## Display
 
-**Process Columns:**
-- **PID** — Process ID
-- **USER** — Owner username
-- **CPU%** — CPU utilization (0-100% in machine-share, 0-N×100% in per-core)
-- **GPU%** — GPU SM/compute utilization
-- **GMEM** — GPU memory (VRAM) usage
-- **MEM** — System RAM usage
-- **COMMAND** — Process name or full command line
-
-**Minimum Display Values:**
-- CPU% and GPU% show **0.1%, 0.2%, etc.** for sub-1% activity
-- Values 1% and above shown as integers
-- This ensures low-activity processes remain visible without inflating their usage
-
-**UI Layout:**
-
-**Default Mode:**
-Left column: PROCESS MONITOR (dynamically fills available height)
-Right column (top to bottom):
-- PROCESSOR (CPU utilization bar)
-- GPU (multi-metric bars: GPU util, VRAM, MEM util, ENC, DEC)
-- MEMORY (RAM utilization bar)
-- DISK I/O (throughput and device stats)
-- NETWORK (throughput and interface stats)
-- SYSTEM (detailed system information)
-
-**SYSTEM Focus Mode (press 's'):**
-Left column: PROCESS MONITOR
-Right column: Comprehensive SYSTEM box showing:
-- Host/kernel/date/time/uptime (when in SYSTEM focus)
-- CPU details (model, threads, frequency, governor, turbo, utilization breakdown)
-- Load averages
-- Context switches and interrupts per second
-- GPU info (model, utilization, NVML status, power, power limit, P-state)
-- Memory (available, used, cache/buffers)
-- Disk I/O (aggregate and per-device)
-- Network (aggregate and per-interface)
-- Filesystem usage
-- CPU and GPU temperatures with margin-to-warning calculations
-- Collector type (Kernel Module, Netlink proc_connector, or Traditional)
-- Process counts (enriched vs total)
-- System threads statistics
-- Process states (Running, Sleeping, Zombie)
-- **PROC CHURN** (when active) or **PROC SECURITY** (when no churn)
-
-**Color Coding:**
-- Normal text: Default terminal color
-- Bars: Green (healthy) → Yellow (caution) → Red (warning) based on utilization
-- CAUTION severity: Yellow/orange highlighting (60-80% default)
-- WARNING severity: Red highlighting (80%+ default)
-- PROC CHURN: CAUTION severity (yellow/orange)
-- PROC SECURITY warnings: Severity-based coloring (INFO/CAUTION/WARNING)
-- Titles: Accent color
-- Borders: Distinct border color for all box-drawing characters
-- COMMAND column: Binary name highlighted, path prefixes and arguments muted, kernel threads fully muted (classified via Thompson NFA)
-- GPU%: Severity coloring mirroring CPU% thresholds
+The process columns (PID / USER / CPU% / GPU% / GMEM / MEM / COMMAND), the two-column layout, the SYSTEM-focus box, and the severity color coding are documented in [`CONFIG.md`](CONFIG.md#display-details).
 
 ## Churn Handling
 
@@ -664,51 +516,6 @@ PID:12347 as
 ```
 
 The event count (8) may exceed visible PIDs (3) because some processes exit before display update.
-
-## Environment Variable Reference
-
-All settings below are env var fallbacks for when a TOML key is absent. Prefer `~/.config/montauk/config.toml` (see Configuration above).
-
-### UI/Terminal
-```bash
-MONTAUK_ALT_SCREEN=0           # [ui] alt_screen = false
-MONTAUK_PROC_CPU_SCALE=total   # [ui] cpu_scale = "total" | "core"
-```
-
-Seven semantic color roles (configured via `[roles]` in TOML): accent, caution, warning, normal, muted, border, binary.
-
-### Thresholds
-```bash
-MONTAUK_PROC_CAUTION_PCT=60    # [thresholds] proc_caution_pct = 60
-MONTAUK_PROC_WARNING_PCT=80    # [thresholds] proc_warning_pct = 80
-MONTAUK_TOPPROC_ALERT_FRAMES=5 # [thresholds] alert_frames = 5
-```
-
-### Thermal Thresholds
-
-**Dynamic (preferred):**
-- NVIDIA: Auto-discovered via NVML (slowdown, mem_max)
-- AMD/Intel: Auto-discovered via sysfs hwmon (crit, max, emergency)
-
-**Overrides (TOML `[thresholds]` or env vars):**
-```bash
-MONTAUK_CPU_TEMP_WARNING_C=90       # cpu_temp_warning_c
-MONTAUK_CPU_TEMP_CAUTION_C=80       # cpu_temp_caution_c
-MONTAUK_GPU_TEMP_WARNING_C=90       # gpu_temp_warning_c
-MONTAUK_TEMP_CAUTION_DELTA_C=10     # temp_caution_delta_c
-MONTAUK_GPU_TEMP_EDGE_WARNING_C=85  # gpu_temp_edge_warning_c
-MONTAUK_GPU_TEMP_HOT_WARNING_C=95   # gpu_temp_hot_warning_c
-MONTAUK_GPU_TEMP_MEM_WARNING_C=95   # gpu_temp_mem_warning_c
-```
-
-### Testing/Development
-```bash
-MONTAUK_PROC_ROOT=/custom/proc    # Remap /proc paths (userspace collectors only)
-MONTAUK_SYS_ROOT=/custom/sys      # Remap /sys paths
-MONTAUK_COLLECTOR=kernel          # [process] collector = "kernel"
-MONTAUK_COLLECTOR=netlink         # [process] collector = "netlink"
-MONTAUK_COLLECTOR=traditional     # [process] collector = "traditional"
-```
 
 ## Testing
 
@@ -888,42 +695,21 @@ montauk supports three collection backends (auto-selected by availability):
 5. Residual VRAM attribution to clear GPU processes
 6. `/proc/*/fd` device inspection for decode workloads
 
-## Performance
+## Runtime Cost
 
-- **Overhead:** ~0.1-0.2% CPU with kernel module, ~0.5-1% with netlink proc_connector, ~2-5% with /proc polling
-- **Sampling:** 250ms default (adjustable with +/-)
-- **Process limit:** 256 default, configurable up to 4096 (top by CPU usage)
-- **Process detection:** Sub-millisecond with kernel module or netlink, ~1 second with /proc polling
-- **System calls:** 1 per snapshot (kernel module), ~1 + N events (netlink), ~3 per process (/proc polling)
-- **Cmdline enrichment:** All tracked processes up to 4096 (full command lines for accurate GPU detection)
-- **Memory:** ~10MB resident
+montauk's own footprint, by collection backend (the sort benchmarks are in the [sublimation](#sublimation--montauks-search-sort-and-match-core) section):
 
-**Technical Implementation:**
-
-**ANSI Escape Sequence Handling:**
-- Display width calculations skip escape codes (don't count as visible characters)
-- String truncation preserves embedded ANSI codes
-- Prevents double-coloring and escape sequence corruption
-- Full truecolor (24-bit) support with 256-color fallback
-
-**Dynamic Layout:**
-- All panels calculate available vertical space dynamically
-- PROCESS MONITOR fills to match terminal height
-- SYSTEM box expands to fill remaining space
-- PROC CHURN and PROC SECURITY details fill all available lines
-- No hardcoded row limits
-
-**Churn Detection:**
-- Tracks /proc and /sysfs read failures in sliding 2-second window
-- Event counts tracked separately by source (PROC vs SYSFS)
-- Per-process churn flag for processes with read failures
-- Auto-clears when churn subsides
-- Zero performance impact when no churn active
+- **CPU:** ~0.1–0.2% with the kernel module, ~0.5–1% with netlink `proc_connector`, ~2–5% with `/proc` polling.
+- **Process detection:** sub-millisecond (kernel module / netlink), ~1s (`/proc` polling).
+- **Syscalls:** 1 per snapshot (kernel module), ~1 + N events (netlink), ~3 per process (`/proc`).
+- **Sampling:** 250ms default (`+`/`-` to adjust).
+- **Process table:** 256 default, up to 4096 (top by CPU), all cmdline-enriched for GPU attribution.
+- **Memory:** ~10MB resident.
 
 ## Policy
 
-**sublimation is an in-tree sub-system:** montauk's sort algorithm lives at `montauk/sublimation/` and is compiled into the montauk build — no system package, no fetch, no runtime fallback. NVML and liburing are auto-detected and gracefully disabled when unavailable. No FetchContent, no ExternalProject — the sublimation source is vendored in the tree, not pulled at build time.
+**sublimation is an in-tree sub-system:** montauk's search/sort/match core lives at `montauk/sublimation/`, vendored in the tree and compiled into the montauk build — no system package, no fetch, no runtime fallback. NVML and liburing are auto-detected and gracefully disabled when unavailable.
 
 ## License
 
-GPL-2.0 — see the [`LICENSE`](LICENSE) file. sublimation, montauk's in-tree sort sub-system, is covered by the same license: it carried its own GPL-2.0 before coming home, and that duplicate is gone. One license, one tree.
+GPL-2.0 — see the [`LICENSE`](LICENSE) file. sublimation, montauk's in-tree search/sort/match core, is covered by the same license. One license, one tree.

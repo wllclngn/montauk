@@ -402,8 +402,12 @@ void sub_avx2_random_quicksort_i64(int64_t *arr, size_t n) {
 
 // Linear-PCF bucket lookup. Same expression used in both the histogram pass
 // and the scatter pass -- if these two ever diverge, buckets will be wrong.
-static inline size_t sub_pcf_bucket(int64_t v, int64_t lo_v, double slope, size_t B) {
-    double f = (double)(v - lo_v) * slope;
+static inline size_t sub_pcf_bucket(int64_t v, double lo_v, double slope, size_t B) {
+    // (double)v - lo_v, NOT (double)(v - lo_v): the int64 subtraction overflows
+    // when the data spans the full signed range (a near-INT64_MIN value minus a
+    // positive lo wraps positive, misbucketing the negative into a high bucket).
+    // double->int64 is monotonic, so the bucketing stays order-preserving.
+    double f = ((double)v - lo_v) * slope;
     long b = (long)f;
     if (b < 0) b = 0;
     else if (b >= (long)B) b = (long)B - 1;
@@ -444,16 +448,19 @@ void sub_random_sort_i64(int64_t *arr, size_t n) {
     // Phase 2: sort the sample to learn the [min, max] envelope
     sub_avx2_random_quicksort_i64(sample, S);
 
-    // Phase 3: compute the linear PCF parameters from the sample CDF.
-    int64_t lo_q = sample[S / 20];          // 5th percentile
-    int64_t hi_q = sample[S - S / 20 - 1];  // 95th percentile
-    int64_t span = hi_q - lo_q;
-    int64_t margin = span / 10;
-    if (margin < 1) margin = 1;
-    int64_t lo_v = lo_q - margin;
-    int64_t hi_v = hi_q + margin;
-    if (lo_v > sample[0])      lo_v = sample[0];
-    if (hi_v < sample[S - 1])  hi_v = sample[S - 1];
+    // Phase 3: compute the linear PCF parameters from the sample CDF. All in
+    // double: the int64 forms (hi_q - lo_q, lo_q - margin, hi_v - lo_v) overflow
+    // when the sample spans the full signed range. double holds the span and is
+    // monotonic in the value -- exact enough for bucket-granularity placement.
+    double lo_q = (double)sample[S / 20];          // 5th percentile
+    double hi_q = (double)sample[S - S / 20 - 1];  // 95th percentile
+    double span = hi_q - lo_q;
+    double margin = span / 10.0;
+    if (margin < 1.0) margin = 1.0;
+    double lo_v = lo_q - margin;
+    double hi_v = hi_q + margin;
+    if (lo_v > (double)sample[0])      lo_v = (double)sample[0];
+    if (hi_v < (double)sample[S - 1])  hi_v = (double)sample[S - 1];
 
     free(sample);
 
@@ -461,7 +468,7 @@ void sub_random_sort_i64(int64_t *arr, size_t n) {
         sub_avx2_random_quicksort_i64(arr, n);
         return;
     }
-    double slope = (double)B / (double)(hi_v - lo_v + 1);
+    double slope = (double)B / (hi_v - lo_v + 1.0);
 
     // Phase 4: allocate scratch. The bucket index is recomputed inline in
     // the scatter pass (no per-element side array) -- saves n*2 bytes of
@@ -544,6 +551,18 @@ void sub_random_sort_i64(int64_t *arr, size_t n) {
     free(scratch);
 }
 
+// uint64_t random sort: map unsigned order to signed by flipping the top bit
+// (the standard unsigned<->signed order isomorphism), run the i64 PCF pipeline,
+// then map back. Two O(n) XOR passes buy u64 the same fast random path the i64
+// type gets -- and u64 is the type montauk's sorts run on. The flip is exact;
+// no precision or overflow concern.
+void sub_random_sort_u64(uint64_t *arr, size_t n) {
+    const uint64_t FLIP = 0x8000000000000000ULL;
+    for (size_t i = 0; i < n; i++) arr[i] ^= FLIP;
+    sub_random_sort_i64((int64_t *)arr, n);
+    for (size_t i = 0; i < n; i++) arr[i] ^= FLIP;
+}
+
 #endif // __AVX2__
 
 // TYPE-GENERIC SORT (all types via template)
@@ -571,10 +590,12 @@ void sub_random_sort_i64(int64_t *arr, size_t n) {
 #undef SUB_TYPE
 #undef SUB_SUFFIX
 
-// uint64_t
+// uint64_t (PCF random fast path via the i64 pipeline + sign flip)
 #define SUB_TYPE uint64_t
 #define SUB_SUFFIX _u64
+#define SUB_TYPE_IS_U64
 #include "sort_impl.h"
+#undef SUB_TYPE_IS_U64
 #undef SUB_TYPE
 #undef SUB_SUFFIX
 

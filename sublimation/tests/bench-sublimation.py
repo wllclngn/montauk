@@ -259,13 +259,41 @@ def run_cmd(cmd, cwd=None, timeout=120, env=None):
 def build_c_bench():
     log_info("Building C benchmark (sublimation + qsort + introsort)")
 
-    # first build the library
-    ret, _, stderr = run_cmd(
-        [sys.executable, str(PROJECT_DIR / "install.py"), "build"],
-        cwd=str(PROJECT_DIR)
-    )
+    # Build libsublimation from the in-tree sources. sublimation is vendored
+    # under montauk now -- there is no standalone install.py. Compile every
+    # src/**/*.c into a static .a (LTO, linked by the C bench) and a shared .so
+    # (real symbols, used by the Rust/Go-direct and Python paths -- the .a's LTO
+    # GIMPLE objects aren't linkable by rustc/cgo).
+    BUILD_DIR.mkdir(exist_ok=True)
+    srcs = sorted(str(p) for p in SRC_DIR.rglob("*.c"))
+    if not srcs:
+        log_error(f"no sublimation sources under {SRC_DIR}")
+        return None
+    base = ["gcc", "-std=c2x", "-O2", "-march=native", "-fPIC",
+            "-I", str(SRC_DIR / "include"), "-I", str(SRC_DIR)]
+    a_objs, so_objs = [], []
+    for s in srcs:
+        stem = Path(s).stem
+        a_o = BUILD_DIR / (stem + ".a.o")
+        so_o = BUILD_DIR / (stem + ".so.o")
+        ret, _, stderr = run_cmd(base + ["-flto=auto", "-c", s, "-o", str(a_o)])
+        if ret != 0:
+            log_error(f"lib compile failed ({Path(s).name}): {stderr[-300:]}")
+            return None
+        ret, _, stderr = run_cmd(base + ["-c", s, "-o", str(so_o)])
+        if ret != 0:
+            log_error(f"lib compile failed ({Path(s).name}): {stderr[-300:]}")
+            return None
+        a_objs.append(str(a_o))
+        so_objs.append(str(so_o))
+    ret, _, stderr = run_cmd(["ar", "rcs", str(BUILD_DIR / "libsublimation.a")] + a_objs)
     if ret != 0:
-        log_error(f"Library build failed: {stderr[-300:]}")
+        log_error(f"ar (static lib) failed: {stderr[-300:]}")
+        return None
+    ret, _, stderr = run_cmd(
+        ["gcc", "-shared", "-o", str(BUILD_DIR / "libsublimation.so")] + so_objs + ["-lpthread", "-lm"])
+    if ret != 0:
+        log_error(f"shared lib link failed: {stderr[-300:]}")
         return None
 
     bench_bin = BUILD_DIR / "bench_c"

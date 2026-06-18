@@ -30,7 +30,7 @@ if [[ $BUILDDIR -ef "$startdir" && "$startdir" == *" "* ]]; then
     BUILDDIR=/tmp/makepkg-$pkgname
 fi
 
-pkgver=7.3.0
+pkgver=7.4.0
 pkgrel=1
 pkgdesc='High-performance Linux system monitor with kernel module, eBPF tracing, GPU attribution, and pixel-rendered area charts'
 arch=('x86_64')

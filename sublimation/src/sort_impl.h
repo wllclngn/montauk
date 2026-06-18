@@ -714,6 +714,12 @@ void SUB_TYPED(sub_sort_internal)(SUB_TYPE *restrict arr, size_t n, sub_adaptive
             state->comparisons += (uint64_t)n * 4;
             return;
         }
+#elif defined(__AVX2__) && defined(SUB_TYPE_IS_U64)
+        if (n >= 64) {
+            sub_random_sort_u64(arr, n);  // i64 PCF pipeline via sign flip
+            state->comparisons += (uint64_t)n * 4;
+            return;
+        }
 #endif
         SUB_TYPED(push)(arr, 0, n - 1, state, profile.disorder);
         return;
@@ -783,6 +789,14 @@ static bool SUB_TYPED(fast_path_dispatch)(SUB_TYPE *restrict arr, size_t n,
     // and falls back to sub_random_sort_i64 if only 1 worker is usable.
     if (out_profile->disorder == SUB_RANDOM && n >= 64 && n < SUB_PARALLEL_THRESHOLD) {
         sub_random_sort_i64(arr, n);
+        return true;
+    }
+#elif defined(__AVX2__) && defined(SUB_TYPE_IS_U64)
+    // u64 has no parallel entry point, so the PCF expert handles all random
+    // n >= 64 (no SUB_PARALLEL_THRESHOLD cap) -- this is the path that closes
+    // the u64<->i64 random gap for montauk's sorts.
+    if (out_profile->disorder == SUB_RANDOM && n >= 64) {
+        sub_random_sort_u64(arr, n);
         return true;
     }
 #endif

@@ -256,6 +256,15 @@ static double bench_sublimation_##SUFFIX(T *data, T *work, size_t n,           \
         double elapsed = (double)(t1 - t0);                                    \
         if (elapsed < best) best = elapsed;                                    \
     }                                                                          \
+    /* Validate: never report a timing for a sort that didn't sort. The bench  \
+       has no business trusting an unverified result -- a fast-but-wrong run    \
+       (e.g. the i64 sign bug) would otherwise pass silently. */                \
+    for (size_t i = 1; i < n; i++)                                            \
+        if (cmp_fn(&work[i - 1], &work[i]) > 0) {                             \
+            fprintf(stderr, "FATAL: " #sort_fn " left '%s' UNSORTED at %zu (n=%zu)\n", \
+                    pattern, i, n);                                           \
+            exit(3);                                                          \
+        }                                                                     \
     return best / (double)n;                                                   \
 }                                                                              \
                                                                                \
@@ -329,6 +338,12 @@ int main(int argc, char **argv) {
         fill_pattern_i64(data, n, pattern, 42);
         memcpy(work, data, n * sizeof(int64_t));
         sublimation_i64(work, n);
+        for (size_t i = 1; i < n; i++)
+            if (work[i - 1] > work[i]) {
+                fprintf(stderr, "FATAL: sublimation_i64 left '%s' UNSORTED at %zu (n=%zu)\n",
+                        pattern, i, n);
+                return 3;
+            }
 
         // sublimation_i64
         double best = 1e18;
