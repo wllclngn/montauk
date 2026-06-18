@@ -1,4 +1,4 @@
-.TH MONTAUK 1 "June 2026" "montauk 7.4.0" "User Commands"
+.TH MONTAUK 1 "June 2026" "montauk 7.5.0" "User Commands"
 .SH NAME
 montauk \- high-performance Linux system monitor with kernel module support
 .SH SYNOPSIS
@@ -234,6 +234,9 @@ montauk --trace myapp --metrics 9101 --log /tmp/trace
 montauk --trace myapp --trace-out /tmp/myapp.mtktrace
 montauk_trace_decode /tmp/myapp.mtktrace        # human-readable text
 montauk_trace_decode /tmp/myapp.mtktrace --csv  # CSV for tooling
+montauk_analyze /tmp/myapp.mtktrace             # diagnostic reports
+montauk_analyze /tmp/rec --digest               # shareable digest
+montauk_analyze --version                       # print version, exit
 .RE
 .fi
 .SS Binary Event Log (\-\-trace-out)
@@ -251,6 +254,16 @@ tool, which reads the log offline and renders text or CSV. The log header
 captures both CLOCK_MONOTONIC and CLOCK_REALTIME anchors at trace start, so
 the decoder reconstructs absolute wall-clock time per event and lets you
 correlate against external traces (schbench output, scheduler logs, etc.).
+.PP
+The
+.B montauk_analyze
+tool reads the same log \(em and a whole \-\-trace recording directory \(em
+offline, producing single-pass diagnostic reports (waits, spins, pairing,
+sched, slice and more) and, over a recording, a one-call \-\-digest that leads
+with scheduler-stability and clean-room state above the system specs.
+.B montauk_analyze \-\-version
+prints the project version and exits, so a consumer can tell a current install
+from a stale one.
 .PP
 \-\-trace-out is independent of MONTAUK_TRACE_VERBOSE (the per-event stderr
 firehose, a human-eyeball aid for low-rate single-app debugging) and of
@@ -512,7 +525,14 @@ unconditionally (no fallback). Numeric columns use a
 pack-key index sort (keys pack with their index; montauk permutes a uint32_t
 index array, stable on the packed index); the name column uses a hybrid
 prefix-pack + MSD radix string sort. Requires a Haswell-or-newer CPU
-(BMI2 + AVX2).
+(BMI2 + AVX2). The same engines are exposed on the command line by the
+.B sublimation
+CLI (installed on PATH): a stream sort with quantile / select / reductions
+(sum / mean / stdev / min / max / count), plus regex
+.B grep
+(Thompson NFA) and substring
+.B contains
+(Boyer-Moore-Horspool) line filters \(em the stream side of grep and awk.
 .SH TROUBLESHOOTING
 .SS Kernel Module Not Detected
 .nf
@@ -640,6 +660,6 @@ Report issues at: https://github.com/wllclngn/montauk/issues
 .SH COPYRIGHT
 MIT License. See LICENSE file in repository.
 .SH VERSION
-montauk 7.4.0
+montauk 7.5.0
 .br
 April 2026

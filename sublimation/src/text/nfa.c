@@ -625,15 +625,31 @@ static void eps_closure(const sublimation_nfa *n, uint64_t *set, int s) {
     }
 }
 
+// ASCII case-fold helpers for icase matching (grep -i). Non-letters pass through,
+// so multi-byte UTF-8 bytes are untouched -- ASCII-only fold, by design.
+static inline uint8_t nfa_fold_lower(uint8_t c) { return (c >= 'A' && c <= 'Z') ? (uint8_t)(c + 32) : c; }
+static inline uint8_t nfa_fold_swap(uint8_t c) {
+    if (c >= 'a' && c <= 'z') return (uint8_t)(c - 32);
+    if (c >= 'A' && c <= 'Z') return (uint8_t)(c + 32);
+    return c;
+}
+
 static void nfa_step(const sublimation_nfa *n, const uint64_t *cur, uint64_t *next, uint8_t byte) {
     clear_set(next);
+    const int ic = n->icase;
     for (int i = 0; i < n->num_states; ++i) {
         if (!test_bit(cur, i)) continue;
         const sublimation_nfa_state *st = &n->states[i];
         int matched = 0;
-        if (st->op == OP_CHAR)       matched = (byte == st->ch);
-        else if (st->op == OP_CLASS) matched = st->negated ? !cc_test(&n->classes[st->class_idx], byte)
-                                                           :  cc_test(&n->classes[st->class_idx], byte);
+        if (st->op == OP_CHAR) {
+            matched = ic ? (nfa_fold_lower(byte) == nfa_fold_lower(st->ch)) : (byte == st->ch);
+        } else if (st->op == OP_CLASS) {
+            const sublimation_nfa_class *cl = &n->classes[st->class_idx];
+            // icase: a byte matches if it OR its case-swap is in the class, so a
+            // pattern [A-Z] matches lowercase input and [a-z] matches uppercase.
+            int in = ic ? (cc_test(cl, byte) || cc_test(cl, nfa_fold_swap(byte))) : cc_test(cl, byte);
+            matched = st->negated ? !in : in;
+        }
         if (matched && st->out >= 0) eps_closure(n, next, st->out);
     }
 }
@@ -646,6 +662,12 @@ static int nfa_has_match(const sublimation_nfa *n, const uint64_t *set) {
 
 // ── Public API ────────────────────────────────────────────────────────────
 void sublimation_nfa_compile(sublimation_nfa *out, const char *pattern, size_t len) {
+    out->icase = 0;
+    out->valid = nfa_compile(out, pattern, len);
+}
+
+void sublimation_nfa_compile_ex(sublimation_nfa *out, const char *pattern, size_t len, int icase) {
+    out->icase = icase ? 1 : 0;
     out->valid = nfa_compile(out, pattern, len);
 }
 

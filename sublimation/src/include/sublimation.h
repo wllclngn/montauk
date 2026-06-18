@@ -25,15 +25,17 @@ extern "C" {
 #endif
 
 // Release version (source-of-truth for the library tag, pkgbuild, tests).
-#define SUBLIMATION_VERSION_MAJOR  1
-#define SUBLIMATION_VERSION_MINOR  5
+#define SUBLIMATION_VERSION_MAJOR  2
+#define SUBLIMATION_VERSION_MINOR  0
 #define SUBLIMATION_VERSION_PATCH  0
-#define SUBLIMATION_VERSION_STRING "1.5.0"
+#define SUBLIMATION_VERSION_STRING "2.0.0"
 
 // ABI version. Bumped only when the library ABI breaks; independent from
 // the release version above. Readers should compare this value at runtime
 // against SUBLIMATION_API_VERSION to catch header/shared-object mismatches.
-#define SUBLIMATION_API_VERSION 1
+// Advanced to 2 for the 2.0.0 release: the public sublimation_nfa struct gained
+// an `icase` field (layout change) -- an ABI break for by-value users.
+#define SUBLIMATION_API_VERSION 2
 
 // Disorder classification (result of the initial BFS)
 typedef enum {

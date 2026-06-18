@@ -10,19 +10,22 @@
 //   sublimation quantile Q  [--field N] [--delim D]      (Q in 0..1)
 //   sublimation select K    [--field N] [--delim D]      (K-th smallest, 0-based)
 //   sublimation searchsorted V [--field N] [--delim D]   (insertion index of V)
+//   sublimation sum|mean|min|max [--field N]             (column reduction -- awk '{s+=$N}...')
+//   sublimation count                                    (line count -- wc -l)
 //   sublimation classify    [--field N] [--delim D]
 //   sublimation locate CLASS [--field N] [--window W] [--stride S]
 //   sublimation rand        [--field N] [--delim D]
-//   sublimation grep PATTERN                             (regex line filter, via the NFA)
-//   sublimation contains STR                             (substring line filter, via Boyer-Moore)
+//   sublimation grep PATTERN  [-i] [-o] [-v] [-c] [-n]   (regex line filter, via the NFA)
+//   sublimation contains STR  [-v] [-c] [-n]             (substring line filter, Boyer-Moore)
+//   sublimation field N       [--delim D]                (print the N-th column -- awk '{print $N}')
 //
 // CLASS is one of: sorted reversed nearly-sorted few-unique random phased spectral
 // --field N pulls the N-th (1-based) delimited column per line, so awk's column
 // extraction is folded in -- no `awk '{print $N}' | ...` needed.
 //
-// The numeric commands read one value per line (or per --field column). grep and
-// contains instead read whole text lines and print the matches -- the order-free
-// search side of sublimation, so the one tool covers grep too, not just awk/sort.
+// The numeric commands read one value per line (or per --field column). grep,
+// contains, and field read whole text lines; grep/contains print matches (the
+// order-free search side), field prints a column. One tool for sort, awk, and grep.
 
 #include "sublimation.h"
 #include "sublimation_search.h"
@@ -33,20 +36,26 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 
 static void usage(FILE *out) {
     fputs(
         "usage: sublimation COMMAND [options]   (reads numbers on stdin)\n"
         "\n"
         "  sort                  order ascending (or --desc)\n"
-        "  quantile Q            the Q-quantile, Q in 0..1 (e.g. 0.99)\n"
+        "  quantile Q            the Q-quantile, Q in 0..1 (e.g. 0.99); --nearest for nearest-rank\n"
         "  select K              the K-th smallest value, 0-based\n"
         "  searchsorted V        insertion index of V in the sorted input\n"
+        "  sum / mean            sum / mean of the value stream\n"
+        "  stdev / variance      sample (n-1) standard deviation / variance\n"
+        "  min / max             minimum / maximum value\n"
+        "  count                 number of input lines (wc -l)\n"
         "  classify              disorder class + profile of the stream\n"
         "  locate CLASS          windows whose disorder class == CLASS\n"
         "  rand                  max-entropy randomness confidence\n"
-        "  grep PATTERN          print stdin lines matching the regex (via the NFA)\n"
-        "  contains STR          print stdin lines containing STR (Boyer-Moore, case-insensitive)\n"
+        "  grep PATTERN          print stdin lines matching the regex (Thompson NFA)\n"
+        "  contains STR          print stdin lines containing STR (Boyer-Moore-Horspool)\n"
+        "  field N               print the N-th delimited column of each line (awk '{print $N}')\n"
         "\n"
         "  CLASS: sorted reversed nearly-sorted few-unique random phased spectral\n"
         "\n"
@@ -55,7 +64,12 @@ static void usage(FILE *out) {
         "  --delim D             column delimiter chars (default: whitespace)\n"
         "  --desc                sort descending\n"
         "  --window W            window size for locate (default 512)\n"
-        "  --stride S            window stride for locate (default = window)\n",
+        "  --stride S            window stride for locate (default = window)\n"
+        "  -v / -c / -n          grep/contains: invert match / count only / line number\n"
+        "  -i / -o               grep: case-insensitive regex / print only the match\n"
+        "  --nearest             quantile: nearest-rank order statistic (not the estimator)\n"
+        "\n"
+        "exit: grep/contains/field return 0 when something matched, 1 when nothing did.\n",
         out);
 }
 
@@ -130,7 +144,10 @@ int main(int argc, char **argv) {
     const char *delim = " \t";
     int desc = 0;
     size_t window = 512, stride = 0;
-    const char *pos = NULL;  // positional arg (Q / K / V / CLASS)
+    int invert = 0, count_only = 0, number = 0;  // grep/contains line-filter flags
+    int icase = 0, only_match = 0;                // grep -i (regex case-fold), grep -o (matches only)
+    int nearest = 0;                              // quantile --nearest: nearest-rank, not estimator
+    const char *pos = NULL;  // positional arg (Q / K / V / CLASS / N)
 
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i];
@@ -139,6 +156,12 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--desc")) desc = 1;
         else if (!strcmp(a, "--window") && i + 1 < argc) window = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(a, "--stride") && i + 1 < argc) stride = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(a, "-v")) invert = 1;       // grep -v: print non-matching
+        else if (!strcmp(a, "-c")) count_only = 1;   // grep -c: count, not lines
+        else if (!strcmp(a, "-n")) number = 1;       // grep -n: 1-based line number
+        else if (!strcmp(a, "-i")) icase = 1;        // grep -i: ASCII case-insensitive regex
+        else if (!strcmp(a, "-o")) only_match = 1;   // grep -o: print only the matched text
+        else if (!strcmp(a, "--nearest")) nearest = 1;  // quantile: nearest-rank order statistic
         else if (a[0] == '-') { fprintf(stderr, "sublimation: unknown option '%s'\n", a); return 2; }
         else if (!pos) pos = a;
         else { fprintf(stderr, "sublimation: unexpected argument '%s'\n", a); return 2; }
@@ -155,33 +178,117 @@ int main(int argc, char **argv) {
             return 2;
         }
         int is_grep = !strcmp(cmd, "grep");
+        size_t plen = strlen(pos);
         sublimation_nfa nfa;
         sublimation_bmh bmh;
         if (is_grep) {
-            sublimation_nfa_compile(&nfa, pos, strlen(pos));
+            sublimation_nfa_compile_ex(&nfa, pos, plen, icase);   // -i folds ASCII case
             if (!sublimation_nfa_valid(&nfa)) {
                 fprintf(stderr, "sublimation: bad regex '%s'\n", pos);
                 return 2;
             }
         } else {
-            sublimation_bmh_compile(&bmh, pos, strlen(pos));
+            sublimation_bmh_compile(&bmh, pos, plen);  // contains is ASCII case-insensitive already
         }
         char *line = NULL;
         size_t cap = 0;
         ssize_t len;
+        long matches = 0, lineno = 0;
         while ((len = getline(&line, &cap, stdin)) != -1) {
+            lineno++;
             size_t mlen = (size_t)len;
             if (mlen && line[mlen - 1] == '\n') mlen--;  // match without the trailing newline
+
+            if (only_match) {
+                // grep -o: emit each non-overlapping match span, one per line.
+                size_t off = 0;
+                while (off <= mlen) {
+                    long end = -1;
+                    long s = is_grep ? sublimation_nfa_find(&nfa, line + off, mlen - off, &end)
+                                     : sublimation_bmh_search(&bmh, line + off, mlen - off);
+                    if (s < 0) break;
+                    size_t mstart = off + (size_t)s;
+                    size_t mend = is_grep ? off + (size_t)end : mstart + plen;
+                    if (mend > mstart) {
+                        matches++;
+                        if (!count_only) {
+                            if (number) printf("%ld:", lineno);
+                            fwrite(line + mstart, 1, mend - mstart, stdout);
+                            putchar('\n');
+                        }
+                        off = mend;            // continue after the match (non-overlapping)
+                    } else {
+                        off = mstart + 1;      // zero-width match: step past to make progress
+                    }
+                }
+                continue;
+            }
+
             long hit = is_grep ? sublimation_nfa_find(&nfa, line, mlen, NULL)
                                : sublimation_bmh_search(&bmh, line, mlen);
-            if (hit >= 0) fwrite(line, 1, (size_t)len, stdout);
+            int show = (hit >= 0);
+            if (invert) show = !show;     // grep -v
+            if (show) {
+                matches++;
+                if (!count_only) {
+                    if (number) printf("%ld:", lineno);   // grep -n
+                    fwrite(line, 1, (size_t)len, stdout);
+                }
+            }
         }
         free(line);
-        return 0;
+        if (count_only) printf("%ld\n", matches);
+        // grep exit semantics: 0 if anything matched, 1 if nothing did -- so
+        // `if ... | sublimation grep` and `&&` chains are correct without a
+        // caller-side buffering hack.
+        return matches ? 0 : 1;
+    }
+
+    // Column projection: print the N-th delimited field of each line. This is
+    // awk '{print $N}' -- the column extraction sublimation could only FEED into
+    // a numeric command (--field) before, now standalone so the awk idiom has a
+    // direct sublimation form. Splits on any --delim char (default whitespace).
+    if (!strcmp(cmd, "field")) {
+        if (!pos) { fputs("sublimation: field needs N (1-based)\n", stderr); return 2; }
+        int col = atoi(pos);
+        if (col < 1) { fputs("sublimation: field N must be >= 1\n", stderr); return 2; }
+        char *line = NULL;
+        size_t cap = 0;
+        ssize_t len;
+        long printed = 0;
+        while ((len = getline(&line, &cap, stdin)) != -1) {
+            size_t mlen = (size_t)len;
+            if (mlen && line[mlen - 1] == '\n') mlen--;
+            size_t i = 0;
+            int f = 0;
+            const char *tok = NULL;
+            size_t toklen = 0;
+            while (i < mlen) {
+                while (i < mlen && strchr(delim, line[i])) i++;       // skip delims
+                if (i >= mlen) break;
+                size_t start = i;
+                while (i < mlen && !strchr(delim, line[i])) i++;      // token body
+                if (++f == col) { tok = line + start; toklen = i - start; break; }
+            }
+            if (tok) { fwrite(tok, 1, toklen, stdout); putchar('\n'); printed++; }
+        }
+        free(line);
+        return printed ? 0 : 1;
     }
 
     Vec data = {0};
-    read_values(&data, field, delim);
+    size_t skipped = read_values(&data, field, delim);
+
+    // count -- lines (records): wc -l / awk NR. No numeric parse, so it works on
+    // all-text input; handled before the numeric-required guard below. Every
+    // getline iteration either parsed a value or was skipped, so data.n + skipped
+    // is the total line count.
+    if (!strcmp(cmd, "count")) {
+        printf("%zu\n", data.n + skipped);
+        free(data.v);
+        return 0;
+    }
+
     if (data.n == 0) {
         fputs("sublimation: no numeric values on stdin\n", stderr);
         return 1;
@@ -192,12 +299,62 @@ int main(int argc, char **argv) {
         if (desc) for (size_t i = 0; i < data.n; i++) printf("%.12g\n", data.v[data.n - 1 - i]);
         else      for (size_t i = 0; i < data.n; i++) printf("%.12g\n", data.v[i]);
 
+    } else if (!strcmp(cmd, "sum")) {     // awk '{s+=$N} END{print s}'
+        double s = 0.0;
+        for (size_t i = 0; i < data.n; i++) s += data.v[i];
+        printf("%.12g\n", s);
+
+    } else if (!strcmp(cmd, "mean")) {    // awk '{s+=$N} END{print s/NR}' (over the parsed values)
+        double s = 0.0;
+        for (size_t i = 0; i < data.n; i++) s += data.v[i];
+        printf("%.12g\n", s / (double)data.n);
+
+    } else if (!strcmp(cmd, "variance") || !strcmp(cmd, "stdev")) {
+        // SAMPLE variance / stdev (n-1 denominator), matching the convention the
+        // PANDEMONIUM suite's mean_stdev() uses so it is an exact drop-in. n<2 has
+        // no spread -> 0.0 (same as mean_stdev). Two-pass for numerical stability.
+        if (data.n < 2) { printf("0\n"); }
+        else {
+            double s = 0.0;
+            for (size_t i = 0; i < data.n; i++) s += data.v[i];
+            double mean = s / (double)data.n;
+            double ss = 0.0;
+            for (size_t i = 0; i < data.n; i++) {
+                double d = data.v[i] - mean;
+                ss += d * d;
+            }
+            double var = ss / (double)(data.n - 1);
+            printf("%.12g\n", !strcmp(cmd, "stdev") ? sqrt(var) : var);
+        }
+
+    } else if (!strcmp(cmd, "min")) {     // running minimum
+        double m = data.v[0];
+        for (size_t i = 1; i < data.n; i++) if (data.v[i] < m) m = data.v[i];
+        printf("%.12g\n", m);
+
+    } else if (!strcmp(cmd, "max")) {     // running maximum
+        double m = data.v[0];
+        for (size_t i = 1; i < data.n; i++) if (data.v[i] > m) m = data.v[i];
+        printf("%.12g\n", m);
+
     } else if (!strcmp(cmd, "quantile")) {
         if (!pos) { fputs("sublimation: quantile needs Q (0..1)\n", stderr); return 2; }
         double q = strtod(pos, NULL);
         if (q < 0.0 || q > 1.0) { fputs("sublimation: Q must be in 0..1\n", stderr); return 2; }
         sublimation_f64(data.v, data.n);
-        size_t idx = (size_t)(q * (double)data.n);
+        size_t idx;
+        if (nearest) {
+            // Nearest-rank: the smallest value at or below which q of the data
+            // falls -- k = ceil(q*n) - 1, clamped. This is the exact convention
+            // the PANDEMONIUM suite's percentile() uses (k = ceil(pct/100*n)-1),
+            // so `quantile Q --nearest` is a bit-exact drop-in. The default
+            // (estimator) path is unchanged for existing callers.
+            double kk = ceil(q * (double)data.n) - 1.0;
+            if (kk < 0.0) kk = 0.0;
+            idx = (size_t)kk;
+        } else {
+            idx = (size_t)(q * (double)data.n);
+        }
         if (idx >= data.n) idx = data.n - 1;
         printf("%.12g\n", data.v[idx]);
 

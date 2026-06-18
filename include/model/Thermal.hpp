@@ -23,6 +23,11 @@ struct Thermal {
   // Optional package power (W) from RAPL/powercap, energy delta per interval.
   bool   has_power{false};
   double power_watts{0.0};
+  // Cumulative package energy (joules): wrap-safe accumulation of each interval's
+  // energy. Monotonic over the collector's life, so a window-integral energy is
+  // the counter delta (end - start) -- what bench-power's J/work-unit consumes.
+  bool   has_energy{false};
+  double energy_joules_total{0.0};
   // Optional per-state idle residency (%) over the interval, across CPUs.
   std::vector<CpuIdleState> cstates;
 };

@@ -561,6 +561,149 @@ std::string system_info_block(const std::string& dir) {
   return out;
 }
 
+std::string scx_stability_block(const std::string& dir) {
+  // CRASH / EJECTION first, because a scheduler that got ejected makes every
+  // latency number below it meaningless -- the reader needs to see it before
+  // anything else. bench-enduser writes these markers into the recording .prom:
+  //   montauk_scx_ejected{scheduler,reason,phase,cores} 1   (one per ejection)
+  //   montauk_cleanroom{verdict,detail} 1                   (CLEAN | NOISY)
+  //   montauk_watchdog_proximity_pct{phase,cores} <pct>     (worst sojourn / 30s)
+  std::vector<std::string> ejections;
+  std::string cr_verdict, cr_detail;
+  double wd_worst = -1;
+  std::string wd_where;
+  for (const auto& path : glob_proms(dir)) {
+    FILE* fp = std::fopen(path.c_str(), "r");
+    if (!fp) continue;
+    char* line = nullptr;
+    size_t cap = 0;
+    ssize_t len;
+    while ((len = ::getline(&line, &cap, fp)) != -1) {
+      std::string ln = strip(std::string(line, len > 0 ? static_cast<size_t>(len) : 0));
+      if (ln.rfind("montauk_scx_ejected{", 0) == 0) {
+        size_t br = ln.find('{'), cb = ln.find('}', br);
+        if (cb == std::string::npos) continue;
+        LabelVec L = parse_labels(ln.substr(br + 1, cb - br - 1));
+        std::string e = label_get(L, "scheduler") + " -- \"" +
+                        label_get(L, "reason") + "\"";
+        std::string ph = label_get(L, "phase"), co = label_get(L, "cores");
+        if (!ph.empty() || !co.empty()) {
+          e += "  (during " + ph;
+          if (!co.empty()) e += (ph.empty() ? "" : ", ") + co + "c";
+          e += ")";
+        }
+        if (std::find(ejections.begin(), ejections.end(), e) == ejections.end())
+          ejections.push_back(e);
+      } else if (ln.rfind("montauk_cleanroom{", 0) == 0) {
+        size_t br = ln.find('{'), cb = ln.find('}', br);
+        if (cb == std::string::npos) continue;
+        LabelVec L = parse_labels(ln.substr(br + 1, cb - br - 1));
+        cr_verdict = label_get(L, "verdict");
+        cr_detail = label_get(L, "detail");
+      } else if (ln.rfind("montauk_watchdog_proximity_pct", 0) == 0) {
+        size_t sp = ln.rfind(' ');
+        double v = sp != std::string::npos ? std::atof(ln.c_str() + sp + 1) : 0;
+        std::string where;
+        size_t br = ln.find('{'), cb = ln.find('}', br);
+        if (cb != std::string::npos && br != std::string::npos) {
+          LabelVec L = parse_labels(ln.substr(br + 1, cb - br - 1));
+          std::string ph = label_get(L, "phase"), co = label_get(L, "cores");
+          where = ph + (co.empty() ? "" : (ph.empty() ? "" : " ") + co + "c");
+        }
+        if (v > wd_worst) { wd_worst = v; wd_where = where; }
+      }
+    }
+    std::free(line);
+    std::fclose(fp);
+  }
+  if (ejections.empty() && cr_verdict.empty() && wd_worst < 0) return "";
+  std::string out = "SCHEDULER STABILITY\n";
+  if (!ejections.empty())
+    for (const auto& e : ejections) out += "  EJECTED      " + e + "\n";
+  else
+    out += "  no ejection -- scheduler ran clean\n";
+  if (wd_worst >= 0) {
+    char num[64];
+    std::snprintf(num, sizeof num, "%.0f%%", wd_worst);
+    out += std::string("  watchdog     worst sojourn ") + num +
+           " of the 30s sched_ext limit";
+    if (!wd_where.empty()) out += "  (" + wd_where + ")";
+    if (wd_worst >= 50) out += "  [NEAR-EJECTION]";
+    out += "\n";
+  }
+  if (!cr_verdict.empty()) {
+    out += "\nCLEAN-ROOM\n  state        " + cr_verdict;
+    if (!cr_detail.empty()) out += " -- " + cr_detail;
+    out += "\n";
+  }
+  return out;
+}
+
+std::string scx_xccx_block(const std::string& dir) {
+  // CROSS-CCX PLACEMENT attribution. montauk's sched report shows the trace-
+  // derived cross-CCX wake2run PERCENTAGE (what fraction of wakeups crossed a
+  // cache domain); it cannot show WHICH scheduler placement path produced those
+  // crossings -- that is a scheduler-internal counter, not a traceable event. The
+  // producer (trace_workload) parses the scheduler's shutdown [KNOBS] line and
+  // writes the per-path nr_xccx[] into the recording as:
+  //   montauk_xccx_scatter_pct <pct>
+  //   montauk_xccx_path{path="sel_dfl"} <count>   (one per placement path)
+  // Surfacing it here lets a multi-CCX user tell a topology-blind fallback
+  // (sel_dfl dominant -> check llc_domain detection) from legitimate dispatch-
+  // side stealing (steal/step5) in one read. Empty when no marker is present.
+  std::vector<std::pair<std::string, long long>> paths;
+  double scatter_pct = -1;
+  for (const auto& path : glob_proms(dir)) {
+    FILE* fp = std::fopen(path.c_str(), "r");
+    if (!fp) continue;
+    char* line = nullptr;
+    size_t cap = 0;
+    ssize_t len;
+    while ((len = ::getline(&line, &cap, fp)) != -1) {
+      std::string ln = strip(std::string(line, len > 0 ? static_cast<size_t>(len) : 0));
+      if (ln.rfind("montauk_xccx_scatter_pct", 0) == 0) {
+        size_t sp = ln.rfind(' ');
+        if (sp != std::string::npos) scatter_pct = std::atof(ln.c_str() + sp + 1);
+      } else if (ln.rfind("montauk_xccx_path{", 0) == 0) {
+        size_t br = ln.find('{'), cb = ln.find('}', br);
+        if (cb == std::string::npos) continue;
+        LabelVec L = parse_labels(ln.substr(br + 1, cb - br - 1));
+        size_t sp = ln.rfind(' ');
+        long long n = sp != std::string::npos ? std::atoll(ln.c_str() + sp + 1) : 0;
+        paths.emplace_back(label_get(L, "path"), n);
+      }
+    }
+    std::free(line);
+    std::fclose(fp);
+  }
+  if (paths.empty() && scatter_pct < 0) return "";
+  // Rank paths by landing count, descending -- the dominant path is the lever.
+  std::sort(paths.begin(), paths.end(),
+            [](const auto& a, const auto& b) { return a.second > b.second; });
+  long long total = 0;
+  for (const auto& p : paths) total += p.second;
+  std::string out = "CROSS-CCX PLACEMENT\n";
+  if (scatter_pct >= 0) {
+    char num[64];
+    std::snprintf(num, sizeof num, "%.0f%%", scatter_pct);
+    out += std::string("  scatter      ") + num +
+           " of placements crossed a cache domain\n";
+  }
+  for (const auto& p : paths) {
+    if (p.second == 0) continue;
+    char row[96];
+    double share = total > 0 ? 100.0 * static_cast<double>(p.second) /
+                                static_cast<double>(total) : 0.0;
+    std::snprintf(row, sizeof row, "  %-11s %lld  (%.0f%%)", p.first.c_str(),
+                  p.second, share);
+    out += row;
+    if (p.first == "sel_dfl")
+      out += "  [topology-blind fallback -- check llc_domain]";
+    out += "\n";
+  }
+  return out;
+}
+
 std::string thermal_power_block(const std::string& dir) {
   double temp_peak = 0, temp_sum = 0;
   int temp_n = 0;
@@ -572,6 +715,7 @@ std::string thermal_power_block(const std::string& dir) {
   double ctx_sum = 0; int ctx_n = 0;
   double mig_sum = 0; int mig_n = 0;
   double br_sum = 0; int br_n = 0;
+  double e_min = -1.0, e_max = -1.0; int e_n = 0;  // package energy counter -> integral
   std::map<std::string, std::pair<double, int>> cstate;  // name -> (sum%, n)
   const std::string kTemp = "montauk_thermal_cpu_temperature_celsius ";
   const std::string kFan = "montauk_thermal_fan_speed_rpm ";
@@ -582,6 +726,7 @@ std::string thermal_power_block(const std::string& dir) {
   const std::string kMig = "montauk_pmu_cpu_migrations_per_second ";
   const std::string kBr = "montauk_pmu_branch_misses_per_second ";
   const std::string kCst = "montauk_cstate_residency_percent{state=\"";
+  const std::string kEnergy = "montauk_package_energy_joules_total ";
   for (const auto& path : glob_proms(dir)) {
     FILE* fp = std::fopen(path.c_str(), "r");
     if (!fp) continue;
@@ -612,6 +757,11 @@ std::string thermal_power_block(const std::string& dir) {
         mig_sum += std::strtod(ln.c_str() + kMig.size(), nullptr); ++mig_n;
       } else if (ln.rfind(kBr, 0) == 0) {
         br_sum += std::strtod(ln.c_str() + kBr.size(), nullptr); ++br_n;
+      } else if (ln.rfind(kEnergy, 0) == 0) {
+        double v = std::strtod(ln.c_str() + kEnergy.size(), nullptr);
+        if (e_min < 0.0 || v < e_min) e_min = v;
+        if (v > e_max) e_max = v;
+        ++e_n;
       } else if (ln.rfind(kCst, 0) == 0) {
         size_t q = ln.find('"', kCst.size());
         size_t b = ln.find("} ", kCst.size());
@@ -643,6 +793,11 @@ std::string thermal_power_block(const std::string& dir) {
   if (pw_n > 0) {
     std::snprintf(buf, sizeof(buf), "  power      avg %.1f W  peak %.1f W\n",
                   pw_sum / pw_n, pw_peak);
+    out += buf;
+  }
+  if (e_n > 0 && e_max > e_min) {
+    std::snprintf(buf, sizeof(buf), "  energy-tot %.1f J integral over recording\n",
+                  e_max - e_min);
     out += buf;
   }
   if (fq_n > 0) {

@@ -62,11 +62,16 @@ typedef struct {
     int  start;
     int  anchored_start;
     int  anchored_end;
+    int  icase;         // ASCII case-fold at match time (grep -i); UTF-8 not folded
     int  valid;
 } sublimation_nfa;
 
 // Compile `pattern` (len bytes) into `out`. Check sublimation_nfa_valid() after.
 SUB_API void sublimation_nfa_compile(sublimation_nfa *out, const char *pattern, size_t len);
+
+// As sublimation_nfa_compile, but matches ASCII case-insensitively when icase != 0
+// (grep -i): A-Z and a-z compare equal at match time. UTF-8 case folding is not done.
+SUB_API void sublimation_nfa_compile_ex(sublimation_nfa *out, const char *pattern, size_t len, int icase);
 
 // Did the pattern compile?
 SUB_API int sublimation_nfa_valid(const sublimation_nfa *nfa);

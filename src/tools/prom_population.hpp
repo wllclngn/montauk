@@ -56,6 +56,20 @@ std::vector<std::string> glob_proms(const std::string& dir);
 // header. Empty string if no system-info line is present.
 std::string system_info_block(const std::string& dir);
 
+// CRASH/EJECTION + CLEAN-ROOM + watchdog-proximity, formatted to LEAD the digest
+// (a scheduler that got ejected invalidates every latency number under it).
+// Scrapes the montauk_scx_ejected / montauk_cleanroom / montauk_watchdog_proximity
+// markers bench-enduser writes into the recording. Empty when none are present.
+std::string scx_stability_block(const std::string& dir);
+
+// CROSS-CCX PLACEMENT attribution: scrapes the montauk_xccx_scatter_pct /
+// montauk_xccx_path{path} markers the harness (trace_workload) writes from the
+// scheduler's [KNOBS] line, ranked by landing count, flagging a sel_dfl-dominant
+// topology-blind fallback. The per-path split is scheduler-internal -- montauk's
+// trace gives the cross-CCX percentage, this gives WHICH path produced it. Empty
+// when no marker is present.
+std::string scx_xccx_block(const std::string& dir);
+
 // Summarize montauk_thermal_*/montauk_power_watts across a recording's scrapes
 // into a THERMAL/POWER block (peak/avg cpu temp, peak fan, avg/peak watts) for
 // the digest. Empty string if none of those metrics are present.

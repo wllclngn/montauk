@@ -537,6 +537,12 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
                 "gauge");
     emit_gauge_d(out, "montauk_power_watts", s.thermal.power_watts);
   }
+  if (s.thermal.has_energy) {
+    emit_header(out, "montauk_package_energy_joules_total",
+                "Cumulative package energy from RAPL/powercap (joules, wrap-safe); "
+                "window-integral energy is the counter delta", "counter");
+    emit_gauge_d(out, "montauk_package_energy_joules_total", s.thermal.energy_joules_total);
+  }
   if (!s.thermal.cstates.empty()) {
     emit_header(out, "montauk_cstate_residency_percent",
                 "Idle-state residency this interval, per state (across CPUs)",

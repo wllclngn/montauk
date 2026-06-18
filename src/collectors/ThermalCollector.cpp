@@ -192,14 +192,20 @@ bool ThermalCollector::sample(montauk::model::Thermal& out) {
         if (have_prev_energy_ && energy_uj >= prev_energy_uj_) {
           double dt = std::chrono::duration<double>(now - prev_energy_t_).count();
           if (dt > 0.0) {
-            out.power_watts =
-                static_cast<double>(energy_uj - prev_energy_uj_) / 1e6 / dt;
+            double interval_j = static_cast<double>(energy_uj - prev_energy_uj_) / 1e6;
+            out.power_watts = interval_j / dt;
             out.has_power = true;
+            // Integrate the (wrap-handled) interval energy. A counter wrap shows
+            // as energy_uj < prev and is skipped, losing at most one interval per
+            // wrap -- the same blind spot the instantaneous power already has.
+            energy_accum_j_ += interval_j;
           }
         }
         prev_energy_uj_ = energy_uj;
         prev_energy_t_ = now;
         have_prev_energy_ = true;
+        out.has_energy = true;
+        out.energy_joules_total = energy_accum_j_;
       }
     }
   } catch (const fs::filesystem_error&) {

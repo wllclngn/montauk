@@ -242,6 +242,10 @@ const char* prom_help(const char* name) {
   static constexpr struct { const char* name; const char* help; } kHelp[] = {
     {"montauk_analysis_events_total",
      "Event count per type+subtype over the whole trace"},
+    {"montauk_analysis_dispatches_per_sec",
+     "Scheduler dispatch (PICK) rate per second over the trace"},
+    {"montauk_analysis_preempts_per_sec",
+     "Preemption (tick + wakeup) rate per second over the trace"},
     {"montauk_analysis_waits_total",
      "NTSYNC wait completions per (tid,fd)"},
     {"montauk_analysis_wait_gap_ms",
@@ -571,6 +575,17 @@ struct SummaryReport final : Report {
       std::snprintf(lab, sizeof(lab), "type=\"%s\",subtype=\"%s\"", r.type, r.sub.c_str());
       out.push_back({"montauk_analysis_events_total", lab, static_cast<double>(r.n)});
     }
+    // Trace-derived scheduler rates -- the dispatches/s and preempts/s the
+    // bench suite otherwise text-scrapes from the scheduler's own [TICK] stdout.
+    // PICK is a dispatch; preempt is tick + wakeup. Duration is the event-span.
+    double dur_s = (max_ts_ > min_ts_) ? static_cast<double>(max_ts_ - min_ts_) / 1e9 : 0.0;
+    if (dur_s > 0.0) {
+      out.push_back({"montauk_analysis_dispatches_per_sec", "",
+                     static_cast<double>(sched_[SCHED_OP_PICK]) / dur_s});
+      out.push_back({"montauk_analysis_preempts_per_sec", "",
+                     static_cast<double>(sched_[SCHED_OP_PREEMPT_TICK] +
+                                         sched_[SCHED_OP_PREEMPT_WAKEUP]) / dur_s});
+    }
   }
 };
 
@@ -703,6 +718,16 @@ struct SpinsReport final : Report {
   };
   std::unordered_map<uint64_t, RunState> state_;
   std::vector<Run> runs_;
+  // Per-object wait/signal totals -- the livelock discriminator. A genuine
+  // livelock makes no progress, so its object has no plausible waker (waits far
+  // outnumber signals). A healthy partnered ping-pong is woken by its partner on
+  // every iteration (waits ~= signals), which looks IDENTICAL to a livelock by
+  // gap and result code alone -- both are sub-tick streaks of result>=0 waits.
+  // Without this, a high-rate but perfectly healthy futex ping-pong (EEVDF and
+  // PANDEMONIUM both produce ~80-170k waits/s on the ipc workload) was ranked a
+  // HIGH-severity spin offender purely on rate.
+  std::unordered_map<uint64_t, uint64_t> obj_waits_;
+  std::unordered_map<uint64_t, uint64_t> obj_signals_;
 
   const char* name() const override { return "spins"; }
 
@@ -720,8 +745,13 @@ struct SpinsReport final : Report {
   }
 
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    // Count signals per object first -- a wake on an object is the evidence that
+    // some partner is making progress on it (it is not a stranded livelock).
+    SyncSignal sig;
+    if (sync_signal(type, data, len, sig)) { ++obj_signals_[sig.obj]; return; }
     SyncWait w;
     if (!sync_wait(type, data, len, w)) return;
+    ++obj_waits_[w.obj];
     auto& s = state_[tid_obj_key(w.tid, w.obj)];
     s.tid = w.tid;
     s.obj = w.obj;
@@ -858,13 +888,29 @@ struct SpinsReport final : Report {
     }
     for (const auto& [key, p] : peaks) {
       (void)key;
+      const Run& r = *p.first;
+      // PROGRESS TEST: is this object actually being woken by a partner? A
+      // healthy ping-pong has roughly one signal per wait; a livelock has waits
+      // with no plausible waker. Reuse the pairing report's ratio: an object is
+      // "partnered" when its signals are within kPairingWaitSignalRatio of its
+      // waits (i.e. not signal-starved).
+      uint64_t waits = obj_waits_.count(r.obj) ? obj_waits_[r.obj] : r.iters;
+      uint64_t sigs = obj_signals_.count(r.obj) ? obj_signals_[r.obj] : 0;
+      bool partnered = sigs > 0 && waits <= sigs * kPairingWaitSignalRatio;
+      // result-tally dominance: success means each wait returned signaled.
+      bool failed_progress = !(r.succ >= r.timeo && r.succ >= r.other);
+      // A partnered, cleanly-returning run is a healthy ping-pong, NOT a spin --
+      // do not rank it as an offender at all, no matter how high the rate. Only a
+      // signal-starved object (real livelock) or a timeout/error-dominant run
+      // (starved/failing waiter) is a genuine offender.
+      if (partnered && !failed_progress) continue;
       char idb[16], objb[24];
-      std::snprintf(idb, sizeof(idb), "%u", p.first->tid);
-      std::snprintf(objb, sizeof(objb), "0x%" PRIx64, p.first->obj);
-      // Every run_ entry is already a sustained sub-tick spin (a livelock);
-      // the wait rate scales severity.
-      out.push_back({"spin", idb, objb, "waits_per_s", p.second,
-                     p.second >= 10000.0 ? 2 : 1});
+      std::snprintf(idb, sizeof(idb), "%u", r.tid);
+      std::snprintf(objb, sizeof(objb), "0x%" PRIx64, r.obj);
+      // Failed-progress runs are always HIGH; a signal-starved livelock scales
+      // severity by rate, as before.
+      int sev = failed_progress ? 2 : (p.second >= 10000.0 ? 2 : 1);
+      out.push_back({"spin", idb, objb, "waits_per_s", p.second, sev});
     }
   }
 };
@@ -2871,6 +2917,18 @@ int run_digest(const std::string& dir, bool redact) {
     });
   }
 
+  // FRONT AND CENTER: a scheduler that crashed/ejected makes every number below
+  // it meaningless, and a NOISY clean-room makes them untrustworthy -- so this
+  // leads the digest, above SYSTEM, before the reader sees a single latency.
+  std::string stab = montauk::pop::scx_stability_block(dir);
+  if (!stab.empty()) std::printf("%s\n", stab.c_str());
+
+  // Cross-CCX PLACEMENT attribution sits with stability: on a multi-CCX host the
+  // scatter source (sel_dfl fallback vs dispatch steal) is the lever, and the
+  // per-path split is not derivable from the trace alone.
+  std::string xccx = montauk::pop::scx_xccx_block(dir);
+  if (!xccx.empty()) std::printf("%s\n", xccx.c_str());
+
   std::string specs = montauk::pop::system_info_block(dir);
   if (!specs.empty()) std::printf("%s", specs.c_str());
   else log_warn("no montauk_system_info in recording (pre-v7.1.0 capture?)");
@@ -2893,7 +2951,11 @@ int run_digest(const std::string& dir, bool redact) {
   if (have_events) {
     std::printf("\nKEY METRICS\n");
     for (auto& r : reports)
-      if (std::string(r->name()) == "sched") { r->emit(reader); r->prom(prom); }
+      if (std::string(r->name()) == "sched" ||
+          std::string(r->name()) == "dispatch-stall") {
+        r->emit(reader);
+        r->prom(prom);
+      }
     if (!prom.empty()) {
       std::string out_path =
           analysis_prom_path(events.c_str(), reader.header().real_anchor_ns);
@@ -2910,7 +2972,18 @@ int run_digest(const std::string& dir, bool redact) {
 
 } // namespace
 
+#ifndef MONTAUK_VERSION
+#define MONTAUK_VERSION "unknown"
+#endif
+
 int main(int argc, char** argv) {
+  // --version: the upgrade detector (bench-enduser / install.py) reads this to
+  // decide whether an installed montauk is older than the clone and needs a
+  // reinstall. Plain "<n>.<n>.<n>" on stdout, nothing else.
+  if (argc >= 2 && std::string(argv[1]) == "--version") {
+    std::printf("%s\n", MONTAUK_VERSION);
+    return 0;
+  }
   bool want_help = argc >= 2 &&
                    (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h");
   if (argc < 2 || want_help) {
