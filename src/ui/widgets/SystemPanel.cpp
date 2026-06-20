@@ -52,9 +52,9 @@ void section_identity(std::vector<Row>& out, const Snapshot&) {
 void section_runtime(std::vector<Row>& out, const Snapshot& s) {
   if (!s.collector_name.empty()) out.push_back(Row::kv("COLLECTOR", s.collector_name));
 
-  // SORT: montauk's sort backend. sublimation is the only one — linked
-  // unconditionally, no runtime choice.
-  out.push_back(Row::kv("SORT", std::string("sublimation")));
+  // CORE: montauk's search / sort / match core. sublimation is the only one —
+  // linked unconditionally, no runtime choice.
+  out.push_back(Row::kv("CORE", std::string("sublimation")));
 
   std::ostringstream procs;
   procs << "ENRICHED:" << s.procs.enriched_count << "  TOTAL:" << s.procs.total_processes;

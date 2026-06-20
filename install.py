@@ -519,6 +519,22 @@ def cmd_install(args, source_dir: Path) -> bool:
         else:
             log_warn(f"{tool} missing from build dir — not installed")
 
+    # The generic profile harness (montauk_profile): a montauk feature any
+    # application uses to turn a montauk capture into a montauk_analyze report --
+    # capture (launch/attach/existing trace), run the reports, assemble. Installed
+    # importable as a module (apps add this dir to sys.path for their own harness,
+    # e.g. quark's diagnose script) plus a `montauk-profile` CLI shim for the
+    # generic command/attach/trace path.
+    profile_src = source_dir / "profiles" / "montauk_profile.py"
+    if profile_src.exists():
+        lib_dest = prefix / "lib" / "montauk" / "montauk_profile.py"
+        cli_dest = prefix / "bin" / "montauk-profile"
+        if run_cmd_sudo(["install", "-Dm755", str(profile_src), str(lib_dest)]) == 0:
+            run_cmd_sudo(["ln", "-sf", str(lib_dest), str(cli_dest)])
+            log_info(f"Installed {cli_dest} (importable: {lib_dest})")
+        else:
+            log_warn("Failed to install montauk-profile")
+
     # Apply file capabilities so `montauk --trace` (eBPF) works without sudo.
     # A plain cp clears whatever caps the previous binary had, so this MUST run
     # on EVERY install — otherwise the next --trace fails with "need root or
@@ -602,6 +618,8 @@ def cmd_uninstall(args, source_dir: Path) -> bool:
                prefix / "bin" / "montauk_analyze",
                prefix / "bin" / "montauk_trace_decode",
                prefix / "bin" / "sublimation",
+               prefix / "bin" / "montauk-profile",
+               prefix / "lib" / "montauk" / "montauk_profile.py",
                prefix / "share" / "man" / "man1" / "montauk.1"]
     removed = 0
     for t in targets:

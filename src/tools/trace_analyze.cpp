@@ -14,9 +14,131 @@
 #include "prom_stats.hpp"
 #include "util/Log.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <cinttypes>
+#include <cstdlib>
+#include <dirent.h>
+#include <fstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 using montauk::util::log_info;
 using montauk::util::log_warn;
 using montauk::util::log_error;
+
+// ── Address resolution against captured /proc/PID/maps sidecars ──────────────
+//
+// montauk writes a <PID>.maps sidecar beside the trace at track time. A wait on
+// a futex names the lock by its userspace address (the uaddr); resolving that
+// address against the owning process's maps turns an opaque 0x7ff6e1249ac0 into
+// "ntdll.so+0x...", naming WHERE the contended lock lives. The same machinery
+// would symbolize heapstk/abort IPs; for now it serves the sync reports.
+struct MapsResolver {
+  struct Seg { uint64_t start, end, file_off; std::string path; };
+  std::unordered_map<uint32_t, std::vector<Seg>> by_pid_;
+  bool empty_ = true;
+
+  void load_dir(const char* trace_path) {
+    std::string tp = trace_path ? trace_path : "";
+    std::string dir = ".";
+    auto slash = tp.find_last_of('/');
+    if (slash != std::string::npos) dir = tp.substr(0, slash);
+    DIR* d = ::opendir(dir.c_str());
+    if (!d) return;
+    for (struct dirent* ent; (ent = ::readdir(d)) != nullptr; ) {
+      std::string name = ent->d_name;
+      if (name.size() < 6 || name.compare(name.size() - 5, 5, ".maps") != 0)
+        continue;
+      std::string pid_s = name.substr(0, name.size() - 5);
+      if (pid_s.empty() ||
+          !std::all_of(pid_s.begin(), pid_s.end(),
+                       [](unsigned char c) { return std::isdigit(c); }))
+        continue;
+      load_file(dir + "/" + name,
+                static_cast<uint32_t>(std::strtoul(pid_s.c_str(), nullptr, 10)));
+    }
+    ::closedir(d);
+    for (auto& [pid, segs] : by_pid_) {
+      (void)pid;
+      std::sort(segs.begin(), segs.end(),
+                [](const Seg& a, const Seg& b) { return a.start < b.start; });
+      if (!segs.empty()) empty_ = false;
+    }
+  }
+
+  void load_file(const std::string& path, uint32_t pid) {
+    std::ifstream f(path);
+    if (!f) return;
+    auto& segs = by_pid_[pid];
+    std::string line;
+    while (std::getline(f, line)) {
+      // "start-end perms file_off dev inode path"
+      char* e = nullptr;
+      uint64_t start = std::strtoull(line.c_str(), &e, 16);
+      if (*e != '-') continue;
+      uint64_t end = std::strtoull(e + 1, &e, 16);
+      while (*e == ' ') ++e;
+      while (*e && *e != ' ') ++e;                 // perms
+      while (*e == ' ') ++e;
+      uint64_t off = std::strtoull(e, &e, 16);
+      while (*e == ' ') ++e;
+      while (*e && *e != ' ') ++e;                 // dev
+      while (*e == ' ') ++e;
+      while (*e && *e != ' ') ++e;                 // inode
+      while (*e == ' ') ++e;
+      segs.push_back({start, end, off, *e ? std::string(e) : std::string()});
+    }
+  }
+
+  // addr -> "module.so+0xoffset" / "[anon]" / "" (no maps for pid, or unmapped).
+  std::string resolve(uint32_t pid, uint64_t addr) const {
+    auto it = by_pid_.find(pid);
+    if (it == by_pid_.end()) return "";
+    const auto& segs = it->second;
+    size_t lo = 0, hi = segs.size();
+    while (lo < hi) {                              // last seg with start <= addr
+      size_t mid = (lo + hi) / 2;
+      if (segs[mid].start <= addr) lo = mid + 1; else hi = mid;
+    }
+    if (lo == 0) return "";
+    const Seg& s = segs[lo - 1];
+    if (addr >= s.end) return "";
+    if (s.path.empty()) return "[anon]";
+    auto sl = s.path.find_last_of('/');
+    std::string base = sl == std::string::npos ? s.path : s.path.substr(sl + 1);
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "+0x%" PRIx64, addr - s.start + s.file_off);
+    return base + buf;
+  }
+
+  bool empty() const { return empty_; }
+};
+
+static MapsResolver g_maps;
+
+// Human identity for a sync-wait object: a futex uaddr resolved to module+offset
+// via the captured maps, else an ntsync object fd. "" when unresolvable.
+static std::string sync_obj_name(uint32_t pid, uint64_t obj, bool is_futex) {
+  if (!is_futex) {
+    char b[32];
+    std::snprintf(b, sizeof(b), "ntsync fd %" PRIu64, obj);
+    return b;
+  }
+  return g_maps.resolve(pid, obj);
+}
+
+// "0x<obj> (<name>)" for reports that print an object id, name appended when
+// resolvable. The name is what turns "suspected" into "this lock, here".
+static std::string fmt_obj(uint32_t pid, uint64_t obj, bool is_futex) {
+  char b[24];
+  std::snprintf(b, sizeof(b), "0x%016" PRIx64, obj);
+  std::string s = b;
+  std::string n = sync_obj_name(pid, obj, is_futex);
+  if (!n.empty()) { s += " ("; s += n; s += ")"; }
+  return s;
+}
 
 // Comm redaction. For a shareable / public report (Discord), the literal
 // process comm is replaced with a STABLE hash handle -- same comm -> same
@@ -168,7 +290,7 @@ constexpr int32_t kFutexSyscallNr = 202;
 inline bool futex_is_wait(uint32_t opb) { return opb == 0 || opb == 9 || opb == 6 || opb == 11; }
 inline bool futex_is_wake(uint32_t opb) { return opb == 1 || opb == 10 || opb == 7; }
 
-struct SyncWait   { uint32_t tid; uint64_t obj; uint64_t ts; int64_t result; };
+struct SyncWait   { uint32_t tid; uint32_t pid; uint64_t obj; uint64_t ts; int64_t result; bool is_futex; };
 struct SyncSignal { uint32_t tid; uint64_t obj; uint64_t ts; };
 
 // Mix tid + opaque object id into one map key (obj is 64-bit: a futex uaddr).
@@ -181,14 +303,14 @@ inline bool sync_wait(uint32_t type, const uint8_t* data, uint32_t len, SyncWait
   if (type == TRACE_EVT_NTSYNC && len >= sizeof(montauk_ntsync_event)) {
     auto* e = reinterpret_cast<const montauk_ntsync_event*>(data);
     if (!is_wait_op(e->op) || e->result == kWaitEntrySentinel) return false;
-    w = {e->tid, static_cast<uint32_t>(e->fd), e->timestamp_ns, e->result};
+    w = {e->tid, e->pid, static_cast<uint32_t>(e->fd), e->timestamp_ns, e->result, false};
     return true;
   }
   if (type == TRACE_EVT_IO && len >= sizeof(montauk_io_event)) {
     auto* e = reinterpret_cast<const montauk_io_event*>(data);
     if (e->syscall_nr != kFutexSyscallNr) return false;
     if (!futex_is_wait(static_cast<uint32_t>(e->fd) & 0x7f)) return false;
-    w = {e->tid, e->count, e->timestamp_ns, e->result};
+    w = {e->tid, e->pid, e->count, e->timestamp_ns, e->result, true};
     return true;
   }
   return false;
@@ -270,6 +392,15 @@ const char* prom_help(const char* name) {
      "Percent of wake2run latencies on the CONFIG_HZ tick floor (>=900us)"},
     {"montauk_analysis_wake2run_crossccx_pct",
      "Percent of wake2run events that ran on a cross-CCX CPU"},
+    {"montauk_analysis_coldwake_count",
+     "Count of wakes landing on a core idle >=20ms (cold-wake samples)"},
+    {"montauk_analysis_coldwake_wake2run_us",
+     "Cold-wake wake-to-run latency quantile in us (wakes from a cold core)"},
+    {"montauk_analysis_coldwake_freq_min_mhz",
+     "Minimum core frequency (MHz) seen at any cold-wake (platform floor proxy)"},
+    {"montauk_analysis_coldwake_freq_slowq_mhz",
+     "Median core frequency (MHz) of the slowest-quartile cold-wakes; near the "
+     "min implies ramp-bound (governor/arch), nominal implies dispatch-bound"},
     {"montauk_analysis_info",
      "Build and trace metadata (montauk version, trace pattern, format version)"},
     {"montauk_analysis_timestamp_seconds",
@@ -593,6 +724,8 @@ struct SummaryReport final : Report {
 struct WaitsReport final : Report {
   struct Agg {
     uint32_t tid = 0;
+    uint32_t pid = 0;
+    bool is_futex = false;
     uint64_t obj = 0;
     uint64_t count = 0;
     uint64_t last_ts = 0;
@@ -607,7 +740,7 @@ struct WaitsReport final : Report {
     SyncWait w;
     if (!sync_wait(type, data, len, w)) return;
     auto& a = aggs_[tid_obj_key(w.tid, w.obj)];
-    if (a.count == 0) { a.tid = w.tid; a.obj = w.obj; }
+    if (a.count == 0) { a.tid = w.tid; a.pid = w.pid; a.is_futex = w.is_futex; a.obj = w.obj; }
     ++a.count;
     ++a.results[w.result];
     if (a.last_ts && w.ts > a.last_ts) a.gaps_ns.push_back(w.ts - a.last_ts);
@@ -639,13 +772,14 @@ struct WaitsReport final : Report {
       if (!top || a.count > top->count) top = &a;
     }
     double share = 100.0 * static_cast<double>(top->count) / static_cast<double>(total);
+    std::string topobj = fmt_obj(top->pid, top->obj, top->is_futex);
     if (share >= 50.0)
-      std::printf("VERDICT: tid=%u obj=0x%016" PRIx64 " dominates — %s of %s wait completions (%.0f%%) across %zu tid/obj pairs\n",
-                  top->tid, top->obj, fmt_count(static_cast<double>(top->count)).c_str(),
+      std::printf("VERDICT: tid=%u obj=%s dominates — %s of %s wait completions (%.0f%%) across %zu tid/obj pairs\n",
+                  top->tid, topobj.c_str(), fmt_count(static_cast<double>(top->count)).c_str(),
                   fmt_count(static_cast<double>(total)).c_str(), share, aggs_.size());
     else
-      std::printf("VERDICT: wait load spread across %zu tid/obj pairs — top tid=%u obj=0x%016" PRIx64 " holds %.0f%% (%s of %s)\n",
-                  aggs_.size(), top->tid, top->obj, share,
+      std::printf("VERDICT: wait load spread across %zu tid/obj pairs — top tid=%u obj=%s holds %.0f%% (%s of %s)\n",
+                  aggs_.size(), top->tid, topobj.c_str(), share,
                   fmt_count(static_cast<double>(top->count)).c_str(),
                   fmt_count(static_cast<double>(total)).c_str());
     std::printf("result legend: >=0 signaled object index, %" PRId64 " ETIMEDOUT, other negative -errno\n",
@@ -671,8 +805,10 @@ struct WaitsReport final : Report {
                       res_s.empty() ? "" : " ", res[i].first, res[i].second);
         res_s += one;
       }
-      std::printf("%-8u 0x%016" PRIx64 " %-10" PRIu64 " %-10s %-10s %s\n",
-                  a->tid, a->obj, a->count, med, p99, res_s.c_str());
+      std::string oname = sync_obj_name(a->pid, a->obj, a->is_futex);
+      std::printf("%-8u 0x%016" PRIx64 " %-10" PRIu64 " %-10s %-10s %s%s%s\n",
+                  a->tid, a->obj, a->count, med, p99, res_s.c_str(),
+                  oname.empty() ? "" : "  ", oname.c_str());
     }
   }
 
@@ -704,6 +840,8 @@ struct WaitsReport final : Report {
 struct SpinsReport final : Report {
   struct RunState {
     uint32_t tid = 0;       // stored: the hashed map key is not reversible
+    uint32_t pid = 0;       // owning process, for resolving a futex uaddr
+    bool is_futex = false;  // obj is a futex uaddr (resolvable) vs an ntsync fd
     uint64_t obj = 0;       // opaque lock id (ntsync fd / futex uaddr)
     uint64_t last_ts = 0;
     int64_t last_result = 0;
@@ -715,6 +853,8 @@ struct SpinsReport final : Report {
     uint32_t tid;
     uint64_t obj;
     uint64_t iters, start_ts, end_ts, succ, timeo, other;
+    uint32_t pid;
+    bool is_futex;
   };
   std::unordered_map<uint64_t, RunState> state_;
   std::vector<Run> runs_;
@@ -739,7 +879,8 @@ struct SpinsReport final : Report {
 
   void finalize(uint32_t tid, uint64_t obj, RunState& s, uint64_t end_ts) {
     if (s.iters >= kSpinMinIters)
-      runs_.push_back({tid, obj, s.iters, s.start_ts, end_ts, s.succ, s.timeo, s.other});
+      runs_.push_back({tid, obj, s.iters, s.start_ts, end_ts, s.succ, s.timeo,
+                       s.other, s.pid, s.is_futex});
     s.iters = 0;
     s.succ = s.timeo = s.other = 0;
   }
@@ -754,6 +895,8 @@ struct SpinsReport final : Report {
     ++obj_waits_[w.obj];
     auto& s = state_[tid_obj_key(w.tid, w.obj)];
     s.tid = w.tid;
+    s.pid = w.pid;
+    s.is_futex = w.is_futex;
     s.obj = w.obj;
     if (s.last_ts && w.ts > s.last_ts && w.ts - s.last_ts < kSpinGapNs) {
       if (s.iters == 0) {
@@ -820,13 +963,14 @@ struct SpinsReport final : Report {
     else
       std::snprintf(counts, sizeof(counts), "%" PRIu64 " of %zu spin runs %s",
                     dom_cls->second, runs_.size(), dom_cls->first.c_str());
-    char where[64];
+    std::string where;
     if (pairs.size() == 1)
-      std::snprintf(where, sizeof(where), "all tid=%u obj=0x%016" PRIx64, runs_[0].tid, runs_[0].obj);
+      where = "all tid=" + std::to_string(runs_[0].tid) + " obj=" +
+              fmt_obj(runs_[0].pid, runs_[0].obj, runs_[0].is_futex);
     else
-      std::snprintf(where, sizeof(where), "across %zu tid/obj pairs", pairs.size());
+      where = "across " + std::to_string(pairs.size()) + " tid/obj pairs";
     std::printf("VERDICT: %s — %s, %s, peak %s waits/s\n",
-                word, counts, where, fmt_count(peak).c_str());
+                word, counts, where.c_str(), fmt_count(peak).c_str());
     std::printf("criteria: inter-wait gap < %.1f ms sustained >= %" PRIu64 " iterations\n",
                 static_cast<double>(kSpinGapNs) / 1e6, kSpinMinIters);
     sublimation_order_u64(runs_, true, [](const Run& r) { return r.iters; });
@@ -849,9 +993,10 @@ struct SpinsReport final : Report {
       char dom_s[32];
       std::snprintf(dom_s, sizeof(dom_s), "%s:%" PRIu64, dom,
                     std::max(r.succ, std::max(r.timeo, r.other)));
-      std::printf("%-8u 0x%016" PRIx64 " %-10" PRIu64 " %-12.3f %-10.3f %-10.0f %-21s %s\n",
+      std::string oname = sync_obj_name(r.pid, r.obj, r.is_futex);
+      std::printf("%-8u 0x%016" PRIx64 " %-10" PRIu64 " %-12.3f %-10.3f %-10.0f %-21s %s%s%s\n",
                   r.tid, r.obj, r.iters, reader.elapsed_ms(r.start_ts), span_ms, rate,
-                  dom_s, verdict);
+                  dom_s, verdict, oname.empty() ? "" : "  ", oname.c_str());
     }
   }
 
@@ -904,13 +1049,13 @@ struct SpinsReport final : Report {
       // signal-starved object (real livelock) or a timeout/error-dominant run
       // (starved/failing waiter) is a genuine offender.
       if (partnered && !failed_progress) continue;
-      char idb[16], objb[24];
+      char idb[16];
       std::snprintf(idb, sizeof(idb), "%u", r.tid);
-      std::snprintf(objb, sizeof(objb), "0x%" PRIx64, r.obj);
+      std::string objs = fmt_obj(r.pid, r.obj, r.is_futex);
       // Failed-progress runs are always HIGH; a signal-starved livelock scales
       // severity by rate, as before.
       int sev = failed_progress ? 2 : (p.second >= 10000.0 ? 2 : 1);
-      out.push_back({"spin", idb, objb, "waits_per_s", p.second, sev});
+      out.push_back({"spin", idb, objs, "waits_per_s", p.second, sev});
     }
   }
 };
@@ -1198,7 +1343,27 @@ struct EndstateReport final : Report {
     uint64_t last_signal_ts = 0;
     uint32_t last_signal_tid = 0;
     uint8_t  last_signal_op = 0;
+    uint8_t  create_op = 0xFF;   // NTS_CREATE_* when the create was traced, else unknown
   };
+
+  // Object class -- names what a parked thread is starved of (an EVENT nobody
+  // sets vs a MUTEX nobody releases). Prefer the traced create op; fall back to
+  // the last signal op's family, since an object created before montauk attached
+  // has no create event but its signaller still names its class.
+  static const char* obj_type_name(uint8_t create_op, uint8_t signal_op = 0xFF) {
+    switch (create_op) {
+      case NTS_CREATE_SEM:   return "SEM";
+      case NTS_CREATE_MUTEX: return "MUTEX";
+      case NTS_CREATE_EVENT: return "EVENT";
+      default: break;
+    }
+    switch (signal_op) {
+      case NTS_SEM_RELEASE:  return "SEM";
+      case NTS_MUTEX_UNLOCK: return "MUTEX";
+      case NTS_EVENT_SET: case NTS_EVENT_RESET: case NTS_EVENT_PULSE: return "EVENT";
+      default:               return "object";
+    }
+  }
   std::map<uint32_t, TidState> tids_;
   std::map<uint64_t, ObjSig> objs_;
   uint64_t max_ts_ = 0;
@@ -1241,6 +1406,11 @@ struct EndstateReport final : Report {
         o.last_signal_ts = e->timestamp_ns;
         o.last_signal_tid = e->tid;
         o.last_signal_op = static_cast<uint8_t>(e->op);
+      } else if (e->op == NTS_CREATE_SEM || e->op == NTS_CREATE_MUTEX ||
+                 e->op == NTS_CREATE_EVENT) {
+        // The create op names the object class; keyed by the same stable
+        // kernel obj_ptr the wait/signal sides use.
+        objs_[e->obj_ptr].create_op = static_cast<uint8_t>(e->op);
       }
       return;
     }
@@ -1268,36 +1438,64 @@ struct EndstateReport final : Report {
       std::printf("VERDICT: no per-thread activity in trace\n");
       return;
     }
+    // A stall victim is a thread stuck in an ntsync wait that never completed:
+    // either still parked at trace end (wait_open, not exited), OR killed while
+    // parked -- a thread that held an open wait for a while and then exited
+    // without it ever completing. The killed case matters because the common
+    // capture is taken AFTER the user force-quits a wedged game, so by trace end
+    // the stalled threads have exited; without this they vanish from the report.
+    constexpr uint64_t kParkSlackNs = 1'000'000;           // 1ms
+    constexpr uint64_t kKilledStallNs = 2'000'000'000ULL;  // 2s open at kill = stall
     std::vector<std::pair<uint32_t, const TidState*>> blocked;
-    for (const auto& [tid, t] : tids_)
-      if (t.wait_open && !t.exited) blocked.emplace_back(tid, &t);
+    for (const auto& [tid, t] : tids_) {
+      if (!t.wait_open) continue;
+      uint64_t open_ns = (max_ts_ > t.wait_since) ? (max_ts_ - t.wait_since) : 0;
+      if (!t.exited || open_ns >= kKilledStallNs) blocked.emplace_back(tid, &t);
+    }
     sublimation_order_u64(blocked, false, [](const std::pair<uint32_t, const TidState*>& p) { return p.second->wait_since; });
     if (blocked.empty()) {
-      std::printf("VERDICT: no threads parked in ntsync waits at trace end\n");
+      std::printf("VERDICT: no threads parked or killed-while-parked in this trace\n");
       return;
     }
-    // A thread is GENUINELY parked only if it executed nothing after its wait
-    // entry. Any later event of any type (last_ts > wait_since) means it woke
-    // and the completion was lost/corrupted by the per-CPU ntsync_scratch race
-    // (single key-0 slot, tgid-only disambiguation) — not a real park.
-    constexpr uint64_t kParkSlackNs = 1'000'000;  // 1ms
+    // Classify each victim. A non-exited thread is GENUINELY parked only if it
+    // executed nothing after its wait entry (any later event means it woke and
+    // the completion was lost to the per-CPU ntsync_scratch race). An exited
+    // thread that was parked long enough is a KILLED-PARKED stall victim.
+    auto status_of = [&](const TidState& t) -> const char* {
+      if (t.exited) return "KILLED-PARKED";
+      return (t.last_ts <= t.wait_since + kParkSlackNs) ? "PARKED" : "woke(lost-compl)";
+    };
     size_t genuine = 0;
     for (const auto& [tid, t] : blocked)
-      if (t->last_ts <= t->wait_since + kParkSlackNs) ++genuine;
+      if (std::string(status_of(*t)) != "woke(lost-compl)") ++genuine;
     const auto& w = *blocked.front().second;
-    std::printf("VERDICT: %zu thread(s) show an open wait at trace end; %zu GENUINELY parked "
-                "(no activity after wait entry), %zu woke (completion lost to scratch race)\n",
-                blocked.size(), genuine, blocked.size() - genuine);
-    std::printf("longest open wait: tid=%u comm='%s' since %.1fs before end\n",
+    // Characterize the longest-parked thread's primary wait object so the
+    // verdict NAMES what it is starved of, not just that it is parked.
+    std::string objdesc;
+    if (w.wait_count > 0) {
+      auto it = objs_.find(w.wait_objs[0]);
+      const char* ty = obj_type_name(
+          it != objs_.end() ? it->second.create_op : 0xFF,
+          it != objs_.end() ? it->second.last_signal_op : 0xFF);
+      if (it == objs_.end() || it->second.signals == 0)
+        objdesc = std::string("; ") + ty + " NEVER signaled (dead producer / no signaler)";
+      else if (it->second.last_signal_ts > w.wait_since)
+        objdesc = std::string("; ") + ty + " signaled AFTER park (lost wakeup)";
+      else
+        objdesc = std::string("; waiting on a ") + ty;
+    }
+    std::printf("VERDICT: %zu thread(s) stuck in an ntsync wait (%zu genuine stall victims, "
+                "%zu woke/lost-compl); longest tid=%u '%s' %s %.1fs%s\n",
+                blocked.size(), genuine, blocked.size() - genuine,
                 blocked.front().first, redact_comm(w.comm).c_str(),
-                (max_ts_ - w.wait_since) / 1e9);
+                w.exited ? "killed while parked" : "parked",
+                (max_ts_ - w.wait_since) / 1e9, objdesc.c_str());
     std::printf("tid      pid      comm             open_s    act_after_ms  status         objs  timeout_ns\n");
     for (const auto& [tid, t] : blocked) {
       double act_after_ms = (t->last_ts > t->wait_since) ? (t->last_ts - t->wait_since) / 1e6 : 0.0;
-      bool parked = t->last_ts <= t->wait_since + kParkSlackNs;
       std::printf("%-8u %-8u %-16s %-9.1f %-13.1f %-14s %-5u %" PRIu64 "\n",
                   tid, t->pid, redact_comm(t->comm).c_str(), (max_ts_ - t->wait_since) / 1e9,
-                  act_after_ms, parked ? "PARKED" : "woke(lost-compl)",
+                  act_after_ms, status_of(*t),
                   t->wait_count, t->timeout_ns);
     }
 
@@ -1307,7 +1505,7 @@ struct EndstateReport final : Report {
     // park (a real lost wakeup) or never come at all (dead producer / no
     // signaler).
     std::printf("\nparked-thread wait objects (signal history):\n");
-    std::printf("tid      obj                  fd     signals  waits     verdict\n");
+    std::printf("tid      obj                  fd     type   signals  waits     verdict\n");
     for (const auto& [tid, t] : blocked) {
       uint32_t n = t->wait_count;
       if (n > NTSYNC_MAX_WAIT_FDS) n = NTSYNC_MAX_WAIT_FDS;
@@ -1316,6 +1514,9 @@ struct EndstateReport final : Report {
         auto it = objs_.find(ptr);
         uint64_t sigs = (it != objs_.end()) ? it->second.signals : 0;
         uint64_t wts  = (it != objs_.end()) ? it->second.waits : 0;
+        const char* ty = obj_type_name(
+            it != objs_.end() ? it->second.create_op : 0xFF,
+            it != objs_.end() ? it->second.last_signal_op : 0xFF);
         char verdict[192];
         if (sigs == 0) {
           std::snprintf(verdict, sizeof(verdict),
@@ -1333,8 +1534,8 @@ struct EndstateReport final : Report {
                         it->second.last_signal_tid,
                         ntsync_op_name(it->second.last_signal_op));
         }
-        std::printf("%-8u 0x%016" PRIx64 " %-6u %-8" PRIu64 " %-9" PRIu64 " %s\n",
-                    tid, ptr, t->wait_fds[i], sigs, wts, verdict);
+        std::printf("%-8u 0x%016" PRIx64 " %-6u %-6s %-8" PRIu64 " %-9" PRIu64 " %s\n",
+                    tid, ptr, t->wait_fds[i], ty, sigs, wts, verdict);
       }
     }
   }
@@ -1796,14 +1997,36 @@ struct SchedLatencyReport final : Report {
   std::vector<Region> regions_;      // where structure sits in the timeline (locator)
   double structured_frac_ = 0.0;     // fraction of windows carrying structure
 
+  // Cold-wake correlation: a wake landing on a core that had been idle a while,
+  // tagged with that core's frequency at the wake instant (freq_mhz from the
+  // cpu_frequency timeline). Separates a slow wake caused by the core ramping
+  // from minimum frequency (governor / architecture) from one caused by dispatch
+  // latency (the scheduler wake path) -- the dispatch-vs-ramp discriminator.
+  static constexpr uint64_t kColdIdleNs = 20000000ULL;  // 20ms idle = core went cold
+  struct ColdWake { uint64_t lat_ns; uint32_t freq_mhz; uint64_t idle_dur_ns; };
+  std::unordered_map<uint32_t, uint64_t> cpu_idle_enter_;  // cpu -> ts entered idle
+  std::vector<ColdWake> cold_;                             // wakes from a cold core
+
   const char* name() const override { return "sched"; }
 
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
     if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
     const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    // Per-CPU idle boundaries. The CPU_IDLE leave is emitted just AFTER the
+    // WAKE2RUN of the task coming on (same sched_switch), so at WAKE2RUN the
+    // enter stamp is still live and the idle duration is exact.
+    if (s->op == SCHED_OP_CPU_IDLE) {
+      if (s->sub_idx == 1) cpu_idle_enter_[s->cpu] = s->timestamp_ns;
+      else cpu_idle_enter_.erase(s->cpu);
+      return;
+    }
     if (s->op != SCHED_OP_WAKE2RUN) return;
     lat_.push_back(s->runtime_ns);
     if (s->sub_idx) cross_lat_.push_back(s->runtime_ns);
+    auto it = cpu_idle_enter_.find(s->cpu);
+    if (it != cpu_idle_enter_.end() && s->timestamp_ns > it->second &&
+        (s->timestamp_ns - it->second) >= kColdIdleNs)
+      cold_.push_back({s->runtime_ns, s->freq_mhz, s->timestamp_ns - it->second});
   }
 
   static double us(uint64_t ns) { return static_cast<double>(ns) / 1000.0; }
@@ -1905,6 +2128,43 @@ struct SchedLatencyReport final : Report {
       }
       std::printf("\n");
     }
+    // COLD-WAKE: wakes onto a core idle >=20ms, correlated with the core's
+    // frequency at the wake. Slow cold-wakes at the minimum frequency seen are
+    // the ramp from deep idle (governor / architecture); at nominal frequency
+    // they are dispatch (the scheduler wake path). The dispatch-vs-ramp answer.
+    if (!cold_.empty()) {
+      std::vector<ColdWake> c = cold_;
+      std::sort(c.begin(), c.end(),
+                [](const ColdWake& a, const ColdWake& b) { return a.lat_ns < b.lat_ns; });
+      auto cq = [&](double f) {
+        size_t i = std::min(c.size() - 1, static_cast<size_t>(c.size() * f));
+        return us(c[i].lat_ns);
+      };
+      uint32_t fmin = 0;
+      bool have_freq = false;
+      for (const auto& w : c)
+        if (w.freq_mhz) { have_freq = true; if (!fmin || w.freq_mhz < fmin) fmin = w.freq_mhz; }
+      uint32_t slowq = 0;  // median freq of the slowest quartile of cold wakes
+      if (have_freq && c.size() >= 4) {
+        std::vector<uint32_t> sf;
+        for (size_t i = c.size() - c.size() / 4; i < c.size(); ++i)
+          if (c[i].freq_mhz) sf.push_back(c[i].freq_mhz);
+        if (!sf.empty()) { std::sort(sf.begin(), sf.end()); slowq = sf[sf.size() / 2]; }
+      }
+      std::printf("COLD-WAKE (idle >=20ms): %s wakes; wake2run p50 %.0fus "
+                  "p99 %.0fus worst %.0fus\n",
+                  fmt_count(static_cast<double>(c.size())).c_str(),
+                  cq(0.50), cq(0.99), us(c.back().lat_ns));
+      if (have_freq)
+        std::printf("  freq-at-wake: min %u MHz seen; slowest-quartile median "
+                    "%u MHz -> %s\n", fmin, slowq,
+                    (slowq && fmin && slowq <= fmin + fmin / 4)
+                        ? "RAMP-BOUND (slow cold-wakes at min freq -- governor/arch, not dispatch)"
+                        : (slowq ? "DISPATCH-BOUND (slow cold-wakes at nominal freq -- scheduler wake path)"
+                                 : "inconclusive (freq spread too sparse)"));
+      else
+        std::printf("  freq-at-wake: unavailable (no cpu_frequency transitions in trace)\n");
+    }
     std::printf("\n");
   }
 
@@ -1942,6 +2202,38 @@ struct SchedLatencyReport final : Report {
     // Locator: fraction of the timeline carrying exploitable structure.
     out.push_back({"montauk_analysis_wake2run_structured_pct", "",
                    100.0 * structured_frac_});
+    // COLD-WAKE metrics: count, wake2run quantiles, and the freq discriminator
+    // (min freq seen, median freq of the slowest quartile). The bench reads these
+    // to score ramp-bound vs dispatch-bound without re-deriving.
+    if (!cold_.empty()) {
+      std::vector<ColdWake> c = cold_;
+      std::sort(c.begin(), c.end(),
+                [](const ColdWake& a, const ColdWake& b) { return a.lat_ns < b.lat_ns; });
+      auto cq = [&](double f) {
+        size_t i = std::min(c.size() - 1, static_cast<size_t>(c.size() * f));
+        return us(c[i].lat_ns);
+      };
+      out.push_back({"montauk_analysis_coldwake_count", "",
+                     static_cast<double>(c.size())});
+      out.push_back({"montauk_analysis_coldwake_wake2run_us", "quantile=\"0.5\"", cq(0.50)});
+      out.push_back({"montauk_analysis_coldwake_wake2run_us", "quantile=\"0.99\"", cq(0.99)});
+      out.push_back({"montauk_analysis_coldwake_wake2run_us", "quantile=\"worst\"",
+                     us(c.back().lat_ns)});
+      uint32_t fmin = 0;
+      for (const auto& w : c)
+        if (w.freq_mhz && (!fmin || w.freq_mhz < fmin)) fmin = w.freq_mhz;
+      out.push_back({"montauk_analysis_coldwake_freq_min_mhz", "",
+                     static_cast<double>(fmin)});
+      uint32_t slowq = 0;
+      if (c.size() >= 4) {
+        std::vector<uint32_t> sf;
+        for (size_t i = c.size() - c.size() / 4; i < c.size(); ++i)
+          if (c[i].freq_mhz) sf.push_back(c[i].freq_mhz);
+        if (!sf.empty()) { std::sort(sf.begin(), sf.end()); slowq = sf[sf.size() / 2]; }
+      }
+      out.push_back({"montauk_analysis_coldwake_freq_slowq_mhz", "",
+                     static_cast<double>(slowq)});
+    }
   }
 };
 
@@ -3103,6 +3395,10 @@ int main(int argc, char** argv) {
                 reader.header().version, montauk::model::kTraceFormatVersion);
       return 1;
   }
+
+  // Load any <PID>.maps sidecars beside the trace so the sync reports can
+  // resolve a futex uaddr to the module+offset of the contended lock.
+  g_maps.load_dir(path);
 
   const auto t0 = std::chrono::steady_clock::now();
   auto status = reader.for_each([&](uint32_t type, const uint8_t* data, uint32_t len) {

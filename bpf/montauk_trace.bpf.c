@@ -145,6 +145,19 @@ struct {
   __type(value, u32);
 } cpu_ccx SEC(".maps");
 
+// Per-CPU current frequency in MHz, indexed by logical CPU. Updated on every
+// tp/power/cpu_frequency transition (the cpufreq core emits one per P-state
+// change under any governor). Read at WAKE2RUN to stamp the core's frequency at
+// the wake instant -- the signal that separates a slow wake caused by dispatch
+// latency from one caused by the core still sitting at minimum frequency after a
+// deep idle (the cold-wake ramp). 0 until the first transition is observed.
+struct {
+  __uint(type, BPF_MAP_TYPE_ARRAY);
+  __uint(max_entries, TRACE_MAX_CPUS);
+  __type(key, u32);
+  __type(value, u32);
+} cur_freq_mhz SEC(".maps");
+
 // Per-CPU migration classification counters (intra/cross/unknown CCX), bumped on
 // the sched_switch migration path and summed in userspace. Churn-proof, unlike
 // the per-thread thread_bpf_state.migrations that a short-lived thread takes with
@@ -850,6 +863,28 @@ int handle_sys_exit(struct trace_event_raw_sys_exit *ctx) {
 
 // ---- SCHEDULER STATE ----
 
+// tp/power/cpu_frequency: the cpufreq core fires this on every P-state
+// transition (cpu_id = target CPU, state = new frequency in KHz). Keep only the
+// latest MHz per CPU so WAKE2RUN can read the core's frequency at the wake
+// instant. Stable tracepoint ABI: 8-byte common header, then state, cpu_id.
+struct trace_event_raw_cpu_frequency_compat {
+  unsigned long long pad;
+  unsigned int state;    // new frequency in KHz
+  unsigned int cpu_id;   // target CPU
+};
+
+SEC("tp/power/cpu_frequency")
+int handle_cpu_frequency(struct trace_event_raw_cpu_frequency_compat *ctx) {
+  if (!sched_stream)
+    return 0;
+  u32 cpu = ctx->cpu_id;
+  if (cpu >= TRACE_MAX_CPUS)
+    return 0;
+  u32 mhz = ctx->state / 1000;  // KHz -> MHz
+  bpf_map_update_elem(&cur_freq_mhz, &cpu, &mhz, BPF_ANY);
+  return 0;
+}
+
 SEC("tp/sched/sched_switch")
 int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
   u64 now = bpf_ktime_get_ns();
@@ -927,6 +962,9 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
         we->secondary_pid = -1;
         we->last_cpu      = -1;
         we->sub_idx       = (u32)cross_ccx;
+        u32 fcpu          = (u32)cpu;
+        u32 *fp           = bpf_map_lookup_elem(&cur_freq_mhz, &fcpu);
+        we->freq_mhz      = fp ? *fp : 0;  // core freq at wake; 0 if no transition seen
         we->score         = 0;
         we->runtime_ns    = d;
         we->budget_ns     = 0;

@@ -13,11 +13,13 @@
 //   sublimation sum|mean|min|max [--field N]             (column reduction -- awk '{s+=$N}...')
 //   sublimation count                                    (line count -- wc -l)
 //   sublimation classify    [--field N] [--delim D]
+//   sublimation characterize [--field N] [--delim D]     (structural verdict -- class, rand, efficiency)
 //   sublimation locate CLASS [--field N] [--window W] [--stride S]
 //   sublimation rand        [--field N] [--delim D]
 //   sublimation grep PATTERN  [-i] [-o] [-v] [-c] [-n]   (regex line filter, via the NFA)
 //   sublimation contains STR  [-v] [-c] [-n]             (substring line filter, Boyer-Moore)
-//   sublimation field N       [--delim D]                (print the N-th column -- awk '{print $N}')
+//   sublimation field N[,M..] [--delim D]                (column(s) -- awk '{print $N}', '{print $1,$3}')
+//   sublimation where 'N OP V' [--delim D]               (numeric column filter -- awk '$N OP V')
 //
 // CLASS is one of: sorted reversed nearly-sorted few-unique random phased spectral
 // --field N pulls the N-th (1-based) delimited column per line, so awk's column
@@ -53,9 +55,11 @@ static void usage(FILE *out) {
         "  classify              disorder class + profile of the stream\n"
         "  locate CLASS          windows whose disorder class == CLASS\n"
         "  rand                  max-entropy randomness confidence\n"
-        "  grep PATTERN          print stdin lines matching the regex (Thompson NFA)\n"
-        "  contains STR          print stdin lines containing STR (Boyer-Moore-Horspool)\n"
-        "  field N               print the N-th delimited column of each line (awk '{print $N}')\n"
+        "  characterize          structural verdict: class, rand confidence, sort efficiency\n"
+        "  grep PATTERN [FILE..] lines matching the regex (Thompson NFA); stdin or FILE(s)\n"
+        "  contains STR [FILE..] lines containing STR (Boyer-Moore-Horspool); stdin or FILE(s)\n"
+        "  field N[,M..] [FILE..] the N-th column, or a comma-list, of each line (awk '{print $N}')\n"
+        "  where 'N OP V' [FILE] lines where field N OP V (awk '$N OP V'; OP: < <= > >= == !=)\n"
         "\n"
         "  CLASS: sorted reversed nearly-sorted few-unique random phased spectral\n"
         "\n"
@@ -67,6 +71,9 @@ static void usage(FILE *out) {
         "  --stride S            window stride for locate (default = window)\n"
         "  -v / -c / -n          grep/contains: invert match / count only / line number\n"
         "  -i / -o               grep: case-insensitive regex / print only the match\n"
+        "  -q / -m N             grep: quiet (exit status only) / stop after N matches\n"
+        "  -E                    grep: extended regex (already the default; accepted for compat)\n"
+        "  short flags bundle    -iE == -i -E, -vn == -v -n, ...\n"
         "  --nearest             quantile: nearest-rank order statistic (not the estimator)\n"
         "\n"
         "exit: grep/contains/field return 0 when something matched, 1 when nothing did.\n",
@@ -146,8 +153,12 @@ int main(int argc, char **argv) {
     size_t window = 512, stride = 0;
     int invert = 0, count_only = 0, number = 0;  // grep/contains line-filter flags
     int icase = 0, only_match = 0;                // grep -i (regex case-fold), grep -o (matches only)
+    int quiet = 0;                                // grep -q: exit status only, no output
+    long max_count = 0;                           // grep -m N: stop after N matches (0 = unlimited)
     int nearest = 0;                              // quantile --nearest: nearest-rank, not estimator
     const char *pos = NULL;  // positional arg (Q / K / V / CLASS / N)
+    const char *files[256];  // grep/contains/field: input files after the pattern
+    int nfiles = 0;          // 0 -> read stdin (the pipe case)
 
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i];
@@ -156,15 +167,32 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--desc")) desc = 1;
         else if (!strcmp(a, "--window") && i + 1 < argc) window = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(a, "--stride") && i + 1 < argc) stride = strtoull(argv[++i], NULL, 10);
-        else if (!strcmp(a, "-v")) invert = 1;       // grep -v: print non-matching
-        else if (!strcmp(a, "-c")) count_only = 1;   // grep -c: count, not lines
-        else if (!strcmp(a, "-n")) number = 1;       // grep -n: 1-based line number
-        else if (!strcmp(a, "-i")) icase = 1;        // grep -i: ASCII case-insensitive regex
-        else if (!strcmp(a, "-o")) only_match = 1;   // grep -o: print only the matched text
         else if (!strcmp(a, "--nearest")) nearest = 1;  // quantile: nearest-rank order statistic
+        else if (!strcmp(a, "-m") && i + 1 < argc) max_count = strtol(argv[++i], NULL, 10);  // grep -m N
+        else if (a[0] == '-' && a[1] && a[1] != '-') {
+            // Bundled short flags, getopt-style: -iE == -i -E, -vn == -v -n. Each
+            // char is one boolean grep flag. -E (extended regex) is a no-op:
+            // sublimation's NFA is already RE2-lineage ERE, so it is accepted for
+            // grep compatibility rather than switching dialects.
+            for (const char *f = a + 1; *f; f++) {
+                switch (*f) {
+                    case 'v': invert = 1; break;       // grep -v: print non-matching
+                    case 'c': count_only = 1; break;   // grep -c: count, not lines
+                    case 'n': number = 1; break;       // grep -n: 1-based line number
+                    case 'i': icase = 1; break;        // grep -i: ASCII case-insensitive
+                    case 'o': only_match = 1; break;   // grep -o: print only the match
+                    case 'q': quiet = 1; break;        // grep -q: exit status only, no output
+                    case 'E': break;                   // grep -E: already extended; accept, no-op
+                    default:
+                        fprintf(stderr, "sublimation: unknown option '-%c'\n", *f);
+                        return 2;
+                }
+            }
+        }
         else if (a[0] == '-') { fprintf(stderr, "sublimation: unknown option '%s'\n", a); return 2; }
         else if (!pos) pos = a;
-        else { fprintf(stderr, "sublimation: unexpected argument '%s'\n", a); return 2; }
+        else if (nfiles < 256) files[nfiles++] = a;   // extra positionals = input files
+        else { fprintf(stderr, "sublimation: too many file arguments\n"); return 2; }
     }
     if (stride == 0) stride = window;
 
@@ -193,48 +221,69 @@ int main(int argc, char **argv) {
         char *line = NULL;
         size_t cap = 0;
         ssize_t len;
-        long matches = 0, lineno = 0;
-        while ((len = getline(&line, &cap, stdin)) != -1) {
-            lineno++;
-            size_t mlen = (size_t)len;
-            if (mlen && line[mlen - 1] == '\n') mlen--;  // match without the trailing newline
+        long matches = 0;
+        int done = 0;                     // -q / -m N: stop early once satisfied
+        int multi = nfiles > 1;           // prefix "file:" when grepping several files
+        // Read each named file, or stdin when none were given. A single named file
+        // is the common `grep PATTERN file` idiom -- sublimation serves it directly
+        // now instead of treating the path as an unexpected argument. Traversal
+        // (-r, globs) is still the real grep's job, by target.
+        for (int fi = 0; (nfiles == 0 ? fi < 1 : fi < nfiles) && !done; fi++) {
+            FILE *in = stdin;
+            const char *fname = NULL;
+            if (nfiles > 0) {
+                fname = files[fi];
+                in = fopen(fname, "r");
+                if (!in) { fprintf(stderr, "sublimation: cannot open '%s'\n", fname); continue; }
+            }
+            long lineno = 0;
+            while (!done && (len = getline(&line, &cap, in)) != -1) {
+                lineno++;
+                size_t mlen = (size_t)len;
+                if (mlen && line[mlen - 1] == '\n') mlen--;  // match without the trailing newline
 
-            if (only_match) {
-                // grep -o: emit each non-overlapping match span, one per line.
-                size_t off = 0;
-                while (off <= mlen) {
-                    long end = -1;
-                    long s = is_grep ? sublimation_nfa_find(&nfa, line + off, mlen - off, &end)
-                                     : sublimation_bmh_search(&bmh, line + off, mlen - off);
-                    if (s < 0) break;
-                    size_t mstart = off + (size_t)s;
-                    size_t mend = is_grep ? off + (size_t)end : mstart + plen;
-                    if (mend > mstart) {
-                        matches++;
-                        if (!count_only) {
-                            if (number) printf("%ld:", lineno);
-                            fwrite(line + mstart, 1, mend - mstart, stdout);
-                            putchar('\n');
+                if (only_match) {
+                    // grep -o: emit each non-overlapping match span, one per line.
+                    size_t off = 0;
+                    while (off <= mlen) {
+                        long end = -1;
+                        long s = is_grep ? sublimation_nfa_find(&nfa, line + off, mlen - off, &end)
+                                         : sublimation_bmh_search(&bmh, line + off, mlen - off);
+                        if (s < 0) break;
+                        size_t mstart = off + (size_t)s;
+                        size_t mend = is_grep ? off + (size_t)end : mstart + plen;
+                        if (mend > mstart) {
+                            matches++;
+                            if (!quiet && !count_only) {
+                                if (multi) printf("%s:", fname);
+                                if (number) printf("%ld:", lineno);
+                                fwrite(line + mstart, 1, mend - mstart, stdout);
+                                putchar('\n');
+                            }
+                            off = mend;            // continue after the match (non-overlapping)
+                            if (quiet || (max_count && matches >= max_count)) { done = 1; break; }
+                        } else {
+                            off = mstart + 1;      // zero-width match: step past to make progress
                         }
-                        off = mend;            // continue after the match (non-overlapping)
-                    } else {
-                        off = mstart + 1;      // zero-width match: step past to make progress
                     }
+                    continue;
                 }
-                continue;
-            }
 
-            long hit = is_grep ? sublimation_nfa_find(&nfa, line, mlen, NULL)
-                               : sublimation_bmh_search(&bmh, line, mlen);
-            int show = (hit >= 0);
-            if (invert) show = !show;     // grep -v
-            if (show) {
-                matches++;
-                if (!count_only) {
-                    if (number) printf("%ld:", lineno);   // grep -n
-                    fwrite(line, 1, (size_t)len, stdout);
+                long hit = is_grep ? sublimation_nfa_find(&nfa, line, mlen, NULL)
+                                   : sublimation_bmh_search(&bmh, line, mlen);
+                int show = (hit >= 0);
+                if (invert) show = !show;     // grep -v
+                if (show) {
+                    matches++;
+                    if (!quiet && !count_only) {
+                        if (multi) printf("%s:", fname);
+                        if (number) printf("%ld:", lineno);   // grep -n
+                        fwrite(line, 1, (size_t)len, stdout);
+                    }
+                    if (quiet || (max_count && matches >= max_count)) done = 1;  // grep -q / -m
                 }
             }
+            if (in != stdin) fclose(in);
         }
         free(line);
         if (count_only) printf("%ld\n", matches);
@@ -244,38 +293,153 @@ int main(int argc, char **argv) {
         return matches ? 0 : 1;
     }
 
-    // Column projection: print the N-th delimited field of each line. This is
-    // awk '{print $N}' -- the column extraction sublimation could only FEED into
-    // a numeric command (--field) before, now standalone so the awk idiom has a
-    // direct sublimation form. Splits on any --delim char (default whitespace).
+    // Column projection: print the N-th delimited field, or a comma-list of
+    // fields, of each line. `field N` is awk '{print $N}'; `field 1,3` is awk
+    // '{print $1,$3}': the requested column(s) joined by a single space (awk's
+    // default OFS), an empty string for a missing column, one line per record --
+    // byte-identical to awk for one or many columns. Splits on any --delim char
+    // (default whitespace).
     if (!strcmp(cmd, "field")) {
-        if (!pos) { fputs("sublimation: field needs N (1-based)\n", stderr); return 2; }
-        int col = atoi(pos);
-        if (col < 1) { fputs("sublimation: field N must be >= 1\n", stderr); return 2; }
+        if (!pos) { fputs("sublimation: field needs N or a comma-list N,M,... (1-based)\n", stderr); return 2; }
+        int cols[64], ncol = 0;
+        for (const char *p = pos; *p; ) {
+            char *e;
+            long c = strtol(p, &e, 10);
+            if (e == p || c < 1 || ncol >= 64) {
+                fputs("sublimation: field needs N or a comma-list N,M,... (1-based)\n", stderr);
+                return 2;
+            }
+            cols[ncol++] = (int)c;
+            p = e;
+            if (*p == ',') p++;
+            else if (*p) { fputs("sublimation: field columns are comma-separated (e.g. 1,3)\n", stderr); return 2; }
+        }
         char *line = NULL;
         size_t cap = 0;
         ssize_t len;
         long printed = 0;
-        while ((len = getline(&line, &cap, stdin)) != -1) {
-            size_t mlen = (size_t)len;
-            if (mlen && line[mlen - 1] == '\n') mlen--;
-            size_t i = 0;
-            int f = 0;
-            const char *tok = NULL;
-            size_t toklen = 0;
-            while (i < mlen) {
-                while (i < mlen && strchr(delim, line[i])) i++;       // skip delims
-                if (i >= mlen) break;
-                size_t start = i;
-                while (i < mlen && !strchr(delim, line[i])) i++;      // token body
-                if (++f == col) { tok = line + start; toklen = i - start; break; }
+        for (int fi = 0; nfiles == 0 ? fi < 1 : fi < nfiles; fi++) {
+            FILE *in = stdin;
+            if (nfiles > 0) {
+                in = fopen(files[fi], "r");
+                if (!in) { fprintf(stderr, "sublimation: cannot open '%s'\n", files[fi]); continue; }
             }
-            if (tok) { fwrite(tok, 1, toklen, stdout); putchar('\n'); printed++; }
+            while ((len = getline(&line, &cap, in)) != -1) {
+                size_t mlen = (size_t)len;
+                if (mlen && line[mlen - 1] == '\n') mlen--;
+                // awk-exact: capture the requested column(s), print them joined by a
+                // single space (awk's default OFS), empty for a missing column, one
+                // line per record -- so `field N` matches `{print $N}` even when a
+                // line is blank or short.
+                const char *got[64];
+                size_t gotlen[64];
+                for (int k = 0; k < ncol; k++) { got[k] = NULL; gotlen[k] = 0; }
+                size_t i = 0;
+                int f = 0;
+                while (i < mlen) {
+                    while (i < mlen && strchr(delim, line[i])) i++;       // skip delims
+                    if (i >= mlen) break;
+                    size_t start = i;
+                    while (i < mlen && !strchr(delim, line[i])) i++;      // token body
+                    f++;
+                    for (int k = 0; k < ncol; k++)
+                        if (cols[k] == f) { got[k] = line + start; gotlen[k] = i - start; }
+                }
+                for (int k = 0; k < ncol; k++) {
+                    if (k) putchar(' ');
+                    if (got[k]) fwrite(got[k], 1, gotlen[k], stdout);
+                }
+                putchar('\n');
+                printed++;
+            }
+            if (in != stdin) fclose(in);
         }
         free(line);
         return printed ? 0 : 1;
     }
 
+    // Numeric column predicate: print lines whose field N satisfies one numeric
+    // comparison -- awk '$N OP V'. Single predicate ONLY by design: the moment it
+    // grows && / || / ~ it has rebuilt awk's expression evaluator, so compound
+    // logic is two `where`s in a pipe or it is real awk. OP in < <= > >= == !=. A
+    // missing or non-numeric field coerces to 0 (awk's numeric context), so
+    // `where '2 > 100'` is byte-identical to `awk '$2 > 100'` on numeric columns.
+    if (!strcmp(cmd, "where")) {
+        if (!pos) {
+            fputs("sublimation: where needs 'N OP V' (quote it -- the shell eats >), e.g. '2 > 100'\n", stderr);
+            return 2;
+        }
+        const char *p = pos;
+        while (*p == ' ') p++;
+        char *e;
+        long col = strtol(p, &e, 10);
+        if (e == p || col < 1) {
+            fputs("sublimation: where: predicate starts with a 1-based column, e.g. '2 > 100'\n", stderr);
+            return 2;
+        }
+        p = e;
+        while (*p == ' ') p++;
+        enum { OP_LT, OP_LE, OP_GT, OP_GE, OP_EQ, OP_NE } op;
+        if      (p[0] == '<' && p[1] == '=') { op = OP_LE; p += 2; }
+        else if (p[0] == '>' && p[1] == '=') { op = OP_GE; p += 2; }
+        else if (p[0] == '=' && p[1] == '=') { op = OP_EQ; p += 2; }
+        else if (p[0] == '!' && p[1] == '=') { op = OP_NE; p += 2; }
+        else if (p[0] == '<')                { op = OP_LT; p += 1; }
+        else if (p[0] == '>')                { op = OP_GT; p += 1; }
+        else { fputs("sublimation: where: operator must be one of < <= > >= == !=\n", stderr); return 2; }
+        while (*p == ' ') p++;
+        char *ve;
+        double val = strtod(p, &ve);
+        if (ve == p) { fputs("sublimation: where needs a numeric value, e.g. '2 > 100'\n", stderr); return 2; }
+        char *line = NULL;
+        size_t cap = 0;
+        ssize_t len;
+        long matches = 0;
+        int multi = nfiles > 1;
+        for (int fi = 0; nfiles == 0 ? fi < 1 : fi < nfiles; fi++) {
+            FILE *in = stdin;
+            const char *fname = NULL;
+            if (nfiles > 0) {
+                fname = files[fi];
+                in = fopen(fname, "r");
+                if (!in) { fprintf(stderr, "sublimation: cannot open '%s'\n", fname); continue; }
+            }
+            while ((len = getline(&line, &cap, in)) != -1) {
+                char buf[4096];
+                size_t n = (size_t)len < sizeof(buf) ? (size_t)len : sizeof(buf) - 1;
+                memcpy(buf, line, n);
+                buf[n] = '\0';
+                char *tok = field_token(buf, (int)col, delim);
+                double x = tok ? strtod(tok, NULL) : 0.0;  // missing / non-numeric -> 0
+                int keep;
+                switch (op) {
+                    case OP_LT: keep = x <  val; break;
+                    case OP_LE: keep = x <= val; break;
+                    case OP_GT: keep = x >  val; break;
+                    case OP_GE: keep = x >= val; break;
+                    case OP_EQ: keep = x == val; break;
+                    default:    keep = x != val; break;  // OP_NE
+                }
+                if (keep) {
+                    matches++;
+                    if (multi) printf("%s:", fname);
+                    fwrite(line, 1, (size_t)len, stdout);
+                }
+            }
+            if (in != stdin) fclose(in);
+        }
+        free(line);
+        return matches ? 0 : 1;
+    }
+
+    // Numeric/structural commands read stdin only; a leftover file argument here
+    // is a mistake (grep/contains/field consumed theirs above). Error rather than
+    // silently reading stdin and ignoring the path.
+    if (nfiles > 0) {
+        fprintf(stderr, "sublimation: %s reads stdin; '%s' is an unexpected "
+                "argument\n", cmd, files[0]);
+        return 2;
+    }
     Vec data = {0};
     size_t skipped = read_values(&data, field, delim);
 
@@ -412,6 +576,27 @@ int main(int argc, char **argv) {
             if (r.lens_available[i]) printf("  %-12s %.2f\n", lens[i], (double)r.lens[i]);
             else                     printf("  %-12s --\n", lens[i]);
         }
+
+    } else if (!strcmp(cmd, "characterize")) {
+        // The honest structural verdict -- the move awk cannot make, because awk
+        // never knew the shape. One line built on the blessed structure
+        // primitives: the disorder class, the max-entropy randomness confidence
+        // (1.0 = structureless noise -- the honesty awk lacks), the flow sort's
+        // comparison_efficiency against the hook-length bound, and that
+        // information-theoretic bound in bits. rand runs on the original order;
+        // the stats sort then classifies and measures it.
+        sub_randomness_t r = sublimation_randomness_f64(data.v, data.n);
+        sub_stats_t st = {0};
+        sublimation_f64_stats(data.v, data.n, &st);   // sorts data.v in place, fills st
+        // Honesty at the floor: the class and the randomness confidence are always
+        // reported; the hook-length efficiency only when it was actually computed
+        // -- the fast paths skip it, and a 0 there is "not measured", not "zero".
+        printf("%s  rand_confidence=%.3f  n=%zu",
+               sublimation_disorder_name(st.disorder), (double)r.confidence, data.n);
+        if (st.info_theoretic_bound > 0.0)
+            printf("  comparison_efficiency=%.3f  info_bound=%.1f bits",
+                   st.comparison_efficiency, st.info_theoretic_bound);
+        putchar('\n');
 
     } else {
         fprintf(stderr, "sublimation: unknown command '%s'\n\n", cmd);

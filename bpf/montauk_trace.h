@@ -268,6 +268,9 @@ struct montauk_sched_event {
   __s32 secondary_pid;  // wakeup waker; preempt_tick & pick: -1
   __s32 last_cpu;       // enqueue only; else -1
   __u32 sub_idx;        // enqueue only; else 0
+  __u32 freq_mhz;       // WAKE2RUN only: target CPU core freq (MHz) at wake from the
+                        //   cpu_frequency timeline; 0 = unknown (no transition seen yet)
+                        //   or other ops. Fills prior alignment pad -- no record growth.
   __u64 score;          // enqueue/pick; else 0
   __u64 runtime_ns;     // preempt_tick only
   __u64 budget_ns;      // preempt_tick only
