@@ -34,23 +34,23 @@ struct PmuSnapshot {
   // Per-logical-CPU interval deltas. Index is the online-CPU slot (0..nr_cpus);
   // per_cpu_ids[i] is that slot's actual logical CPU id (NOT equal to i on a
   // sparse online set, e.g. a restrict_cpus core-count sweep), so a consumer
-  // can map a miss back to the right CPU/CCX.
+  // can map a miss back to the right CPU/cache-domain.
   std::vector<int>      per_cpu_ids;
   std::vector<uint64_t> per_cpu_l2_misses;
   std::vector<uint64_t> per_cpu_l2_refs;
   std::vector<uint64_t> per_cpu_instructions;
   std::vector<uint64_t> per_cpu_cycles;
 
-  // Per-CCX L3 traffic. Each amd_l3 fd is opened on one cpumask CPU which
-  // owns one L3/CCX domain, so each entry is PER-CCX traffic (kept separate,
-  // not summed, so cross-CCX behaviour stays visible). Zen2 (3600) has 2 CCX.
-  struct CcxL3 {
-    int      domain_cpu{};  // the cpumask CPU representing this CCX
+  // per-cache-domain L3 traffic. Each amd_l3 fd is opened on one cpumask CPU which
+  // owns one L3 cache domain, so each entry is per-cache-domain traffic (kept separate,
+  // not summed, so cross-domain behaviour stays visible). Zen2 (3600) has 2 cache domains.
+  struct DomainL3 {
+    int      domain_cpu{};  // the cpumask CPU representing this cache domain
     uint64_t accesses{};    // L3 access/lookup delta
     uint64_t misses{};      // L3 miss delta
     double   miss_pct{};    // 100 * misses / accesses
   };
-  std::vector<CcxL3> l3_per_ccx;
+  std::vector<DomainL3> l3_per_cache_domain;
   uint64_t l3_accesses_total{};
   uint64_t l3_misses_total{};
 

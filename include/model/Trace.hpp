@@ -92,11 +92,11 @@ struct TraceSnapshot {
 
   // Migration classification (cumulative since attach, summed across CPUs from
   // the BPF mig_ccx_counts map): a fork-storm's core-hopping split by whether
-  // the move stayed within an L3/CCX domain or crossed Infinity Fabric. The
-  // intra-heavy signature is the intra-CCX L2-refill cost; cross is the c2c cost.
-  uint64_t mig_intra_ccx{};
-  uint64_t mig_cross_ccx{};
-  uint64_t mig_unknown_ccx{};
+  // the move stayed within an L3 cache domain or crossed cross-domain interconnect. The
+  // intra-heavy signature is the intra-domain L2-refill cost; cross is the cross-domain cost.
+  uint64_t mig_intra_domain{};
+  uint64_t mig_cross_domain{};
+  uint64_t mig_unknown_domain{};
 
   bool     waiting_for_match{false};
   uint64_t seq{};

@@ -8,7 +8,7 @@ namespace montauk::collectors {
 
 // Per-CPU hardware performance counter collector built on perf_event_open(2)
 // in COUNTING mode (no sampling, no mmap ring). Targets AMD Zen 2 (Ryzen 5
-// 3600): 12 logical CPUs, 2 CCX / 2 L3 domains.
+// 3600): 12 logical CPUs, 2 cache domains.
 //
 // Counters are opened lazily on the first sample() call. If perf_event_open
 // is denied (perf_event_paranoid, EACCES/EPERM) or unsupported (ENODEV), the
@@ -58,7 +58,7 @@ private:
   std::vector<Counter> migr_;
   std::vector<Counter> branch_;
 
-  // amd_l3 uncore: one (access, miss) pair per CCX/L3 domain cpu.
+  // amd_l3 uncore: one (access, miss) pair per L3 cache domain cpu.
   struct L3Domain {
     int     domain_cpu{-1};
     Counter access;

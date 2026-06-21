@@ -29,7 +29,7 @@ public:
   ~Producer();
 
   // Opt into hardware PMU sampling (perf_event_open: L2 miss/ref, IPC,
-  // per-CCX L3). PMU data exists for the trace→analyze pipeline, not the
+  // per-cache-domain L3). PMU data exists for the trace→analyze pipeline, not the
   // monitor — it needs CAP_PERFMON or perf_event_paranoid<=0, which the
   // plain TUI must never demand. main.cpp calls this only when --trace
   // is active. Must be called before start().

@@ -22,17 +22,17 @@ namespace {
 // per ~256 KB instead of per event.
 constexpr size_t kTraceFlushThreshold = 256 * 1024;
 
-// Build cpu -> CCX/L3-domain id from sysfs and push it into the BPF cpu_ccx map.
-// CPUs sharing an L3 (one CCX) get the same id; a monolithic single-L3 part maps
+// Build cpu -> cache domain/L3-domain id from sysfs and push it into the BPF cpu_cache_domain map.
+// CPUs sharing an L3 (one cache domain) get the same id; a monolithic single-L3 part maps
 // every CPU to 0. Same grouping the scheduler's own topology layer derives, so
-// sched_switch can classify each migration as intra- vs cross-CCX.
-void populate_cpu_ccx_map(int map_fd) {
+// sched_switch can classify each migration as intra- vs cross-domain.
+void populate_cache_domain_map(int map_fd) {
   if (map_fd < 0) return;
   int ncpu = libbpf_num_possible_cpus();
   if (ncpu <= 0) ncpu = 1;
   if (ncpu > TRACE_MAX_CPUS) ncpu = TRACE_MAX_CPUS;
-  std::map<std::string, uint32_t> list_to_ccx;
-  uint32_t next_ccx = 0;
+  std::map<std::string, uint32_t> list_to_domain;
+  uint32_t next_domain = 0;
   for (int cpu = 0; cpu < ncpu; ++cpu) {
     char path[128];
     std::snprintf(path, sizeof(path),
@@ -40,19 +40,19 @@ void populate_cpu_ccx_map(int map_fd) {
     std::ifstream f(path);
     std::string list;
     if (f) std::getline(f, list);
-    uint32_t ccx;
+    uint32_t domain;
     if (list.empty()) {
-      ccx = 0;  // no L3 info (monolithic / offline) -> single domain
+      domain = 0;  // no L3 info (monolithic / offline) -> single domain
     } else {
-      auto it = list_to_ccx.find(list);
-      if (it == list_to_ccx.end()) { ccx = next_ccx++; list_to_ccx[list] = ccx; }
-      else ccx = it->second;
+      auto it = list_to_domain.find(list);
+      if (it == list_to_domain.end()) { domain = next_domain++; list_to_domain[list] = domain; }
+      else domain = it->second;
     }
     uint32_t key = static_cast<uint32_t>(cpu);
-    bpf_map_update_elem(map_fd, &key, &ccx, BPF_ANY);
+    bpf_map_update_elem(map_fd, &key, &domain, BPF_ANY);
   }
-  montauk::util::log_info("cpu_ccx populated (%d cpus, %zu CCX domains)",
-               ncpu, list_to_ccx.empty() ? size_t{1} : list_to_ccx.size());
+  montauk::util::log_info("cpu_cache_domain populated (%d cpus, %zu cache domains)",
+               ncpu, list_to_domain.empty() ? size_t{1} : list_to_domain.size());
 }
 }
 
@@ -230,6 +230,10 @@ void BpfTraceCollector::trace_flush() {
 
 void BpfTraceCollector::append_provider_snapshots() {
   if (trace_fd_ < 0) return;
+  if (!cache_topo_emitted_) {
+    append_cache_topology_snapshot();
+    cache_topo_emitted_ = true;
+  }
   std::vector<montauk::model::Provider> provs;
   if (!providers_.sample(provs) || provs.empty()) return;
   timespec mono{};
@@ -249,6 +253,68 @@ void BpfTraceCollector::append_provider_snapshots() {
     rec.insert(rec.end(), tp, tp + p.raw_text.size());
     trace_append(rec.data(), rec.size());
   }
+}
+
+// Generic cpu -> cache-hierarchy snapshot embedded once in the binary trace.
+// Each /sys cache shared_cpu_list maps to a dense id; physical_package_id is the
+// socket. The analyzer reads this to give every migration a cache-tier distance
+// with no live /sys read. Hardware fact, no scheduler named.
+void BpfTraceCollector::append_cache_topology_snapshot() {
+  if (trace_fd_ < 0) return;
+  int ncpu = libbpf_num_possible_cpus();
+  if (ncpu <= 0) ncpu = 1;
+  if (ncpu > TRACE_MAX_CPUS) ncpu = TRACE_MAX_CPUS;
+  std::map<std::string, uint32_t> l2_id, l3_id;
+  uint32_t next_l2 = 0, next_l3 = 0;
+  auto group = [](const char* fmt, int cpu, std::map<std::string, uint32_t>& m,
+                  uint32_t& next) -> uint32_t {
+    char path[160];
+    std::snprintf(path, sizeof(path), fmt, cpu);
+    std::ifstream f(path);
+    std::string s;
+    if (f) std::getline(f, s);
+    if (s.empty()) return 0;
+    auto it = m.find(s);
+    if (it != m.end()) return it->second;
+    uint32_t id = next++;
+    m[s] = id;
+    return id;
+  };
+  std::string text;
+  for (int cpu = 0; cpu < ncpu; ++cpu) {
+    uint32_t l2 = group("/sys/devices/system/cpu/cpu%d/cache/index2/shared_cpu_list",
+                        cpu, l2_id, next_l2);
+    uint32_t l3 = group("/sys/devices/system/cpu/cpu%d/cache/index3/shared_cpu_list",
+                        cpu, l3_id, next_l3);
+    uint32_t sock = 0;
+    {
+      char path[160];
+      std::snprintf(path, sizeof(path),
+                    "/sys/devices/system/cpu/cpu%d/topology/physical_package_id", cpu);
+      std::ifstream f(path);
+      std::string s;
+      if (f) std::getline(f, s);
+      if (!s.empty()) sock = static_cast<uint32_t>(std::strtoul(s.c_str(), nullptr, 10));
+    }
+    char line[160];
+    std::snprintf(line, sizeof(line),
+                  "montauk_cache_topology{cpu=\"%d\",l2=\"%u\",l3=\"%u\",socket=\"%u\"} 1\n",
+                  cpu, l2, l3, sock);
+    text += line;
+  }
+  montauk_provider_event ev{};
+  ev.type = TRACE_EVT_PROVIDER;
+  timespec mono{};
+  clock_gettime(CLOCK_MONOTONIC, &mono);
+  ev.timestamp_ns = static_cast<uint64_t>(mono.tv_sec) * 1000000000ull + mono.tv_nsec;
+  std::snprintf(ev.name, sizeof(ev.name), "cache_topology");
+  ev.payload_len = static_cast<__u32>(text.size());
+  std::vector<uint8_t> rec;
+  const auto* hp = reinterpret_cast<const uint8_t*>(&ev);
+  rec.insert(rec.end(), hp, hp + sizeof(ev));
+  const auto* tp = reinterpret_cast<const uint8_t*>(text.data());
+  rec.insert(rec.end(), tp, tp + text.size());
+  trace_append(rec.data(), rec.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -971,14 +1037,14 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
     }
   }
 
-  // Migration classification counters (intra/cross/unknown CCX): same per-CPU
+  // Migration classification counters (intra/cross/unknown cache domain): same per-CPU
   // array sum pattern. Cumulative since attach — churn-proof globals that a
   // fork-storm's short-lived threads cannot carry off when they exit.
-  if (skel_ && skel_->maps.mig_ccx_counts) {
-    int fd = bpf_map__fd(skel_->maps.mig_ccx_counts);
+  if (skel_ && skel_->maps.mig_domain_counts) {
+    int fd = bpf_map__fd(skel_->maps.mig_domain_counts);
     int ncpu = libbpf_num_possible_cpus();
     if (fd >= 0 && ncpu > 0) {
-      std::vector<struct mig_ccx_counters> per(static_cast<size_t>(ncpu));
+      std::vector<struct mig_domain_counters> per(static_cast<size_t>(ncpu));
       uint32_t key = 0;
       if (bpf_map_lookup_elem(fd, &key, per.data()) == 0) {
         uint64_t in = 0, cr = 0, un = 0;
@@ -987,9 +1053,9 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
           cr += per[static_cast<size_t>(c)].cross;
           un += per[static_cast<size_t>(c)].unknown;
         }
-        snap.mig_intra_ccx = in;
-        snap.mig_cross_ccx = cr;
-        snap.mig_unknown_ccx = un;
+        snap.mig_intra_domain = in;
+        snap.mig_cross_domain = cr;
+        snap.mig_unknown_domain = un;
       }
     }
   }
@@ -1063,10 +1129,10 @@ void BpfTraceCollector::run(std::stop_token st) {
     return;
   }
 
-  // Push the cpu->CCX topology so sched_switch can classify each migration as
-  // intra- vs cross-CCX (a fork-storm's core-hopping surfaces in mig_ccx_counts).
-  if (skel_->maps.cpu_ccx)
-    populate_cpu_ccx_map(bpf_map__fd(skel_->maps.cpu_ccx));
+  // Push the cpu->cache domain topology so sched_switch can classify each migration as
+  // intra- vs cross-domain (a fork-storm's core-hopping surfaces in mig_domain_counts).
+  if (skel_->maps.cpu_cache_domain)
+    populate_cache_domain_map(bpf_map__fd(skel_->maps.cpu_cache_domain));
 
   // Generic scheduler-decision programs, attached at RUNTIME to the active
   // scheduler's tracepoints. The bindings come from MONTAUK_SCHED_TRACEPOINTS as

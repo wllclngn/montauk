@@ -179,8 +179,8 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
     out += "\",gpu=\""; out += san(gpu);
     out += "\",kernel=\""; out += san(montauk::ui::read_kernel_version());
     out += "\",sched=\""; out += san(montauk::ui::read_scheduler());
-    if (!s.pmu.l3_per_ccx.empty()) {
-      out += "\",ccx=\""; out += std::to_string(s.pmu.l3_per_ccx.size());
+    if (!s.pmu.l3_per_cache_domain.empty()) {
+      out += "\",cache_domain=\""; out += std::to_string(s.pmu.l3_per_cache_domain.size());
     }
     out += "\"} 1\n";
   }
@@ -227,7 +227,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
 
   // ---- PMU hardware counters (interval deltas / rates). All values are over
   // the last sample interval. L2 = per-physical-core private cache (the
-  // migration-cost signal on Zen2); L3 is kept per-CCX so cross-CCX traffic
+  // migration-cost signal on Zen2); L3 is kept per-cache-domain so cross-domain traffic
   // stays visible. Emitted only when the core PMU opened (root / paranoid<=1).
   emit_header(out, "montauk_pmu_available", "Core PMU counters available", "gauge");
   emit_gauge_i(out, "montauk_pmu_available", s.pmu.available ? 1 : 0);
@@ -260,7 +260,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
     }
 
     // Per-CPU L2 this interval. cpu label = actual logical CPU id (per_cpu_ids),
-    // so misses localize to the right core/CCX even on a sparse online set.
+    // so misses localize to the right core/cache domain even on a sparse online set.
     emit_header(out, "montauk_pmu_l2_misses_per_cpu", "L2 misses this interval, per logical CPU", "gauge");
     for (size_t i = 0; i < s.pmu.per_cpu_l2_misses.size(); ++i) {
       char cb[12], vb[20];
@@ -289,28 +289,28 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
     emit_header(out, "montauk_pmu_l3_available", "amd_l3 uncore PMU available", "gauge");
     emit_gauge_i(out, "montauk_pmu_l3_available", s.pmu.l3_available ? 1 : 0);
     if (s.pmu.l3_available) {
-      // Per-CCX L3 traffic this interval. ccx label = the L3-domain owner CPU.
-      emit_header(out, "montauk_pmu_l3_misses_interval", "L3 misses this interval, per CCX domain", "gauge");
-      for (const auto& d : s.pmu.l3_per_ccx) {
+      // Per-cache domain L3 traffic this interval. cache_domain label = the L3-domain owner CPU.
+      emit_header(out, "montauk_pmu_l3_misses_interval", "L3 misses this interval, per cache domain domain", "gauge");
+      for (const auto& d : s.pmu.l3_per_cache_domain) {
         char cb[12], vb[20];
         auto [c1, ce] = std::to_chars(cb, cb + sizeof(cb), d.domain_cpu);
         auto [v1, ve] = std::to_chars(vb, vb + sizeof(vb), d.misses);
-        out += "montauk_pmu_l3_misses_interval{ccx=\""; out.append(cb, c1);
+        out += "montauk_pmu_l3_misses_interval{cache_domain=\""; out.append(cb, c1);
         out += "\"} "; out.append(vb, v1); out += '\n';
       }
-      emit_header(out, "montauk_pmu_l3_accesses_interval", "L3 accesses this interval, per CCX domain", "gauge");
-      for (const auto& d : s.pmu.l3_per_ccx) {
+      emit_header(out, "montauk_pmu_l3_accesses_interval", "L3 accesses this interval, per cache domain domain", "gauge");
+      for (const auto& d : s.pmu.l3_per_cache_domain) {
         char cb[12], vb[20];
         auto [c1, ce] = std::to_chars(cb, cb + sizeof(cb), d.domain_cpu);
         auto [v1, ve] = std::to_chars(vb, vb + sizeof(vb), d.accesses);
-        out += "montauk_pmu_l3_accesses_interval{ccx=\""; out.append(cb, c1);
+        out += "montauk_pmu_l3_accesses_interval{cache_domain=\""; out.append(cb, c1);
         out += "\"} "; out.append(vb, v1); out += '\n';
       }
-      emit_header(out, "montauk_pmu_l3_miss_percent", "L3 miss percent, per CCX domain", "gauge");
-      for (const auto& d : s.pmu.l3_per_ccx) {
+      emit_header(out, "montauk_pmu_l3_miss_percent", "L3 miss percent, per cache domain domain", "gauge");
+      for (const auto& d : s.pmu.l3_per_cache_domain) {
         char cb[12];
         auto [c1, ce] = std::to_chars(cb, cb + sizeof(cb), d.domain_cpu);
-        out += "montauk_pmu_l3_miss_percent{ccx=\""; out.append(cb, c1);
+        out += "montauk_pmu_l3_miss_percent{cache_domain=\""; out.append(cb, c1);
         out += "\"} "; append_double(out, d.miss_pct); out += '\n';
       }
     }
@@ -718,24 +718,24 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
       out += '\n';
     }
 
-    // ---- Global migration classification by CCX (cumulative since attach) ----
-    // The decisive fork-storm signal: intra-CCX moves are the per-core L2-refill
+    // ---- Global migration classification by cache domain (cumulative since attach) ----
+    // The decisive fork-storm signal: intra- vs cross-domain moves are the per-core L2-refill
     // cost (warm L3, cold L2 — what the Zen2 "cache-misses" counter measures);
-    // cross-CCX moves are the Infinity-Fabric c2c cost.
+    // cross-domain moves are the cross-domain interconnect cost.
     {
       char b[20];
-      emit_header(out, "montauk_trace_migrations_intra_ccx",
-                  "Cross-core migrations within one CCX/L3 domain", "counter");
-      auto [p1, e1] = std::to_chars(b, b + sizeof(b), t.mig_intra_ccx);
-      out += "montauk_trace_migrations_intra_ccx "; out.append(b, p1); out += '\n';
-      emit_header(out, "montauk_trace_migrations_cross_ccx",
-                  "Cross-core migrations across CCX/L3 domains (Infinity-Fabric c2c)", "counter");
-      auto [p2, e2] = std::to_chars(b, b + sizeof(b), t.mig_cross_ccx);
-      out += "montauk_trace_migrations_cross_ccx "; out.append(b, p2); out += '\n';
-      emit_header(out, "montauk_trace_migrations_unknown_ccx",
-                  "Cross-core migrations with unmapped CCX (topology not pushed)", "counter");
-      auto [p3, e3] = std::to_chars(b, b + sizeof(b), t.mig_unknown_ccx);
-      out += "montauk_trace_migrations_unknown_ccx "; out.append(b, p3); out += '\n';
+      emit_header(out, "montauk_trace_migrations_intra_domain",
+                  "Cross-core migrations within one cache domain/L3 domain", "counter");
+      auto [p1, e1] = std::to_chars(b, b + sizeof(b), t.mig_intra_domain);
+      out += "montauk_trace_migrations_intra_domain "; out.append(b, p1); out += '\n';
+      emit_header(out, "montauk_trace_migrations_cross_domain",
+                  "Cross-core migrations across cache domain/L3 domains (cross-domain interconnect)", "counter");
+      auto [p2, e2] = std::to_chars(b, b + sizeof(b), t.mig_cross_domain);
+      out += "montauk_trace_migrations_cross_domain "; out.append(b, p2); out += '\n';
+      emit_header(out, "montauk_trace_migrations_unknown_domain",
+                  "Cross-core migrations with unmapped cache domain (topology not pushed)", "counter");
+      auto [p3, e3] = std::to_chars(b, b + sizeof(b), t.mig_unknown_domain);
+      out += "montauk_trace_migrations_unknown_domain "; out.append(b, p3); out += '\n';
     }
 
     // ---- Per-thread syscall ----

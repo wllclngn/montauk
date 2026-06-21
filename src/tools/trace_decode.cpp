@@ -146,7 +146,7 @@ int main(int argc, char** argv) {
             std::printf(" target_cpu=%u", s->cpu);
           else if (s->op == SCHED_OP_WAKE2RUN) {
             std::printf(" wake2run=%" PRIu64 "us%s", (uint64_t)s->runtime_ns / 1000,
-                        s->sub_idx ? " CROSS-CCX" : "");
+                        s->sub_idx ? " CROSS-DOMAIN" : "");
             if (s->freq_mhz) std::printf(" freq=%uMHz", s->freq_mhz);
           }
           std::printf("\n");

@@ -48,6 +48,12 @@ private:
   // provider to the binary log. No-op when binary output is disabled.
   void append_provider_snapshots();
 
+  // Embed a generic cpu -> cache-hierarchy (L2/L3/socket) snapshot once, so the
+  // offline analyzer can turn each migration into a cache-tier distance with no
+  // live /sys read (decode-anywhere). Named "cache_topology"; names no scheduler.
+  void append_cache_topology_snapshot();
+  bool cache_topo_emitted_ = false;
+
   // Add a PID to the BPF proc_map (tracked set)
   void track_pid(int32_t pid, int32_t ppid, bool is_root, const char* comm);
   // Snapshot /proc/<pid>/maps to the per-incident sidecar while the process

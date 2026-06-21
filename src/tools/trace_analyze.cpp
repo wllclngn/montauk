@@ -396,8 +396,8 @@ const char* prom_help(const char* name) {
      "Of PREEMPT-STARVED floored wakes, percent whose run-CPU was busy through the wait (held by a task)"},
     {"montauk_analysis_dispatch_worst_dark_ms",
      "Longest dark-CPU (idle, un-ticked) dispatch strand in ms"},
-    {"montauk_analysis_wake2run_crossccx_pct",
-     "Percent of wake2run events that ran on a cross-CCX CPU"},
+    {"montauk_analysis_wake2run_crossdomain_pct",
+     "Percent of wake2run events that ran on a cross-domain CPU"},
     {"montauk_analysis_coldwake_count",
      "Count of wakes landing on a core idle >=20ms (cold-wake samples)"},
     {"montauk_analysis_coldwake_wake2run_us",
@@ -1983,7 +1983,7 @@ struct KeyedEvtReport final : Report {
 // REPORT sched: wake-to-run latency over SCHED_OP_WAKE2RUN events (runtime_ns =
 // became-runnable -> ran). Surfaces the BIMODAL split -- the cache-hot fast mode
 // vs the CONFIG_HZ tick-quantized floor -- and how much of the slow tail is
-// cross-CCX (sub_idx). The report that resolves an IPC p99 sitting on the kernel
+// cross-domain (sub_idx). The report that resolves an IPC p99 sitting on the kernel
 // tick instead of inferring it from aggregates. Latencies are u64 ns, sorted
 // with sublimation's direct type-generic entry (sublimation_u64), not the u32
 // index-pack path.
@@ -2006,7 +2006,7 @@ static const char* disorder_name(sub_disorder_t d) {
 
 struct SchedLatencyReport final : Report {
   std::vector<uint64_t> lat_;        // wake2run latencies (ns)
-  std::vector<uint64_t> cross_lat_;  // cross-CCX subset (ns)
+  std::vector<uint64_t> cross_lat_;  // cross-domain subset (ns)
   sub_profile_t prof_{};             // flow-model profile of lat_ in arrival order
   struct Region { size_t start, end; sub_disorder_t cls; };
   std::vector<Region> regions_;      // where structure sits in the timeline (locator)
@@ -2111,12 +2111,12 @@ struct SchedLatencyReport final : Report {
 
     std::printf("VERDICT: %s wake2run; p50 %.0fus p99 %.0fus p999 %.0fus "
                 "worst %.0fus; %.1f%% fast(<100us) / %.1f%% mid / "
-                "%.1f%% tick-floor(>=900us); %.1f%% cross-CCX\n",
+                "%.1f%% tick-floor(>=900us); %.1f%% cross-domain\n",
                 fmt_count(dn).c_str(), q_us(lat_, 0.50), q_us(lat_, 0.99),
                 q_us(lat_, 0.999), us(lat_.back()), fastpct, midpct, tickpct,
                 crosspct);
     if (!cross_lat_.empty())
-      std::printf("cross-CCX wake2run: %s events; p50 %.0fus p99 %.0fus "
+      std::printf("cross-domain wake2run: %s events; p50 %.0fus p99 %.0fus "
                   "worst %.0fus (high here = scatter feeds the slow mode)\n",
                   fmt_count(static_cast<double>(cross_lat_.size())).c_str(),
                   q_us(cross_lat_, 0.50), q_us(cross_lat_, 0.99),
@@ -2208,7 +2208,7 @@ struct SchedLatencyReport final : Report {
     out.push_back({"montauk_analysis_wake2run_mid_pct", "",
                    100.0 - fastpct - tickpct});
     out.push_back({"montauk_analysis_wake2run_tickfloor_pct", "", tickpct});
-    out.push_back({"montauk_analysis_wake2run_crossccx_pct", "",
+    out.push_back({"montauk_analysis_wake2run_crossdomain_pct", "",
                    100.0 * static_cast<double>(cross_lat_.size()) / dn});
     // Flow-model distinct-value estimate: a low count on a large trace means
     // latency is quantized onto a few values (a fixed timer/quantum).
@@ -2875,7 +2875,7 @@ struct ServiceReport final : Report {
 // dimension D=2-H, and a migration-avalanche (self-organized-criticality) tail.
 struct FractalReport final : Report {
   std::vector<uint64_t> disp_ts_;  // WAKE2RUN run-event timestamps
-  std::vector<uint64_t> mig_ts_;   // cross-CCX WAKE2RUN timestamps (sub_idx set)
+  std::vector<uint64_t> mig_ts_;   // cross-domain WAKE2RUN timestamps (sub_idx set)
   // Computed in emit(), surfaced in prom().
   struct SeriesOut { const char* name; double h, se, hrs, dim, decades; bool ok; };
   std::vector<SeriesOut> out_;
@@ -2890,7 +2890,7 @@ struct FractalReport final : Report {
     const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
     if (s->op == SCHED_OP_WAKE2RUN) {
       disp_ts_.push_back(s->timestamp_ns);
-      if (s->sub_idx) mig_ts_.push_back(s->timestamp_ns);  // cross-CCX landing
+      if (s->sub_idx) mig_ts_.push_back(s->timestamp_ns);  // cross-domain landing
     }
   }
 
@@ -2940,10 +2940,10 @@ struct FractalReport final : Report {
     std::vector<double> mig = bin_rate(mig_ts_, t0, w, nbins_);
     out_.clear();
     out_.push_back(analyze_series("dispatch-rate", disp));
-    out_.push_back(analyze_series("xccx-rate", mig));
+    out_.push_back(analyze_series("migration-rate", mig));
     avalanches_ = montauk::stats::avalanche_tail(mig, &aval_slope_);
 
-    std::printf("TIMELINE: %s dispatches, %s cross-CCX over %.1fs; "
+    std::printf("TIMELINE: %s dispatches, %s cross-domain over %.1fs; "
                 "bin %.0fus -> %zu bins\n",
                 fmt_count(static_cast<double>(disp_ts_.size())).c_str(),
                 fmt_count(static_cast<double>(mig_ts_.size())).c_str(), secs,
@@ -3366,8 +3366,147 @@ struct KStrandReport final : Report {
   }
 };
 
+// REPORT locality: turns each placement migration (WAKE2RUN: prev-run core -> run core) into a
+// cache-tier distance (same-L2 / same-L3 / same-socket / cross-socket) and reports
+// how migration density decays with distance -- a generic scheduler-analysis lens
+// that characterizes any scheduler equally. Topology comes from the trace-embedded
+// "cache_topology" snapshot, so it decodes anywhere. montauk measures the
+// distribution; the consumer decides what a healthy decay is. Names no scheduler,
+// no vendor: a cache tier is hardware, the distance is generic.
+class LocalityReport : public Report {
+  std::unordered_map<uint32_t, std::array<uint32_t, 3>> topo_;  // cpu -> {l2,l3,socket}
+  bool have_topo_ = false;
+  std::array<uint64_t, 4> tier_{};  // same-L2, same-L3, same-socket, cross-socket
+  uint64_t migrations_ = 0, unmapped_ = 0;
+
+  static bool pu(const std::string& line, const char* key, uint32_t& out) {
+    std::string pat = std::string(key) + "=\"";
+    size_t k = line.find(pat);
+    if (k == std::string::npos) return false;
+    out = static_cast<uint32_t>(std::strtoul(line.c_str() + k + pat.size(), nullptr, 10));
+    return true;
+  }
+  void parse_topo(const char* p, uint32_t plen) {
+    std::string text(p, plen);
+    size_t pos = 0;
+    while (pos < text.size()) {
+      size_t eol = text.find('\n', pos);
+      std::string line =
+          text.substr(pos, eol == std::string::npos ? std::string::npos : eol - pos);
+      pos = (eol == std::string::npos) ? text.size() : eol + 1;
+      uint32_t cpu, l2, l3, sock;
+      if (pu(line, "cpu", cpu) && pu(line, "l2", l2) && pu(line, "l3", l3) &&
+          pu(line, "socket", sock)) {
+        topo_[cpu] = {l2, l3, sock};
+        have_topo_ = true;
+      }
+    }
+  }
+  int tier(uint32_t a, uint32_t b) {
+    auto ia = topo_.find(a), ib = topo_.find(b);
+    if (ia == topo_.end() || ib == topo_.end()) return -1;
+    const auto& A = ia->second;
+    const auto& B = ib->second;
+    if (A[0] == B[0]) return 0;
+    if (A[1] == B[1]) return 1;
+    if (A[2] == B[2]) return 2;
+    return 3;
+  }
+
+ public:
+  const char* name() const override { return "locality"; }
+
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type == TRACE_EVT_PROVIDER && len >= sizeof(montauk_provider_event)) {
+      const auto* e = reinterpret_cast<const montauk_provider_event*>(data);
+      char nm[33];
+      std::memcpy(nm, e->name, 32);
+      nm[32] = 0;
+      if (std::strcmp(nm, "cache_topology") != 0) return;
+      uint32_t avail = len - static_cast<uint32_t>(sizeof(montauk_provider_event));
+      uint32_t plen = e->payload_len < avail ? e->payload_len : avail;
+      parse_topo(reinterpret_cast<const char*>(data + sizeof(montauk_provider_event)), plen);
+      return;
+    }
+    if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
+    const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    // WAKE2RUN carries the migration: last_cpu = the core it last ran on (src),
+    // cpu = the core it ran on now (dst). last_cpu < 0 = no prior run, == cpu = no
+    // migration. (sched_switch is where montauk detects the move.)
+    if (s->op != SCHED_OP_WAKE2RUN) return;
+    if (s->last_cpu < 0 || s->last_cpu == static_cast<int32_t>(s->cpu)) return;
+    ++migrations_;
+    int t = tier(static_cast<uint32_t>(s->last_cpu), s->cpu);
+    if (t < 0) {
+      ++unmapped_;
+      return;
+    }
+    ++tier_[t];
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    std::printf("REPORT locality\n");
+    if (!have_topo_) {
+      std::printf("VERDICT: no cache_topology snapshot in the trace -- cannot map "
+                  "migration distance (recapture with montauk >= 7.8.0)\n\n");
+      return;
+    }
+    uint64_t cl = tier_[0] + tier_[1] + tier_[2] + tier_[3];
+    if (cl == 0) {
+      std::printf("VERDICT: no cross-CPU migrations captured\n\n");
+      return;
+    }
+    std::printf("%" PRIu64 " migrations (%" PRIu64 " unmapped)\n", migrations_, unmapped_);
+    const char* nm[4] = {"same-L2", "same-L3", "same-socket", "cross-socket"};
+    std::printf("%-14s %-12s %-8s\n", "tier", "moves", "pct");
+    for (int t = 0; t < 4; t++)
+      std::printf("%-14s %-12" PRIu64 " %6.1f%%\n", nm[t], tier_[t],
+                  100.0 * static_cast<double>(tier_[t]) / static_cast<double>(cl));
+    std::printf("decay (tier_{k+1}/tier_k):");
+    for (int t = 0; t < 3; t++)
+      std::printf(" %.3f", tier_[t] > 0
+                               ? static_cast<double>(tier_[t + 1]) / static_cast<double>(tier_[t])
+                               : 0.0);
+    std::printf("\n");
+    // Monotonic from the first POPULATED tier: a structurally-empty FINER tier
+    // (e.g. same-L2 on a no-SMT part, where no two cores share L2) is not scatter
+    // -- it just doesn't exist on that hardware. Skip leading empties, then density
+    // must be non-increasing with distance.
+    bool mono = true;
+    uint64_t prev = 0;
+    bool seen = false;
+    for (int t = 0; t < 4; t++) {
+      if (!seen && tier_[t] == 0) continue;
+      if (seen && tier_[t] > prev) {
+        mono = false;
+        break;
+      }
+      prev = tier_[t];
+      seen = true;
+    }
+    double local_pct =
+        100.0 * static_cast<double>(tier_[0] + tier_[1]) / static_cast<double>(cl);
+    std::printf("VERDICT: %.1f%% of migrations stay cache-local (same-L2/L3); density %s\n\n",
+                local_pct,
+                mono ? "decays with distance (locality preserved)"
+                     : "does NOT decay with distance (placement scatters across domains)");
+  }
+
+  void prom(std::vector<PromMetric>& out) override {
+    const char* nm[4] = {"same_l2", "same_l3", "same_socket", "cross_socket"};
+    for (int t = 0; t < 4; t++)
+      out.push_back({"montauk_analysis_locality_tier_moves",
+                     std::string("tier=\"") + nm[t] + "\"", static_cast<double>(tier_[t])});
+    uint64_t cl = tier_[0] + tier_[1] + tier_[2] + tier_[3];
+    out.push_back({"montauk_analysis_locality_local_pct", "",
+                   cl ? 100.0 * static_cast<double>(tier_[0] + tier_[1]) / static_cast<double>(cl)
+                      : 0.0});
+  }
+};
+
 std::vector<std::unique_ptr<Report>> make_reports() {
   std::vector<std::unique_ptr<Report>> reports;
+  reports.push_back(std::make_unique<LocalityReport>());
   reports.push_back(std::make_unique<SummaryReport>());
   reports.push_back(std::make_unique<SchedLatencyReport>());
   reports.push_back(std::make_unique<WorkConservationReport>());
@@ -3448,12 +3587,6 @@ int run_digest(const std::string& dir, bool redact) {
   // leads the digest, above SYSTEM, before the reader sees a single latency.
   std::string stab = montauk::pop::scx_stability_block(dir);
   if (!stab.empty()) std::printf("%s\n", stab.c_str());
-
-  // Cross-CCX PLACEMENT attribution sits with stability: on a multi-CCX host the
-  // scatter source (sel_dfl fallback vs dispatch steal) is the lever, and the
-  // per-path split is not derivable from the trace alone.
-  std::string xccx = montauk::pop::scx_xccx_block(dir);
-  if (!xccx.empty()) std::printf("%s\n", xccx.c_str());
 
   std::string specs = montauk::pop::system_info_block(dir);
   if (!specs.empty()) std::printf("%s", specs.c_str());

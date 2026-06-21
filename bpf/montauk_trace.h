@@ -15,7 +15,7 @@
 #define TRACE_MAX_FDS       4096
 #define TRACE_MAX_DISCOVERY 4096  // discovery map: all processes seen by sys_enter
 #define TRACE_PATTERN_MAX   32   // max pattern length for BPF-side matching
-#define TRACE_MAX_CPUS      256   // cpu_ccx map size; logical-CPU index space
+#define TRACE_MAX_CPUS      256   // cpu_cache_domain map size; logical-CPU index space
 
 // BPF-side pattern for immediate exec matching (no userspace roundtrip).
 // Userspace writes this once at startup. BPF reads it on every exec.
@@ -232,7 +232,7 @@ enum sched_trace_op {
   SCHED_OP_PREEMPT_WAKEUP = 5,
   SCHED_OP_WAKEUP         = 6,  // generic kernel tp/sched/sched_wakeup: woken pid + target_cpu
   SCHED_OP_WAKE2RUN       = 7,  // wake-to-run (runqueue) latency: pid=wakee, cpu=run CPU,
-                                //   runtime_ns=delta ns (became-runnable -> ran), sub_idx=cross_ccx(0|1)
+                                //   runtime_ns=delta ns (became-runnable -> ran), sub_idx=cross_domain(0|1)
   SCHED_OP_CPU_IDLE       = 8,  // per-CPU idle boundary (pid 0 in/out of sched_switch),
                                 //   cpu=CPU, sub_idx=1 entering idle / 0 leaving idle. Emitted
                                 //   UNCONDITIONALLY (not gated to the traced comm group) so the
@@ -251,14 +251,14 @@ struct sched_op_counters {
 
 // Per-CPU migration classification counters. The sched_switch hot path bumps
 // these on every cross-core move of a traced thread, classified by whether the
-// source and destination CPUs share an L3/CCX domain (looked up in cpu_ccx).
+// source and destination CPUs share an L3/cache domain domain (looked up in cpu_cache_domain).
 // Userspace sums across CPUs at snapshot time. These globals survive traced-
 // thread churn: a fork-storm exits ~1000 short-lived threads whose per-thread
 // thread_bpf_state.migrations counts evaporate from thread_map; these do not.
-struct mig_ccx_counters {
-  __u64 intra;    // src and dst CPUs in the same CCX (shared L3)
-  __u64 cross;    // src and dst in different CCX domains (Infinity-Fabric c2c)
-  __u64 unknown;  // a CPU index outside cpu_ccx (topology not pushed / out of range)
+struct mig_domain_counters {
+  __u64 intra;    // src and dst CPUs in the same cache domain (shared L3)
+  __u64 cross;    // src and dst in different cache domain domains (cross-domain interconnect)
+  __u64 unknown;  // a CPU index outside cpu_cache_domain (topology not pushed / out of range)
 };
 
 struct montauk_sched_event {

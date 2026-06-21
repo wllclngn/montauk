@@ -435,21 +435,21 @@ bool PmuCollector::sample(montauk::model::PmuSnapshot& out) {
     out.branch_misses_per_sec = 0.0;
   }
 
-  // Per-CCX L3: keep per-domain (do NOT collapse) so cross-CCX traffic shows.
-  out.l3_per_ccx.clear();
+  // Per-cache domain L3: keep per-domain (do NOT collapse) so cross-domain traffic shows.
+  out.l3_per_cache_domain.clear();
   out.l3_accesses_total = 0;
   out.l3_misses_total = 0;
   if (l3_available_) {
-    out.l3_per_ccx.reserve(l3_.size());
+    out.l3_per_cache_domain.reserve(l3_.size());
     for (auto& d : l3_) {
       uint64_t da = read_delta(d.access);
       uint64_t dm = (d.miss.fd >= 0) ? read_delta(d.miss) : 0;
-      montauk::model::PmuSnapshot::CcxL3 c{};
+      montauk::model::PmuSnapshot::DomainL3 c{};
       c.domain_cpu = d.domain_cpu;
       c.accesses   = da;
       c.misses     = dm;
       c.miss_pct   = (da > 0) ? 100.0 * (double)dm / (double)da : 0.0;
-      out.l3_per_ccx.push_back(c);
+      out.l3_per_cache_domain.push_back(c);
       out.l3_accesses_total += da;
       out.l3_misses_total   += dm;
     }

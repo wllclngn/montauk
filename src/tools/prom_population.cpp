@@ -550,8 +550,8 @@ std::string system_info_block(const std::string& dir) {
   std::string out = "SYSTEM\n";
   out += "  cpu        " + g("cpu_model") + " (" + g("physical_cores") + "c/" +
          g("logical_cpus") + "t";
-  std::string ccx = g("ccx");
-  if (!ccx.empty()) out += ", " + ccx + " ccx";
+  std::string domain = g("cache_domains");
+  if (!domain.empty()) out += ", " + domain + " cache domains";
   out += ")\n";
   out += "  memory     " + g("mem_total_gib") + " GiB\n";
   std::string gpu = g("gpu");
@@ -639,70 +639,6 @@ std::string scx_stability_block(const std::string& dir) {
   return out;
 }
 
-std::string scx_xccx_block(const std::string& dir) {
-  // CROSS-CCX PLACEMENT attribution. montauk's sched report shows the trace-
-  // derived cross-CCX wake2run PERCENTAGE (what fraction of wakeups crossed a
-  // cache domain); it cannot show WHICH scheduler placement path produced those
-  // crossings -- that is a scheduler-internal counter, not a traceable event. The
-  // producer (trace_workload) parses the scheduler's shutdown [KNOBS] line and
-  // writes the per-path nr_xccx[] into the recording as:
-  //   montauk_xccx_scatter_pct <pct>
-  //   montauk_xccx_path{path="sel_dfl"} <count>   (one per placement path)
-  // Surfacing it here lets a multi-CCX user tell a topology-blind fallback
-  // (sel_dfl dominant -> check llc_domain detection) from legitimate dispatch-
-  // side stealing (steal/step5) in one read. Empty when no marker is present.
-  std::vector<std::pair<std::string, long long>> paths;
-  double scatter_pct = -1;
-  for (const auto& path : glob_proms(dir)) {
-    FILE* fp = std::fopen(path.c_str(), "r");
-    if (!fp) continue;
-    char* line = nullptr;
-    size_t cap = 0;
-    ssize_t len;
-    while ((len = ::getline(&line, &cap, fp)) != -1) {
-      std::string ln = strip(std::string(line, len > 0 ? static_cast<size_t>(len) : 0));
-      if (ln.rfind("montauk_xccx_scatter_pct", 0) == 0) {
-        size_t sp = ln.rfind(' ');
-        if (sp != std::string::npos) scatter_pct = std::atof(ln.c_str() + sp + 1);
-      } else if (ln.rfind("montauk_xccx_path{", 0) == 0) {
-        size_t br = ln.find('{'), cb = ln.find('}', br);
-        if (cb == std::string::npos) continue;
-        LabelVec L = parse_labels(ln.substr(br + 1, cb - br - 1));
-        size_t sp = ln.rfind(' ');
-        long long n = sp != std::string::npos ? std::atoll(ln.c_str() + sp + 1) : 0;
-        paths.emplace_back(label_get(L, "path"), n);
-      }
-    }
-    std::free(line);
-    std::fclose(fp);
-  }
-  if (paths.empty() && scatter_pct < 0) return "";
-  // Rank paths by landing count, descending -- the dominant path is the lever.
-  std::sort(paths.begin(), paths.end(),
-            [](const auto& a, const auto& b) { return a.second > b.second; });
-  long long total = 0;
-  for (const auto& p : paths) total += p.second;
-  std::string out = "CROSS-CCX PLACEMENT\n";
-  if (scatter_pct >= 0) {
-    char num[64];
-    std::snprintf(num, sizeof num, "%.0f%%", scatter_pct);
-    out += std::string("  scatter      ") + num +
-           " of placements crossed a cache domain\n";
-  }
-  for (const auto& p : paths) {
-    if (p.second == 0) continue;
-    char row[96];
-    double share = total > 0 ? 100.0 * static_cast<double>(p.second) /
-                                static_cast<double>(total) : 0.0;
-    std::snprintf(row, sizeof row, "  %-11s %lld  (%.0f%%)", p.first.c_str(),
-                  p.second, share);
-    out += row;
-    if (p.first == "sel_dfl")
-      out += "  [topology-blind fallback -- check llc_domain]";
-    out += "\n";
-  }
-  return out;
-}
 
 std::string thermal_power_block(const std::string& dir) {
   double temp_peak = 0, temp_sum = 0;

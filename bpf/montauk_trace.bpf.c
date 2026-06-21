@@ -135,15 +135,15 @@ struct {
   __type(value, struct sched_op_counters);
 } sched_op_counts SEC(".maps");
 
-// cpu → CCX/L3-domain id. Userspace populates from sysfs L3 shared_cpu_list
-// before attach: CPUs sharing an L3 (one CCX) get the same id. On a monolithic
+// cpu → cache domain/L3-domain id. Userspace populates from sysfs L3 shared_cpu_list
+// before attach: CPUs sharing an L3 (one cache domain) get the same id. On a monolithic
 // single-L3 part every CPU maps to 0, so every move classifies intra (correct).
 struct {
   __uint(type, BPF_MAP_TYPE_ARRAY);
   __uint(max_entries, TRACE_MAX_CPUS);
   __type(key, u32);
   __type(value, u32);
-} cpu_ccx SEC(".maps");
+} cpu_cache_domain SEC(".maps");
 
 // Per-CPU current frequency in MHz, indexed by logical CPU. Updated on every
 // tp/power/cpu_frequency transition (the cpufreq core emits one per P-state
@@ -158,7 +158,7 @@ struct {
   __type(value, u32);
 } cur_freq_mhz SEC(".maps");
 
-// Per-CPU migration classification counters (intra/cross/unknown CCX), bumped on
+// Per-CPU migration classification counters (intra/cross/unknown cache domain), bumped on
 // the sched_switch migration path and summed in userspace. Churn-proof, unlike
 // the per-thread thread_bpf_state.migrations that a short-lived thread takes with
 // it when it exits.
@@ -166,8 +166,8 @@ struct {
   __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
   __uint(max_entries, 1);
   __type(key, u32);
-  __type(value, struct mig_ccx_counters);
-} mig_ccx_counts SEC(".maps");
+  __type(value, struct mig_domain_counters);
+} mig_domain_counts SEC(".maps");
 
 // Per-event streaming of sched-decision events to the ringbuf is a firehose on
 // a hot path; OFF by default. Userspace sets this true only when the binary
@@ -955,19 +955,20 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
     next->enter_ns = now;
     next->state = 0; // R (running)
     // ON-CPU + MIGRATION: count a cross-CPU move when the running core changes,
-    // and classify it intra- vs cross-CCX by the L3 domain of src/dst core.
+    // and classify it intra- vs cross-domain by the L3 domain of src/dst core.
     int cpu = (int)bpf_get_smp_processor_id();
-    int cross_ccx = 0;  // did this sched-in land on a different CCX than last run
+    int prev_run_cpu = next->cur_cpu;  // src core of this sched-in; stamped on WAKE2RUN
+    int cross_domain = 0;  // did this sched-in land on a different cache domain than last run
     if (next->cur_cpu >= 0 && next->cur_cpu != cpu) {
       next->migrations += 1;
       u32 src = (u32)next->cur_cpu, dst = (u32)cpu;
-      u32 *sc = (src < TRACE_MAX_CPUS) ? bpf_map_lookup_elem(&cpu_ccx, &src) : NULL;
-      u32 *dc = (dst < TRACE_MAX_CPUS) ? bpf_map_lookup_elem(&cpu_ccx, &dst) : NULL;
+      u32 *sc = (src < TRACE_MAX_CPUS) ? bpf_map_lookup_elem(&cpu_cache_domain, &src) : NULL;
+      u32 *dc = (dst < TRACE_MAX_CPUS) ? bpf_map_lookup_elem(&cpu_cache_domain, &dst) : NULL;
       u32 zero = 0;
-      struct mig_ccx_counters *m = bpf_map_lookup_elem(&mig_ccx_counts, &zero);
+      struct mig_domain_counters *m = bpf_map_lookup_elem(&mig_domain_counts, &zero);
       if (sc && dc) {
         if (*sc == *dc) { if (m) m->intra += 1; }
-        else { cross_ccx = 1; if (m) m->cross += 1; }
+        else { cross_domain = 1; if (m) m->cross += 1; }
       } else if (m) {
         m->unknown += 1;
       }
@@ -977,8 +978,8 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
     // WAKE-TO-RUN: drain a pending became-runnable stamp into one latency
     // sample. The timestamps are kernel-side (sched_wakeup / preempt -> here),
     // so no userspace measurer is in the path -- the artifact that made wall-
-    // clock IPC timing unusable is structurally absent. Tagged cross_ccx so the
-    // tail can be attributed to cross-CCX placement.
+    // clock IPC timing unusable is structurally absent. Tagged cross_domain so the
+    // tail can be attributed to cross-domain placement.
     if (sched_stream && next->wake_ns) {
       u64 d = (now > next->wake_ns) ? (now - next->wake_ns) : 0;
       struct montauk_sched_event *we =
@@ -989,8 +990,8 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
         we->cpu           = (u32)cpu;
         we->pid           = (int)next_tid;
         we->secondary_pid = -1;
-        we->last_cpu      = -1;
-        we->sub_idx       = (u32)cross_ccx;
+        we->last_cpu      = prev_run_cpu;  // migration src core (-1 = no prior run)
+        we->sub_idx       = (u32)cross_domain;
         u32 fcpu          = (u32)cpu;
         u32 *fp           = bpf_map_lookup_elem(&cur_freq_mhz, &fcpu);
         we->freq_mhz      = fp ? *fp : 0;  // core freq at wake; 0 if no transition seen
