@@ -390,6 +390,12 @@ const char* prom_help(const char* name) {
      "Percent of wake2run latencies between fast mode and the tick floor"},
     {"montauk_analysis_wake2run_tickfloor_pct",
      "Percent of wake2run latencies on the CONFIG_HZ tick floor (>=900us)"},
+    {"montauk_analysis_dispatch_dark_pct",
+     "Of PREEMPT-STARVED floored wakes, percent whose run-CPU was IDLE through the wait (tickless strand)"},
+    {"montauk_analysis_dispatch_held_pct",
+     "Of PREEMPT-STARVED floored wakes, percent whose run-CPU was busy through the wait (held by a task)"},
+    {"montauk_analysis_dispatch_worst_dark_ms",
+     "Longest dark-CPU (idle, un-ticked) dispatch strand in ms"},
     {"montauk_analysis_wake2run_crossccx_pct",
      "Percent of wake2run events that ran on a cross-CCX CPU"},
     {"montauk_analysis_coldwake_count",
@@ -524,6 +530,7 @@ struct SummaryReport final : Report {
   uint64_t heapstack_ = 0;        // size-filtered allocation stack captures
   uint64_t lifecycle_[5] {};      // indexed by FORK..COMM_CHANGE (1..4)
   uint64_t mmap_ = 0;
+  uint64_t kstrand_ = 0;          // per-CPU kthread dispatch strands
   std::map<std::string, uint64_t> provider_;  // provider name -> snapshot count
   std::map<uint32_t, uint64_t> unknown_;
 
@@ -603,6 +610,13 @@ struct SummaryReport final : Report {
       case TRACE_EVT_COMM_CHANGE:
         ++lifecycle_[type];  // montauk_ring_event carries no timestamp
         break;
+      case TRACE_EVT_KSTRAND: {
+        if (len < sizeof(montauk_kstrand_event)) break;
+        auto* e = reinterpret_cast<const montauk_kstrand_event*>(data);
+        note_ts(e->timestamp_ns);
+        ++kstrand_;
+        break;
+      }
       case TRACE_EVT_PROVIDER: {
         if (len < sizeof(montauk_provider_event)) break;
         auto* e = reinterpret_cast<const montauk_provider_event*>(data);
@@ -656,6 +670,7 @@ struct SummaryReport final : Report {
     row("ABORT", "abort", abort_[ABORT_FN_ABORT]);
     row("HEAPSTK", "size_filtered", heapstack_);
     row("MMAP", "file_backed", mmap_);
+    row("KSTRAND", "pcpu_kthread", kstrand_);
     row("FORK", "", lifecycle_[TRACE_EVT_FORK]);
     row("EXEC", "", lifecycle_[TRACE_EVT_EXEC]);
     row("EXIT", "", lifecycle_[TRACE_EVT_EXIT]);
@@ -2468,6 +2483,13 @@ struct DispatchStallReport final : Report {
   // floored wake: (wake_ts, run_ts, run_cpu, wakee_pid)
   struct FW { uint64_t wake_ts, run_ts; uint32_t cpu; int pid; };
   std::vector<FW> floored_;
+  // Per-CPU idle intervals from SCHED_OP_CPU_IDLE (enter ts -> exit ts). On a
+  // tickless-idle kernel an idle CPU gets no scheduler tick, hence no ops.tick,
+  // hence no tick-driven rescue scan: a task stranded there ages un-dispatched.
+  // This is the signal that separates a HELD CPU (busy hog, real preempt gap)
+  // from a DARK CPU (idle, no tick -- the strand bug) inside PREEMPT-STARVED.
+  std::unordered_map<uint32_t, std::vector<std::pair<uint64_t, uint64_t>>> idle_iv_;
+  std::unordered_map<uint32_t, uint64_t> idle_open_;  // cpu -> enter ts (open)
 
   const char* name() const override { return "dispatch-stall"; }
 
@@ -2478,6 +2500,20 @@ struct DispatchStallReport final : Report {
       picks_[s->cpu].push_back({s->timestamp_ns, s->pid, s->sub_idx, s->score});
       return;
     }
+    if (s->op == SCHED_OP_CPU_IDLE) {
+      // sub_idx==1 is idle-enter, else idle-exit (mirrors the analyzer's other
+      // CPU_IDLE consumers). Close the open interval on exit.
+      if (s->sub_idx == 1) {
+        idle_open_[s->cpu] = s->timestamp_ns;
+      } else {
+        auto it = idle_open_.find(s->cpu);
+        if (it != idle_open_.end() && s->timestamp_ns > it->second) {
+          idle_iv_[s->cpu].push_back({it->second, s->timestamp_ns});
+          idle_open_.erase(it);
+        }
+      }
+      return;
+    }
     if (s->op != SCHED_OP_WAKE2RUN) return;
     uint64_t wait = s->runtime_ns;
     if (wait < kTickFloorNs) return;
@@ -2485,10 +2521,26 @@ struct DispatchStallReport final : Report {
     floored_.push_back({(run_ts > wait) ? (run_ts - wait) : 0, run_ts, s->cpu, s->pid});
   }
 
+  // ns of [a,b) the given CPU spent idle (overlap with its idle intervals).
+  uint64_t idle_overlap(uint32_t cpu, uint64_t a, uint64_t b) const {
+    auto it = idle_iv_.find(cpu);
+    if (it == idle_iv_.end() || b <= a) return 0;
+    uint64_t acc = 0;
+    for (const auto& iv : it->second) {
+      uint64_t lo = iv.first > a ? iv.first : a;
+      uint64_t hi = iv.second < b ? iv.second : b;
+      if (hi > lo) acc += hi - lo;
+    }
+    return acc;
+  }
+
   double preempt_pct_ = 0, order_pct_ = 0, avg_inter_ = 0;
   double po_mirror_pct_ = 0, served_mirror_pct_ = 0;
   double po_higher_pct_ = 0, po_same_pct_ = 0, po_lower_pct_ = 0;
   double same_newer_pct_ = 0, avg_distinct_ = 0;
+  double dark_pct_ = 0, held_pct_ = 0;  // of PREEMPT-STARVED: CPU idle vs busy during the wait
+  uint64_t dark_ = 0, n_dark_idle_ = 0; bool have_idle_ = false;
+  uint64_t worst_dark_ns_ = 0;
   uint64_t n_ = 0;
 
   void emit(const montauk::model::TraceReader&) override {
@@ -2499,8 +2551,13 @@ struct DispatchStallReport final : Report {
     }
     for (auto& kv : picks_)
       sublimation_order_u64(kv.second, false, [](const Pk& e) { return e.ts; });
+    for (auto& kv : idle_iv_)
+      sublimation_order_u64(kv.second, false,
+                            [](const std::pair<uint64_t, uint64_t>& e) { return e.first; });
+    have_idle_ = !idle_iv_.empty();
 
     uint64_t preempt = 0, order = 0, inter_sum = 0;
+    uint64_t held = 0;  // PREEMPT-STARVED with the run-CPU busy through the wait
     uint64_t po_total = 0, po_mirror = 0;        // pass-over picks, of which mirror-lane
     uint64_t served_total = 0, served_mirror = 0; // floored wakees served by which lane
     // pass-over class vs the wakee's own (served) class: HIGHER beats it on the
@@ -2562,7 +2619,22 @@ struct DispatchStallReport final : Report {
           }
         }
       }
-      if (inter == 0) ++preempt; else { ++order; inter_sum += inter; }
+      if (inter == 0) {
+        ++preempt;
+        // Split PREEMPT-STARVED: was the run-CPU DARK (idle, no tick -> no
+        // rescue) or HELD (a hog ran it the whole wait)? Majority-idle of the
+        // wait window = DARK, the tickless strand. Only meaningful with CPU_IDLE.
+        if (have_idle_) {
+          uint64_t wait_ns = fw.run_ts > fw.wake_ts ? fw.run_ts - fw.wake_ts : 0;
+          uint64_t idle_ns = idle_overlap(fw.cpu, fw.wake_ts, fw.run_ts);
+          if (wait_ns && idle_ns * 2 >= wait_ns) {
+            ++dark_;
+            if (wait_ns > worst_dark_ns_) worst_dark_ns_ = wait_ns;
+          } else {
+            ++held;
+          }
+        }
+      } else { ++order; inter_sum += inter; }
       distinct_sum += po_pids.size();
       inter_v.push_back(inter);
       legit_v.push_back(legit);
@@ -2570,6 +2642,8 @@ struct DispatchStallReport final : Report {
     n_ = preempt + order;
     preempt_pct_ = n_ ? 100.0 * (double)preempt / (double)n_ : 0.0;
     order_pct_   = n_ ? 100.0 * (double)order / (double)n_ : 0.0;
+    dark_pct_ = preempt ? 100.0 * (double)dark_ / (double)preempt : 0.0;
+    held_pct_ = preempt ? 100.0 * (double)held / (double)preempt : 0.0;
     avg_inter_   = order ? (double)inter_sum / (double)order : 0.0;
     po_mirror_pct_     = po_total ? 100.0 * (double)po_mirror / (double)po_total : 0.0;
     served_mirror_pct_ = served_total ? 100.0 * (double)served_mirror / (double)served_total : 0.0;
@@ -2586,6 +2660,15 @@ struct DispatchStallReport final : Report {
                 "first); avg %.1f pass-overs, p99 %llu pass-overs\n",
                 fmt_count((double)n_).c_str(), preempt_pct_, order_pct_, avg_inter_,
                 (unsigned long long)p99);
+    if (have_idle_)
+      std::printf("  PREEMPT split: %.0f%% DARK (run-CPU IDLE through the wait -- "
+                  "tickless, no tick, no rescue scan = the strand; worst %.1fms) / "
+                  "%.0f%% HELD (a task ran the CPU the whole wait)\n",
+                  dark_pct_, (double)worst_dark_ns_ / 1e6, held_pct_);
+    else
+      std::printf("  PREEMPT split: no CPU_IDLE events -- cannot separate DARK "
+                  "(idle strand) from HELD (busy hog); recapture with a montauk "
+                  "that streams CPU_IDLE\n");
     std::printf("  LANE: %.0f%% of pass-over picks via MIRROR / %.0f%% via SUB; "
                 "floored wakees finally served %.0f%% MIRROR / %.0f%% SUB\n",
                 po_mirror_pct_, 100.0 - po_mirror_pct_,
@@ -2624,6 +2707,12 @@ struct DispatchStallReport final : Report {
     if (!n_) return;
     out.push_back({"montauk_analysis_dispatch_preempt_pct", "", preempt_pct_});
     out.push_back({"montauk_analysis_dispatch_order_pct", "", order_pct_});
+    if (have_idle_) {
+      out.push_back({"montauk_analysis_dispatch_dark_pct", "", dark_pct_});
+      out.push_back({"montauk_analysis_dispatch_held_pct", "", held_pct_});
+      out.push_back({"montauk_analysis_dispatch_worst_dark_ms", "",
+                     (double)worst_dark_ns_ / 1e6});
+    }
     out.push_back({"montauk_analysis_dispatch_avg_passovers", "", avg_inter_});
     out.push_back({"montauk_analysis_dispatch_passover_mirror_pct", "", po_mirror_pct_});
     out.push_back({"montauk_analysis_dispatch_served_mirror_pct", "", served_mirror_pct_});
@@ -3133,6 +3222,150 @@ struct HandlesReport final : Report {
   }
 };
 
+// REPORT kstrand: per-CPU kernel-thread dispatch strands (TRACE_EVT_KSTRAND).
+// A per-CPU kthread (ksoftirqd/N, a bound kworker, a btrfs endio worker, the scx
+// watchdog workfn) can ONLY run on its single allowed CPU. When the scheduler
+// strands it behind a long slice, I/O-completion / writeback work backs up and
+// every fsync/fdatasync waiter on the box wedges into D state -- without ever
+// tripping the runnable-stall watchdog, because the victims are in D, not R.
+// This report ranks the worst-stranded kthreads and splits each strand HELD
+// (its CPU was busy through the wait -- a genuine scheduler strand) vs DARK (its
+// CPU was idle/tickless -- no rescue scan fired). HELD strands in the 100ms+
+// range are the writeback-freeze signature.
+struct KStrandReport final : Report {
+  struct Agg {
+    uint32_t cpu = 0;
+    std::vector<uint64_t> lat;  // strand latencies (ns)
+    uint64_t held = 0, dark = 0;
+    uint64_t max_ns = 0;
+  };
+  std::unordered_map<std::string, Agg> by_comm_;
+  // strands buffered until emit() so CPU_IDLE intervals are complete first.
+  struct Ev { uint32_t cpu; uint64_t run_ts, lat; std::string comm; };
+  std::vector<Ev> evs_;
+  std::unordered_map<uint32_t, std::vector<std::pair<uint64_t, uint64_t>>> idle_iv_;
+  std::unordered_map<uint32_t, uint64_t> idle_open_;
+  uint64_t total_ = 0, worst_held_ns_ = 0;
+
+  const char* name() const override { return "kstrand"; }
+
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type == TRACE_EVT_SCHED && len >= sizeof(montauk_sched_event)) {
+      const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+      if (s->op != SCHED_OP_CPU_IDLE) return;
+      if (s->sub_idx == 1) { idle_open_[s->cpu] = s->timestamp_ns; }
+      else {
+        auto it = idle_open_.find(s->cpu);
+        if (it != idle_open_.end() && s->timestamp_ns > it->second) {
+          idle_iv_[s->cpu].push_back({it->second, s->timestamp_ns});
+          idle_open_.erase(it);
+        }
+      }
+      return;
+    }
+    if (type != TRACE_EVT_KSTRAND || len < sizeof(montauk_kstrand_event)) return;
+    const auto* k = reinterpret_cast<const montauk_kstrand_event*>(data);
+    evs_.push_back({k->cpu, k->timestamp_ns, k->latency_ns, redact_comm(k->comm)});
+    ++total_;
+  }
+
+  // ns of [a,b) the given CPU spent idle.
+  uint64_t idle_overlap(uint32_t cpu, uint64_t a, uint64_t b) const {
+    auto it = idle_iv_.find(cpu);
+    if (it == idle_iv_.end() || b <= a) return 0;
+    uint64_t acc = 0;
+    for (const auto& iv : it->second) {
+      uint64_t lo = iv.first > a ? iv.first : a;
+      uint64_t hi = iv.second < b ? iv.second : b;
+      if (hi > lo) acc += hi - lo;
+    }
+    return acc;
+  }
+
+  static double ms(uint64_t ns) { return static_cast<double>(ns) / 1e6; }
+  static double q_ms(const std::vector<uint64_t>& v, double f) {
+    if (v.empty()) return 0.0;
+    size_t i = static_cast<size_t>(static_cast<double>(v.size()) * f);
+    if (i >= v.size()) i = v.size() - 1;
+    return ms(v[i]);
+  }
+
+  // Aggregate strands into per-kthread rows with the HELD/DARK split. Built here,
+  // NOT in emit(), because the digest path calls offenders()/prom() WITHOUT ever
+  // calling emit() for this report -- deferring the aggregation to emit() would
+  // hide the strand offenders from the one-file report. Idempotent: safe to call
+  // from emit(), offenders() and prom() in any order.
+  bool finalized_ = false;
+  void finalize() {
+    if (finalized_) return;
+    finalized_ = true;
+    for (auto& kv : idle_iv_)
+      sublimation_order_u64(kv.second, false,
+                            [](const std::pair<uint64_t, uint64_t>& e) { return e.first; });
+    for (const auto& e : evs_) {
+      Agg& a = by_comm_[e.comm];
+      a.cpu = e.cpu;
+      a.lat.push_back(e.lat);
+      if (e.lat > a.max_ns) a.max_ns = e.lat;
+      uint64_t wait_start = (e.run_ts > e.lat) ? (e.run_ts - e.lat) : 0;
+      uint64_t idle = idle_overlap(e.cpu, wait_start, e.run_ts);
+      // Majority-idle through the wait => DARK (tickless, no rescue); else HELD.
+      if (idle * 2 >= e.lat) a.dark++;
+      else { a.held++; if (e.lat > worst_held_ns_) worst_held_ns_ = e.lat; }
+    }
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    std::printf("REPORT kstrand\n");
+    if (evs_.empty()) {
+      std::printf("VERDICT: no per-CPU kthread strands over threshold "
+                  "(no I/O-completion starvation captured)\n\n");
+      return;
+    }
+    finalize();
+    // Rank kthreads by max strand.
+    std::vector<std::pair<std::string, Agg*>> rows;
+    rows.reserve(by_comm_.size());
+    for (auto& kv : by_comm_) rows.push_back({kv.first, &kv.second});
+    std::sort(rows.begin(), rows.end(),
+              [](const auto& x, const auto& y) { return x.second->max_ns > y.second->max_ns; });
+
+    std::printf("%zu strands across %zu per-CPU kthreads (threshold-crossing dispatch waits)\n",
+                static_cast<size_t>(total_), rows.size());
+    std::printf("worst HELD strand %.1fms (CPU busy through the wait -- I/O-completion freeze signature)\n",
+                ms(worst_held_ns_));
+    std::printf("%-18s %-5s %-7s %-9s %-9s %-6s %-6s\n",
+                "kthread", "cpu", "strands", "max_ms", "p99_ms", "held", "dark");
+    size_t shown = 0;
+    for (auto& [comm, a] : rows) {
+      if (shown++ >= 20) break;
+      sublimation_u64(a->lat.data(), a->lat.size());
+      std::printf("%-18s %-5u %-7zu %-9.1f %-9.1f %-6" PRIu64 " %-6" PRIu64 "\n",
+                  comm.c_str(), a->cpu, a->lat.size(), ms(a->max_ns),
+                  q_ms(a->lat, 0.99), a->held, a->dark);
+    }
+    std::printf("\n");
+  }
+
+  void prom(std::vector<PromMetric>& out) override {
+    finalize();
+    out.push_back({"montauk_analysis_kstrand_events_total", "",
+                   static_cast<double>(total_)});
+    out.push_back({"montauk_analysis_kstrand_worst_held_ms", "", ms(worst_held_ns_)});
+  }
+
+  void offenders(std::vector<Offender>& out) override {
+    finalize();
+    for (auto& [comm, a] : by_comm_) {
+      if (a.held == 0) continue;  // DARK-only strands are a tickless-rescue gap, not a held strand
+      // sev: 100ms+ held strand wedges fsync/writeback (high); 5-100ms (med).
+      int sev = a.max_ns >= 100000000ULL ? 2 : 1;
+      out.push_back({"kthread-strand", comm, "", "max_strand_ms",
+                     ms(a.max_ns), sev});
+    }
+  }
+};
+
 std::vector<std::unique_ptr<Report>> make_reports() {
   std::vector<std::unique_ptr<Report>> reports;
   reports.push_back(std::make_unique<SummaryReport>());
@@ -3140,6 +3373,7 @@ std::vector<std::unique_ptr<Report>> make_reports() {
   reports.push_back(std::make_unique<WorkConservationReport>());
   reports.push_back(std::make_unique<PlacementRaceReport>());
   reports.push_back(std::make_unique<DispatchStallReport>());
+  reports.push_back(std::make_unique<KStrandReport>());
   reports.push_back(std::make_unique<SliceReport>());
   reports.push_back(std::make_unique<ServiceReport>());
   reports.push_back(std::make_unique<WaitsReport>());
@@ -3244,7 +3478,8 @@ int run_digest(const std::string& dir, bool redact) {
     std::printf("\nKEY METRICS\n");
     for (auto& r : reports)
       if (std::string(r->name()) == "sched" ||
-          std::string(r->name()) == "dispatch-stall") {
+          std::string(r->name()) == "dispatch-stall" ||
+          std::string(r->name()) == "kstrand") {
         r->emit(reader);
         r->prom(prom);
       }

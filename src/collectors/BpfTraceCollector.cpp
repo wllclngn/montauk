@@ -1042,6 +1042,18 @@ void BpfTraceCollector::run(std::stop_token st) {
                    (unsigned long long)skel_->rodata->heap_stack_size);
   }
 
+  // Per-CPU kthread strand threshold: MONTAUK_KSTRAND_THRESH_NS lowers/raises
+  // the became-runnable -> ran wait at which a per-CPU kthread emits a
+  // TRACE_EVT_KSTRAND. Default (5ms) lives in the BPF .rodata. .rodata, so set
+  // before load.
+  if (const char* kt = std::getenv("MONTAUK_KSTRAND_THRESH_NS")) {
+    unsigned long long v = std::strtoull(kt, nullptr, 0);
+    if (v) {
+      skel_->rodata->kstrand_thresh_ns = v;
+      montauk::util::log_info("per-CPU kthread strand threshold set to %lluns", v);
+    }
+  }
+
   int err = montauk_trace_bpf__load(skel_);
   if (err) {
     montauk::util::log_error("failed to load BPF programs (need root or CAP_BPF)");

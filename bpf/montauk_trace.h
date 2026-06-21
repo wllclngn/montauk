@@ -46,6 +46,7 @@ enum montauk_event_type {
   TRACE_EVT_ABORT       = 12, // libc abort-path uprobes (__assert_fail/__libc_message/abort)
   TRACE_EVT_HEAPSTACK   = 13, // caller stack for size-filtered malloc/calloc (MONTAUK_HEAP_STACK_SIZE)
   TRACE_EVT_KEYEDEVT    = 14, // ntdll keyed-event uprobes (critical-section wait/release; key = CS addr)
+  TRACE_EVT_KSTRAND     = 15, // per-CPU kernel-thread dispatch strand (became-runnable -> ran latency over threshold)
 };
 
 // Provider snapshot record (userspace-appended to the binary trace log;
@@ -275,6 +276,27 @@ struct montauk_sched_event {
   __u64 runtime_ns;     // preempt_tick only
   __u64 budget_ns;      // preempt_tick only
   __u64 timestamp_ns;
+};
+
+// Per-CPU kernel-thread dispatch-strand event. Emitted system-wide (NOT scoped
+// to the traced comm group, like SCHED_OP_CPU_IDLE) when a per-CPU kthread
+// (PF_KTHREAD with nr_cpus_allowed == 1 -- ksoftirqd/N, bound kworkers, btrfs
+// endio workers, the scx watchdog workfn) finally comes on-CPU after a
+// became-runnable -> ran latency >= kstrand_thresh_ns. These threads can ONLY
+// run on their one bound CPU, so a scheduler that strands them behind a long
+// slice wedges every fsync/writeback waiter on the system into D state without
+// tripping the runnable-stall watchdog (the victims are in D, not R). The run
+// CPU here IS the bound CPU; the analyzer correlates it against CPU_IDLE to
+// split a HELD strand (CPU busy through the wait -- scheduler fault) from a
+// DARK one (CPU idle, tickless, no rescue scan). Gated on sched_stream.
+struct montauk_kstrand_event {
+  __u32 type;             // TRACE_EVT_KSTRAND
+  __u32 tid;              // the per-CPU kthread's tid
+  __u32 cpu;              // run CPU == the kthread's single allowed CPU
+  __u32 nr_cpus_allowed;  // == 1 by construction (kept for forward-compat / sanity)
+  __u64 latency_ns;       // became-runnable -> ran (the strand duration)
+  __u64 timestamp_ns;     // ktime_get_ns at sched-in
+  char  comm[16];         // next_comm from the sched_switch tracepoint
 };
 
 // ntsync operation types (mapped from ioctl nr 0x80-0x8D)

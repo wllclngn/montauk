@@ -153,6 +153,20 @@ int main(int argc, char** argv) {
         }
         break;
       }
+      case TRACE_EVT_KSTRAND: {
+        if (len < sizeof(montauk_kstrand_event)) break;
+        auto* k = reinterpret_cast<const montauk_kstrand_event*>(data);
+        if (csv) {
+          std::printf("KSTRAND,%.3f,%s,%u,%u,%s,lat_us=%" PRIu64 "\n",
+                      elapsed_ms(k->timestamp_ns), wall_str(to_wall(k->timestamp_ns)).c_str(),
+                      k->tid, k->cpu, k->comm, (uint64_t)k->latency_ns / 1000);
+        } else {
+          std::printf("[%10.3f] KSTRAND cpu=%-3u tid=%-7u %-16s strand=%" PRIu64 "us\n",
+                      elapsed_ms(k->timestamp_ns), k->cpu, k->tid, k->comm,
+                      (uint64_t)k->latency_ns / 1000);
+        }
+        break;
+      }
       case TRACE_EVT_NTSYNC: {
         if (len < sizeof(montauk_ntsync_event)) break;
         auto* nts = reinterpret_cast<const montauk_ntsync_event*>(data);

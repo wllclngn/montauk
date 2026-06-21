@@ -180,6 +180,35 @@ const volatile unsigned char sched_stream = 0;  /* base type: portable into the 
 // user stack, alongside the normal TRACE_EVT_HEAP record.
 const volatile __u64 heap_stack_size = 0;
 
+// Per-CPU kthread strand threshold (ns). A per-CPU kthread whose
+// became-runnable -> ran latency reaches this emits a TRACE_EVT_KSTRAND. 5ms
+// default: well above a healthy dispatch (tens of us) yet far below the I/O
+// timescales (btrfs writeback, fsync) that wedge when these threads strand.
+// Userspace may lower it via MONTAUK_KSTRAND_THRESH_NS before load.
+const volatile __u64 kstrand_thresh_ns = 5000000;
+
+// became-runnable timestamp + comm for per-CPU kthreads pending a run, keyed by
+// tid. Separate from thread_map (which is scoped to the traced comm group);
+// these kthreads are tracked system-wide so a strand that freezes the box is
+// caught even when the traced app is not the victim. Earliest wake is kept
+// (BPF_NOEXIST on re-wakeup) so the latency reflects the full strand, not the
+// last poke. The comm is stamped here from the task_struct (verifier-clean CO-RE
+// read) so the sched-in side never has to dereference the tracepoint ctx.
+struct kpcpu_wait {
+  __u64 wake_ns;
+  char  comm[16];
+};
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, 4096);
+  __type(key, __u32);
+  __type(value, struct kpcpu_wait);
+} kpcpu_wake SEC(".maps");
+
+#ifndef PF_KTHREAD
+#define PF_KTHREAD 0x00200000
+#endif
+
 static __always_inline void sched_op_bump(u32 op)
 {
   u32 z = 0;
@@ -976,6 +1005,35 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
     // comm is already set by handle_sys_enter via bpf_get_current_comm()
   }
 
+  // PER-CPU KTHREAD STRAND: a kthread we stamped at wakeup (handle_kpcpu_wakeup)
+  // is coming on-CPU. Drain its became-runnable stamp; if it waited past the
+  // threshold, emit one strand event. Runs OUTSIDE the thread_map (`next`) gate
+  // above -- these kthreads are not in the traced comm group, so `next` is NULL
+  // for them. The comm was stamped into the map at wakeup (from the task_struct),
+  // so naming the thread needs no tracepoint-ctx dereference here.
+  if (sched_stream) {
+    struct kpcpu_wait *kw = bpf_map_lookup_elem(&kpcpu_wake, &next_tid);
+    if (kw) {
+      u64 wake_ns = kw->wake_ns;
+      u64 lat = (now > wake_ns) ? (now - wake_ns) : 0;
+      if (lat >= kstrand_thresh_ns) {
+        struct montauk_kstrand_event *ke =
+            bpf_ringbuf_reserve(&events, sizeof(*ke), 0);
+        if (ke) {
+          ke->type            = TRACE_EVT_KSTRAND;
+          ke->tid             = next_tid;
+          ke->cpu             = (u32)bpf_get_smp_processor_id();
+          ke->nr_cpus_allowed = 1;
+          ke->latency_ns      = lat;
+          ke->timestamp_ns    = now;
+          __builtin_memcpy(ke->comm, kw->comm, sizeof(ke->comm));
+          bpf_ringbuf_submit(ke, 0);
+        }
+      }
+      bpf_map_delete_elem(&kpcpu_wake, &next_tid);
+    }
+  }
+
   // PER-CPU IDLE BOUNDARY. Emitted for EVERY CPU's idle transitions, not just
   // the traced comm group -- the only event here that is. The traced-group gate
   // above (thread_map/is_tracked) drops swapper, so without this the analyzer
@@ -1052,6 +1110,34 @@ int handle_sched_wakeup(struct trace_event_raw_sched_wakeup_compat *ctx) {
   e->budget_ns     = 0;
   e->timestamp_ns  = bpf_ktime_get_ns();
   bpf_ringbuf_submit(e, 0);
+  return 0;
+}
+
+// Per-CPU kthread wakeup stamp. The classic tp/sched/sched_wakeup carries only
+// pid/comm/target_cpu (no task_struct), so it cannot see nr_cpus_allowed or
+// PF_KTHREAD -- the two fields that identify a CPU-bound kernel thread. This BTF
+// raw tracepoint gets the task pointer directly. Cheap: two scalar reads gate
+// everything; only an actual per-CPU kthread touches the map. Gated on
+// sched_stream so it is inert outside binary --trace-out capture. The sched-in
+// side (handle_sched_switch) drains the stamp and emits TRACE_EVT_KSTRAND.
+SEC("tp_btf/sched_wakeup")
+int BPF_PROG(handle_kpcpu_wakeup, struct task_struct *p)
+{
+  if (!sched_stream)
+    return 0;
+  if (!(BPF_CORE_READ(p, flags) & PF_KTHREAD))
+    return 0;
+  if (BPF_CORE_READ(p, nr_cpus_allowed) != 1)
+    return 0;
+  u32 tid = (u32)BPF_CORE_READ(p, pid);
+  struct kpcpu_wait w = {};
+  w.wake_ns = bpf_ktime_get_ns();
+  // p->comm is a fixed char[16]; read it through CO-RE (a tp_btf task ptr is
+  // trusted, so this is verifier-clean -- unlike a tracepoint-ctx array field).
+  BPF_CORE_READ_STR_INTO(&w.comm, p, comm);
+  // BPF_NOEXIST: keep the EARLIEST pending wake so a re-wakeup of a still-stranded
+  // kthread does not reset the clock and hide the true strand duration.
+  bpf_map_update_elem(&kpcpu_wake, &tid, &w, BPF_NOEXIST);
   return 0;
 }
 
