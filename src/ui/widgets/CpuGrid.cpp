@@ -114,10 +114,28 @@ void CpuGrid::render(widget::Canvas& canvas,
                                               border_style, title_style);
   if (inner.width <= 0 || inner.height <= 0) return;
 
-  // Lazy-size cells_ to match the snapshot's per-core count. Allocate
-  // image IDs once; resize only grows.
+  // Size cells_ to the snapshot's live per-core count each frame. The count
+  // tracks CPU hotplug: it can shrink as well as grow.
   const int ncpu = static_cast<int>(snap.cpu.per_core_pct.size());
   if (ncpu <= 0) return;
+
+  auto& gfx = widget::GraphicsEmitter::instance();
+
+  // Hotplug DOWN: cores went offline since the last frame. Their chart images
+  // are still placed on the terminal, and once the grid re-lays-out for fewer
+  // cores the surviving cells draw over the stale ones -- the overlay. Delete
+  // the removed cells' images and shrink the grid to the live core count.
+  if (static_cast<int>(cells_.size()) > ncpu) {
+    for (size_t i = static_cast<size_t>(ncpu); i < cells_.size(); ++i) {
+      if (!cells_[i].placed) continue;
+      std::string del = gfx.emit_delete(cells_[i].image_id);
+      if (!del.empty()) canvas.push_graphics_command(std::move(del));
+    }
+    cells_.resize(static_cast<size_t>(ncpu));
+  }
+
+  // Hotplug UP / first frame: grow to the live count, allocating one image ID
+  // per new cell.
   if (static_cast<int>(cells_.size()) < ncpu) {
     cells_.resize(static_cast<size_t>(ncpu));
     for (auto& c : cells_) {
@@ -145,8 +163,6 @@ void CpuGrid::render(widget::Canvas& canvas,
   const int last_row  = std::min(total_rows, scroll_rows_ + visible_rows);
   const int first_idx = first_row * cols;
   const int last_idx  = last_row  * cols;
-
-  auto& gfx = widget::GraphicsEmitter::instance();
 
   // Drop placements for cells that aren't visible this frame.
   for (int i = 0; i < ncpu; ++i) {

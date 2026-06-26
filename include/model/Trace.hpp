@@ -97,6 +97,10 @@ struct TraceSnapshot {
   uint64_t mig_intra_domain{};
   uint64_t mig_cross_domain{};
   uint64_t mig_unknown_domain{};
+  uint64_t mig_intra_wake{};   // intra-domain wake-placements (select_cpu / enqueue spill push)
+  uint64_t mig_intra_steal{};  // intra-domain dispatch steals (pull)
+  uint64_t mig_cross_wake{};
+  uint64_t mig_cross_steal{};
 
   bool     waiting_for_match{false};
   uint64_t seq{};

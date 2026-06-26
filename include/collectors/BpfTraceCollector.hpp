@@ -48,11 +48,23 @@ private:
   // provider to the binary log. No-op when binary output is disabled.
   void append_provider_snapshots();
 
+  // Track quark's wineserver daemon by the daemon_pid="N" label it publishes in
+  // its provider text — writes the pid straight into the BPF proc_map. Comm- and
+  // timing-independent: quark knows its own pid, so it tells us.
+  void track_daemon_from_provider(const std::string& provider_text);
+
   // Embed a generic cpu -> cache-hierarchy (L2/L3/socket) snapshot once, so the
   // offline analyzer can turn each migration into a cache-tier distance with no
   // live /sys read (decode-anywhere). Named "cache_topology"; names no scheduler.
   void append_cache_topology_snapshot();
   bool cache_topo_emitted_ = false;
+
+  // Read the per-CPU sched_ext kick-storm counters, delta vs the previous cycle,
+  // and append one TRACE_EVT_SCX_STORM sample. Names the cpu_release storm from the
+  // trace -- replaces the scheduler-stdout scrape (storm_score).
+  void append_scx_storm_sample();
+  uint64_t scx_kicks_last_ = 0, scx_preempt_last_ = 0, scx_reenq_last_ = 0;
+  uint64_t scx_sample_last_ns_ = 0;
 
   // Add a PID to the BPF proc_map (tracked set)
   void track_pid(int32_t pid, int32_t ppid, bool is_root, const char* comm);

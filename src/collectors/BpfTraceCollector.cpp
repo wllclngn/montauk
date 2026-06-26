@@ -241,6 +241,11 @@ void BpfTraceCollector::append_provider_snapshots() {
   uint64_t now_ns = static_cast<uint64_t>(mono.tv_sec) * 1000000000ull + mono.tv_nsec;
   std::vector<uint8_t> rec;
   for (const auto& p : provs) {
+    // quark announces its wineserver daemon pid as a daemon_pid label. Track it
+    // into the BPF proc_map the moment we can read the announcement, so the
+    // daemon and all its threads are traced regardless of comm or spawn timing.
+    if (p.name.find("quark") != std::string::npos)
+      track_daemon_from_provider(p.raw_text);
     montauk_provider_event ev{};
     ev.type = TRACE_EVT_PROVIDER;
     ev.timestamp_ns = now_ns;
@@ -253,6 +258,66 @@ void BpfTraceCollector::append_provider_snapshots() {
     rec.insert(rec.end(), tp, tp + p.raw_text.size());
     trace_append(rec.data(), rec.size());
   }
+}
+
+// Read the per-CPU scx_storm counters, delta against the previous cycle, and append
+// one TRACE_EVT_SCX_STORM sample. The deltas + interval give per-CPU-summed kick /
+// preempt-kick / reenqueue rates -- the cpu_release storm, straight from the trace.
+void BpfTraceCollector::append_scx_storm_sample() {
+  if (trace_fd_ < 0 || !skel_) return;
+  int fd = bpf_map__fd(skel_->maps.scx_storm);
+  if (fd < 0) return;
+  int ncpu = libbpf_num_possible_cpus();
+  if (ncpu <= 0) ncpu = 1;
+  std::vector<scx_storm_counters> per(static_cast<size_t>(ncpu));
+  uint32_t key = 0;
+  if (bpf_map_lookup_elem(fd, &key, per.data()) != 0) return;
+  uint64_t kicks = 0, preempt = 0, reenq = 0;
+  for (const auto& v : per) { kicks += v.kicks; preempt += v.preempt_kicks; reenq += v.reenq; }
+
+  timespec mono{};
+  clock_gettime(CLOCK_MONOTONIC, &mono);
+  uint64_t now_ns = static_cast<uint64_t>(mono.tv_sec) * 1000000000ull + mono.tv_nsec;
+
+  // First call seeds the baseline; a delta is only meaningful from the next cycle on.
+  if (scx_sample_last_ns_ != 0) {
+    montauk_scx_storm_event ev{};
+    ev.type = TRACE_EVT_SCX_STORM;
+    ev.interval_ms = static_cast<__u32>((now_ns - scx_sample_last_ns_) / 1000000ull);
+    ev.kicks = kicks - scx_kicks_last_;
+    ev.preempt_kicks = preempt - scx_preempt_last_;
+    ev.reenq = reenq - scx_reenq_last_;
+    ev.timestamp_ns = now_ns;
+    trace_append(reinterpret_cast<const uint8_t*>(&ev), sizeof(ev));
+  }
+  scx_kicks_last_ = kicks;
+  scx_preempt_last_ = preempt;
+  scx_reenq_last_ = reenq;
+  scx_sample_last_ns_ = now_ns;
+}
+
+// Track the wineserver daemon by the pid quark publishes as a daemon_pid="N"
+// label in its provider text (the same label montauk_analyze reads to build the
+// (daemon_pid,fd)->obj_ptr bridge). Writing that pid into the BPF proc_map makes
+// is_tracked() true for the daemon and every one of its threads, so its ntsync
+// signaler ops are emitted into the trace. This is the kernel-direct alternative
+// to string-matching a comm the daemon's worker threads never carry: quark knows
+// its own pid, so it tells us, and we flip one map entry. Idempotent via the
+// proc_map lookup, so the once-per-cycle call re-tracks only on a daemon restart.
+void BpfTraceCollector::track_daemon_from_provider(const std::string& text) {
+  if (!skel_) return;
+  size_t pos = text.find("daemon_pid=\"");
+  if (pos == std::string::npos) return;
+  pos += 12; // strlen("daemon_pid=\"")
+  long pid = std::strtol(text.c_str() + pos, nullptr, 10);
+  if (pid <= 1) return;
+  uint32_t key = static_cast<uint32_t>(pid);
+  int pf = bpf_map__fd(skel_->maps.proc_map);
+  struct proc_bpf_info dummy;
+  if (pf >= 0 && bpf_map_lookup_elem(pf, &key, &dummy) == 0) return; // already tracked
+  montauk::util::log_info(
+      "DAEMON pid=%ld tracked from quark provider daemon_pid label", pid);
+  track_pid(static_cast<int32_t>(pid), 0, true, "triskelion");
 }
 
 // Generic cpu -> cache-hierarchy snapshot embedded once in the binary trace.
@@ -1047,15 +1112,23 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
       std::vector<struct mig_domain_counters> per(static_cast<size_t>(ncpu));
       uint32_t key = 0;
       if (bpf_map_lookup_elem(fd, &key, per.data()) == 0) {
-        uint64_t in = 0, cr = 0, un = 0;
+        uint64_t in = 0, cr = 0, un = 0, iw = 0, is = 0, cw = 0, cs = 0;
         for (int c = 0; c < ncpu; ++c) {
           in += per[static_cast<size_t>(c)].intra;
           cr += per[static_cast<size_t>(c)].cross;
           un += per[static_cast<size_t>(c)].unknown;
+          iw += per[static_cast<size_t>(c)].intra_wake;
+          is += per[static_cast<size_t>(c)].intra_steal;
+          cw += per[static_cast<size_t>(c)].cross_wake;
+          cs += per[static_cast<size_t>(c)].cross_steal;
         }
         snap.mig_intra_domain = in;
         snap.mig_cross_domain = cr;
         snap.mig_unknown_domain = un;
+        snap.mig_intra_wake = iw;
+        snap.mig_intra_steal = is;
+        snap.mig_cross_wake = cw;
+        snap.mig_cross_steal = cs;
       }
     }
   }
@@ -1212,6 +1285,16 @@ void BpfTraceCollector::run(std::stop_token st) {
   if (sched_tp > 0)
     montauk::util::log_info("attached %d scheduler-decision tracepoint(s)", sched_tp);
 
+  // Pick-stream fallback. If no scheduler pick tracepoint bound, tell the BPF to
+  // derive picks from the universal sched_switch (SCHED_OP_SWITCH_IN) so the slice/
+  // service reports still resolve (EEVDF, or an scx mode that does not export pick).
+  // Set post-attach: the link is known only here, and switch_in_fallback lives in
+  // .bss (writable), not the load-frozen rodata. Pick present -> stay quiet so the
+  // two pick streams never double up.
+  if (skel_->bss)
+    skel_->bss->switch_in_fallback =
+        (skel_->links.handle_sched_pick == nullptr) ? 1 : 0;
+
   // Task-iterator thread enrollment: attach the iterator once; we drive it each
   // scan (snapshot_from_maps) to enroll every tracked process's threads, however
   // fast they spawn. Non-fatal if it can't attach -- the reactive sys_enter path
@@ -1353,9 +1436,10 @@ void BpfTraceCollector::run(std::stop_token st) {
   if (!emitter_.start())
     montauk::util::log_warn("provider emitter bind failed (continuing)");
 
-  // No initial_scan. No /proc reads. BPF tracepoints populate maps
-  // as processes fork/exec/syscall/switch. Userspace pattern matching
-  // happens in handle_event (exec + comm_change) and rescan_comms.
+  // The daemon is tracked in-kernel: discovery_map sees every syscalling process
+  // (now keyed by the group_leader comm, so the daemon's worker threads no longer
+  // mask the process name), and append_provider_snapshots tracks the exact
+  // daemon pid quark announces. No /proc discovery scan.
 
   while (!st.stop_requested()) {
     ring_buffer__poll(rb_, 100);
@@ -1390,6 +1474,7 @@ void BpfTraceCollector::run(std::stop_token st) {
     // Embed provider snapshots into the binary log once per cycle so the
     // trace carries the providers' view of the same time window.
     append_provider_snapshots();
+    append_scx_storm_sample();
 
     // Publish montauk's own state to the provider mesh (montauk.sock).
     emitter_.update(montauk::app::trace_to_prometheus(snap));

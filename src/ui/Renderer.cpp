@@ -182,6 +182,14 @@ void Renderer::handle_input(const widget::InputEvent& ev) {
   // Quit ('q') stays globally available so users can always bail.
   if (impl_->cpu_view) {
     if (ev.is_char('q')) { impl_->quit = true; return; }
+    // The right column renders beside CPU TOPOLOGY (left = grid, right = column),
+    // so its on-screen toggles must still work -- 's' SYSTEM focus, 't' thermal,
+    // 'G' gpumon. Without this the modal swallowed them and the visible right
+    // column would not respond. CpuGrid's own keys (Esc / 'C' / arrows) don't
+    // collide with these.
+    if (ev.is_char('s')) { impl_->right_column.set_system_focus(!impl_->right_column.system_focus()); return; }
+    if (ev.is_char('t')) { impl_->right_column.set_show_thermal(!impl_->right_column.show_thermal()); return; }
+    if (ev.is_char('G')) { impl_->right_column.set_show_gpumon(!impl_->right_column.show_gpumon()); return; }
     impl_->cpu_grid.handle_input(ev);
     if (impl_->cpu_grid.consume_close_request()) impl_->cpu_view = false;
     return;

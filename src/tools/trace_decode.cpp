@@ -318,6 +318,21 @@ int main(int argc, char** argv) {
         }
         break;
       }
+      case TRACE_EVT_WAITSTACK: {
+        if (len < sizeof(montauk_waitstack_event)) break;
+        auto* w = reinterpret_cast<const montauk_waitstack_event*>(data);
+        std::printf("[%10.3f] WAITSTK pid=%u tid=%u obj=0x%016" PRIx64
+                    " comm='%.16s' stack_depth=%u (INFINITE wait)\n",
+                    elapsed_ms(w->timestamp_ns), w->pid, w->tid,
+                    (uint64_t)w->obj_ptr, w->comm, w->stack_depth);
+        unsigned wn = w->stack_depth;
+        if (wn > TRACE_STACK_MAX_FRAMES) wn = TRACE_STACK_MAX_FRAMES;
+        for (unsigned i = 0; i < wn; ++i) {
+          std::printf("              #%-2u 0x%016" PRIx64 "\n",
+                      i, (uint64_t)w->stack_user[i]);
+        }
+        break;
+      }
       case TRACE_EVT_KEYEDEVT: {
         if (len < sizeof(montauk_keyedevt_event)) break;
         auto* k = reinterpret_cast<const montauk_keyedevt_event*>(data);

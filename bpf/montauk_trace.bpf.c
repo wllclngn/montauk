@@ -59,6 +59,14 @@ struct {
   __type(value, struct ntsync_scratch);
 } ntsync_scratch SEC(".maps");
 
+// sched_ext kick-storm counters (per-CPU; the collector sums + deltas each interval)
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, u32);
+  __type(value, struct scx_storm_counters);
+} scx_storm SEC(".maps");
+
 // Per-CPU scratch for openat filename passing (enter → exit)
 struct {
   __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -187,6 +195,14 @@ const volatile __u64 heap_stack_size = 0;
 // Userspace may lower it via MONTAUK_KSTRAND_THRESH_NS before load.
 const volatile __u64 kstrand_thresh_ns = 5000000;
 
+// WRITABLE global (.bss), set by the collector AFTER the decision tracepoints are
+// bound -- not const volatile rodata, which is frozen at load before that attach
+// result is known. 1 when no sched_decision/pick tracepoint attached, so
+// handle_sched_switch emits a SCHED_OP_SWITCH_IN pick from the universal
+// sched_switch and the slice/service reports still resolve; 0 when the scheduler's
+// own pick stream is present, so the two streams never double up.
+unsigned char switch_in_fallback = 0;
+
 // became-runnable timestamp + comm for per-CPU kthreads pending a run, keyed by
 // tid. Separate from thread_map (which is scoped to the traced comm group);
 // these kthreads are tracked system-wide so a strand that freezes the box is
@@ -204,6 +220,16 @@ struct {
   __type(key, __u32);
   __type(value, struct kpcpu_wait);
 } kpcpu_wake SEC(".maps");
+
+// Dedup set for TRACE_EVT_THREAD_NAME: one tid->comm binding per thread. A tid
+// already present skips the emit, so a CPU-bound holder is named once, not per
+// switch-in. Bounded; if full, BPF_NOEXIST fails and the tid stays unnamed.
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, 8192);
+  __type(key, __u32);
+  __type(value, __u8);
+} named_tids SEC(".maps");
 
 #ifndef PF_KTHREAD
 #define PF_KTHREAD 0x00200000
@@ -636,7 +662,15 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
     if (!existing) {
       struct discovery_entry de = {};
       de.pid = pid;
-      bpf_get_current_comm(de.comm, sizeof(de.comm));
+      // Record the PROCESS (group_leader) comm, not the running thread's. A
+      // multi-threaded daemon's worker threads carry their own names (the
+      // wineserver's ntsync worker pool), which would mask the process name the
+      // --trace pattern matches and leave the daemon unpromoted. The group_leader
+      // is the main thread whose comm is the process identity (the exec'd binary,
+      // e.g. "triskelion"). discovery_entry is keyed by tgid, so this is the
+      // right granularity.
+      struct task_struct *cur = (struct task_struct *)bpf_get_current_task();
+      BPF_CORE_READ_STR_INTO(&de.comm, cur, group_leader, comm);
       bpf_map_update_elem(&discovery_map, &pid, &de, BPF_NOEXIST);
 
       // BPF-SIDE PATTERN MATCH on first syscall — auto-track immediately.
@@ -653,28 +687,37 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
   if (syscall_id == 157 && arg0 == 15) {
     const char *name = (const char *)arg1;
 
-    // Update discovery_map with new name
-    struct discovery_entry de = {};
-    de.pid = pid;
-    bpf_probe_read_user_str(de.comm, sizeof(de.comm), name);
-    bpf_map_update_elem(&discovery_map, &pid, &de, BPF_ANY);
+    // Only a group_leader (main-thread) rename changes the PROCESS identity.
+    // A worker thread renaming itself must NOT clobber the process comm in
+    // discovery_map/proc_map or auto-track on its own name — that is exactly how
+    // a daemon's worker pool used to mask the process name and break promotion.
+    // Wine renames a new Windows process's MAIN thread to the exe name, so this
+    // still catches the intended case (tid == tgid). The thread's own comm is
+    // updated unconditionally in thread_map below.
+    if (tid == pid) {
+      // Update discovery_map with new name
+      struct discovery_entry de = {};
+      de.pid = pid;
+      bpf_probe_read_user_str(de.comm, sizeof(de.comm), name);
+      bpf_map_update_elem(&discovery_map, &pid, &de, BPF_ANY);
 
-    // Update proc_map if tracked
-    struct proc_bpf_info *info = bpf_map_lookup_elem(&proc_map, &pid);
-    if (info) {
-      bpf_probe_read_user_str(info->comm, sizeof(info->comm), name);
-    } else {
-      // Not tracked yet — BPF-side pattern match on the new name.
-      // Any process that renames itself to match the pattern gets
-      // auto-tracked immediately. Application-agnostic.
-      if (trace_pat.len > 0) {
-        if (bpf_substr_match(de.comm, 16, (const char *)trace_pat.pattern, trace_pat.len)) {
-          auto_track_pid(pid);
+      // Update proc_map if tracked
+      struct proc_bpf_info *info = bpf_map_lookup_elem(&proc_map, &pid);
+      if (info) {
+        bpf_probe_read_user_str(info->comm, sizeof(info->comm), name);
+      } else {
+        // Not tracked yet — BPF-side pattern match on the new name.
+        // Any process that renames its main thread to match the pattern gets
+        // auto-tracked immediately. Application-agnostic.
+        if (trace_pat.len > 0) {
+          if (bpf_substr_match(de.comm, 16, (const char *)trace_pat.pattern, trace_pat.len)) {
+            auto_track_pid(pid);
+          }
         }
       }
     }
 
-    // Update thread_map if entry exists
+    // Update thread_map if entry exists (per-thread comm — always)
     struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
     if (ts) {
       bpf_probe_read_user_str(ts->comm, sizeof(ts->comm), name);
@@ -691,6 +734,35 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
    * (op->fd, val->result, uaddr->count). */
   if (syscall_id == 202)
     emit_io_event(pid, tid, 202, (s32)arg1, (s64)arg2, arg0, 0);
+
+  /* I/O-WAIT syscalls (poll/ppoll/epoll_wait/epoll_pwait/select/pselect6/
+   * recvmsg/recvfrom): a thread blocked here is parked on a producer the way an
+   * ntsync waiter is, but in a syscall that may never return (the winepulse
+   * mainloop in poll() on the audio socket). Emit a PENDING (result=-999) enter
+   * marker so the analyzer can name a thread still parked in it at trace end;
+   * the exit handler emits the completion that pairs it. */
+  {
+    s32 io_fd = -1;
+    int is_iowait = 1;
+    switch (syscall_id) {
+      case 232: case 281: /* epoll_wait / epoll_pwait: arg0 = epfd */
+      case 47:  case 45:  /* recvmsg / recvfrom: arg0 = sockfd */
+        io_fd = (s32)arg0; break;
+      case 7:   case 271: /* poll / ppoll: arg0 = pollfd[], arg1 = nfds */
+        if (arg1 > 0) {
+          int first_fd = -1;
+          bpf_probe_read_user(&first_fd, sizeof(first_fd), (void *)arg0);
+          io_fd = first_fd;
+        }
+        break;
+      case 23:  case 270: /* select / pselect6: no single fd */
+        io_fd = -1; break;
+      default:
+        is_iowait = 0; break;
+    }
+    if (is_iowait)
+      emit_io_event(pid, tid, syscall_id, io_fd, -999, 0, 0);
+  }
 
   struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
   if (ts) {
@@ -787,6 +859,27 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
                 bpf_ringbuf_submit(we, 0);
               }
             }
+            // Wait-site stack for INFINITE waits only (the hang-prone ones). A
+            // thread parked at trace end never reaches sys_exit, so this names
+            // WHERE it blocked (resolved offline against the maps sidecar).
+            if (s->timeout_ns == ~0ULL) {
+              struct montauk_waitstack_event *ws =
+                  bpf_ringbuf_reserve(&events, sizeof(*ws), 0);
+              if (ws) {
+                ws->type = TRACE_EVT_WAITSTACK;
+                ws->pid = pid;
+                ws->tid = tid;
+                ws->obj_ptr = s->wait_count > 0
+                                  ? montauk_fd_obj((int)s->wait_fds[0]) : 0;
+                ws->timeout_ns = s->timeout_ns;
+                long sb = bpf_get_stack(ctx, ws->stack_user,
+                                        sizeof(ws->stack_user), BPF_F_USER_STACK);
+                ws->stack_depth = sb > 0 ? (u32)(sb / sizeof(u64)) : 0;
+                bpf_get_current_comm(ws->comm, sizeof(ws->comm));
+                ws->timestamp_ns = bpf_ktime_get_ns();
+                bpf_ringbuf_submit(ws, 0);
+              }
+            }
             break;
           }
           default:
@@ -809,6 +902,12 @@ int handle_sys_exit(struct trace_event_raw_sys_exit *ctx) {
 
   struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
   if (ts) {
+    // I/O-wait completion: pair the pending enter (above) so a poll/epoll/recv
+    // that DID return is not mistaken for a thread still parked in it.
+    s32 snr = ts->syscall_nr;
+    if (snr == 7 || snr == 271 || snr == 232 || snr == 281 ||
+        snr == 47 || snr == 45 || snr == 23 || snr == 270)
+      emit_io_event(pid, tid, snr, -1, ctx->ret, 0, 0);
     ts->syscall_nr = -1; // back to running
   }
 
@@ -952,6 +1051,12 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
   u32 next_tid = ctx->next_pid;
   struct thread_bpf_state *next = bpf_map_lookup_elem(&thread_map, &next_tid);
   if (next) {
+    // STATE AT LAST SWITCH-OUT, CAPTURED BEFORE WE RESET IT BELOW: 0 = R (PREEMPTED, STILL
+    // RUNNABLE -> A DISPATCH STEAL PULLED IT HERE); S/D = SLEPT (-> THE SCHEDULER PLACED A
+    // WOKEN TASK ON THIS CPU AT WAKE = A select_cpu / ENQUEUE SPILL PUSH). MAINTAINED
+    // ALWAYS-ON (sched_switch IS NOT sched_stream-GATED), SO THE SPLIT WORKS ON A .prom-ONLY
+    // CAPTURE TOO -- NO --trace NEEDED.
+    int off_state = next->state;
     next->enter_ns = now;
     next->state = 0; // R (running)
     // ON-CPU + MIGRATION: count a cross-CPU move when the running core changes,
@@ -966,9 +1071,15 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
       u32 *dc = (dst < TRACE_MAX_CPUS) ? bpf_map_lookup_elem(&cpu_cache_domain, &dst) : NULL;
       u32 zero = 0;
       struct mig_domain_counters *m = bpf_map_lookup_elem(&mig_domain_counts, &zero);
+      // SPILL vs STEAL: A SLEPT-THEN-WOKEN TASK (off_state != R) WAS PLACED ON THIS CPU AT
+      // WAKE -- A select_cpu / ENQUEUE SPILL PUSH; A PREEMPTED-STILL-RUNNABLE TASK
+      // (off_state == 0) WAS PULLED HERE AT DISPATCH -- A STEAL. THE PATH-BLIND MIGRATION
+      // COUNT CANNOT TELL THE TWO APART; ON A SINGLE-CCX BOX (cross ALWAYS 0) THIS SPLIT IS
+      // THE ONLY WAY TO SEE WHICH SIDE SCATTERS A THRASHING PAIR.
+      int woke = (off_state != 0);
       if (sc && dc) {
-        if (*sc == *dc) { if (m) m->intra += 1; }
-        else { cross_domain = 1; if (m) m->cross += 1; }
+        if (*sc == *dc) { if (m) { m->intra += 1; if (woke) m->intra_wake += 1; else m->intra_steal += 1; } }
+        else { cross_domain = 1; if (m) { m->cross += 1; if (woke) m->cross_wake += 1; else m->cross_steal += 1; } }
       } else if (m) {
         m->unknown += 1;
       }
@@ -1064,6 +1175,58 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
     }
   }
 
+  // THREAD NAME BINDING: one tid->comm record per distinct thread so the holder
+  // ledger can name a CPU-bound task whose only appearance is SWITCH_IN (emits no
+  // syscall, predates the trace). Deduped via named_tids; sched_stream-gated, so
+  // it is one event per thread for the whole capture, not per switch.
+  if (sched_stream && next_tid != 0) {
+    __u8 one = 1;
+    if (bpf_map_update_elem(&named_tids, &next_tid, &one, BPF_NOEXIST) == 0) {
+      struct montauk_ring_event *ne =
+          bpf_ringbuf_reserve(&events, sizeof(*ne), 0);
+      if (ne) {
+        ne->type        = TRACE_EVT_THREAD_NAME;
+        ne->pid         = next_tid;
+        ne->ppid        = 0;
+        ne->child_pid   = 0;
+        // next_comm is an array inside the tracepoint ctx (PTR_TO_CTX); a bulk
+        // memcpy out of it is verifier-rejected (-EACCES), so read it through the
+        // probe-read path montauk uses for the exec filename.
+        bpf_probe_read_kernel_str(ne->comm, sizeof(ne->comm), ctx->next_comm);
+        ne->filename[0] = '\0';
+        bpf_ringbuf_submit(ne, 0);
+      }
+    }
+  }
+
+  // SCHED_SWITCH-DERIVED PICK. When no scheduler pick tracepoint is bound
+  // (switch_in_fallback, set by the collector post-attach), the next task coming
+  // on-CPU is the pick the slice/service reports need -- sched_switch is universal,
+  // so this resolves those reports for EEVDF and any scx mode that does not export
+  // a pick. Unconditional like CPU_IDLE above (the hog holding a CPU is not in the
+  // traced comm group, yet its slice is exactly what we measure); idle excluded
+  // (that boundary is CPU_IDLE). Suppressed when the scheduler's own pick stream is
+  // present, so it never double-counts; gated on sched_stream, off the hot path.
+  if (sched_stream && switch_in_fallback && next_tid != 0) {
+    struct montauk_sched_event *pe =
+        bpf_ringbuf_reserve(&events, sizeof(*pe), 0);
+    if (pe) {
+      pe->type          = TRACE_EVT_SCHED;
+      pe->op            = SCHED_OP_SWITCH_IN;
+      pe->cpu           = (u32)bpf_get_smp_processor_id();
+      pe->pid           = (int)next_tid;
+      pe->secondary_pid = -1;
+      pe->last_cpu      = -1;
+      pe->sub_idx       = 0;
+      pe->freq_mhz      = 0;
+      pe->score         = 0;
+      pe->runtime_ns    = 0;
+      pe->budget_ns     = 0;
+      pe->timestamp_ns  = now;
+      bpf_ringbuf_submit(pe, 0);
+    }
+  }
+
   return 0;
 }
 
@@ -1103,7 +1266,13 @@ int handle_sched_wakeup(struct trace_event_raw_sched_wakeup_compat *ctx) {
   e->op            = SCHED_OP_WAKEUP;
   e->cpu           = (u32)ctx->target_cpu;
   e->pid           = ctx->pid;
-  e->secondary_pid = -1;
+  /* v7.9.0: stamp the WAKER. sched_wakeup fires in try_to_wake_up in the
+   * waker's context, so current is the task issuing the wake. Recording it
+   * gives every wake its causal edge waker -> wakee, which the analyzer walks
+   * to reconstruct the messenger->worker wake chain and attribute request-level
+   * latency per hop (the interval schbench reports but per-hop wake2run cannot
+   * localize). -1 only for a kernel/IRQ-context wake with no task current. */
+  e->secondary_pid = (int)(bpf_get_current_pid_tgid() & 0xffffffffULL);
   e->last_cpu      = -1;
   e->sub_idx       = 0;
   e->score         = 0;
@@ -1139,6 +1308,43 @@ int BPF_PROG(handle_kpcpu_wakeup, struct task_struct *p)
   // BPF_NOEXIST: keep the EARLIEST pending wake so a re-wakeup of a still-stranded
   // kthread does not reset the clock and hide the true strand duration.
   bpf_map_update_elem(&kpcpu_wake, &tid, &w, BPF_NOEXIST);
+  return 0;
+}
+
+// SCHED_EXT KICK-STORM COUNTERS
+// fentry on the scx kfuncs: each kick / re-enqueue bumps a per-CPU counter that the
+// collector reads + deltas every log interval (TRACE_EVT_SCX_STORM). Gated on
+// sched_stream so they stay inert outside binary --trace-out capture.
+#ifndef SCX_KICK_PREEMPT
+#define SCX_KICK_PREEMPT (1ULL << 1)
+#endif
+
+SEC("fentry/scx_bpf_kick_cpu")
+int BPF_PROG(handle_scx_kick, s32 cpu, u64 flags)
+{
+  (void)cpu;
+  if (!sched_stream)
+    return 0;
+  u32 zero = 0;
+  struct scx_storm_counters *c = bpf_map_lookup_elem(&scx_storm, &zero);
+  if (!c)
+    return 0;
+  c->kicks++;
+  if (flags & SCX_KICK_PREEMPT)
+    c->preempt_kicks++;
+  return 0;
+}
+
+SEC("fexit/scx_bpf_reenqueue_local")
+int BPF_PROG(handle_scx_reenq, u32 ret)
+{
+  if (!sched_stream)
+    return 0;
+  u32 zero = 0;
+  struct scx_storm_counters *c = bpf_map_lookup_elem(&scx_storm, &zero);
+  if (!c)
+    return 0;
+  c->reenq += ret;
   return 0;
 }
 

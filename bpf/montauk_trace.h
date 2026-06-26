@@ -47,6 +47,9 @@ enum montauk_event_type {
   TRACE_EVT_HEAPSTACK   = 13, // caller stack for size-filtered malloc/calloc (MONTAUK_HEAP_STACK_SIZE)
   TRACE_EVT_KEYEDEVT    = 14, // ntdll keyed-event uprobes (critical-section wait/release; key = CS addr)
   TRACE_EVT_KSTRAND     = 15, // per-CPU kernel-thread dispatch strand (became-runnable -> ran latency over threshold)
+  TRACE_EVT_WAITSTACK   = 16, // user stack at an INFINITE ntsync wait-enter (names where a parked thread blocks)
+  TRACE_EVT_SCX_STORM   = 17, // per-interval sched_ext kick/reenqueue counters (cpu_release storm)
+  TRACE_EVT_THREAD_NAME = 18, // tid->comm binding, deduped (one per tid), so the holder ledger can name a CPU-bound task that predates the trace and emits no syscall (montauk_ring_event payload)
 };
 
 // Provider snapshot record (userspace-appended to the binary trace log;
@@ -60,6 +63,25 @@ struct montauk_provider_event {
   char  name[32];      // provider runtime name, NUL-padded
   __u32 payload_len;   // bytes of Prometheus text following this struct
   __u32 _pad1;
+};
+
+// sched_ext kick-storm counters. BPF maintains these per-CPU; the collector reads
+// + deltas them each log interval and appends one TRACE_EVT_SCX_STORM sample. Names
+// the cpu_release kick-storm -- a REAL IPI storm (preempt-kick dominant) vs IDLE
+// re-enqueue churn -- directly from the trace, no scheduler-stdout scrape.
+struct scx_storm_counters {
+  __u64 kicks;          // scx_bpf_kick_cpu calls
+  __u64 preempt_kicks;  // ... of which carried SCX_KICK_PREEMPT (the real IPIs)
+  __u64 reenq;          // tasks re-enqueued via scx_bpf_reenqueue_local (return count)
+};
+
+struct montauk_scx_storm_event {
+  __u32 type;           // TRACE_EVT_SCX_STORM
+  __u32 interval_ms;    // wall interval this delta covers (for rate = delta / interval)
+  __u64 kicks;          // deltas over the interval, summed across CPUs
+  __u64 preempt_kicks;
+  __u64 reenq;
+  __u64 timestamp_ns;
 };
 
 // File-backed mmap event. Captures fd, length, prot, flags, offset, return
@@ -177,6 +199,23 @@ struct montauk_heapstack_event {
   char  comm[16];
 };
 
+// User stack captured at an INFINITE ntsync wait-enter. A thread parked at trace
+// end never reaches sys_exit, so its LAST waitstack names WHERE in the code it is
+// blocked (resolved against the maps sidecar -> module+offset, e.g. winepulse
+// pulse.c). Gated to infinite-timeout waits to bound volume -- those are exactly
+// the hang-prone ones that become dead-producer parks.
+struct montauk_waitstack_event {
+  __u32 type;          // TRACE_EVT_WAITSTACK
+  __u32 pid;
+  __u32 tid;
+  __u32 stack_depth;   // number of valid frames in stack_user[]
+  __u64 obj_ptr;       // first waited object's kernel ptr (0 if none) -- correlates to endstate
+  __u64 timeout_ns;    // always infinite here (the gate)
+  __u64 stack_user[TRACE_STACK_MAX_FRAMES]; // user-mode IPs, frame 0 = innermost
+  __u64 timestamp_ns;
+  char  comm[16];
+};
+
 // Keyed-event uprobe record. Wine critical sections (including loader_section)
 // wait/wake via NtWaitForKeyedEvent/NtReleaseKeyedEvent in ntdll.so, passing
 // the CRITICAL_SECTION address as the "key". Capturing that key makes critical
@@ -237,6 +276,12 @@ enum sched_trace_op {
                                 //   cpu=CPU, sub_idx=1 entering idle / 0 leaving idle. Emitted
                                 //   UNCONDITIONALLY (not gated to the traced comm group) so the
                                 //   analyzer can reconstruct exact per-CPU occupancy at any instant.
+  SCHED_OP_SWITCH_IN      = 9,  // sched_switch-derived pick: the next task coming on-CPU
+                                //   (pid=next tid, cpu=CPU). Emitted UNCONDITIONALLY, like
+                                //   CPU_IDLE, but only when no sched_decision/pick tracepoint is
+                                //   bound (switch_in_fallback) -- so slice/service derive picks
+                                //   from the universal sched_switch for any scheduler (EEVDF, or
+                                //   an scx mode that does not export pick). Idle is CPU_IDLE.
 };
 
 // Per-CPU aggregation of scheduler-decision counts, indexed by sched_trace_op.
@@ -244,7 +289,7 @@ enum sched_trace_op {
 // (one bump, no shared ringbuf reserve) keeps tracing near-zero-overhead there.
 // Userspace sums across CPUs at snapshot time. Per-event streaming is opt-in
 // (binary --trace-out only); the contract struct above is the streamed form.
-#define MONTAUK_SCHED_OP_MAX 9   /* index by sched_trace_op (1..8); 0 unused */
+#define MONTAUK_SCHED_OP_MAX 10  /* index by sched_trace_op (1..9); 0 unused */
 struct sched_op_counters {
   __u64 op[MONTAUK_SCHED_OP_MAX];
 };
@@ -259,6 +304,10 @@ struct mig_domain_counters {
   __u64 intra;    // src and dst CPUs in the same cache domain (shared L3)
   __u64 cross;    // src and dst in different cache domain domains (cross-domain interconnect)
   __u64 unknown;  // a CPU index outside cpu_cache_domain (topology not pushed / out of range)
+  __u64 intra_wake;   // intra-domain move of a SLEPT-then-woken task: WAKE-PLACEMENT (select_cpu / enqueue spill push)
+  __u64 intra_steal;  // intra-domain move of a PREEMPTED still-runnable task: dispatch-side STEAL/pull
+  __u64 cross_wake;   // cross-domain wake-placement
+  __u64 cross_steal;  // cross-domain steal
 };
 
 struct montauk_sched_event {

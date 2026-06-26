@@ -30,7 +30,7 @@ if [[ $BUILDDIR -ef "$startdir" && "$startdir" == *" "* ]]; then
     BUILDDIR=/tmp/makepkg-$pkgname
 fi
 
-pkgver=7.7.0
+pkgver=7.8.0.r79.g4fd29ea0
 pkgrel=1
 pkgdesc='High-performance Linux system monitor with kernel module, eBPF tracing, GPU attribution, and pixel-rendered area charts'
 arch=('x86_64')
@@ -56,6 +56,14 @@ optdepends=(
 # Coexistence with a future stable AUR `montauk` package.
 provides=("$_pkgname")
 conflicts=("$_pkgname")
+
+# Rename hygiene. This PKGBUILD was once named `montauk` and its debug split
+# was `montauk-debug`. After the `-git` rename, provides/conflicts swapped the
+# main package but left `montauk-debug` installed, orphaned and still owning the
+# /usr/lib/debug/.build-id/* files -- which then collide with montauk-git-debug
+# ("exists in filesystem, owned by montauk-debug") and fail the install commit.
+# replaces= supersedes the orphan on install so the debug files transfer cleanly.
+replaces=("$_pkgname-debug")
 
 source=("$_pkgname::git+$url.git")
 # git branches are dynamic — checksums change every commit. SKIP is correct

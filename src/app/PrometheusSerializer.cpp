@@ -736,6 +736,22 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
                   "Cross-core migrations with unmapped cache domain (topology not pushed)", "counter");
       auto [p3, e3] = std::to_chars(b, b + sizeof(b), t.mig_unknown_domain);
       out += "montauk_trace_migrations_unknown_domain "; out.append(b, p3); out += '\n';
+      emit_header(out, "montauk_trace_migrations_intra_wake",
+                  "Intra-domain migrations that placed a woken task (select_cpu / enqueue spill push)", "counter");
+      auto [pw, ew] = std::to_chars(b, b + sizeof(b), t.mig_intra_wake);
+      out += "montauk_trace_migrations_intra_wake "; out.append(b, pw); out += '\n';
+      emit_header(out, "montauk_trace_migrations_intra_steal",
+                  "Intra-domain migrations that pulled an already-runnable task at dispatch (steal)", "counter");
+      auto [ps, es] = std::to_chars(b, b + sizeof(b), t.mig_intra_steal);
+      out += "montauk_trace_migrations_intra_steal "; out.append(b, ps); out += '\n';
+      emit_header(out, "montauk_trace_migrations_cross_wake",
+                  "Cross-domain wake-placements (select_cpu / enqueue spill push)", "counter");
+      auto [pcw, ecw] = std::to_chars(b, b + sizeof(b), t.mig_cross_wake);
+      out += "montauk_trace_migrations_cross_wake "; out.append(b, pcw); out += '\n';
+      emit_header(out, "montauk_trace_migrations_cross_steal",
+                  "Cross-domain dispatch steals (pull)", "counter");
+      auto [pcs, ecs] = std::to_chars(b, b + sizeof(b), t.mig_cross_steal);
+      out += "montauk_trace_migrations_cross_steal "; out.append(b, pcs); out += '\n';
     }
 
     // ---- Per-thread syscall ----

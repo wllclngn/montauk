@@ -243,6 +243,14 @@ const char* io_syscall_name(int32_t nr) {
     case 8:   return "lseek";
     case 17:  return "pread64";
     case 257: return "openat";
+    case 7:   return "poll";
+    case 271: return "ppoll";
+    case 232: return "epoll_wait";
+    case 281: return "epoll_pwait";
+    case 47:  return "recvmsg";
+    case 45:  return "recvfrom";
+    case 23:  return "select";
+    case 270: return "pselect6";
     default:  return "?";
   }
 }
@@ -257,6 +265,7 @@ const char* sched_op_name(uint32_t op) {
     case SCHED_OP_WAKEUP:         return "WAKEUP";
     case SCHED_OP_WAKE2RUN:       return "WAKE2RUN";
     case SCHED_OP_CPU_IDLE:       return "CPU_IDLE";
+    case SCHED_OP_SWITCH_IN:      return "SWITCH_IN";
     default:                      return "?";
   }
 }
@@ -275,6 +284,14 @@ std::string wall_str(uint64_t wall_ns) {
 bool is_wait_op(uint8_t op) { return op == NTS_WAIT_ANY || op == NTS_WAIT_ALL; }
 bool is_signal_op(uint8_t op) {
   return op == NTS_EVENT_SET || op == NTS_EVENT_RESET || op == NTS_SEM_RELEASE ||
+         op == NTS_MUTEX_UNLOCK;
+}
+// Wakeup-worthy: ops that can WAKE a waiter. event_reset CLEARS the signal and
+// wakes nothing, so a reset-heavy event is not a busy producer. Excluding reset
+// is what separates a genuine lost wakeup (a real wake landed after the park)
+// from a producer that simply went quiet (its last actual wake was before it).
+bool is_wakeup_op(uint8_t op) {
+  return op == NTS_EVENT_SET || op == NTS_EVENT_PULSE || op == NTS_SEM_RELEASE ||
          op == NTS_MUTEX_UNLOCK;
 }
 
@@ -1382,6 +1399,9 @@ struct EndstateReport final : Report {
   std::map<uint32_t, TidState> tids_;
   std::map<uint64_t, ObjSig> objs_;
   uint64_t max_ts_ = 0;
+  // tid -> the IPs of its LAST infinite-wait-enter stack. A thread parked at
+  // trace end never exits the wait, so this names where in the code it blocked.
+  std::map<uint32_t, std::vector<uint64_t>> wait_stack_;
 
   const char* name() const override { return "endstate"; }
 
@@ -1394,6 +1414,16 @@ struct EndstateReport final : Report {
   }
 
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type == TRACE_EVT_WAITSTACK && len >= sizeof(montauk_waitstack_event)) {
+      auto* e = reinterpret_cast<const montauk_waitstack_event*>(data);
+      touch(e->tid, e->pid, e->timestamp_ns, e->comm);
+      auto& v = wait_stack_[e->tid];
+      v.clear();
+      uint32_t n = e->stack_depth;
+      if (n > TRACE_STACK_MAX_FRAMES) n = TRACE_STACK_MAX_FRAMES;
+      for (uint32_t i = 0; i < n; ++i) v.push_back(e->stack_user[i]);
+      return;
+    }
     if (type == TRACE_EVT_NTSYNC && len >= sizeof(montauk_ntsync_event)) {
       auto* e = reinterpret_cast<const montauk_ntsync_event*>(data);
       touch(e->tid, e->pid, e->timestamp_ns, nullptr);
@@ -1415,7 +1445,11 @@ struct EndstateReport final : Report {
         } else {
           t.wait_open = false;
         }
-      } else if (is_signal_op(e->op)) {
+      } else if (is_wakeup_op(e->op)) {
+        // Only a WAKEUP-worthy op (set/pulse/release/unlock) counts as a signal
+        // for the lost-wakeup vs dead-producer discriminator. event_reset wakes
+        // no one, so it must not make a quiet producer look busy or land as a
+        // bogus "signaled after park".
         auto& o = objs_[e->obj_ptr];
         ++o.signals;
         o.last_signal_ts = e->timestamp_ns;
@@ -1497,7 +1531,7 @@ struct EndstateReport final : Report {
       else if (it->second.last_signal_ts > w.wait_since)
         objdesc = std::string("; ") + ty + " signaled AFTER park (lost wakeup)";
       else
-        objdesc = std::string("; waiting on a ") + ty;
+        objdesc = std::string("; ") + ty + " last wakeup BEFORE the park — producer went quiet";
     }
     std::printf("VERDICT: %zu thread(s) stuck in an ntsync wait (%zu genuine stall victims, "
                 "%zu woke/lost-compl); longest tid=%u '%s' %s %.1fs%s\n",
@@ -1552,6 +1586,24 @@ struct EndstateReport final : Report {
         std::printf("%-8u 0x%016" PRIx64 " %-6u %-6s %-8" PRIu64 " %-9" PRIu64 " %s\n",
                     tid, ptr, t->wait_fds[i], ty, sigs, wts, verdict);
       }
+      // Wait-site: the top resolved frames of WHERE this thread is parked in the
+      // code (its last infinite-wait stack, joined against the maps sidecar).
+      // Turns "in an ntsync wait" into e.g. winepulse pulse.c+0x... -- which names
+      // who owns the dead-producer signal and whether the wait is safe to break.
+      auto wsit = wait_stack_.find(tid);
+      if (wsit != wait_stack_.end() && !wsit->second.empty()) {
+        std::string site;
+        int shown = 0;
+        for (uint64_t ip : wsit->second) {
+          std::string r = g_maps.resolve(t->pid, ip);
+          if (r.empty() || r == "[anon]") continue;
+          if (!site.empty()) site += " <- ";
+          site += r;
+          if (++shown >= 4) break;
+        }
+        if (!site.empty())
+          std::printf("%-8u parked at: %s\n", tid, site.c_str());
+      }
     }
   }
 
@@ -1563,6 +1615,77 @@ struct EndstateReport final : Report {
     }
     out.push_back({"montauk_analysis_endstate_blocked_threads", "",
                    static_cast<double>(blocked)});
+  }
+};
+
+// REPORT iowait: who was parked in a blocking I/O-wait syscall (poll/ppoll/
+// epoll_wait/select/recvmsg) when the trace ENDED. The I/O-bound analog of
+// endstate: a producer asleep in poll() on a socket (the winepulse mainloop on
+// the PulseAudio fd) is parked on its data source the way an ntsync waiter is
+// parked on a signaler, but in a syscall that may never return -- invisible to
+// the ntsync/futex reports. BPF emits a pending (result=-999) enter marker and a
+// completion on return; an enter with no completion at trace end is parked.
+struct IowaitReport final : Report {
+  static bool is_iowait_syscall(int32_t nr) {
+    switch (nr) {
+      case 7: case 271: case 232: case 281:
+      case 47: case 45: case 23: case 270: return true;
+      default: return false;
+    }
+  }
+  struct Parked {
+    bool open = false;
+    uint64_t since = 0;
+    int32_t nr = 0;
+    int32_t fd = -1;
+    uint32_t pid = 0;
+    char comm[16] = {};
+  };
+  std::map<uint32_t, Parked> tids_;
+  uint64_t max_ts_ = 0;
+
+  const char* name() const override { return "iowait"; }
+
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_IO || len < sizeof(montauk_io_event)) return;
+    auto* e = reinterpret_cast<const montauk_io_event*>(data);
+    if (e->timestamp_ns > max_ts_) max_ts_ = e->timestamp_ns;
+    if (!is_iowait_syscall(e->syscall_nr)) return;
+    auto& p = tids_[e->tid];
+    if (e->result == kWaitEntrySentinel) {        // enter: now parked
+      p.open = true;
+      p.since = e->timestamp_ns;
+      p.nr = e->syscall_nr;
+      p.fd = e->fd;
+      p.pid = e->pid;
+      std::memcpy(p.comm, e->comm, sizeof(p.comm));
+    } else {                                       // exit: returned
+      p.open = false;
+    }
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    std::vector<std::pair<uint32_t, const Parked*>> parked;
+    for (const auto& [tid, p] : tids_)
+      if (p.open) parked.push_back({tid, &p});
+    std::printf("REPORT iowait\n");
+    if (parked.empty()) {
+      std::printf("VERDICT: no threads parked in a blocking I/O-wait syscall at trace end\n");
+      return;
+    }
+    std::sort(parked.begin(), parked.end(),
+              [](const auto& a, const auto& b){ return a.second->since < b.second->since; });
+    const auto* lp = parked.front().second;
+    std::printf("VERDICT: %zu thread(s) parked in a blocking I/O-wait at trace end "
+                "(a producer asleep on its data source -- e.g. winepulse in poll() on "
+                "the audio socket); longest tid=%u '%s' in %s(fd=%d) %.1fs\n",
+                parked.size(), parked.front().first, redact_comm(lp->comm).c_str(),
+                io_syscall_name(lp->nr), lp->fd, (max_ts_ - lp->since) / 1e9);
+    std::printf("tid      pid      comm             syscall      fd     parked_s\n");
+    for (const auto& [tid, p] : parked)
+      std::printf("%-8u %-8u %-16s %-12s %-6d %.1f\n",
+                  tid, p->pid, redact_comm(p->comm).c_str(),
+                  io_syscall_name(p->nr), p->fd, (max_ts_ - p->since) / 1e9);
   }
 };
 
@@ -2443,7 +2566,12 @@ struct PlacementRaceReport final : Report {
                 fmt_count((double)n).c_str(), miss_pct, sat_pct, avg_idle);
     std::printf("  (high PLACEMENT-MISS %% = wakees queued behind a busy CPU "
                 "while idle CPUs sat free -- the wakeup-placement race; "
-                "high SATURATED %% = unavoidable queueing, fix the busy CPU)\n\n");
+                "high SATURATED %% = unavoidable queueing, fix the busy CPU)\n");
+    std::printf("  REROUTABLE %.1f%% of the floor: that fraction had an idle CPU "
+                "and an idle-pull/placement fix could move it; the remaining "
+                "%.1f%% is genuine saturation -- only a busy-CPU fix (pick "
+                "order / wakeup-preempt / shorter slice) cuts it\n\n",
+                miss_pct, sat_pct);
     miss_pct_ = miss_pct; sat_pct_ = sat_pct; avg_idle_ = avg_idle; floored_n_ = n;
   }
 
@@ -2454,6 +2582,7 @@ struct PlacementRaceReport final : Report {
     if (!floored_n_) return;
     out.push_back({"montauk_analysis_floored_wakes", "", (double)floored_n_});
     out.push_back({"montauk_analysis_placement_miss_pct", "", miss_pct_});
+    out.push_back({"montauk_analysis_reroutable_pct", "", miss_pct_});
     out.push_back({"montauk_analysis_saturated_pct", "", sat_pct_});
     out.push_back({"montauk_analysis_avg_idle_at_miss", "", avg_idle_});
   }
@@ -2472,11 +2601,97 @@ struct PlacementRaceReport final : Report {
 // Pure replay of the PICK + WAKE2RUN streams already in the trace -- no capture
 // change, no re-run. The avg intervening-pick count sizes how deep the tail's
 // pass-over goes (p99 52ms / 3ms quantum ~ 17 pass-overs would read ORDER-heavy).
+// Per-CPU ownership ledger: who held each CPU across any time window. Folds the
+// SWITCH_IN / PICK stream (one "task took this CPU at ts" record per context
+// switch, system-wide -- the holder need not be in the traced comm group) into a
+// per-CPU timeline, and resolves tids to names from the tid-bearing events. The
+// kstrand and dispatch-stall reports both query it to name the task that HELD a
+// CPU while a victim waited -- the holder the HELD/DARK split could only infer
+// before. An untraced holder (no tid->comm seen) renders as tid=N; the dominant-
+// owner coverage still shows whether one task held the whole window.
+struct CpuHolderLedger {
+  std::unordered_map<uint32_t, std::vector<std::pair<uint64_t, uint32_t>>> own_;  // cpu -> (ts, tid)
+  std::unordered_map<uint32_t, std::string> name_;  // tid -> comm
+  bool sorted_ = false;
+
+  void learn(uint32_t tid, const char* comm) {
+    if (!comm || !comm[0]) return;
+    if (name_.find(tid) == name_.end()) name_.emplace(tid, redact_comm(comm));
+  }
+
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) {
+    if (type == TRACE_EVT_SCHED && len >= sizeof(montauk_sched_event)) {
+      const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+      if (s->op == SCHED_OP_SWITCH_IN || s->op == SCHED_OP_PICK)
+        own_[s->cpu].push_back({s->timestamp_ns, (uint32_t)s->pid});
+      return;
+    }
+    if (type == TRACE_EVT_KSTRAND && len >= sizeof(montauk_kstrand_event)) {
+      const auto* e = reinterpret_cast<const montauk_kstrand_event*>(data);
+      learn(e->tid, e->comm);
+    } else if (type == TRACE_EVT_IO && len >= sizeof(montauk_io_event)) {
+      const auto* e = reinterpret_cast<const montauk_io_event*>(data);
+      learn(e->tid, e->comm);
+    } else if (type == TRACE_EVT_WAITSTACK && len >= sizeof(montauk_waitstack_event)) {
+      const auto* e = reinterpret_cast<const montauk_waitstack_event*>(data);
+      learn(e->tid, e->comm);
+    } else if ((type == TRACE_EVT_FORK || type == TRACE_EVT_EXEC ||
+                type == TRACE_EVT_COMM_CHANGE || type == TRACE_EVT_THREAD_NAME) &&
+               len >= sizeof(montauk_ring_event)) {
+      // fork/exec/rename + the deduped THREAD_NAME binding carry the thread's tid
+      // (child_pid on fork) + comm -- the system-wide name source for a CPU-bound
+      // worker that emits no syscall and predates the trace.
+      const auto* e = reinterpret_cast<const montauk_ring_event*>(data);
+      learn(e->pid, e->comm);
+      if (e->child_pid) learn(e->child_pid, e->comm);
+    }
+  }
+
+  void finalize() {
+    if (sorted_) return;
+    sorted_ = true;
+    for (auto& kv : own_) std::sort(kv.second.begin(), kv.second.end());
+  }
+
+  std::string name_of(uint32_t tid) const {
+    auto it = name_.find(tid);
+    if (it != name_.end()) return it->second;
+    return "tid=" + std::to_string(tid);
+  }
+
+  // Dominant owner of [t0,t1) on cpu: the tid that ran the most of the window and
+  // the ns it held. held_ns == window_ns => one task held the entire wait.
+  struct Holder { uint32_t tid = 0; uint64_t held_ns = 0; uint64_t window_ns = 0; };
+  Holder dominant(uint32_t cpu, uint64_t t0, uint64_t t1) const {
+    Holder h;
+    if (t1 <= t0) return h;
+    h.window_ns = t1 - t0;
+    auto it = own_.find(cpu);
+    if (it == own_.end()) return h;
+    const auto& tl = it->second;
+    std::unordered_map<uint32_t, uint64_t> acc;
+    size_t i = (size_t)(std::lower_bound(tl.begin(), tl.end(),
+                          std::make_pair(t0, 0u)) - tl.begin());
+    if (i > 0) --i;  // the segment covering t0 starts before t0
+    for (; i < tl.size(); ++i) {
+      uint64_t seg_lo = tl[i].first;
+      if (seg_lo >= t1) break;
+      uint64_t seg_hi = (i + 1 < tl.size()) ? tl[i + 1].first : t1;
+      uint64_t lo = seg_lo > t0 ? seg_lo : t0;
+      uint64_t hi = seg_hi < t1 ? seg_hi : t1;
+      if (hi > lo) acc[tl[i].second] += hi - lo;
+    }
+    for (const auto& kv : acc)
+      if (kv.second > h.held_ns) { h.held_ns = kv.second; h.tid = kv.first; }
+    return h;
+  }
+};
+
 struct DispatchStallReport final : Report {
   static constexpr uint64_t kTickFloorNs = 900000ULL;
-  // pick on a CPU: timestamp, picked pid, LANE (sub_idx: 0=mirror, >0=sub), and
-  // silica score. score = [class_weight:16 | inv_enq_time:48]; within a class
-  // oldest=highest score, so cross-class beats age outright. cls = score>>48.
+  // pick on a CPU: timestamp, picked pid, LANE (sub_idx: 0=primary, >0=steal), and
+  // the dispatch score. The class occupies the high bits; within a class the
+  // oldest waiter sorts highest, so a higher class outranks age. cls = score>>48.
   struct Pk { uint64_t ts; int pid; uint32_t lane; uint64_t score; };
   std::unordered_map<uint32_t, std::vector<Pk>> picks_;  // cpu -> picks
   static uint64_t cls_of(uint64_t score) { return score >> 48; }
@@ -2490,10 +2705,13 @@ struct DispatchStallReport final : Report {
   // from a DARK CPU (idle, no tick -- the strand bug) inside PREEMPT-STARVED.
   std::unordered_map<uint32_t, std::vector<std::pair<uint64_t, uint64_t>>> idle_iv_;
   std::unordered_map<uint32_t, uint64_t> idle_open_;  // cpu -> enter ts (open)
+  CpuHolderLedger holder_;
+  std::unordered_map<uint32_t, uint64_t> held_by_;  // tid -> ns held across HELD floored wakes
 
   const char* name() const override { return "dispatch-stall"; }
 
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    holder_.fold(type, data, len);
     if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
     const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
     if (s->op == SCHED_OP_PICK) {
@@ -2539,6 +2757,8 @@ struct DispatchStallReport final : Report {
   double po_higher_pct_ = 0, po_same_pct_ = 0, po_lower_pct_ = 0;
   double same_newer_pct_ = 0, avg_distinct_ = 0;
   double dark_pct_ = 0, held_pct_ = 0;  // of PREEMPT-STARVED: CPU idle vs busy during the wait
+  double passover_p99_ = 0;             // p99 pass-overs per floored wake (queue depth)
+  double ceiling_remains_pct_ = 0;      // % of p99 pass-overs left after removing inversions (legit-backlog = lag prize)
   uint64_t dark_ = 0, n_dark_idle_ = 0; bool have_idle_ = false;
   uint64_t worst_dark_ns_ = 0;
   uint64_t n_ = 0;
@@ -2555,6 +2775,7 @@ struct DispatchStallReport final : Report {
       sublimation_order_u64(kv.second, false,
                             [](const std::pair<uint64_t, uint64_t>& e) { return e.first; });
     have_idle_ = !idle_iv_.empty();
+    holder_.finalize();
 
     uint64_t preempt = 0, order = 0, inter_sum = 0;
     uint64_t held = 0;  // PREEMPT-STARVED with the run-CPU busy through the wait
@@ -2632,6 +2853,9 @@ struct DispatchStallReport final : Report {
             if (wait_ns > worst_dark_ns_) worst_dark_ns_ = wait_ns;
           } else {
             ++held;
+            CpuHolderLedger::Holder hd =
+                holder_.dominant(fw.cpu, fw.wake_ts, fw.run_ts);
+            if (hd.tid) held_by_[hd.tid] += hd.held_ns;
           }
         }
       } else { ++order; inter_sum += inter; }
@@ -2655,6 +2879,7 @@ struct DispatchStallReport final : Report {
     (void)same_older;
     sublimation_u64(inter_v.data(), inter_v.size());
     uint64_t p99 = inter_v[(size_t)((double)inter_v.size() * 0.99)];
+    passover_p99_ = (double)p99;
     std::printf("VERDICT: %s saturated floored wakes; PREEMPT-STARVED %.0f%% "
                 "(0 intervening picks) / ORDER-STARVED %.0f%% (CPU served others "
                 "first); avg %.1f pass-overs, p99 %llu pass-overs\n",
@@ -2669,6 +2894,17 @@ struct DispatchStallReport final : Report {
       std::printf("  PREEMPT split: no CPU_IDLE events -- cannot separate DARK "
                   "(idle strand) from HELD (busy hog); recapture with a montauk "
                   "that streams CPU_IDLE\n");
+    if (!held_by_.empty()) {
+      std::vector<std::pair<uint32_t, uint64_t>> hv(held_by_.begin(), held_by_.end());
+      std::sort(hv.begin(), hv.end(),
+                [](const std::pair<uint32_t, uint64_t>& a,
+                   const std::pair<uint32_t, uint64_t>& b) { return a.second > b.second; });
+      std::printf("  HELD by:");
+      for (size_t i = 0; i < hv.size() && i < 3; ++i)
+        std::printf(" %s %.1fms", holder_.name_of(hv[i].first).c_str(),
+                    (double)hv[i].second / 1e6);
+      std::printf("  (the task that ran the CPU through the HELD waits)\n");
+    }
     std::printf("  LANE: %.0f%% of pass-over picks via MIRROR / %.0f%% via SUB; "
                 "floored wakees finally served %.0f%% MIRROR / %.0f%% SUB\n",
                 po_mirror_pct_, 100.0 - po_mirror_pct_,
@@ -2696,6 +2932,7 @@ struct DispatchStallReport final : Report {
     sublimation_u64(legit_v.data(), legit_v.size());
     uint64_t p99_legit = legit_v[(size_t)((double)legit_v.size() * 0.99)];
     double keep = p99 ? 100.0 * (double)p99_legit / (double)p99 : 0.0;
+    ceiling_remains_pct_ = keep;
     std::printf("  CEILING: p99 pass-overs %llu total -> %llu if ALL inversions "
                 "removed (%.0f%% remains = LEGIT backlog only eligibility/lag can "
                 "cut; %.0f%% is the mirror-coherence headroom)\n\n",
@@ -2718,6 +2955,18 @@ struct DispatchStallReport final : Report {
     out.push_back({"montauk_analysis_dispatch_served_mirror_pct", "", served_mirror_pct_});
     out.push_back({"montauk_analysis_dispatch_passover_higher_class_pct", "", po_higher_pct_});
     out.push_back({"montauk_analysis_dispatch_passover_same_class_pct", "", po_same_pct_});
+    out.push_back({"montauk_analysis_dispatch_passover_lower_class_pct", "", po_lower_pct_});
+    out.push_back({"montauk_analysis_dispatch_passover_p99", "", passover_p99_});
+    // Concentration ratio: distinct pass-over tasks / total pass-over picks. Low
+    // (~0.3) = a few hogs re-picked = the fair-share/lag prize; ~1.0 = deep
+    // distinct backlog = a deadline prize. The single number that says which
+    // lever the saturated floor wants.
+    out.push_back({"montauk_analysis_dispatch_concentration_ratio", "",
+                   avg_inter_ > 0 ? avg_distinct_ / avg_inter_ : 0.0});
+    // Legit-backlog ceiling: % of the p99 pass-over depth that survives removing
+    // every ordering inversion. That residual is what only eligibility/lag can
+    // cut -- the size of the cliff a stronger service price can still reach.
+    out.push_back({"montauk_analysis_dispatch_ceiling_remains_pct", "", ceiling_remains_pct_});
   }
 };
 
@@ -2727,16 +2976,20 @@ struct DispatchStallReport final : Report {
 // running a long slice," this is the per-slice multiplier: tail ~ pass-overs x
 // slice. Idle strands (gap > 10ms) are excluded -- those are not slices.
 struct SliceReport final : Report {
-  std::unordered_map<uint32_t, std::vector<uint64_t>> pick_ts_;  // cpu -> pick timestamps
+  std::unordered_map<uint32_t, std::vector<uint64_t>> pick_ts_;    // cpu -> custom PICK ts
+  std::unordered_map<uint32_t, std::vector<uint64_t>> switch_ts_;  // cpu -> sched_switch fallback ts
   std::vector<uint64_t> slices_;
+  std::vector<std::pair<uint64_t, uint64_t>> tl_;  // (slice start ts, duration) for the wall-clock trajectory
+  double traj_inversion_ = 0.0;
+  bool traj_ok_ = false;
 
   const char* name() const override { return "slice"; }
 
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
     if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
     const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
-    if (s->op != SCHED_OP_PICK) return;
-    pick_ts_[s->cpu].push_back(s->timestamp_ns);
+    if (s->op == SCHED_OP_PICK)           pick_ts_[s->cpu].push_back(s->timestamp_ns);
+    else if (s->op == SCHED_OP_SWITCH_IN) switch_ts_[s->cpu].push_back(s->timestamp_ns);
   }
 
   static double us(uint64_t ns) { return (double)ns / 1000.0; }
@@ -2750,12 +3003,18 @@ struct SliceReport final : Report {
   void emit(const montauk::model::TraceReader&) override {
     std::printf("REPORT slice\n");
     static constexpr uint64_t kStrandNs = 10000000ULL;  // >10ms gap = idle, not a slice
-    for (auto& kv : pick_ts_) {
+    // Prefer the scheduler's own PICK stream; fall back to the sched_switch-derived
+    // SWITCH_IN when no pick tracepoint was bound (EEVDF / scx modes without pick).
+    auto& src = !pick_ts_.empty() ? pick_ts_ : switch_ts_;
+    for (auto& kv : src) {
       auto& v = kv.second;
       sublimation_u64(v.data(), v.size());
       for (size_t i = 1; i < v.size(); ++i) {
         uint64_t d = v[i] - v[i - 1];
-        if (d > 0 && d < kStrandNs) slices_.push_back(d);
+        if (d > 0 && d < kStrandNs) {
+          slices_.push_back(d);
+          tl_.push_back({v[i - 1], d});
+        }
       }
     }
     if (slices_.empty()) {
@@ -2772,7 +3031,65 @@ struct SliceReport final : Report {
                 q_us(slices_, 0.50), q_us(slices_, 0.90), q_us(slices_, 0.99),
                 us(slices_.back()), mean / 1000.0);
     std::printf("  (long slices x pass-over depth = the saturation tail; a "
-                "shorter effective slice drains a deep runqueue faster)\n\n");
+                "shorter effective slice drains a deep runqueue faster)\n");
+    // TRAJECTORY: is the dispatched-slice length steady, drifting smoothly, or
+    // hunting? Segment the run by wall-clock, take each segment's median slice in
+    // TIME order (NOT the quantile sort), and classify the sequence's shape. A
+    // scheduler whose effective quantum tracks load coherently reads SORTED /
+    // NEARLY_SORTED / PHASED (a settled trajectory); one whose quantum oscillates
+    // reads RANDOM -- the control loop hunting rather than converging. Built from
+    // the same sched_switch-derived slices, no knowledge of what sets the quantum.
+    static constexpr size_t kSegs = 8;
+    if (tl_.size() >= 2 * kSegs) {
+      std::sort(tl_.begin(), tl_.end(),
+                [](const std::pair<uint64_t, uint64_t>& a,
+                   const std::pair<uint64_t, uint64_t>& b) { return a.first < b.first; });
+      uint64_t t0 = tl_.front().first, t1 = tl_.back().first;
+      if (t1 > t0) {
+        uint64_t span = t1 - t0;
+        std::vector<uint64_t> seg_med, bucket;
+        for (size_t g = 0; g < kSegs; ++g) {
+          uint64_t lo = t0 + span * g / kSegs;
+          uint64_t hi = t0 + span * (g + 1) / kSegs;
+          bucket.clear();
+          for (const auto& pr : tl_)
+            if (pr.first >= lo && (pr.first < hi || (g + 1 == kSegs && pr.first <= hi)))
+              bucket.push_back(pr.second);
+          if (bucket.empty()) continue;
+          sublimation_u64(bucket.data(), bucket.size());
+          seg_med.push_back(bucket[bucket.size() / 2]);
+        }
+        if (seg_med.size() >= 3) {
+          sub_profile_t tp = sublimation_classify_u64(seg_med.data(), seg_med.size());
+          traj_inversion_ = (double)tp.inversion_ratio;
+          traj_ok_ = true;
+          std::printf("TRAJECTORY: slice p50 over %zu segments (us):", seg_med.size());
+          for (uint64_t m : seg_med) std::printf(" %.0f", us(m));
+          std::printf("; shape=%s inv=%.2f -- %s\n", disorder_name(tp.disorder),
+                      traj_inversion_,
+                      tp.disorder != SUB_RANDOM
+                          ? "coherent (quantum settles with load)"
+                          : "chatter (quantum hunting, not converging)");
+        }
+      }
+    }
+    // PER-CPU PREEMPT FAILURE EVIDENCE: with a ~1ms slice quantum the per-CPU tick
+    // preempt should chop any slice whose CPU holds a waiter past ~1ms. Slices that
+    // ran far past it uninterrupted are hogs the preempt never touched -- the mass
+    // of the lat-critical/ctxless preempt-exemption strand. Over the sorted stream.
+    auto over = [&](uint64_t ns) {
+      size_t k = (size_t)(slices_.end() -
+                          std::lower_bound(slices_.begin(), slices_.end(), ns));
+      return std::make_pair(k, 100.0 * (double)k / (double)slices_.size());
+    };
+    auto o2 = over(2000000ULL), o5 = over(5000000ULL), o8 = over(8000000ULL);
+    sub_profile_t sp = sublimation_classify_u64(slices_.data(), slices_.size());
+    std::printf("PREEMPT-OVERRUN: >2ms %s (%.2f%%)  >5ms %s (%.2f%%)  >8ms %s (%.2f%%)"
+                "  -- ~%zu distinct slice lengths\n\n",
+                fmt_count((double)o2.first).c_str(), o2.second,
+                fmt_count((double)o5.first).c_str(), o5.second,
+                fmt_count((double)o8.first).c_str(), o8.second,
+                sp.distinct_estimate);
   }
 
   void prom(std::vector<PromMetric>& out) override {
@@ -2784,6 +3101,85 @@ struct SliceReport final : Report {
     push("0.5", q_us(slices_, 0.50));
     push("0.99", q_us(slices_, 0.99));
     push("worst", us(slices_.back()));
+    if (traj_ok_)
+      out.push_back({"montauk_analysis_slice_trajectory_inversion", "", traj_inversion_});
+  }
+};
+
+// REPORT storm: the sched_ext cpu_release kick-storm, from TRACE_EVT_SCX_STORM
+// per-interval counters (fentry on scx_bpf_kick_cpu / scx_bpf_reenqueue_local).
+// Replaces storm_score's scrape of the scheduler's printed tick log: reenqueue
+// rate is the storm intensity; the preempt-kick share splits a REAL IPI storm from
+// benign IDLE re-enqueue churn.
+struct StormReport final : Report {
+  struct Sample { uint64_t kicks, preempt, reenq; uint32_t interval_ms; };
+  std::vector<Sample> samples_;
+  uint64_t tot_kicks_ = 0, tot_preempt_ = 0, tot_reenq_ = 0, tot_ms_ = 0;
+  double storm_pct_ = 0.0, peak_reenq_rate_ = 0.0;
+
+  static constexpr double kStormReenqPerS = 50000.0; // a core reenqueuing this hard is storming
+  static constexpr double kHardFrac = 0.5;           // preempt >= frac*reenq => real IPI storm
+
+  const char* name() const override { return "storm"; }
+
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_SCX_STORM || len < sizeof(montauk_scx_storm_event)) return;
+    const auto* s = reinterpret_cast<const montauk_scx_storm_event*>(data);
+    samples_.push_back({s->kicks, s->preempt_kicks, s->reenq, s->interval_ms});
+    tot_kicks_ += s->kicks; tot_preempt_ += s->preempt_kicks; tot_reenq_ += s->reenq;
+    tot_ms_ += s->interval_ms;
+  }
+
+  static double reenq_rate(const Sample& s) {
+    return s.interval_ms ? (double)s.reenq * 1000.0 / (double)s.interval_ms : 0.0;
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    std::printf("REPORT storm\n");
+    if (samples_.empty() || tot_ms_ == 0) {
+      std::printf("VERDICT: no sched_ext kick activity captured (non-scx scheduler, "
+                  "or no cpu_release storm)\n\n");
+      return;
+    }
+    std::vector<uint64_t> rr;
+    rr.reserve(samples_.size());
+    size_t storm_intervals = 0;
+    for (const auto& s : samples_) {
+      double r = reenq_rate(s);
+      rr.push_back((uint64_t)r);
+      if (r >= kStormReenqPerS) ++storm_intervals;
+    }
+    storm_pct_ = 100.0 * (double)storm_intervals / (double)samples_.size();
+    sublimation_u64(rr.data(), rr.size());
+    peak_reenq_rate_ = (double)rr.back();
+    double p50 = (double)rr[rr.size() / 2];
+    double secs = (double)tot_ms_ / 1000.0;
+    bool real_ipi = tot_reenq_ && (double)tot_preempt_ >= kHardFrac * (double)tot_reenq_;
+    const char* kind = storm_intervals == 0 ? "clean -- no storm intervals"
+                       : real_ipi ? "REAL IPI storm (preempt-kick dominant)"
+                                  : "IDLE re-enqueue churn (kicks no-op on busy CPUs)";
+    std::printf("VERDICT: %s; storm %zu/%zu intervals (%.1f%%); reenq/s p50=%.0f "
+                "peak=%.0f; kick/s=%.0f (preempt %.0f) reenq/s=%.0f\n",
+                kind, storm_intervals, samples_.size(), storm_pct_,
+                p50, peak_reenq_rate_, (double)tot_kicks_ / secs,
+                (double)tot_preempt_ / secs, (double)tot_reenq_ / secs);
+    std::printf("  (storm interval = reenqueue rate >= %.0f/s; REAL when preempt-kicks "
+                ">= %.0f%% of reenqueues)\n\n", kStormReenqPerS, kHardFrac * 100.0);
+  }
+
+  void prom(std::vector<PromMetric>& out) override {
+    if (samples_.empty() || tot_ms_ == 0) return;
+    double secs = (double)tot_ms_ / 1000.0;
+    out.push_back({"montauk_analysis_storm_pct", "", storm_pct_});
+    out.push_back({"montauk_analysis_storm_reenq_per_s", "stat=\"peak\"", peak_reenq_rate_});
+    out.push_back({"montauk_analysis_storm_kick_per_s", "flag=\"all\"", (double)tot_kicks_ / secs});
+    out.push_back({"montauk_analysis_storm_kick_per_s", "flag=\"preempt\"", (double)tot_preempt_ / secs});
+  }
+
+  void offenders(std::vector<Offender>& out) override {
+    if (peak_reenq_rate_ < kStormReenqPerS) return;
+    int sev = peak_reenq_rate_ > 5.0 * kStormReenqPerS ? 2 : 1;
+    out.push_back({"scx-storm", "scheduler", "", "reenq_per_s", peak_reenq_rate_, sev});
   }
 };
 
@@ -2797,7 +3193,8 @@ struct SliceReport final : Report {
 // (next_pick_ts - this_pick_ts) on the CPU while this PID was the picked task
 // (idle strands > 10ms excluded).
 struct ServiceReport final : Report {
-  std::unordered_map<uint32_t, std::vector<std::pair<uint64_t, int>>> picks_;  // cpu->(ts,pid)
+  std::unordered_map<uint32_t, std::vector<std::pair<uint64_t, int>>> picks_;        // cpu->(ts,pid) custom PICK
+  std::unordered_map<uint32_t, std::vector<std::pair<uint64_t, int>>> switch_picks_; // cpu->(ts,pid) fallback
   std::vector<uint64_t> svc_;  // per-pid total service, filled in emit()
 
   const char* name() const override { return "service"; }
@@ -2805,8 +3202,8 @@ struct ServiceReport final : Report {
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
     if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
     const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
-    if (s->op != SCHED_OP_PICK) return;
-    picks_[s->cpu].push_back({s->timestamp_ns, s->pid});
+    if (s->op == SCHED_OP_PICK)           picks_[s->cpu].push_back({s->timestamp_ns, s->pid});
+    else if (s->op == SCHED_OP_SWITCH_IN) switch_picks_[s->cpu].push_back({s->timestamp_ns, s->pid});
   }
 
   static double ms(uint64_t ns) { return (double)ns / 1e6; }
@@ -2821,7 +3218,10 @@ struct ServiceReport final : Report {
     std::printf("REPORT service\n");
     static constexpr uint64_t kStrandNs = 10000000ULL;
     std::unordered_map<int, uint64_t> by_pid;
-    for (auto& kv : picks_) {
+    // Prefer the scheduler's own PICK stream; fall back to the sched_switch-derived
+    // SWITCH_IN when no pick tracepoint was bound (EEVDF / scx modes without pick).
+    auto& src = !picks_.empty() ? picks_ : switch_picks_;
+    for (auto& kv : src) {
       auto& v = kv.second;
       sublimation_order_u64(v, false, [](const std::pair<uint64_t, int>& p) { return p.first; });
       for (size_t i = 1; i < v.size(); ++i) {
@@ -2836,6 +3236,15 @@ struct ServiceReport final : Report {
     uint64_t total = 0;
     for (auto& kv : by_pid) { svc_.push_back(kv.second); total += kv.second; }
     sublimation_u64(svc_.data(), svc_.size());  // ascending
+    // Env-gated raw dump: per-PID service in microseconds, one per line, for
+    // sublimation classify/locate/quantile over the real distribution shape.
+    if (const char* dp = std::getenv("MONTAUK_SVC_DUMP")) {
+      if (FILE* df = std::fopen(dp, "w")) {
+        for (uint64_t s : svc_) std::fprintf(df, "%llu\n",
+                                             (unsigned long long)(s / 1000));
+        std::fclose(df);
+      }
+    }
     size_t np = svc_.size();
     uint64_t top1 = svc_.back();
     uint64_t top5 = 0;
@@ -2863,6 +3272,78 @@ struct ServiceReport final : Report {
                    total ? 100.0 * (double)svc_.back() / (double)total : 0.0});
     out.push_back({"montauk_analysis_service_pids", "", (double)svc_.size()});
   }
+};
+
+// REPORT wakers (v7.9.0): localize request-level latency to the WAKER critical
+// path. schbench's reported latency is a messenger->worker round-trip; per-hop
+// wake2run cannot see it, but if the MESSENGER (a hot waker) is itself delayed,
+// every worker it wakes inherits that delay in the round-trip. Using the v7.9.0
+// waker edge (SCHED_OP_WAKEUP secondary_pid = waker), classify hot wakers
+// (messengers, by wake-issue count) and split WAKE2RUN into MESSENGER-dispatch
+// vs WORKER-dispatch. If the messenger wake2run tail dwarfs the worker tail,
+// the cliff is the waker path, not generic dispatch -- the 54k schbench sees.
+struct WakersReport final : Report {
+  std::unordered_map<int, uint64_t> wake_count_;   // waker pid -> wakes issued
+  std::unordered_map<int, std::vector<uint64_t>> w2r_by_pid_;  // wakee pid -> waits
+  uint64_t total_wakes_ = 0;
+
+  const char* name() const override { return "wakers"; }
+
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
+    const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    if (s->op == SCHED_OP_WAKEUP) {
+      if (s->secondary_pid >= 0) { ++wake_count_[s->secondary_pid]; ++total_wakes_; }
+      return;
+    }
+    if (s->op == SCHED_OP_WAKE2RUN)
+      w2r_by_pid_[s->pid].push_back(s->runtime_ns);
+  }
+
+  static double us(uint64_t ns) { return (double)ns / 1000.0; }
+  static double q_us(std::vector<uint64_t>& v, double f) {
+    if (v.empty()) return 0.0;
+    sublimation_u64(v.data(), v.size());
+    size_t i = (size_t)((double)v.size() * f);
+    if (i >= v.size()) i = v.size() - 1;
+    return us(v[i]);
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    std::printf("REPORT wakers\n");
+    if (wake_count_.empty()) {
+      std::printf("VERDICT: no waker edges (pre-v7.9.0 trace -- sched_wakeup did "
+                  "not stamp the waker); re-capture to resolve\n\n");
+      return;
+    }
+    // Hot waker = messenger: wake-issue count >= 8x the mean waker's count.
+    uint64_t sum = 0; for (auto& kv : wake_count_) sum += kv.second;
+    double mean = (double)sum / (double)wake_count_.size();
+    uint64_t thresh = (uint64_t)(mean * 8.0); if (thresh < 8) thresh = 8;
+    std::unordered_set<int> hot;
+    for (auto& kv : wake_count_) if (kv.second >= thresh) hot.insert(kv.first);
+
+    std::vector<uint64_t> msg, wrk;
+    for (auto& kv : w2r_by_pid_) {
+      auto& dst = hot.count(kv.first) ? msg : wrk;
+      for (uint64_t v : kv.second) dst.push_back(v);
+    }
+    std::printf("VERDICT: %s waker pids, %s hot (messengers, >=%llu wakes); "
+                "%s total wakes\n",
+                fmt_count((double)wake_count_.size()).c_str(),
+                fmt_count((double)hot.size()).c_str(),
+                (unsigned long long)thresh, fmt_count((double)total_wakes_).c_str());
+    std::printf("  MESSENGER wake2run (%s samples): p50 %.0fus p99 %.0fus "
+                "p999 %.0fus\n", fmt_count((double)msg.size()).c_str(),
+                q_us(msg, 0.50), q_us(msg, 0.99), q_us(msg, 0.999));
+    std::printf("  WORKER    wake2run (%s samples): p50 %.0fus p99 %.0fus "
+                "p999 %.0fus\n", fmt_count((double)wrk.size()).c_str(),
+                q_us(wrk, 0.50), q_us(wrk, 0.99), q_us(wrk, 0.999));
+    std::printf("  (messenger tail >> worker tail -> the cliff is the waker "
+                "critical path; protect the wakers, don't deprioritize them)\n\n");
+  }
+
+  void prom(std::vector<PromMetric>&) override {}
 };
 
 // REPORT fractal: self-similarity of the dispatch + migration timeline.
@@ -3238,8 +3719,10 @@ struct KStrandReport final : Report {
     std::vector<uint64_t> lat;  // strand latencies (ns)
     uint64_t held = 0, dark = 0;
     uint64_t max_ns = 0;
+    uint64_t worst_run_ts = 0;  // run_ts of the max strand, for holder attribution
   };
   std::unordered_map<std::string, Agg> by_comm_;
+  CpuHolderLedger holder_;
   // strands buffered until emit() so CPU_IDLE intervals are complete first.
   struct Ev { uint32_t cpu; uint64_t run_ts, lat; std::string comm; };
   std::vector<Ev> evs_;
@@ -3250,6 +3733,7 @@ struct KStrandReport final : Report {
   const char* name() const override { return "kstrand"; }
 
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    holder_.fold(type, data, len);
     if (type == TRACE_EVT_SCHED && len >= sizeof(montauk_sched_event)) {
       const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
       if (s->op != SCHED_OP_CPU_IDLE) return;
@@ -3306,13 +3790,14 @@ struct KStrandReport final : Report {
       Agg& a = by_comm_[e.comm];
       a.cpu = e.cpu;
       a.lat.push_back(e.lat);
-      if (e.lat > a.max_ns) a.max_ns = e.lat;
+      if (e.lat > a.max_ns) { a.max_ns = e.lat; a.worst_run_ts = e.run_ts; }
       uint64_t wait_start = (e.run_ts > e.lat) ? (e.run_ts - e.lat) : 0;
       uint64_t idle = idle_overlap(e.cpu, wait_start, e.run_ts);
       // Majority-idle through the wait => DARK (tickless, no rescue); else HELD.
       if (idle * 2 >= e.lat) a.dark++;
       else { a.held++; if (e.lat > worst_held_ns_) worst_held_ns_ = e.lat; }
     }
+    holder_.finalize();
   }
 
   void emit(const montauk::model::TraceReader&) override {
@@ -3334,15 +3819,24 @@ struct KStrandReport final : Report {
                 static_cast<size_t>(total_), rows.size());
     std::printf("worst HELD strand %.1fms (CPU busy through the wait -- I/O-completion freeze signature)\n",
                 ms(worst_held_ns_));
-    std::printf("%-18s %-5s %-7s %-9s %-9s %-6s %-6s\n",
-                "kthread", "cpu", "strands", "max_ms", "p99_ms", "held", "dark");
+    std::printf("%-18s %-5s %-7s %-9s %-9s %-6s %-6s %s\n",
+                "kthread", "cpu", "strands", "max_ms", "p99_ms", "held", "dark", "held_by");
     size_t shown = 0;
     for (auto& [comm, a] : rows) {
       if (shown++ >= 20) break;
       sublimation_u64(a->lat.data(), a->lat.size());
-      std::printf("%-18s %-5u %-7zu %-9.1f %-9.1f %-6" PRIu64 " %-6" PRIu64 "\n",
+      std::string held_by = "-";
+      if (a->held && a->worst_run_ts) {
+        uint64_t ws = a->worst_run_ts > a->max_ns ? a->worst_run_ts - a->max_ns : 0;
+        CpuHolderLedger::Holder hd = holder_.dominant(a->cpu, ws, a->worst_run_ts);
+        if (hd.window_ns) {
+          int cov = static_cast<int>(100.0 * (double)hd.held_ns / (double)hd.window_ns);
+          held_by = holder_.name_of(hd.tid) + " " + std::to_string(cov) + "%";
+        }
+      }
+      std::printf("%-18s %-5u %-7zu %-9.1f %-9.1f %-6" PRIu64 " %-6" PRIu64 " %s\n",
                   comm.c_str(), a->cpu, a->lat.size(), ms(a->max_ns),
-                  q_ms(a->lat, 0.99), a->held, a->dark);
+                  q_ms(a->lat, 0.99), a->held, a->dark, held_by.c_str());
     }
     std::printf("\n");
   }
@@ -3378,6 +3872,18 @@ class LocalityReport : public Report {
   bool have_topo_ = false;
   std::array<uint64_t, 4> tier_{};  // same-L2, same-L3, same-socket, cross-socket
   uint64_t migrations_ = 0, unmapped_ = 0;
+  std::unordered_map<int, uint64_t> last_mig_ts_;  // pid -> ts of its last migration
+  // Migration-cause attribution by dispatch lane (PICK sub_idx: 0 = mirror/own STEP-0,
+  // >0 = sub/STEP-1 steal). An own-dispatch migration = the task was PLACED on a new CPU
+  // (select_cpu/enqueue, incl warm-stay-release) and that CPU drained it; a sub-dispatch
+  // migration = a STEAL pulled it cross-CPU. Splits the bounce into placement vs steal and
+  // each one's cadence, so the inter-migration period maps to a scheduler clock.
+  std::unordered_map<int, uint32_t> last_lane_;  // pid -> last PICK lane
+  uint64_t steal_mig_ = 0, place_mig_ = 0;
+  std::vector<uint64_t> steal_iv_, place_iv_;
+  bool have_lane_ = false;
+  std::vector<uint64_t> intervals_;                // inter-migration intervals (ns), all threads
+  uint64_t ts_min_ = 0, ts_max_ = 0;               // trace active span (sched events)
 
   static bool pu(const std::string& line, const char* key, uint32_t& out) {
     std::string pat = std::string(key) + "=\"";
@@ -3430,12 +3936,35 @@ class LocalityReport : public Report {
     }
     if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
     const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    // Trace active span over ALL sched ops -- the denominator for migrations/s.
+    if (ts_min_ == 0 || s->timestamp_ns < ts_min_) ts_min_ = s->timestamp_ns;
+    if (s->timestamp_ns > ts_max_) ts_max_ = s->timestamp_ns;
     // WAKE2RUN carries the migration: last_cpu = the core it last ran on (src),
     // cpu = the core it ran on now (dst). last_cpu < 0 = no prior run, == cpu = no
     // migration. (sched_switch is where montauk detects the move.)
+    // PICK lane carries the dispatch cause: 0 = own STEP-0 (task ran where it was placed),
+    // >0 = STEP-1 steal (a remote CPU pulled it). Track the last lane per pid; the PICK
+    // precedes the WAKE2RUN for the same run, so it names this migration's cause.
+    if (s->op == SCHED_OP_PICK) { last_lane_[s->pid] = s->sub_idx; have_lane_ = true; return; }
     if (s->op != SCHED_OP_WAKE2RUN) return;
     if (s->last_cpu < 0 || s->last_cpu == static_cast<int32_t>(s->cpu)) return;
     ++migrations_;
+    // Attribute: own-dispatch (lane 0) = PLACEMENT (select_cpu/enqueue put it on a new
+    // CPU, incl warm-stay-release); sub-dispatch (lane >0) = STEAL.
+    bool by_steal = false;
+    auto lit = last_lane_.find(s->pid);
+    if (lit != last_lane_.end()) by_steal = lit->second > 0;
+    (by_steal ? steal_mig_ : place_mig_)++;
+    // Inter-migration interval per thread: time since THIS pid last migrated. Tiny
+    // intervals = a tight high-frequency bounce; large = sticky. The bounce FREQUENCY
+    // the same-L2/L3 tier mix cannot show -- both a pinned and a thrashing pair read local.
+    auto mit = last_mig_ts_.find(s->pid);
+    if (mit != last_mig_ts_.end() && s->timestamp_ns > mit->second) {
+      uint64_t iv = s->timestamp_ns - mit->second;
+      intervals_.push_back(iv);
+      (by_steal ? steal_iv_ : place_iv_).push_back(iv);
+    }
+    last_mig_ts_[s->pid] = s->timestamp_ns;
     int t = tier(static_cast<uint32_t>(s->last_cpu), s->cpu);
     if (t < 0) {
       ++unmapped_;
@@ -3468,6 +3997,37 @@ class LocalityReport : public Report {
                                ? static_cast<double>(tier_[t + 1]) / static_cast<double>(tier_[t])
                                : 0.0);
     std::printf("\n");
+    // Migration FREQUENCY -- the bounce rate the tier distribution hides. A pair
+    // pinned to one L2 and a pair thrashing between two both read "cache-local";
+    // the rate and the inter-migration interval separate them.
+    double span_s = (ts_max_ > ts_min_) ? static_cast<double>(ts_max_ - ts_min_) / 1e9 : 0.0;
+    if (span_s > 0.0)
+      std::printf("rate: %.0f migrations/s over %.2fs\n",
+                  static_cast<double>(migrations_) / span_s, span_s);
+    if (!intervals_.empty()) {
+      std::sort(intervals_.begin(), intervals_.end());
+      auto iq = [&](double p) {
+        size_t i = static_cast<size_t>(p * static_cast<double>(intervals_.size() - 1));
+        return static_cast<double>(intervals_[i]) / 1000.0;  // us
+      };
+      std::printf("inter-migration interval us: p50=%.1f p99=%.1f min=%.1f (n=%zu)\n",
+                  iq(0.50), iq(0.99), static_cast<double>(intervals_.front()) / 1000.0,
+                  intervals_.size());
+    }
+    if (have_lane_) {
+      uint64_t a = steal_mig_ + place_mig_;
+      auto cad = [](std::vector<uint64_t>& v) {
+        if (v.empty()) return 0.0;
+        std::sort(v.begin(), v.end());
+        return static_cast<double>(v[v.size() / 2]) / 1000.0;  // p50 us
+      };
+      std::printf("MIGRATION CAUSE (dispatch lane): STEAL (STEP-1) %.0f%% cadence p50 %.0fus  |  "
+                  "PLACEMENT (own STEP-0 / select-enqueue) %.0f%% cadence p50 %.0fus\n",
+                  a ? 100.0 * static_cast<double>(steal_mig_) / static_cast<double>(a) : 0.0, cad(steal_iv_),
+                  a ? 100.0 * static_cast<double>(place_mig_) / static_cast<double>(a) : 0.0, cad(place_iv_));
+      std::printf("  (match each cadence to a scheduler clock: ~codel_target -> CoDel relief/steal beat; "
+                  "~wake rate -> warm-stay-release fan-out)\n");
+    }
     // Monotonic from the first POPULATED tier: a structurally-empty FINER tier
     // (e.g. same-L2 on a no-SMT part, where no two cores share L2) is not scatter
     // -- it just doesn't exist on that hardware. Skip leading empties, then density
@@ -3501,6 +4061,18 @@ class LocalityReport : public Report {
     out.push_back({"montauk_analysis_locality_local_pct", "",
                    cl ? 100.0 * static_cast<double>(tier_[0] + tier_[1]) / static_cast<double>(cl)
                       : 0.0});
+    double span_s = (ts_max_ > ts_min_) ? static_cast<double>(ts_max_ - ts_min_) / 1e9 : 0.0;
+    out.push_back({"montauk_analysis_locality_migration_rate_hz", "",
+                   span_s > 0.0 ? static_cast<double>(migrations_) / span_s : 0.0});
+    if (!intervals_.empty()) {
+      std::sort(intervals_.begin(), intervals_.end());
+      auto iq = [&](double p) {
+        size_t i = static_cast<size_t>(p * static_cast<double>(intervals_.size() - 1));
+        return static_cast<double>(intervals_[i]) / 1000.0;
+      };
+      out.push_back({"montauk_analysis_locality_intermigration_us", "quantile=\"p50\"", iq(0.50)});
+      out.push_back({"montauk_analysis_locality_intermigration_us", "quantile=\"p99\"", iq(0.99)});
+    }
   }
 };
 
@@ -3508,13 +4080,16 @@ std::vector<std::unique_ptr<Report>> make_reports() {
   std::vector<std::unique_ptr<Report>> reports;
   reports.push_back(std::make_unique<LocalityReport>());
   reports.push_back(std::make_unique<SummaryReport>());
+  reports.push_back(std::make_unique<IowaitReport>());
   reports.push_back(std::make_unique<SchedLatencyReport>());
   reports.push_back(std::make_unique<WorkConservationReport>());
   reports.push_back(std::make_unique<PlacementRaceReport>());
   reports.push_back(std::make_unique<DispatchStallReport>());
   reports.push_back(std::make_unique<KStrandReport>());
   reports.push_back(std::make_unique<SliceReport>());
+  reports.push_back(std::make_unique<StormReport>());
   reports.push_back(std::make_unique<ServiceReport>());
+  reports.push_back(std::make_unique<WakersReport>());
   reports.push_back(std::make_unique<WaitsReport>());
   reports.push_back(std::make_unique<SpinsReport>());
   reports.push_back(std::make_unique<PairingReport>());

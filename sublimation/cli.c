@@ -52,6 +52,7 @@ static void usage(FILE *out) {
         "  stdev / variance      sample (n-1) standard deviation / variance\n"
         "  min / max             minimum / maximum value\n"
         "  count                 number of input lines (wc -l)\n"
+        "  distinct              count of distinct values (sort | uniq | wc -l)\n"
         "  classify              disorder class + profile of the stream\n"
         "  locate CLASS          windows whose disorder class == CLASS\n"
         "  rand                  max-entropy randomness confidence\n"
@@ -462,6 +463,13 @@ int main(int argc, char **argv) {
         sublimation_f64(data.v, data.n);
         if (desc) for (size_t i = 0; i < data.n; i++) printf("%.12g\n", data.v[data.n - 1 - i]);
         else      for (size_t i = 0; i < data.n; i++) printf("%.12g\n", data.v[i]);
+
+    } else if (!strcmp(cmd, "distinct")) {  // exact distinct-value count (sort | uniq | wc -l)
+        sublimation_f64(data.v, data.n);
+        size_t d = 1;
+        for (size_t i = 1; i < data.n; i++)
+            if (data.v[i] != data.v[i - 1]) d++;
+        printf("%zu\n", d);
 
     } else if (!strcmp(cmd, "sum")) {     // awk '{s+=$N} END{print s}'
         double s = 0.0;
