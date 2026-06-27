@@ -1243,6 +1243,17 @@ void BpfTraceCollector::run(std::stop_token st) {
   bpf_program__set_autoattach(skel_->progs.uprobe_libc_message, false);
   bpf_program__set_autoattach(skel_->progs.uprobe_abort,        false);
 
+  // scx storm probes OFF by default. handle_scx_kick / handle_scx_reenq are the
+  // only montauk programs that trampoline sched_ext's OWN kfuncs
+  // (fentry/scx_bpf_kick_cpu, fexit/scx_bpf_reenqueue_local). Attaching a BPF
+  // trampoline patches live kernel text, and those kfuncs are exactly what an scx
+  // scheduler hammers at storm rates (~100k/s). On 7.1+ that patch cannot
+  // synchronize across CPUs while scx saturates them -- a silent box-wide freeze.
+  // The pervasive --trace path must never carry them; opt in below with
+  // MONTAUK_SCX_STORM for a deliberate storm capture. Skip auto-attach here.
+  bpf_program__set_autoattach(skel_->progs.handle_scx_kick,  false);
+  bpf_program__set_autoattach(skel_->progs.handle_scx_reenq, false);
+
   // Atomic skeleton attach now covers only the universal handlers -- always
   // present, so this cannot fail on a missing scheduler tracepoint.
   err = montauk_trace_bpf__attach(skel_);
@@ -1252,6 +1263,22 @@ void BpfTraceCollector::run(std::stop_token st) {
     skel_ = nullptr;
     load_failed_.store(true);
     return;
+  }
+
+  // Opt-in scx storm probes (see the OFF-by-default note above). A storm capture
+  // sets MONTAUK_SCX_STORM=1; montauk comes up BEFORE the load ramps, so the
+  // trampoline patch lands while scx is still quiescent, and detaches after the
+  // load drains -- never patched/unpatched mid-storm. Off => the StormReport is
+  // simply empty, never a freeze.
+  if (const char* sv = std::getenv("MONTAUK_SCX_STORM");
+      sv && sv[0] && sv[0] != '0') {
+    skel_->links.handle_scx_kick  = bpf_program__attach(skel_->progs.handle_scx_kick);
+    skel_->links.handle_scx_reenq = bpf_program__attach(skel_->progs.handle_scx_reenq);
+    if (skel_->links.handle_scx_kick && skel_->links.handle_scx_reenq)
+      montauk::util::log_info("scx storm probes attached (MONTAUK_SCX_STORM)");
+    else
+      montauk::util::log_warn("scx storm probes requested but attach failed -- "
+                              "StormReport will be empty");
   }
 
   // Bind the decision programs to the configured scheduler tracepoints, if any.

@@ -18,7 +18,10 @@
 namespace montauk::pop {
 
 struct PopOptions {
-  std::string compare_axis = "scheduler";  // label (or "version") to split on
+  std::string compare_axis = "scheduler";  // label to split on: any prom label,
+                                           // plus synthetic version/commit/capture
+                                           // (capture = per-run filename stamp, so
+                                           // an uncommitted A/B still separates)
   std::string metric_filter;               // substring; empty = every family
   double quantile = 99.0;                   // within-run quantile (Path A)
   uint64_t seed = 1729;

@@ -4227,7 +4227,7 @@ int main(int argc, char** argv) {
         "       montauk_analyze DIR|FILE.prom [more.prom...] [--by axis]\n"
         "                       [--metric substr] [--full] [--higher-better]\n"
         "                       [--seed n] [--quantile q] [--no-emit]\n"
-        "                       (axis: scheduler | version | commit)\n"
+        "                       (axis: scheduler | version | commit | capture)\n"
         "       montauk_analyze RECORDING_DIR --digest [--redact]\n"
         "       montauk_analyze RECORDING_DIR --l2-by-cpu\n");
     return want_help ? 0 : 2;

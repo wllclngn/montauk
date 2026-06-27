@@ -153,6 +153,27 @@ void reconstruct(const Hist& h, std::vector<double>& out) {
   }
 }
 
+// Synthetic `capture` axis: the run's identity for population splits when the
+// committed labels collide -- an uncommitted A/B where version, commit and
+// scheduler are all identical and `--by commit` folds both runs into one cell.
+// Each .prom is one run, so we key it by the YYYYMMDD-HHMMSS stamp in its
+// filename (the last such stamp; bench .prom names end in it), falling back to
+// the basename so every file still maps to a distinct group.
+std::string capture_key_from_path(const std::string& path) {
+  size_t slash = path.find_last_of('/');
+  std::string base = (slash == std::string::npos) ? path : path.substr(slash + 1);
+  if (base.size() >= 5 && base.compare(base.size() - 5, 5, ".prom") == 0)
+    base.resize(base.size() - 5);
+  std::string found;
+  for (size_t i = 0; i + 15 <= base.size(); ++i) {
+    bool ok = base[i + 8] == '-';
+    for (size_t k = 0; ok && k < 15; ++k)
+      if (k != 8 && !std::isdigit(static_cast<unsigned char>(base[i + k]))) ok = false;
+    if (ok) found = base.substr(i, 15);  // keep the last match
+  }
+  return found.empty() ? base : found;
+}
+
 // Parse one file: inject `version` into every sample's labels; route gauges to
 // the run vectors and histogram parts to the per-cell pools.
 void parse_file(const std::string& path, const PopOptions& opt,
@@ -165,12 +186,17 @@ void parse_file(const std::string& path, const PopOptions& opt,
   std::set<std::string> hist_families;
   std::string version = "unknown";
   std::string commit = "unknown";
+  const std::string capture = capture_key_from_path(path);
   // TYPE lines precede their series in the bench .prom, so a single pass works.
   // family -> cellkey -> axis value -> cumulative-bucket histogram.
   std::map<std::string, std::map<std::string, std::map<std::string, Hist>>> file_hist;
   std::map<std::string, LabelVec> file_hist_disp;  // cellkey -> display
 
-  const std::set<std::string> drop_for_cell = {opt.compare_axis, "le"};
+  // `capture` is always dropped from the cell identity: it is a per-run key that
+  // exists only to BE a compare axis. Left in the key it would fragment every
+  // cell by run even under --by commit/version/scheduler. When compare_axis ==
+  // "capture" it is the axis (label_get still finds it) and splits the cell.
+  const std::set<std::string> drop_for_cell = {opt.compare_axis, "le", "capture"};
 
   char* line = nullptr;
   size_t cap = 0;
@@ -238,6 +264,7 @@ void parse_file(const std::string& path, const PopOptions& opt,
     if (!hb.empty()) {
       labels.emplace_back("version", version);
       labels.emplace_back("commit", commit);
+      labels.emplace_back("capture", capture);
       std::string axv = label_get(labels, opt.compare_axis);
       if (axv.empty()) continue;
       std::string ck = cell_key(labels, drop_for_cell);  // drops le + axis
@@ -252,6 +279,7 @@ void parse_file(const std::string& path, const PopOptions& opt,
     // Plain gauge: one per-run scalar for (family, full labels).
     labels.emplace_back("version", version);
     labels.emplace_back("commit", commit);
+    labels.emplace_back("capture", capture);
     std::string axis = label_get(labels, opt.compare_axis);
     if (axis.empty()) continue;  // cannot place without the compare axis
     std::string ck = cell_key(labels, drop_for_cell);
