@@ -34,11 +34,18 @@
 #include "sublimation_randomness.h"
 #include "sublimation_text.h"
 
+#include "util/sink.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
+
+// Data output (stdout) drains through one buffered sink instead of a syscall
+// per printf; stderr diagnostics stay on stderr unchanged.
+static montauk_sink g_out;
+static void drain_out(void) { montauk_sink_drain(&g_out); }
 
 static void usage(FILE *out) {
     fputs(
@@ -52,7 +59,8 @@ static void usage(FILE *out) {
         "  stdev / variance      sample (n-1) standard deviation / variance\n"
         "  min / max             minimum / maximum value\n"
         "  count                 number of input lines (wc -l)\n"
-        "  distinct              count of distinct values (sort | uniq | wc -l)\n"
+        "  distinct              count of distinct tokens (sort | uniq | wc -l)\n"
+        "  tally                 per-token frequency, high to low (sort | uniq -c | sort -rn)\n"
         "  classify              disorder class + profile of the stream\n"
         "  locate CLASS          windows whose disorder class == CLASS\n"
         "  rand                  max-entropy randomness confidence\n"
@@ -147,6 +155,11 @@ int main(int argc, char **argv) {
         return 0;
     }
     const char *cmd = argv[1];
+
+    // One stdout sink for all data output; atexit covers every return/exit path,
+    // streaming loops drain periodically (below) to bound memory.
+    montauk_sink_init(&g_out, 1);
+    atexit(drain_out);
 
     int field = 0;
     const char *delim = " \t";
@@ -256,10 +269,11 @@ int main(int argc, char **argv) {
                         if (mend > mstart) {
                             matches++;
                             if (!quiet && !count_only) {
-                                if (multi) printf("%s:", fname);
-                                if (number) printf("%ld:", lineno);
-                                fwrite(line + mstart, 1, mend - mstart, stdout);
-                                putchar('\n');
+                                if (multi) montauk_sink_appendf(&g_out, "%s:", fname);
+                                if (number) montauk_sink_appendf(&g_out, "%ld:", lineno);
+                                montauk_sink_append(&g_out, line + mstart, mend - mstart);
+                                montauk_sink_appendc(&g_out, '\n');
+                                if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
                             }
                             off = mend;            // continue after the match (non-overlapping)
                             if (quiet || (max_count && matches >= max_count)) { done = 1; break; }
@@ -277,9 +291,10 @@ int main(int argc, char **argv) {
                 if (show) {
                     matches++;
                     if (!quiet && !count_only) {
-                        if (multi) printf("%s:", fname);
-                        if (number) printf("%ld:", lineno);   // grep -n
-                        fwrite(line, 1, (size_t)len, stdout);
+                        if (multi) montauk_sink_appendf(&g_out, "%s:", fname);
+                        if (number) montauk_sink_appendf(&g_out, "%ld:", lineno);   // grep -n
+                        montauk_sink_append(&g_out, line, (size_t)len);
+                        if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);  // bound memory
                     }
                     if (quiet || (max_count && matches >= max_count)) done = 1;  // grep -q / -m
                 }
@@ -287,7 +302,7 @@ int main(int argc, char **argv) {
             if (in != stdin) fclose(in);
         }
         free(line);
-        if (count_only) printf("%ld\n", matches);
+        if (count_only) montauk_sink_appendf(&g_out, "%ld\n", matches);
         // grep exit semantics: 0 if anything matched, 1 if nothing did -- so
         // `if ... | sublimation grep` and `&&` chains are correct without a
         // caller-side buffering hack.
@@ -347,10 +362,11 @@ int main(int argc, char **argv) {
                         if (cols[k] == f) { got[k] = line + start; gotlen[k] = i - start; }
                 }
                 for (int k = 0; k < ncol; k++) {
-                    if (k) putchar(' ');
-                    if (got[k]) fwrite(got[k], 1, gotlen[k], stdout);
+                    if (k) montauk_sink_appendc(&g_out, ' ');
+                    if (got[k]) montauk_sink_append(&g_out, got[k], gotlen[k]);
                 }
-                putchar('\n');
+                montauk_sink_appendc(&g_out, '\n');
+                if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);  // bound memory
                 printed++;
             }
             if (in != stdin) fclose(in);
@@ -423,8 +439,8 @@ int main(int argc, char **argv) {
                 }
                 if (keep) {
                     matches++;
-                    if (multi) printf("%s:", fname);
-                    fwrite(line, 1, (size_t)len, stdout);
+                    if (multi) montauk_sink_appendf(&g_out, "%s:", fname);
+                    montauk_sink_append(&g_out, line, (size_t)len);
                 }
             }
             if (in != stdin) fclose(in);
@@ -441,6 +457,77 @@ int main(int argc, char **argv) {
                 "argument\n", cmd, files[0]);
         return 2;
     }
+
+    // tally / distinct: frequency and distinct-count over TEXT tokens -- the
+    // --field column, or the whole line. tally is sort | uniq -c | sort -rn;
+    // distinct is sort | uniq | wc -l (so "1.0" and "1" are distinct lines, as
+    // those tools see them). Grouping is a single-pass open-addressing hash;
+    // tally orders the counts through the in-tree u64 sort.
+    if (!strcmp(cmd, "tally") || !strcmp(cmd, "distinct")) {
+        size_t hcap = 1024, used = 0;
+        char  **keys = (char **)calloc(hcap, sizeof(char *));
+        size_t *cnts = (size_t *)calloc(hcap, sizeof(size_t));
+        if (!keys || !cnts) { fputs("sublimation: out of memory\n", stderr); return 1; }
+        char *line = NULL; size_t lcap = 0; ssize_t len;
+        while ((len = getline(&line, &lcap, stdin)) != -1) {
+            if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
+            char buf[4096];
+            const char *tok = line;
+            if (field > 0) {
+                size_t n = (size_t)len < sizeof(buf) ? (size_t)len : sizeof(buf) - 1;
+                memcpy(buf, line, n); buf[n] = '\0';
+                char *t = field_token(buf, field, delim);
+                if (!t) continue;  // missing column -- skip, like read_values
+                tok = t;
+            }
+            if ((used + 1) * 2 >= hcap) {  // grow at 50% load
+                size_t ncap = hcap * 2;
+                char  **nk = (char **)calloc(ncap, sizeof(char *));
+                size_t *nc = (size_t *)calloc(ncap, sizeof(size_t));
+                if (!nk || !nc) { fputs("sublimation: out of memory\n", stderr); return 1; }
+                for (size_t i = 0; i < hcap; i++) {
+                    if (!keys[i]) continue;
+                    uint64_t h = 1469598103934665603ULL;
+                    for (const char *p = keys[i]; *p; p++) { h ^= (unsigned char)*p; h *= 1099511628211ULL; }
+                    size_t j = (size_t)h & (ncap - 1);
+                    while (nk[j]) j = (j + 1) & (ncap - 1);
+                    nk[j] = keys[i]; nc[j] = cnts[i];
+                }
+                free(keys); free(cnts); keys = nk; cnts = nc; hcap = ncap;
+            }
+            uint64_t h = 1469598103934665603ULL;
+            for (const char *p = tok; *p; p++) { h ^= (unsigned char)*p; h *= 1099511628211ULL; }
+            size_t i = (size_t)h & (hcap - 1);
+            while (keys[i] && strcmp(keys[i], tok) != 0) i = (i + 1) & (hcap - 1);
+            if (keys[i]) cnts[i]++;
+            else { keys[i] = strdup(tok); cnts[i] = 1; used++; }
+        }
+        free(line);
+
+        if (!strcmp(cmd, "distinct")) {
+            montauk_sink_appendf(&g_out, "%zu\n", used);
+        } else if (used > 0) {
+            // Compact to dense (key,count); order by count desc through the u64
+            // sort. pack = (count << 32) | dense_index -- both fit a line stream.
+            char    **dk     = (char **)malloc(used * sizeof(char *));
+            uint64_t *packed = (uint64_t *)malloc(used * sizeof(uint64_t));
+            if (!dk || !packed) { fputs("sublimation: out of memory\n", stderr); return 1; }
+            size_t d = 0;
+            for (size_t i = 0; i < hcap; i++)
+                if (keys[i]) { dk[d] = keys[i]; packed[d] = ((uint64_t)cnts[i] << 32) | (uint64_t)d; d++; }
+            sublimation_u64(packed, used);             // ascending
+            for (size_t i = used; i-- > 0;) {          // descending = highest count first
+                unsigned long long count = (unsigned long long)(packed[i] >> 32);
+                size_t idx = (size_t)(packed[i] & 0xFFFFFFFFULL);
+                montauk_sink_appendf(&g_out, "%llu %s\n", count, dk[idx]);
+            }
+            free(dk); free(packed);
+        }
+        for (size_t i = 0; i < hcap; i++) free(keys[i]);
+        free(keys); free(cnts);
+        return 0;
+    }
+
     Vec data = {0};
     size_t skipped = read_values(&data, field, delim);
 
@@ -449,7 +536,7 @@ int main(int argc, char **argv) {
     // getline iteration either parsed a value or was skipped, so data.n + skipped
     // is the total line count.
     if (!strcmp(cmd, "count")) {
-        printf("%zu\n", data.n + skipped);
+        montauk_sink_appendf(&g_out, "%zu\n", data.n + skipped);
         free(data.v);
         return 0;
     }
@@ -461,31 +548,24 @@ int main(int argc, char **argv) {
 
     if (!strcmp(cmd, "sort")) {
         sublimation_f64(data.v, data.n);
-        if (desc) for (size_t i = 0; i < data.n; i++) printf("%.12g\n", data.v[data.n - 1 - i]);
-        else      for (size_t i = 0; i < data.n; i++) printf("%.12g\n", data.v[i]);
-
-    } else if (!strcmp(cmd, "distinct")) {  // exact distinct-value count (sort | uniq | wc -l)
-        sublimation_f64(data.v, data.n);
-        size_t d = 1;
-        for (size_t i = 1; i < data.n; i++)
-            if (data.v[i] != data.v[i - 1]) d++;
-        printf("%zu\n", d);
+        if (desc) for (size_t i = 0; i < data.n; i++) montauk_sink_appendf(&g_out, "%.12g\n", data.v[data.n - 1 - i]);
+        else      for (size_t i = 0; i < data.n; i++) montauk_sink_appendf(&g_out, "%.12g\n", data.v[i]);
 
     } else if (!strcmp(cmd, "sum")) {     // awk '{s+=$N} END{print s}'
         double s = 0.0;
         for (size_t i = 0; i < data.n; i++) s += data.v[i];
-        printf("%.12g\n", s);
+        montauk_sink_appendf(&g_out, "%.12g\n", s);
 
     } else if (!strcmp(cmd, "mean")) {    // awk '{s+=$N} END{print s/NR}' (over the parsed values)
         double s = 0.0;
         for (size_t i = 0; i < data.n; i++) s += data.v[i];
-        printf("%.12g\n", s / (double)data.n);
+        montauk_sink_appendf(&g_out, "%.12g\n", s / (double)data.n);
 
     } else if (!strcmp(cmd, "variance") || !strcmp(cmd, "stdev")) {
         // SAMPLE variance / stdev (n-1 denominator), matching the convention the
         // PANDEMONIUM suite's mean_stdev() uses so it is an exact drop-in. n<2 has
         // no spread -> 0.0 (same as mean_stdev). Two-pass for numerical stability.
-        if (data.n < 2) { printf("0\n"); }
+        if (data.n < 2) { montauk_sink_appendf(&g_out, "0\n"); }
         else {
             double s = 0.0;
             for (size_t i = 0; i < data.n; i++) s += data.v[i];
@@ -496,18 +576,18 @@ int main(int argc, char **argv) {
                 ss += d * d;
             }
             double var = ss / (double)(data.n - 1);
-            printf("%.12g\n", !strcmp(cmd, "stdev") ? sqrt(var) : var);
+            montauk_sink_appendf(&g_out, "%.12g\n", !strcmp(cmd, "stdev") ? sqrt(var) : var);
         }
 
     } else if (!strcmp(cmd, "min")) {     // running minimum
         double m = data.v[0];
         for (size_t i = 1; i < data.n; i++) if (data.v[i] < m) m = data.v[i];
-        printf("%.12g\n", m);
+        montauk_sink_appendf(&g_out, "%.12g\n", m);
 
     } else if (!strcmp(cmd, "max")) {     // running maximum
         double m = data.v[0];
         for (size_t i = 1; i < data.n; i++) if (data.v[i] > m) m = data.v[i];
-        printf("%.12g\n", m);
+        montauk_sink_appendf(&g_out, "%.12g\n", m);
 
     } else if (!strcmp(cmd, "quantile")) {
         if (!pos) { fputs("sublimation: quantile needs Q (0..1)\n", stderr); return 2; }
@@ -528,7 +608,7 @@ int main(int argc, char **argv) {
             idx = (size_t)(q * (double)data.n);
         }
         if (idx >= data.n) idx = data.n - 1;
-        printf("%.12g\n", data.v[idx]);
+        montauk_sink_appendf(&g_out, "%.12g\n", data.v[idx]);
 
     } else if (!strcmp(cmd, "select")) {
         if (!pos) { fputs("sublimation: select needs K (0-based)\n", stderr); return 2; }
@@ -537,21 +617,21 @@ int main(int argc, char **argv) {
             fprintf(stderr, "sublimation: K out of range (0..%zu)\n", data.n - 1);
             return 2;
         }
-        printf("%.12g\n", sublimation_select_f64(data.v, data.n, (size_t)k));
+        montauk_sink_appendf(&g_out, "%.12g\n", sublimation_select_f64(data.v, data.n, (size_t)k));
 
     } else if (!strcmp(cmd, "searchsorted")) {
         if (!pos) { fputs("sublimation: searchsorted needs a value\n", stderr); return 2; }
         double target = strtod(pos, NULL);
         sublimation_f64(data.v, data.n);  // searchsorted needs sorted input
-        printf("%zu\n", sublimation_searchsorted_f64(data.v, data.n, target, 0));
+        montauk_sink_appendf(&g_out, "%zu\n", sublimation_searchsorted_f64(data.v, data.n, target, 0));
 
     } else if (!strcmp(cmd, "classify")) {
         sub_profile_t p = sublimation_classify_f64(data.v, data.n);
-        printf("%s  n=%zu  inversion_ratio=%.3f  lis=%zu  distinct~%zu  runs=%zu",
+        montauk_sink_appendf(&g_out, "%s  n=%zu  inversion_ratio=%.3f  lis=%zu  distinct~%zu  runs=%zu",
                sublimation_disorder_name(p.disorder), data.n,
                (double)p.inversion_ratio, p.lis_length, p.distinct_estimate, p.run_count);
-        if (p.phase_boundary) printf("  phase_boundary=%zu", p.phase_boundary);
-        putchar('\n');
+        if (p.phase_boundary) montauk_sink_appendf(&g_out, "  phase_boundary=%zu", p.phase_boundary);
+        montauk_sink_appendc(&g_out, '\n');
 
     } else if (!strcmp(cmd, "locate")) {
         sub_disorder_t target;
@@ -567,9 +647,9 @@ int main(int argc, char **argv) {
         size_t cap = data.n / stride + 2;
         sub_match_t *m = (sub_match_t *)malloc(cap * sizeof(sub_match_t));
         size_t k = sublimation_locate_f64(data.v, data.n, window, stride, target, m, cap);
-        printf("%zu window(s) matching %s:\n", k, sublimation_disorder_name(target));
+        montauk_sink_appendf(&g_out, "%zu window(s) matching %s:\n", k, sublimation_disorder_name(target));
         for (size_t i = 0; i < k; i++)
-            printf("  [%zu,%zu)  inv=%.2f  distinct~%zu\n",
+            montauk_sink_appendf(&g_out, "  [%zu,%zu)  inv=%.2f  distinct~%zu\n",
                    m[i].start, m[i].start + m[i].len,
                    (double)m[i].inversion_ratio, m[i].distinct_estimate);
         free(m);
@@ -578,11 +658,11 @@ int main(int argc, char **argv) {
         sub_randomness_t r = sublimation_randomness_f64(data.v, data.n);
         static const char *lens[SUB_RANDOMNESS_LENSES] =
             {"hook", "lis", "inv", "distinct", "hvg", "bandt-pompe"};
-        printf("confidence=%.3f  (k=%u/%u agree)\n", (double)r.confidence,
+        montauk_sink_appendf(&g_out, "confidence=%.3f  (k=%u/%u agree)\n", (double)r.confidence,
                r.agree_count, r.lens_count);
         for (int i = 0; i < SUB_RANDOMNESS_LENSES; i++) {
-            if (r.lens_available[i]) printf("  %-12s %.2f\n", lens[i], (double)r.lens[i]);
-            else                     printf("  %-12s --\n", lens[i]);
+            if (r.lens_available[i]) montauk_sink_appendf(&g_out, "  %-12s %.2f\n", lens[i], (double)r.lens[i]);
+            else                     montauk_sink_appendf(&g_out, "  %-12s --\n", lens[i]);
         }
 
     } else if (!strcmp(cmd, "characterize")) {
@@ -599,12 +679,12 @@ int main(int argc, char **argv) {
         // Honesty at the floor: the class and the randomness confidence are always
         // reported; the hook-length efficiency only when it was actually computed
         // -- the fast paths skip it, and a 0 there is "not measured", not "zero".
-        printf("%s  rand_confidence=%.3f  n=%zu",
+        montauk_sink_appendf(&g_out, "%s  rand_confidence=%.3f  n=%zu",
                sublimation_disorder_name(st.disorder), (double)r.confidence, data.n);
         if (st.info_theoretic_bound > 0.0)
-            printf("  comparison_efficiency=%.3f  info_bound=%.1f bits",
+            montauk_sink_appendf(&g_out, "  comparison_efficiency=%.3f  info_bound=%.1f bits",
                    st.comparison_efficiency, st.info_theoretic_bound);
-        putchar('\n');
+        montauk_sink_appendc(&g_out, '\n');
 
     } else {
         fprintf(stderr, "sublimation: unknown command '%s'\n\n", cmd);

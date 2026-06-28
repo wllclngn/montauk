@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 7.10.0 LANGUAGES C CXX)
+project(montauk VERSION 7.11.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -255,6 +255,9 @@ add_executable(sublimation_cli sublimation/cli.c)
 set_target_properties(sublimation_cli PROPERTIES
     OUTPUT_NAME sublimation
     C_STANDARD 23 C_STANDARD_REQUIRED ON)
+# montauk's include/ for the shared output sink (util/sink.h); the CLI's data
+# output drains through it like the rest of montauk.
+target_include_directories(sublimation_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(sublimation_cli PRIVATE sublimation)
 
 if(MONTAUK_BUILD_TESTS)
@@ -283,11 +286,21 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_toml_reader.cpp
     tests/test_canvas.cpp
     tests/test_provider_collector.cpp
+    tests/test_sink.cpp
   )
   target_include_directories(montauk_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(montauk_tests PRIVATE montauk_core)
   target_compile_options(montauk_tests PRIVATE -Wall -Wextra -Werror -Wshadow)
   target_compile_definitions(montauk_tests PRIVATE MONTAUK_TESTING=1)
 
-  add_custom_target(check COMMAND montauk_tests DEPENDS montauk_tests)
+  # The output sink (include/util/sink.h) is a shared C23/C++23 header. The C++
+  # front-end is covered above; this target proves the same header compiles and
+  # runs as C23 -- the shared-header property the whole unification rests on.
+  add_executable(montauk_sink_c_test tests/test_sink_c.c)
+  set_target_properties(montauk_sink_c_test PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
+  target_include_directories(montauk_sink_c_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_options(montauk_sink_c_test PRIVATE -Wall -Wextra -Werror -Wshadow)
+
+  add_custom_target(check COMMAND montauk_tests DEPENDS montauk_tests montauk_sink_c_test
+                          COMMAND montauk_sink_c_test)
 endif()

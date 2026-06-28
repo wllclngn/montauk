@@ -2158,3 +2158,52 @@ int BPF_KPROBE(uprobe_keyed_release, void *handle, void *key) {
   emit_keyedevt(KEVT_RELEASE, (u64)key);
   return 0;
 }
+
+// Wait-site uprobes on ntdll.so. NtWaitForSingleObject/NtWaitForMultipleObjects
+// sit ABOVE the raw syscall-enter in the call stack, so bpf_get_stack here can
+// reach the Wine caller (e.g. winepulse) that the syscall-leaf WAITSTACK in
+// handle_sys_enter resolves only to the libc wrapper. Gated to INFINITE waits
+// (NULL timeout pointer = the NT "no timeout" convention) to bound volume to the
+// hang-prone class, same intent as the syscall-enter path.
+// Raw stack + registers for the offline scan. bpf_get_stack's frame-pointer walk
+// is useless on Wine ntdll (no FP -- it returns frame 0 then garbage), so instead
+// we capture RIP + a slice of the stack at RSP and let the analyzer resolve each
+// stack word against the maps sidecar to name the winepulse caller.
+static __always_inline void emit_wait_rawstack(void *ctx, u64 obj) {
+  u64 pt = bpf_get_current_pid_tgid();
+  u32 pid = pt >> 32;
+  if (!is_tracked(pid)) return;
+  struct pt_regs *regs = (struct pt_regs *)ctx;
+  struct montauk_rawstack_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return;
+  e->type = TRACE_EVT_RAWSTACK;
+  e->pid = pid;
+  e->tid = (u32)pt;
+  e->rip = PT_REGS_IP(regs);
+  e->rsp = PT_REGS_SP(regs);
+  e->rbp = PT_REGS_FP(regs);
+  e->obj_ptr = obj;
+  long n = bpf_probe_read_user(e->stack, TRACE_RAWSTACK_BYTES, (void *)e->rsp);
+  e->stack_len = (n == 0) ? TRACE_RAWSTACK_BYTES : 0;
+  bpf_get_current_comm(e->comm, sizeof(e->comm));
+  e->timestamp_ns = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(e, 0);
+}
+
+// NtWaitForSingleObject(HANDLE, BOOLEAN alertable, PLARGE_INTEGER timeout)
+SEC("uprobe")
+int BPF_KPROBE(uprobe_wait_single, void *handle, u64 alertable, void *timeout) {
+  if (timeout) return 0; // NULL timeout = infinite
+  emit_wait_rawstack(ctx, (u64)handle);
+  return 0;
+}
+
+// NtWaitForMultipleObjects(ULONG count, const HANDLE *handles,
+//                          OBJECT_WAIT_TYPE, BOOLEAN alertable, PLARGE_INTEGER timeout)
+SEC("uprobe")
+int BPF_KPROBE(uprobe_wait_multiple, u64 count, void *handles, u64 wtype,
+               u64 alertable, void *timeout) {
+  if (timeout) return 0; // NULL timeout = infinite
+  emit_wait_rawstack(ctx, 0);
+  return 0;
+}

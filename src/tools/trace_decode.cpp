@@ -14,15 +14,21 @@
 #include "model/TraceReader.hpp"
 #include "montauk_trace.h"
 #include "util/Log.hpp"
+#include "util/sink.h"
 
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <string>
 
 namespace {
+
+// Decoded output drains through one buffered sink, drained at exit.
+montauk_sink g_out;
+void drain_out() { montauk_sink_drain(&g_out); }
 
 const char* sched_op_name(uint32_t op) {
   switch (op) {
@@ -83,6 +89,8 @@ std::string wall_str(uint64_t wall_ns) {
 } // namespace
 
 int main(int argc, char** argv) {
+  montauk_sink_init(&g_out, 1);
+  std::atexit(drain_out);
   if (argc < 2) {
     std::fprintf(stderr, "usage: montauk_trace_decode FILE [--csv]\n");
     return 2;
@@ -116,9 +124,9 @@ int main(int argc, char** argv) {
   if (!csv) {
     char pat[33];
     std::snprintf(pat, sizeof(pat), "%.*s", static_cast<int>(sizeof(hdr.pattern)), hdr.pattern);
-    std::printf("# montauk trace log  pattern='%s'  start=%s\n", pat, wall_str(hdr.real_anchor_ns).c_str());
+    montauk_sink_appendf(&g_out, "# montauk trace log  pattern='%s'  start=%s\n", pat, wall_str(hdr.real_anchor_ns).c_str());
   } else {
-    std::printf("type,op,elapsed_ms,wall,pid,tid,cpu,detail\n");
+    montauk_sink_appendf(&g_out, "type,op,elapsed_ms,wall,pid,tid,cpu,detail\n");
   }
 
   auto status = reader.for_each([&](uint32_t type, const uint8_t* data, uint32_t len) {
@@ -127,29 +135,29 @@ int main(int argc, char** argv) {
         if (len < sizeof(montauk_sched_event)) break;
         auto* s = reinterpret_cast<const montauk_sched_event*>(data);
         if (csv) {
-          std::printf("SCHED,%s,%.3f,%s,%d,%d,%u,score=%" PRIu64 " last_cpu=%d sub=%u runtime=%" PRIu64 " budget=%" PRIu64 "\n",
+          montauk_sink_appendf(&g_out, "SCHED,%s,%.3f,%s,%d,%d,%u,score=%" PRIu64 " last_cpu=%d sub=%u runtime=%" PRIu64 " budget=%" PRIu64 "\n",
                       sched_op_name(s->op), elapsed_ms(s->timestamp_ns), wall_str(to_wall(s->timestamp_ns)).c_str(),
                       s->pid, s->secondary_pid, s->cpu, (uint64_t)s->score, s->last_cpu, s->sub_idx,
                       (uint64_t)s->runtime_ns, (uint64_t)s->budget_ns);
         } else {
-          std::printf("[%10.3f] SCHED %-14s cpu=%-3u pid=%-7d", elapsed_ms(s->timestamp_ns),
+          montauk_sink_appendf(&g_out, "[%10.3f] SCHED %-14s cpu=%-3u pid=%-7d", elapsed_ms(s->timestamp_ns),
                       sched_op_name(s->op), s->cpu, s->pid);
           if (s->op == SCHED_OP_ENQUEUE)
-            std::printf(" last_cpu=%d sub=%u score=%" PRIu64, s->last_cpu, s->sub_idx, (uint64_t)s->score);
+            montauk_sink_appendf(&g_out, " last_cpu=%d sub=%u score=%" PRIu64, s->last_cpu, s->sub_idx, (uint64_t)s->score);
           else if (s->op == SCHED_OP_PICK)
-            std::printf(" score=%" PRIu64, (uint64_t)s->score);
+            montauk_sink_appendf(&g_out, " score=%" PRIu64, (uint64_t)s->score);
           else if (s->op == SCHED_OP_PREEMPT_TICK)
-            std::printf(" runtime=%" PRIu64 " budget=%" PRIu64, (uint64_t)s->runtime_ns, (uint64_t)s->budget_ns);
+            montauk_sink_appendf(&g_out, " runtime=%" PRIu64 " budget=%" PRIu64, (uint64_t)s->runtime_ns, (uint64_t)s->budget_ns);
           else if (s->op == SCHED_OP_PREEMPT_WAKEUP)
-            std::printf(" waker=%d", s->secondary_pid);
+            montauk_sink_appendf(&g_out, " waker=%d", s->secondary_pid);
           else if (s->op == SCHED_OP_WAKEUP)
-            std::printf(" target_cpu=%u", s->cpu);
+            montauk_sink_appendf(&g_out, " target_cpu=%u", s->cpu);
           else if (s->op == SCHED_OP_WAKE2RUN) {
-            std::printf(" wake2run=%" PRIu64 "us%s", (uint64_t)s->runtime_ns / 1000,
+            montauk_sink_appendf(&g_out, " wake2run=%" PRIu64 "us%s", (uint64_t)s->runtime_ns / 1000,
                         s->sub_idx ? " CROSS-DOMAIN" : "");
-            if (s->freq_mhz) std::printf(" freq=%uMHz", s->freq_mhz);
+            if (s->freq_mhz) montauk_sink_appendf(&g_out, " freq=%uMHz", s->freq_mhz);
           }
-          std::printf("\n");
+          montauk_sink_appendf(&g_out, "\n");
         }
         break;
       }
@@ -157,11 +165,11 @@ int main(int argc, char** argv) {
         if (len < sizeof(montauk_kstrand_event)) break;
         auto* k = reinterpret_cast<const montauk_kstrand_event*>(data);
         if (csv) {
-          std::printf("KSTRAND,%.3f,%s,%u,%u,%s,lat_us=%" PRIu64 "\n",
+          montauk_sink_appendf(&g_out, "KSTRAND,%.3f,%s,%u,%u,%s,lat_us=%" PRIu64 "\n",
                       elapsed_ms(k->timestamp_ns), wall_str(to_wall(k->timestamp_ns)).c_str(),
                       k->tid, k->cpu, k->comm, (uint64_t)k->latency_ns / 1000);
         } else {
-          std::printf("[%10.3f] KSTRAND cpu=%-3u tid=%-7u %-16s strand=%" PRIu64 "us\n",
+          montauk_sink_appendf(&g_out, "[%10.3f] KSTRAND cpu=%-3u tid=%-7u %-16s strand=%" PRIu64 "us\n",
                       elapsed_ms(k->timestamp_ns), k->cpu, k->tid, k->comm,
                       (uint64_t)k->latency_ns / 1000);
         }
@@ -170,25 +178,25 @@ int main(int argc, char** argv) {
       case TRACE_EVT_NTSYNC: {
         if (len < sizeof(montauk_ntsync_event)) break;
         auto* nts = reinterpret_cast<const montauk_ntsync_event*>(data);
-        std::printf("[%10.3f] NTSYNC %-13s pid=%-7d tid=%-7d fd=%-4d result=%ld",
+        montauk_sink_appendf(&g_out, "[%10.3f] NTSYNC %-13s pid=%-7d tid=%-7d fd=%-4d result=%ld",
                     elapsed_ms(nts->timestamp_ns), ntsync_op_name(nts->op),
                     nts->pid, nts->tid, nts->fd, (long)nts->result);
         if (nts->op == NTS_WAIT_ANY || nts->op == NTS_WAIT_ALL) {
           uint32_t n = nts->wait_count;
           if (n > NTSYNC_MAX_WAIT_FDS) n = NTSYNC_MAX_WAIT_FDS;
-          std::printf(" objs=[");
+          montauk_sink_appendf(&g_out, " objs=[");
           for (uint32_t i = 0; i < n; ++i)
-            std::printf(i ? ",%d" : "%d", static_cast<int32_t>(nts->wait_fds[i]));
-          std::printf("]");
-          std::printf(" objptrs=[");
+            montauk_sink_appendf(&g_out, i ? ",%d" : "%d", static_cast<int32_t>(nts->wait_fds[i]));
+          montauk_sink_appendf(&g_out, "]");
+          montauk_sink_appendf(&g_out, " objptrs=[");
           for (uint32_t i = 0; i < n; ++i)
-            std::printf(i ? ",0x%llx" : "0x%llx",
+            montauk_sink_appendf(&g_out, i ? ",0x%llx" : "0x%llx",
                         (unsigned long long)nts->wait_objs[i]);
-          std::printf("]");
+          montauk_sink_appendf(&g_out, "]");
         } else if (nts->obj_ptr) {
-          std::printf(" objptr=0x%llx", (unsigned long long)nts->obj_ptr);
+          montauk_sink_appendf(&g_out, " objptr=0x%llx", (unsigned long long)nts->obj_ptr);
         }
-        std::printf("\n");
+        montauk_sink_appendf(&g_out, "\n");
         break;
       }
       case TRACE_EVT_IO: {
@@ -199,12 +207,12 @@ int main(int argc, char** argv) {
         // other syscalls it's unset. Print accordingly so byte-level
         // analysis can correlate pread → file offset.
         if (io->syscall_nr == 17) {
-          std::printf("[%10.3f] IO     %-13s pid=%-7d tid=%-7d fd=%-4d count=%" PRIu64 " offset=%u result=%ld comm='%.16s'\n",
+          montauk_sink_appendf(&g_out, "[%10.3f] IO     %-13s pid=%-7d tid=%-7d fd=%-4d count=%" PRIu64 " offset=%u result=%ld comm='%.16s'\n",
                       elapsed_ms(io->timestamp_ns),
                       io_syscall_name(io->syscall_nr), io->pid, io->tid, io->fd,
                       (uint64_t)io->count, io->whence, (long)io->result, io->comm);
         } else {
-          std::printf("[%10.3f] IO     %-13s pid=%-7d tid=%-7d fd=%-4d count=%" PRIu64 " result=%ld comm='%.16s'\n",
+          montauk_sink_appendf(&g_out, "[%10.3f] IO     %-13s pid=%-7d tid=%-7d fd=%-4d count=%" PRIu64 " result=%ld comm='%.16s'\n",
                       elapsed_ms(io->timestamp_ns),
                       io_syscall_name(io->syscall_nr), io->pid, io->tid, io->fd,
                       (uint64_t)io->count, (long)io->result, io->comm);
@@ -223,7 +231,7 @@ int main(int argc, char** argv) {
         if (m->prot & 0x4) prot_s[2] = 'x';
         const char* share = (m->flags & 0x1) ? "SHARED" : (m->flags & 0x2) ? "PRIVATE" : "?";
         const char* fixed = (m->flags & 0x10) ? " FIXED" : "";
-        std::printf("[%10.3f] MMAP   pid=%-7d tid=%-7d fd=%-4d addr=0x%016" PRIx64 " length=%" PRIu64 " offset=%" PRIu64 " prot=%s %s%s comm='%.16s'\n",
+        montauk_sink_appendf(&g_out, "[%10.3f] MMAP   pid=%-7d tid=%-7d fd=%-4d addr=0x%016" PRIx64 " length=%" PRIu64 " offset=%" PRIu64 " prot=%s %s%s comm='%.16s'\n",
                     elapsed_ms(m->timestamp_ns), m->pid, m->tid, m->fd,
                     (uint64_t)m->addr, (uint64_t)m->length, (uint64_t)m->offset,
                     prot_s, share, fixed, m->comm);
@@ -238,14 +246,14 @@ int main(int argc, char** argv) {
                        : h->op == HEAP_OP_CALLOC  ? "calloc"
                        : "?";
         if (h->op == HEAP_OP_REALLOC) {
-          std::printf("[%10.3f] HEAP   %-9s pid=%-7u tid=%-7u "
+          montauk_sink_appendf(&g_out, "[%10.3f] HEAP   %-9s pid=%-7u tid=%-7u "
                       "old=0x%016" PRIx64 " new=0x%016" PRIx64 " size=%" PRIu64
                       " comm='%.16s'\n",
                       elapsed_ms(h->timestamp_ns), op, h->pid, h->tid,
                       (uint64_t)h->addr, (uint64_t)h->new_addr,
                       (uint64_t)h->size, h->comm);
         } else {
-          std::printf("[%10.3f] HEAP   %-9s pid=%-7u tid=%-7u "
+          montauk_sink_appendf(&g_out, "[%10.3f] HEAP   %-9s pid=%-7u tid=%-7u "
                       "addr=0x%016" PRIx64 " size=%" PRIu64 " comm='%.16s'\n",
                       elapsed_ms(h->timestamp_ns), op, h->pid, h->tid,
                       (uint64_t)h->addr, (uint64_t)h->size, h->comm);
@@ -269,7 +277,7 @@ int main(int argc, char** argv) {
           default: signame = "?";       break;
         }
         const char* kind = (s->kind == SIGEVT_DELIVER) ? "DELIVER" : "EXIT_ABNL";
-        std::printf("[%10.3f] SIGNAL %s pid=%u tid=%u sig=%s(%d) sender=%d "
+        montauk_sink_appendf(&g_out, "[%10.3f] SIGNAL %s pid=%u tid=%u sig=%s(%d) sender=%d "
                     "exit_code=0x%x comm='%.16s' stack_depth=%u\n",
                     elapsed_ms(s->timestamp_ns), kind, s->pid, s->tid,
                     signame, s->signal_nr, s->sender_pid,
@@ -277,7 +285,7 @@ int main(int argc, char** argv) {
         unsigned n = s->stack_depth;
         if (n > TRACE_STACK_MAX_FRAMES) n = TRACE_STACK_MAX_FRAMES;
         for (unsigned i = 0; i < n; ++i) {
-          std::printf("              #%-2u 0x%016" PRIx64 "\n",
+          montauk_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
                       i, (uint64_t)s->stack_user[i]);
         }
         break;
@@ -289,14 +297,14 @@ int main(int argc, char** argv) {
                        : a->func == ABORT_FN_LIBC_MESSAGE ? "__libc_message"
                        : a->func == ABORT_FN_ABORT        ? "abort"
                        : "?";
-        std::printf("[%10.3f] ABORT  %s pid=%u tid=%u comm='%.16s' "
+        montauk_sink_appendf(&g_out, "[%10.3f] ABORT  %s pid=%u tid=%u comm='%.16s' "
                     "msg='%.128s' loc='%.128s' line=%u stack_depth=%u\n",
                     elapsed_ms(a->timestamp_ns), fn, a->pid, a->tid, a->comm,
                     a->msg, a->loc, a->line, a->stack_depth);
         unsigned an = a->stack_depth;
         if (an > TRACE_STACK_MAX_FRAMES) an = TRACE_STACK_MAX_FRAMES;
         for (unsigned i = 0; i < an; ++i) {
-          std::printf("              #%-2u 0x%016" PRIx64 "\n",
+          montauk_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
                       i, (uint64_t)a->stack_user[i]);
         }
         break;
@@ -305,7 +313,7 @@ int main(int argc, char** argv) {
         if (len < sizeof(montauk_heapstack_event)) break;
         auto* h = reinterpret_cast<const montauk_heapstack_event*>(data);
         const char* opn = h->op == HEAP_OP_CALLOC ? "calloc" : "malloc";
-        std::printf("[%10.3f] HEAPSTK %s pid=%u tid=%u addr=0x%016" PRIx64
+        montauk_sink_appendf(&g_out, "[%10.3f] HEAPSTK %s pid=%u tid=%u addr=0x%016" PRIx64
                     " size=%" PRIu64 " comm='%.16s' stack_depth=%u\n",
                     elapsed_ms(h->timestamp_ns), opn, h->pid, h->tid,
                     (uint64_t)h->addr, (uint64_t)h->size, h->comm,
@@ -313,7 +321,7 @@ int main(int argc, char** argv) {
         unsigned hn = h->stack_depth;
         if (hn > TRACE_STACK_MAX_FRAMES) hn = TRACE_STACK_MAX_FRAMES;
         for (unsigned i = 0; i < hn; ++i) {
-          std::printf("              #%-2u 0x%016" PRIx64 "\n",
+          montauk_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
                       i, (uint64_t)h->stack_user[i]);
         }
         break;
@@ -321,14 +329,14 @@ int main(int argc, char** argv) {
       case TRACE_EVT_WAITSTACK: {
         if (len < sizeof(montauk_waitstack_event)) break;
         auto* w = reinterpret_cast<const montauk_waitstack_event*>(data);
-        std::printf("[%10.3f] WAITSTK pid=%u tid=%u obj=0x%016" PRIx64
+        montauk_sink_appendf(&g_out, "[%10.3f] WAITSTK pid=%u tid=%u obj=0x%016" PRIx64
                     " comm='%.16s' stack_depth=%u (INFINITE wait)\n",
                     elapsed_ms(w->timestamp_ns), w->pid, w->tid,
                     (uint64_t)w->obj_ptr, w->comm, w->stack_depth);
         unsigned wn = w->stack_depth;
         if (wn > TRACE_STACK_MAX_FRAMES) wn = TRACE_STACK_MAX_FRAMES;
         for (unsigned i = 0; i < wn; ++i) {
-          std::printf("              #%-2u 0x%016" PRIx64 "\n",
+          montauk_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
                       i, (uint64_t)w->stack_user[i]);
         }
         break;
@@ -336,7 +344,7 @@ int main(int argc, char** argv) {
       case TRACE_EVT_KEYEDEVT: {
         if (len < sizeof(montauk_keyedevt_event)) break;
         auto* k = reinterpret_cast<const montauk_keyedevt_event*>(data);
-        std::printf("[%10.3f] KEYEDEVT %-7s pid=%-7u tid=%-7u key=0x%016" PRIx64 " comm='%.16s'\n",
+        montauk_sink_appendf(&g_out, "[%10.3f] KEYEDEVT %-7s pid=%-7u tid=%-7u key=0x%016" PRIx64 " comm='%.16s'\n",
                     elapsed_ms(k->timestamp_ns), k->op == KEVT_RELEASE ? "release" : "wait",
                     k->pid, k->tid, (uint64_t)k->key, k->comm);
         break;
@@ -350,15 +358,15 @@ int main(int argc, char** argv) {
         const char* tn = type == TRACE_EVT_FORK ? "FORK"
                        : type == TRACE_EVT_EXEC ? "EXEC"
                        : type == TRACE_EVT_EXIT ? "EXIT" : "COMM";
-        std::printf("[          ] %-5s pid=%-7u ppid=%-7u comm='%.16s'", tn, e->pid, e->ppid, e->comm);
-        if (type == TRACE_EVT_EXEC) std::printf(" file='%.64s'", e->filename);
-        std::printf("\n");
+        montauk_sink_appendf(&g_out, "[          ] %-5s pid=%-7u ppid=%-7u comm='%.16s'", tn, e->pid, e->ppid, e->comm);
+        if (type == TRACE_EVT_EXEC) montauk_sink_appendf(&g_out, " file='%.64s'", e->filename);
+        montauk_sink_appendf(&g_out, "\n");
         break;
       }
       case TRACE_EVT_PROVIDER: {
         if (len < sizeof(montauk_provider_event)) break;
         auto* p = reinterpret_cast<const montauk_provider_event*>(data);
-        std::printf("[%10.3f] PROVIDER %.32s snapshot bytes=%u\n",
+        montauk_sink_appendf(&g_out, "[%10.3f] PROVIDER %.32s snapshot bytes=%u\n",
                     elapsed_ms(p->timestamp_ns), p->name, p->payload_len);
         break;
       }
@@ -375,6 +383,6 @@ int main(int argc, char** argv) {
     montauk::util::log_error("truncated record at event %" PRIu64, reader.events_read());
   }
 
-  if (!csv) std::printf("# %" PRIu64 " events\n", reader.events_read());
+  if (!csv) montauk_sink_appendf(&g_out, "# %" PRIu64 " events\n", reader.events_read());
   return 0;
 }

@@ -1,4 +1,5 @@
 #include "util/Log.hpp"
+#include "util/sink.h"
 
 #include <cstdio>
 #include <cstring>
@@ -30,8 +31,15 @@ void vlog_msg(LogLevel level, const char* fmt, va_list ap) {
   const char* ls = level_str(level);
   int pad = 9 - static_cast<int>(std::strlen(ls) + 2);
   if (pad < 1) pad = 1;
-  std::fprintf(stderr, "[%02d:%02d:%02d] [%s]%*s%s\n",
-               tm.tm_hour, tm.tm_min, tm.tm_sec, ls, pad, "", buf);
+  // Format into a per-call stderr sink and drain immediately: logs stay
+  // real-time, and a stack-local sink keeps it thread-safe (no shared buffer).
+  // Same bytes as the prior single fprintf.
+  montauk_sink s;
+  montauk_sink_init(&s, 2);
+  montauk_sink_appendf(&s, "[%02d:%02d:%02d] [%s]%*s%s\n",
+                       tm.tm_hour, tm.tm_min, tm.tm_sec, ls, pad, "", buf);
+  montauk_sink_drain(&s);
+  montauk_sink_free(&s);
 }
 
 void log_msg(LogLevel level, const char* fmt, ...) {

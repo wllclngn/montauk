@@ -1423,6 +1423,10 @@ void BpfTraceCollector::run(std::stop_token st) {
     const KevtAttach kattaches[] = {
       { skel_->progs.uprobe_keyed_wait,    &skel_->links.uprobe_keyed_wait,    "NtWaitForKeyedEvent" },
       { skel_->progs.uprobe_keyed_release, &skel_->links.uprobe_keyed_release, "NtReleaseKeyedEvent" },
+      // Wait-site stacks: capture the user stack at the Wine wait function (above
+      // the syscall leaf) so a parked thread resolves to its winepulse/Wine caller.
+      { skel_->progs.uprobe_wait_single,   &skel_->links.uprobe_wait_single,   "NtWaitForSingleObject" },
+      { skel_->progs.uprobe_wait_multiple, &skel_->links.uprobe_wait_multiple, "NtWaitForMultipleObjects" },
     };
     const char *ntdll_path = getenv("MONTAUK_NTDLL_PATH");
     if (ntdll_path && access(ntdll_path, R_OK) == 0) {
@@ -1441,7 +1445,7 @@ void BpfTraceCollector::run(std::stop_token st) {
         }
       }
       montauk::util::log_info(
-                   "keyed-event uprobes attached: %d/2 to %s",
+                   "ntdll keyed-event + wait-site uprobes attached: %d/4 to %s",
                    kattached, ntdll_path);
     } else {
       montauk::util::log_info(

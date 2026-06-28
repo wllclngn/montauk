@@ -20,6 +20,8 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
+#include "util/sink.h"
+
 #ifndef MONTAUK_VERSION
 #define MONTAUK_VERSION "unknown"
 #endif
@@ -27,6 +29,19 @@
 namespace montauk::pop {
 
 namespace {
+
+// Population / l2-by-cpu stdout drains through one buffered sink, lazily set up
+// on first use (these paths run from montauk_analyze's main) and drained at exit.
+montauk_sink g_pop_out;
+bool g_pop_out_init = false;
+void drain_pop_out() { montauk_sink_drain(&g_pop_out); }
+void ensure_pop_out() {
+  if (!g_pop_out_init) {
+    montauk_sink_init(&g_pop_out, 1);
+    std::atexit(drain_pop_out);
+    g_pop_out_init = true;
+  }
+}
 
 using LabelVec = std::vector<std::pair<std::string, std::string>>;
 
@@ -337,6 +352,7 @@ struct PromLine {
 };
 
 void emit_prom(const std::vector<PromLine>& lines, const PopOptions& opt) {
+  ensure_pop_out();
   const char* xdg = std::getenv("XDG_CACHE_HOME");
   std::string dir = (xdg && *xdg)
                         ? std::string(xdg)
@@ -438,15 +454,15 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
     if (!opt.metric_filter.empty() &&
         metric.find(opt.metric_filter) == std::string::npos)
       continue;
-    std::printf("\nMETRIC %s\n", metric.c_str());
+    montauk_sink_appendf(&g_pop_out, "\nMETRIC %s\n", metric.c_str());
     for (auto& cell_kv : fam_kv.second.cells) {
       Cell& cell = cell_kv.second;
       std::vector<std::string> groups;
       for (auto& g : cell.runs)
         if (!g.second.empty()) groups.push_back(g.first);
-      std::printf("  [%s]\n", cell_label_str(cell.display).c_str());
+      montauk_sink_appendf(&g_pop_out, "  [%s]\n", cell_label_str(cell.display).c_str());
       if (groups.size() < 2) {
-        std::printf("    only %s -- no comparison\n",
+        montauk_sink_appendf(&g_pop_out, "    only %s -- no comparison\n",
                     groups.empty() ? "(none)" : short_axis(groups[0]).c_str());
         continue;
       }
@@ -466,7 +482,7 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
           double pp = stats::perm_test(va, vb, stats::Stat::Mean, 0.0, rng);
           int npow = stats::mc_power(va, vb, rng);
           std::string sa = short_axis(groups[i]), sb = short_axis(groups[j]);
-          std::printf(
+          montauk_sink_appendf(&g_pop_out, 
               "    %s vs %s [N=%zu/%zu]: mean %.6g (%.4g..%.4g) vs %.6g (%.4g..%.4g) | "
               "cliff %+.2f (%s) | perm p=%.3f | power %s\n",
               sa.c_str(), sb.c_str(), va.size(), vb.size(), ma, mnA, mxA, mb,
@@ -489,12 +505,12 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
         gn.push_back(short_axis(s));
       }
       auto mcb = stats::bootstrap_mcb(g, opt.lower_is_better, rng);
-      std::printf("    MCB (%s):", better);
+      montauk_sink_appendf(&g_pop_out, "    MCB (%s):", better);
       for (size_t k = 0; k < gn.size(); ++k) {
         const char* v = mcb[k].verdict == 1 ? "best"
                         : mcb[k].verdict == -1 ? "not-best"
                                                : "tied";
-        std::printf(" %s=%s", gn[k].c_str(), v);
+        montauk_sink_appendf(&g_pop_out, " %s=%s", gn[k].c_str(), v);
         std::string lab = "metric=\"" + metric + "\",cell=\"" + clabel +
                           "\",group=\"" + gn[k] + "\"";
         prom.push_back({"montauk_pop_mcb_is_best", lab,
@@ -503,7 +519,7 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
         prom.push_back({"montauk_pop_n", lab,
                         static_cast<double>(g[k].size())});
       }
-      std::printf("\n");
+      montauk_sink_appendf(&g_pop_out, "\n");
 
       // Path A: Games-Howell + within-run quantile permutation on the
       // reconstructed histogram distributions, when present and --full was set.
@@ -525,13 +541,13 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
             for (size_t j = i + 1; j < groups.size(); ++j) {
               double qp = stats::perm_test(hs[i], hs[j], stats::Stat::Percentile,
                                            opt.quantile, rng);
-              std::printf("      within-run q%.0f perm p=%.3f (%s vs %s)\n",
+              montauk_sink_appendf(&g_pop_out, "      within-run q%.0f perm p=%.3f (%s vs %s)\n",
                           opt.quantile, qp, hn[i].c_str(), hn[j].c_str());
             }
         }
         auto gh = stats::games_howell(hs);
         for (const auto& pr : gh) {
-          std::printf("      games-howell %s vs %s: p=%.3f%s\n",
+          montauk_sink_appendf(&g_pop_out, "      games-howell %s vs %s: p=%.3f%s\n",
                       hn[pr.i].c_str(), hn[pr.j].c_str(), pr.p,
                       have_hist ? "" : " [run-level]");
           std::string lab = "metric=\"" + metric + "\",cell=\"" + clabel +
@@ -891,6 +907,7 @@ int l2_severity(double top_pct, double uniform_pct) {
 }  // namespace
 
 int run_l2_by_cpu(const std::string& dir) {
+  ensure_pop_out();
   std::vector<std::string> files = glob_proms(dir);
   if (files.empty()) {
     util::log_error("no montauk_*.prom in %s", dir.c_str());
@@ -905,21 +922,21 @@ int run_l2_by_cpu(const std::string& dir) {
     return 1;
   }
 
-  std::printf("\nREPORT l2-by-cpu  (%d busy of %zu scrapes)\n", s.busy, s.scrapes);
-  std::printf("%-6s %18s %9s\n", "CPU", "L2-misses", "share");
+  montauk_sink_appendf(&g_pop_out, "\nREPORT l2-by-cpu  (%d busy of %zu scrapes)\n", s.busy, s.scrapes);
+  montauk_sink_appendf(&g_pop_out, "%-6s %18s %9s\n", "CPU", "L2-misses", "share");
   for (const auto& r : s.rows)
-    std::printf("%-6d %18.0f %8.1f%%\n", r.first, r.second,
+    montauk_sink_appendf(&g_pop_out, "%-6d %18.0f %8.1f%%\n", r.first, r.second,
                 100.0 * r.second / s.grand);
   double top = 100.0 * s.rows.front().second / s.grand;
   double uniform = 100.0 / static_cast<double>(s.rows.size());
   int sev = l2_severity(top, uniform);
   const char* verdict = sev == 2 ? "CONCENTRATED (hotspot)"
                         : sev == 1 ? "skewed" : "spread";
-  std::printf("top CPU %d holds %.1f%% (uniform = %.1f%%) -- %s\n",
+  montauk_sink_appendf(&g_pop_out, "top CPU %d holds %.1f%% (uniform = %.1f%%) -- %s\n",
               s.rows.front().first, top, uniform, verdict);
   // Join the offender family so the hot core sits alongside the trace-side
   // offenders in the report's machine-readable list (one montauk_offender{}).
-  std::printf("montauk_offender{kind=\"hot-cpu\",id=\"%d\",metric=\"l2_miss_share\",sev=\"%d\"} %.1f\n",
+  montauk_sink_appendf(&g_pop_out, "montauk_offender{kind=\"hot-cpu\",id=\"%d\",metric=\"l2_miss_share\",sev=\"%d\"} %.1f\n",
               s.rows.front().first, sev, top);
   return 0;
 }

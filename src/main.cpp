@@ -12,6 +12,7 @@
 #include "ui/Config.hpp"
 #include "util/TomlReader.hpp"
 #include "util/Log.hpp"
+#include "util/sink.h"
 
 #include <atomic>
 #include <chrono>
@@ -30,6 +31,10 @@ using namespace std::chrono_literals;
 using montauk::ui::g_stop;
 using montauk::ui::restore_terminal_minimal;
 using montauk::ui::on_sigint;
+
+// CLI/usage stdout drains through one buffered sink, drained at exit.
+static montauk_sink g_out;
+static void drain_out() { montauk_sink_drain(&g_out); }
 using montauk::ui::on_atexit_restore;
 using montauk::ui::tty_stdout;
 using montauk::ui::config;
@@ -38,6 +43,8 @@ using montauk::ui::config;
 int main(int argc, char** argv) {
   std::setlocale(LC_ALL, "");  // Required for wcwidth() to work correctly
   std::signal(SIGINT, on_sigint);
+  montauk_sink_init(&g_out, 1);
+  std::atexit(drain_out);
   // Text-only UI is the default and only mode. Ctrl+C to exit.
   // Default: run indefinitely with 250ms refresh (no flags needed).
   int iterations = 0; // 0 or less => run until Ctrl+C
@@ -130,23 +137,23 @@ int main(int argc, char** argv) {
       if (last_slash != std::string::npos)
         std::filesystem::create_directories(cfg_path.substr(0, last_slash));
       if (toml.save(cfg_path))
-        std::cout << "Wrote " << cfg_path << "\n";
+        montauk_sink_appendf(&g_out, "Wrote %s\n", cfg_path.c_str());
       else
         montauk::util::log_error("failed to write %s", cfg_path.c_str());
       return 0;
     }
     else if (a == "-h" || a == "--help") {
-      std::cout << "Usage: montauk [--self-test-seconds S] [--iterations N]\n";
-      std::cout << "               [--metrics PORT] [--log DIR] [--log-interval-ms MS] [--headless]\n";
-      std::cout << "               [--trace PATTERN] [--trace-out FILE] [--init-theme]\n";
-      std::cout << "Notes: Text UI runs until Ctrl+C by default.\n";
-      std::cout << "       --metrics PORT        Enable Prometheus endpoint on PORT\n";
-      std::cout << "       --log DIR             Write timestamped snapshots to DIR\n";
-      std::cout << "       --log-interval-ms MS  Write interval in ms (default: 1000)\n";
-      std::cout << "       --headless            Daemon mode (no TUI, requires --metrics or --log)\n";
-      std::cout << "       --trace PATTERN       Trace process group matching PATTERN (headless)\n";
-      std::cout << "       --trace-out FILE      Write raw binary event log; decode with montauk_trace_decode\n";
-      std::cout << "       --init-theme          Detect terminal palette and write config.toml\n";
+      montauk_sink_appendf(&g_out, "Usage: montauk [--self-test-seconds S] [--iterations N]\n");
+      montauk_sink_appendf(&g_out, "               [--metrics PORT] [--log DIR] [--log-interval-ms MS] [--headless]\n");
+      montauk_sink_appendf(&g_out, "               [--trace PATTERN] [--trace-out FILE] [--init-theme]\n");
+      montauk_sink_appendf(&g_out, "Notes: Text UI runs until Ctrl+C by default.\n");
+      montauk_sink_appendf(&g_out, "       --metrics PORT        Enable Prometheus endpoint on PORT\n");
+      montauk_sink_appendf(&g_out, "       --log DIR             Write timestamped snapshots to DIR\n");
+      montauk_sink_appendf(&g_out, "       --log-interval-ms MS  Write interval in ms (default: 1000)\n");
+      montauk_sink_appendf(&g_out, "       --headless            Daemon mode (no TUI, requires --metrics or --log)\n");
+      montauk_sink_appendf(&g_out, "       --trace PATTERN       Trace process group matching PATTERN (headless)\n");
+      montauk_sink_appendf(&g_out, "       --trace-out FILE      Write raw binary event log; decode with montauk_trace_decode\n");
+      montauk_sink_appendf(&g_out, "       --init-theme          Detect terminal palette and write config.toml\n");
       return 0;
     }
   }
@@ -242,7 +249,8 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     double secs = std::chrono::duration<double>(clock::now() - start).count();
-    std::cout << "Self-test: updates=" << updates << " in " << secs << "s (~" << (updates/secs) << "/s)\n";
+    montauk_sink_appendf(&g_out, "Self-test: updates=%llu in %gs (~%g/s)\n",
+                         (unsigned long long)updates, secs, updates / secs);
     producer.stop();
     return 0;
   }

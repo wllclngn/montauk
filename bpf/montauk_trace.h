@@ -50,6 +50,7 @@ enum montauk_event_type {
   TRACE_EVT_WAITSTACK   = 16, // user stack at an INFINITE ntsync wait-enter (names where a parked thread blocks)
   TRACE_EVT_SCX_STORM   = 17, // per-interval sched_ext kick/reenqueue counters (cpu_release storm)
   TRACE_EVT_THREAD_NAME = 18, // tid->comm binding, deduped (one per tid), so the holder ledger can name a CPU-bound task that predates the trace and emits no syscall (montauk_ring_event payload)
+  TRACE_EVT_RAWSTACK    = 19, // raw user stack slice + RIP/RSP/RBP at an INFINITE wait-enter, for offline DWARF .eh_frame unwinding (FP-less Wine code)
 };
 
 // Provider snapshot record (userspace-appended to the binary trace log;
@@ -213,6 +214,26 @@ struct montauk_waitstack_event {
   __u64 timeout_ns;    // always infinite here (the gate)
   __u64 stack_user[TRACE_STACK_MAX_FRAMES]; // user-mode IPs, frame 0 = innermost
   __u64 timestamp_ns;
+  char  comm[16];
+};
+
+// Raw user stack slice + register state at an INFINITE wait-enter, for OFFLINE
+// DWARF .eh_frame unwinding. The WAITSTACK bpf_get_stack frame-pointer walk yields
+// only frame 0 for Wine/luajit code (no frame pointers), so the analyzer rebuilds
+// the call chain from raw bytes + each module's .eh_frame CFI -- which needs the
+// registers (RIP/RSP/RBP) and a slice of the stack at and above RSP.
+#define TRACE_RAWSTACK_BYTES 1024
+struct montauk_rawstack_event {
+  __u32 type;          // TRACE_EVT_RAWSTACK
+  __u32 pid;
+  __u32 tid;
+  __u32 stack_len;     // valid bytes captured into stack[] (0 = read failed)
+  __u64 rip;           // instruction pointer at the wait (innermost frame PC)
+  __u64 rsp;           // stack pointer -- stack[] holds the bytes at [rsp, rsp+stack_len)
+  __u64 rbp;           // frame base pointer
+  __u64 obj_ptr;       // waited handle/object (0 if none)
+  __u64 timestamp_ns;
+  __u8  stack[TRACE_RAWSTACK_BYTES];
   char  comm[16];
 };
 
