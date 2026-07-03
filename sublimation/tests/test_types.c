@@ -14,9 +14,7 @@
 #include <float.h>
 #include <math.h>
 
-// ============================================================
 // GENERIC PERMUTATION TEST MACHINERY (macro-generated per type)
-// ============================================================
 
 #define DEFINE_PERM_TESTS(T, SUFFIX, sort_fn)                                  \
                                                                                \
@@ -228,9 +226,7 @@ DEFINE_PERM_TESTS(uint64_t, u64, sublimation_u64, 0x400ull)
 DEFINE_PERM_TESTS(float,    f32, sublimation_f32, 0x500ull)
 DEFINE_PERM_TESTS(double,   f64, sublimation_f64, 0x600ull)
 
-// ============================================================
 // BOUNDARY VALUE TESTS (type-specific edge cases)
-// ============================================================
 
 static void test_boundary_i32(void) {
     printf("\n  -- i32 boundaries --\n");
@@ -412,9 +408,7 @@ static void test_boundary_f64(void) {
     }
 }
 
-// ============================================================
 // RUN ALL EXHAUSTIVE PERMUTATION TESTS PER TYPE
-// ============================================================
 
 #define RUN_EXHAUSTIVE(SUFFIX) do {                                            \
     printf("\n  -- " #SUFFIX " exhaustive permutations --\n");                 \
@@ -430,9 +424,7 @@ static void test_boundary_f64(void) {
     test_random_large_##SUFFIX(10000);                                         \
 } while (0)
 
-// ============================================================
 // MAIN
-// ============================================================
 
 int main(void) {
     printf("[sublimation] Multi-type exhaustive correctness testing\n");

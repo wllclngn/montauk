@@ -33,6 +33,10 @@ public:
   // batches. No-op if path is empty.
   void set_binary_output(const std::string& path);
 
+  // --sched-detail: enable the per-CPU idle-boundary stream (off by default). Must
+  // be called before start() -- it sets a const-volatile rodata bit, frozen at load.
+  void set_sched_detail(bool on) { sched_detail_ = on; }
+
 private:
   void run(std::stop_token st);
 
@@ -47,11 +51,6 @@ private:
   // Scrape metrics providers and append one TRACE_EVT_PROVIDER record per
   // provider to the binary log. No-op when binary output is disabled.
   void append_provider_snapshots();
-
-  // Track quark's wineserver daemon by the daemon_pid="N" label it publishes in
-  // its provider text — writes the pid straight into the BPF proc_map. Comm- and
-  // timing-independent: quark knows its own pid, so it tells us.
-  void track_daemon_from_provider(const std::string& provider_text);
 
   // Embed a generic cpu -> cache-hierarchy (L2/L3/socket) snapshot once, so the
   // offline analyzer can turn each migration into a cache-tier distance with no
@@ -119,6 +118,11 @@ private:
   // the collector thread (ring callback + run loop are the only writers),
   // so no lock is needed.
   int trace_fd_{-1};
+  // Directory holding the --trace-out file. .maps sidecars are written
+  // beside it, since that's where montauk_analyze's MapsResolver looks.
+  // Empty when --trace-out is unset (no sidecar has anywhere useful to go).
+  std::string trace_dir_;
+  bool sched_detail_{false};   // --sched-detail: stream per-CPU idle boundaries
   std::vector<uint8_t> trace_buf_;
   ProviderCollector providers_{};
 

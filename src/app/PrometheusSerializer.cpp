@@ -185,7 +185,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
     out += "\"} 1\n";
   }
 
-  // ---- CPU ----
+  // CPU
   emit_header(out, "montauk_cpu_usage_percent", "Aggregate CPU utilization", "gauge");
   emit_gauge_d(out, "montauk_cpu_usage_percent", s.cpu.usage_pct);
 
@@ -225,7 +225,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
   emit_header(out, "montauk_cpu_logical_threads", "Logical CPU threads", "gauge");
   emit_gauge_i(out, "montauk_cpu_logical_threads", s.cpu.logical_threads);
 
-  // ---- PMU hardware counters (interval deltas / rates). All values are over
+  // PMU hardware counters (interval deltas / rates). All values are over
   // the last sample interval. L2 = per-physical-core private cache (the
   // migration-cost signal on Zen2); L3 is kept per-cache-domain so cross-domain traffic
   // stays visible. Emitted only when the core PMU opened (root / paranoid<=1).
@@ -316,7 +316,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
     }
   }
 
-  // ---- Memory (KB * 1024 -> bytes) ----
+  // Memory (KB * 1024 -> bytes)
   emit_header(out, "montauk_memory_total_bytes", "Total physical memory", "gauge");
   emit_gauge_u(out, "montauk_memory_total_bytes", s.mem.total_kb * 1024ULL);
   emit_header(out, "montauk_memory_used_bytes", "Used physical memory", "gauge");
@@ -334,7 +334,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
   emit_header(out, "montauk_memory_used_percent", "Memory utilization percent", "gauge");
   emit_gauge_d(out, "montauk_memory_used_percent", s.mem.used_pct);
 
-  // ---- Network ----
+  // Network
   if (!s.net.interfaces.empty()) {
     emit_header(out, "montauk_network_interface_receive_bps", "Per-interface receive bytes/sec", "gauge");
     for (const auto& iface : s.net.interfaces)
@@ -348,7 +348,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
   emit_header(out, "montauk_network_transmit_bps_total", "Aggregate transmit bytes/sec", "gauge");
   emit_gauge_d(out, "montauk_network_transmit_bps_total", s.net.agg_tx_bps);
 
-  // ---- Disk ----
+  // Disk
   if (!s.disk.devices.empty()) {
     emit_header(out, "montauk_disk_device_read_bps", "Per-device read bytes/sec", "gauge");
     for (const auto& dev : s.disk.devices)
@@ -365,7 +365,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
   emit_header(out, "montauk_disk_write_bps_total", "Aggregate disk write bytes/sec", "gauge");
   emit_gauge_d(out, "montauk_disk_write_bps_total", s.disk.total_write_bps);
 
-  // ---- Filesystem ----
+  // Filesystem
   if (!s.fs.mounts.empty()) {
     emit_header(out, "montauk_filesystem_total_bytes", "Filesystem total size", "gauge");
     for (const auto& m : s.fs.mounts)
@@ -388,7 +388,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
     if (!p.raw_text.empty() && p.raw_text.back() != '\n') out += '\n';
   }
 
-  // ---- Process summary ----
+  // Process summary
   emit_header(out, "montauk_processes_total", "Total processes", "gauge");
   emit_gauge_u(out, "montauk_processes_total", static_cast<uint64_t>(s.total_processes));
   emit_header(out, "montauk_processes_running", "Running processes", "gauge");
@@ -400,7 +400,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
   emit_header(out, "montauk_threads_total", "Total threads", "gauge");
   emit_gauge_u(out, "montauk_threads_total", static_cast<uint64_t>(s.total_threads));
 
-  // ---- Per-process top-N ----
+  // Per-process top-N
   if (s.top_procs_count > 0) {
     emit_header(out, "montauk_process_cpu_percent", "Per-process CPU utilization", "gauge");
     for (int i = 0; i < s.top_procs_count; ++i) {
@@ -452,7 +452,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
     }
   }
 
-  // ---- GPU ----
+  // GPU
   if (!s.vram.devices.empty()) {
     emit_header(out, "montauk_gpu_vram_total_bytes", "Per-device GPU VRAM total", "gauge");
     for (const auto& d : s.vram.devices)
@@ -522,7 +522,7 @@ std::string snapshot_to_prometheus(const MetricsSnapshot& s) {
     emit_gauge_d(out, "montauk_gpu_power_limit_watts", s.vram.power_limit_w);
   }
 
-  // ---- Thermal ----
+  // Thermal
   if (s.thermal.has_temp) {
     emit_header(out, "montauk_thermal_cpu_temperature_celsius", "CPU max temperature", "gauge");
     emit_gauge_d(out, "montauk_thermal_cpu_temperature_celsius", s.thermal.cpu_max_c);
@@ -564,9 +564,9 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
   std::string out;
   out.reserve(4096);
 
-  out += "\n# ---- Trace ----\n";
+  out += "\n# Trace\n";
 
-  // ---- Trace metadata ----
+  // Trace metadata
   emit_header(out, "montauk_trace_waiting", "Trace mode waiting for pattern match", "gauge");
   emit_gauge_i(out, "montauk_trace_waiting", t.waiting_for_match ? 1 : 0);
 
@@ -578,7 +578,7 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
 
   if (t.procs_count == 0) return out;
 
-  // ---- Per-process info ----
+  // Per-process info
   emit_header(out, "montauk_trace_process_info", "Traced process group member", "gauge");
   for (int i = 0; i < t.procs_count; ++i) {
     const auto& p = t.procs[i];
@@ -620,7 +620,7 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
     out += "\"} 1\n";
   }
 
-  // ---- Scheduler-decision counts (per op, summed across CPUs) ----
+  // Scheduler-decision counts (per op, summed across CPUs)
   {
     static const char* const op_name[7] = {
       "", "enqueue", "pick", "pick_empty", "preempt_tick", "preempt_wakeup", "wakeup"
@@ -644,7 +644,7 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
     }
   }
 
-  // ---- Per-thread state ----
+  // Per-thread state
   if (t.thread_count > 0) {
     emit_header(out, "montauk_trace_thread_state", "Per-thread state for traced group", "gauge");
     for (int i = 0; i < t.thread_count; ++i) {
@@ -660,7 +660,7 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
                       "state", std::string_view(state_str), 1);
     }
 
-    // ---- Per-thread CPU% ----
+    // Per-thread CPU%
     emit_header(out, "montauk_trace_thread_cpu_percent", "Per-thread CPU utilization", "gauge");
     for (int i = 0; i < t.thread_count; ++i) {
       const auto& th = t.threads[i];
@@ -678,7 +678,7 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
       out += '\n';
     }
 
-    // ---- Per-thread current on-CPU core ----
+    // Per-thread current on-CPU core
     emit_header(out, "montauk_trace_thread_cpu", "Per-thread current on-CPU core", "gauge");
     for (int i = 0; i < t.thread_count; ++i) {
       const auto& th = t.threads[i];
@@ -698,7 +698,7 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
       out += '\n';
     }
 
-    // ---- Per-thread cross-CPU migrations (fork-storm thrash signal) ----
+    // Per-thread cross-CPU migrations (fork-storm thrash signal)
     emit_header(out, "montauk_trace_thread_migrations", "Per-thread cross-CPU migration count", "counter");
     for (int i = 0; i < t.thread_count; ++i) {
       const auto& th = t.threads[i];
@@ -718,7 +718,7 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
       out += '\n';
     }
 
-    // ---- Global migration classification by cache domain (cumulative since attach) ----
+    // Global migration classification by cache domain (cumulative since attach)
     // The decisive fork-storm signal: intra- vs cross-domain moves are the per-core L2-refill
     // cost (warm L3, cold L2 — what the Zen2 "cache-misses" counter measures);
     // cross-domain moves are the cross-domain interconnect cost.
@@ -754,7 +754,7 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
       out += "montauk_trace_migrations_cross_steal "; out.append(b, pcs); out += '\n';
     }
 
-    // ---- Per-thread syscall ----
+    // Per-thread syscall
     emit_header(out, "montauk_trace_thread_syscall", "Per-thread current syscall", "gauge");
     for (int i = 0; i < t.thread_count; ++i) {
       const auto& th = t.threads[i];
@@ -770,7 +770,7 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
                       th.syscall_nr);
     }
 
-    // ---- Per-thread I/O details ----
+    // Per-thread I/O details
     emit_header(out, "montauk_trace_thread_io", "Per-thread last I/O syscall details", "gauge");
     for (int i = 0; i < t.thread_count; ++i) {
       const auto& th = t.threads[i];
@@ -807,7 +807,7 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
     }
   }
 
-  // ---- ntsync operations ----
+  // ntsync operations
   if (t.ntsync_count > 0) {
     static const char* nts_ops[] = {
       "create_sem", "sem_release", "wait_any", "wait_all",
@@ -854,7 +854,7 @@ std::string trace_to_prometheus(const montauk::model::TraceSnapshot& t) {
     }
   }
 
-  // ---- FD targets ----
+  // FD targets
   if (t.fd_count > 0) {
     emit_header(out, "montauk_trace_fd_target", "Per-process fd targets", "gauge");
     for (int i = 0; i < t.fd_count; ++i) {

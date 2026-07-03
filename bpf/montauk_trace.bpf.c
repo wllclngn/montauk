@@ -18,7 +18,7 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
-// ---- MAPS ----
+// MAPS
 
 // Tracked PID set — userspace populates roots, BPF auto-adds children
 struct {
@@ -101,6 +101,23 @@ struct {
   __type(value, struct heap_scratch);
 } heap_inflight SEC(".maps");
 
+// Free-probe echo guard. The uprobe layer can deliver the free probe TWICE
+// for one logical call: two handler executions 1-3us apart, observed on a
+// thread's early frees, with the process never aborting (a real second
+// glibc free of a just-freed chunk aborts on every path, so the duplicate
+// is physically not an app re-free). Per-tid last freed pointer: a repeat
+// of the same pointer inside the window with no allocation in between is
+// the echo and is not emitted. Every allocation return clears the entry,
+// so a real rapid free/alloc/free cycle at one address never matches.
+#define FREE_ECHO_WINDOW_NS 10000
+struct free_echo { u64 ptr; u64 ts; };
+struct {
+  __uint(type, BPF_MAP_TYPE_LRU_HASH);
+  __uint(max_entries, 8192);
+  __type(key, u32);
+  __type(value, struct free_echo);
+} free_echo_guard SEC(".maps");
+
 // Discovery map: ALL processes that make syscalls get comm recorded here.
 // Userspace scans this periodically for pattern matching.
 // This is how processes get found — they clone() (no exec), then
@@ -181,6 +198,7 @@ struct {
 // a hot path; OFF by default. Userspace sets this true only when the binary
 // --trace-out log is active. The per-CPU counters above are always maintained.
 const volatile unsigned char sched_stream = 0;  /* base type: portable into the C++ skeleton (u8 is BPF-only) */
+const volatile unsigned char sched_detail = 0;    /* --sched-detail: gate the per-CPU idle-boundary firehose (off by default) */
 
 // Heap caller-stack size filter (bytes). Loaded from MONTAUK_HEAP_STACK_SIZE
 // before skeleton load; 0 disables. Non-zero: every malloc/calloc whose
@@ -243,7 +261,7 @@ static __always_inline void sched_op_bump(u32 op)
     c->op[op]++;
 }
 
-// ---- HELPERS ----
+// HELPERS
 
 static __always_inline bool is_tracked(u32 pid) {
   return bpf_map_lookup_elem(&proc_map, &pid) != NULL;
@@ -399,9 +417,9 @@ static __always_inline void emit_keyedevt(u32 op, u64 key) {
 // bpf_get_stack with BPF_F_USER_STACK walks the userspace stack via either
 // frame pointers (cheap, accurate if -fno-omit-frame-pointer) or DWARF
 // unwind (libbpf installs a CORE-relocated helper for stripped binaries).
-// Wine PE-side code is built without frame pointers in some DLLs; the
-// captured frames may be partial but always include the innermost IP,
-// which is the load-bearing datum for "what was executing when this died."
+// Some code is built without frame pointers; the captured frames may be
+// partial but always include the innermost IP, which is the load-bearing
+// datum for "what was executing when this died."
 static __always_inline void emit_signal_event(void *ctx, u32 kind, u32 pid,
                                               u32 tid, s32 sig, s32 sender_pid,
                                               s32 exit_code) {
@@ -450,7 +468,7 @@ static __always_inline void emit_signal_event(void *ctx, u32 kind, u32 pid,
   bpf_ringbuf_submit(evt, 0);
 }
 
-// ---- PROCESS LIFECYCLE ----
+// PROCESS LIFECYCLE
 
 SEC("tp/sched/sched_process_fork")
 int handle_fork(struct trace_event_raw_sched_process_fork *ctx) {
@@ -596,7 +614,7 @@ int handle_signal_deliver(struct trace_event_raw_signal_deliver *ctx) {
   return 0;
 }
 
-// ---- NTSYNC HELPERS (used by raw_syscalls handlers below) ----
+// NTSYNC HELPERS (used by raw_syscalls handlers below)
 
 static __always_inline bool is_ntsync_ioctl(u32 cmd) {
   return ((cmd >> 8) & 0xFF) == 0x4E &&
@@ -624,7 +642,7 @@ static __always_inline u8 ntsync_cmd_to_op(u32 cmd) {
   }
 }
 
-// ---- SYSCALL TRACING ----
+// SYSCALL TRACING
 
 // Resolve an fd in the current task to its kernel object identity
 // (file->private_data). This pointer is the same struct on both sides of an
@@ -663,12 +681,11 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
       struct discovery_entry de = {};
       de.pid = pid;
       // Record the PROCESS (group_leader) comm, not the running thread's. A
-      // multi-threaded daemon's worker threads carry their own names (the
-      // wineserver's ntsync worker pool), which would mask the process name the
-      // --trace pattern matches and leave the daemon unpromoted. The group_leader
-      // is the main thread whose comm is the process identity (the exec'd binary,
-      // e.g. "triskelion"). discovery_entry is keyed by tgid, so this is the
-      // right granularity.
+      // multi-threaded process's worker threads can carry their own names,
+      // which would mask the process name the --trace pattern matches and
+      // leave the process unpromoted. The group_leader is the main thread
+      // whose comm is the process identity (the exec'd binary). discovery_entry
+      // is keyed by tgid, so this is the right granularity.
       struct task_struct *cur = (struct task_struct *)bpf_get_current_task();
       BPF_CORE_READ_STR_INTO(&de.comm, cur, group_leader, comm);
       bpf_map_update_elem(&discovery_map, &pid, &de, BPF_NOEXIST);
@@ -690,10 +707,10 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
     // Only a group_leader (main-thread) rename changes the PROCESS identity.
     // A worker thread renaming itself must NOT clobber the process comm in
     // discovery_map/proc_map or auto-track on its own name — that is exactly how
-    // a daemon's worker pool used to mask the process name and break promotion.
-    // Wine renames a new Windows process's MAIN thread to the exe name, so this
-    // still catches the intended case (tid == tgid). The thread's own comm is
-    // updated unconditionally in thread_map below.
+    // a worker pool could mask the process name and break promotion. A process
+    // that renames its own main thread to its final identity after exec still
+    // catches the intended case (tid == tgid). The thread's own comm is updated
+    // unconditionally in thread_map below.
     if (tid == pid) {
       // Update discovery_map with new name
       struct discovery_entry de = {};
@@ -737,10 +754,10 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
 
   /* I/O-WAIT syscalls (poll/ppoll/epoll_wait/epoll_pwait/select/pselect6/
    * recvmsg/recvfrom): a thread blocked here is parked on a producer the way an
-   * ntsync waiter is, but in a syscall that may never return (the winepulse
-   * mainloop in poll() on the audio socket). Emit a PENDING (result=-999) enter
-   * marker so the analyzer can name a thread still parked in it at trace end;
-   * the exit handler emits the completion that pairs it. */
+   * ntsync waiter is, but in a syscall that may never return (a mainloop in
+   * poll() on a socket or fd). Emit a PENDING (result=-999) enter marker so the
+   * analyzer can name a thread still parked in it at trace end; the exit
+   * handler emits the completion that pairs it. */
   {
     s32 io_fd = -1;
     int is_iowait = 1;
@@ -757,6 +774,18 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
         break;
       case 23:  case 270: /* select / pselect6: no single fd */
         io_fd = -1; break;
+      case 16: /* ioctl: arg0 = fd, arg1 = cmd. A non-ntsync ioctl that
+                * never returns is a genuine blind spot -- e.g. a DRM/GPU
+                * driver wait-idle call. ntsync ioctls already get their
+                * own richer TRACE_EVT_NTSYNC pending/parked tracking a
+                * few lines below; skip the generic marker for those so
+                * the same wait isn't double-counted in both iowait and
+                * endstate. */
+        if (is_ntsync_ioctl((u32)arg1))
+          is_iowait = 0;
+        else
+          io_fd = (s32)arg0;
+        break;
       default:
         is_iowait = 0; break;
     }
@@ -906,7 +935,8 @@ int handle_sys_exit(struct trace_event_raw_sys_exit *ctx) {
     // that DID return is not mistaken for a thread still parked in it.
     s32 snr = ts->syscall_nr;
     if (snr == 7 || snr == 271 || snr == 232 || snr == 281 ||
-        snr == 47 || snr == 45 || snr == 23 || snr == 270)
+        snr == 47 || snr == 45 || snr == 23 || snr == 270 ||
+        (snr == 16 && !is_ntsync_ioctl((u32)ts->syscall_arg1)))
       emit_io_event(pid, tid, snr, -1, ctx->ret, 0, 0);
     ts->syscall_nr = -1; // back to running
   }
@@ -989,7 +1019,7 @@ int handle_sys_exit(struct trace_event_raw_sys_exit *ctx) {
   return 0;
 }
 
-// ---- SCHEDULER STATE ----
+// SCHEDULER STATE
 
 // tp/power/cpu_frequency: the cpufreq core fires this on every P-state
 // transition (cpu_id = target CPU, state = new frequency in KHz). Keep only the
@@ -1153,9 +1183,14 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
   // idle at this wake instant." A wakee landing on a busy CPU while another sat
   // idle is the placement-race signature; this is the signal that proves it.
   // pid 0 = swapper: next_pid==0 -> CPU enters idle; prev_pid==0 -> CPU leaves
-  // idle. One tiny ringbuf event per boundary, gated on sched_stream (binary
-  // --trace-out only), so off the always-on hot path.
-  if (sched_stream && (next_tid == 0 || prev_tid == 0)) {
+  // idle. One tiny ringbuf event per boundary. Gated on sched_stream (binary
+  // --trace-out only) AND sched_detail (--sched-detail, OFF by default): on a
+  // CPU-cycling workload (make -jN) this fires on every CPU's every idle flip
+  // system-wide -- ~82% of a build capture, a ~6x trace overhead -- so a generic
+  // --trace must not pay it. The placement-race / dispatch-stall / kstrand /
+  // cold-wake reports that consume CPU_IDLE require --sched-detail; without it they
+  // report the idle signal absent, exactly as a pre-CPU_IDLE trace does.
+  if (sched_stream && sched_detail && (next_tid == 0 || prev_tid == 0)) {
     u32 idle_cpu = (u32)bpf_get_smp_processor_id();
     struct montauk_sched_event *ie =
         bpf_ringbuf_reserve(&events, sizeof(*ie), 0);
@@ -1203,11 +1238,14 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
   // (switch_in_fallback, set by the collector post-attach), the next task coming
   // on-CPU is the pick the slice/service reports need -- sched_switch is universal,
   // so this resolves those reports for EEVDF and any scx mode that does not export
-  // a pick. Unconditional like CPU_IDLE above (the hog holding a CPU is not in the
+  // a pick. Per-switch like CPU_IDLE above (the hog holding a CPU is not in the
   // traced comm group, yet its slice is exactly what we measure); idle excluded
   // (that boundary is CPU_IDLE). Suppressed when the scheduler's own pick stream is
-  // present, so it never double-counts; gated on sched_stream, off the hot path.
-  if (sched_stream && switch_in_fallback && next_tid != 0) {
+  // present, so it never double-counts. On a pick-less scheduler (EEVDF) under a
+  // switch-heavy workload it is a per-switch firehose, the SWITCH_IN sibling of the
+  // idle firehose -- so it shares the sched_detail gate (--sched-detail, off by
+  // default); the slice/service reports that need it ask for the same flag.
+  if (sched_stream && sched_detail && switch_in_fallback && next_tid != 0) {
     struct montauk_sched_event *pe =
         bpf_ringbuf_reserve(&events, sizeof(*pe), 0);
     if (pe) {
@@ -1348,11 +1386,11 @@ int BPF_PROG(handle_scx_reenq, u32 ret)
   return 0;
 }
 
-// ---- COMM CHANGE TRACKING ----
+// COMM CHANGE TRACKING
 
 // prctl(PR_SET_NAME) handling merged into handle_sys_enter above.
 
-// ---- FD TRACKING ----
+// FD TRACKING
 
 SEC("tp/syscalls/sys_enter_openat")
 int handle_openat_enter(struct trace_event_raw_sys_enter *ctx) {
@@ -1473,9 +1511,9 @@ int handle_eventfd2_exit(struct trace_event_raw_sys_exit *ctx) {
   return 0;
 }
 
-// ---- FILE I/O TRACKING ----
+// FILE I/O TRACKING
 
-// -- lseek (syscall 8) --
+// lseek (syscall 8)
 
 SEC("tp/syscalls/sys_enter_lseek")
 int handle_lseek_enter(struct trace_event_raw_sys_enter *ctx) {
@@ -1515,7 +1553,7 @@ int handle_lseek_exit(struct trace_event_raw_sys_exit *ctx) {
   return 0;
 }
 
-// -- read (syscall 0) --
+// read (syscall 0)
 
 SEC("tp/syscalls/sys_enter_read")
 int handle_read_enter(struct trace_event_raw_sys_enter *ctx) {
@@ -1554,7 +1592,7 @@ int handle_read_exit(struct trace_event_raw_sys_exit *ctx) {
   return 0;
 }
 
-// -- write (syscall 1) --
+// write (syscall 1)
 
 SEC("tp/syscalls/sys_enter_write")
 int handle_write_enter(struct trace_event_raw_sys_enter *ctx) {
@@ -1593,7 +1631,7 @@ int handle_write_exit(struct trace_event_raw_sys_exit *ctx) {
   return 0;
 }
 
-// -- pread64 (syscall 17) --
+// pread64 (syscall 17)
 
 SEC("tp/syscalls/sys_enter_pread64")
 int handle_pread64_enter(struct trace_event_raw_sys_enter *ctx) {
@@ -1633,7 +1671,7 @@ int handle_pread64_exit(struct trace_event_raw_sys_exit *ctx) {
   return 0;
 }
 
-// -- mmap (syscall 9) --
+// mmap (syscall 9)
 //
 // File-backed mmap is the path Unity-style asset loaders use when they call
 // MapViewOfFile (or, on Linux, mmap directly on a file fd). It bypasses
@@ -1694,7 +1732,7 @@ int handle_mmap_exit(struct trace_event_raw_sys_exit *ctx) {
   return 0;
 }
 
-// -- fstat / newfstat (syscall 5) --
+// fstat / newfstat (syscall 5)
 
 SEC("tp/syscalls/sys_enter_newfstat")
 int handle_fstat_enter(struct trace_event_raw_sys_enter *ctx) {
@@ -1745,7 +1783,6 @@ int handle_fstat_exit(struct trace_event_raw_sys_exit *ctx) {
 // above via the raw_syscalls tracepoints (sys_enter_ioctl doesn't exist on
 // all kernels). The ntsync filter checks syscall_nr == 16 and magic 'N'.
 
-// ============================================================================
 // Scheduler-decision tracepoints (generic). Captures the universal scheduler
 // decision points -- enqueue, pick, pick_empty, preempt_tick, preempt_wakeup.
 // These programs carry a neutral placeholder SEC and are NOT auto-attached;
@@ -1754,7 +1791,6 @@ int handle_fstat_exit(struct trace_event_raw_sys_exit *ctx) {
 // structs below are the generic decision-event field contract a scheduler
 // emits to. Emitted unconditionally (no pid filter) so the scheduler's
 // mechanism is visible even before any process group is tracked.
-// ============================================================================
 
 struct trace_event_raw_sched_enqueue {
   unsigned long long pad;
@@ -1791,6 +1827,14 @@ struct trace_event_raw_sched_preempt_wakeup {
   int waker;
   int wakee;
   int cpu;
+};
+
+struct trace_event_raw_sched_field_gate {
+  unsigned long long pad;
+  int cpu;
+  int changed;    // 1 = signature moved this gate tick (re-derived); 0 = held
+  u64 signature;  // current discrete field signature (regime code / pattern bitmap)
+  u64 prev;       // signature at the previous gate tick
 };
 
 SEC("tp/sched_decision/enqueue")
@@ -1903,14 +1947,40 @@ int handle_sched_preempt_wakeup(struct trace_event_raw_sched_preempt_wakeup *ctx
   return 0;
 }
 
-// ============================================================================
+// Structural-reclassification gate. Fires each time an adaptive scheduler
+// re-evaluates its discrete workload classification. Low rate (a periodic gate
+// tick, not the dispatch hot path), so it streams unconditionally under
+// sched_stream. score carries the current field signature, runtime_ns the prior,
+// sub_idx the changed bit -- the field-persist report reads whether the signature
+// ever moves or is pinned for the whole capture.
+SEC("tp/sched_decision/field_gate")
+int handle_sched_field_gate(struct trace_event_raw_sched_field_gate *ctx) {
+  sched_op_bump(SCHED_OP_FIELD_GATE);
+  if (!sched_stream)
+    return 0;
+  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return 0;
+  e->type          = TRACE_EVT_SCHED;
+  e->op            = SCHED_OP_FIELD_GATE;
+  e->cpu           = (u32)ctx->cpu;
+  e->pid           = -1;
+  e->secondary_pid = -1;
+  e->last_cpu      = -1;
+  e->sub_idx       = ctx->changed ? 1u : 0u;
+  e->score         = ctx->signature;
+  e->runtime_ns    = ctx->prev;
+  e->budget_ns     = 0;
+  e->timestamp_ns  = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(e, 0);
+  return 0;
+}
+
 // Thread enrollment via task iterator. The reactive sys_enter path only learns
 // a thread on its FIRST syscall; a process that spawns a burst of threads can
 // outrun that and leave most of them untracked. This iterator sweeps every task
 // and enrolls each thread whose process is tracked into thread_map, so coverage
 // is COMPLETE regardless of how fast threads appear. Driven from userspace each
 // scan; scoped purely by proc_map membership -- fully process-agnostic, no /proc.
-// ============================================================================
 SEC("iter/task")
 int enroll_threads(struct bpf_iter__task *ctx) {
   struct task_struct *task = ctx->task;
@@ -1936,9 +2006,7 @@ int enroll_threads(struct bpf_iter__task *ctx) {
   return 0;
 }
 
-// ============================================================================
 // HEAP UPROBES — libc malloc/free/realloc/calloc
-// ============================================================================
 // Attached at runtime by BpfTraceCollector to /usr/lib/libc.so.6 symbols.
 // Pairs entry (size) with uretprobe (return ptr) via per-thread scratch
 // keyed by tid in heap_inflight.
@@ -2018,6 +2086,7 @@ int BPF_KRETPROBE(uretprobe_malloc, void *ret) {
   emit_heap(HEAP_OP_MALLOC, (u64)ret, s->size, 0);
   emit_heapstack(ctx, HEAP_OP_MALLOC, (u64)ret, s->size);
   bpf_map_delete_elem(&heap_inflight, &tid);
+  bpf_map_delete_elem(&free_echo_guard, &tid);
   return 0;
 }
 
@@ -2026,6 +2095,13 @@ int BPF_KPROBE(uprobe_free, void *ptr) {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid = pid_tgid >> 32;
   if (!is_tracked(pid)) return 0;
+  u32 tid = (u32)pid_tgid;
+  u64 now = bpf_ktime_get_ns();
+  struct free_echo *last = bpf_map_lookup_elem(&free_echo_guard, &tid);
+  if (last && last->ptr == (u64)ptr && now - last->ts <= FREE_ECHO_WINDOW_NS)
+    return 0;  /* duplicate probe delivery of the free just emitted */
+  struct free_echo cur = { .ptr = (u64)ptr, .ts = now };
+  bpf_map_update_elem(&free_echo_guard, &tid, &cur, BPF_ANY);
   /* free has no return value worth recording — emit at entry directly. */
   emit_heap(HEAP_OP_FREE, (u64)ptr, 0, 0);
   return 0;
@@ -2052,6 +2128,7 @@ int BPF_KRETPROBE(uretprobe_realloc, void *ret) {
   /* addr = old pointer (input), new_addr = return value, size = requested */
   emit_heap(HEAP_OP_REALLOC, s->old_addr, s->size, (u64)ret);
   bpf_map_delete_elem(&heap_inflight, &tid);
+  bpf_map_delete_elem(&free_echo_guard, &tid);
   return 0;
 }
 
@@ -2076,12 +2153,11 @@ int BPF_KRETPROBE(uretprobe_calloc, void *ret) {
   emit_heap(HEAP_OP_CALLOC, (u64)ret, s->size, 0);
   emit_heapstack(ctx, HEAP_OP_CALLOC, (u64)ret, s->size);
   bpf_map_delete_elem(&heap_inflight, &tid);
+  bpf_map_delete_elem(&free_echo_guard, &tid);
   return 0;
 }
 
-// ============================================================================
 // ABORT-PATH UPROBES — libc __assert_fail / __libc_message / abort
-// ============================================================================
 // Attached at runtime by BpfTraceCollector to libc, same best-effort path as
 // the heap uprobes. glibc prints its fatal diagnostics (assert text, "double
 // free or corruption", fortify/stack-smash reports via __libc_message) to the
@@ -2159,16 +2235,19 @@ int BPF_KPROBE(uprobe_keyed_release, void *handle, void *key) {
   return 0;
 }
 
-// Wait-site uprobes on ntdll.so. NtWaitForSingleObject/NtWaitForMultipleObjects
-// sit ABOVE the raw syscall-enter in the call stack, so bpf_get_stack here can
-// reach the Wine caller (e.g. winepulse) that the syscall-leaf WAITSTACK in
-// handle_sys_enter resolves only to the libc wrapper. Gated to INFINITE waits
-// (NULL timeout pointer = the NT "no timeout" convention) to bound volume to the
-// hang-prone class, same intent as the syscall-enter path.
+// Wait-site uprobes, attached to an operator-named function pair (default
+// Wine's NtWaitForSingleObject/NtWaitForMultipleObjects -- see
+// MONTAUK_WAITSTACK_FUNC1/2 in BpfTraceCollector.cpp). These sit ABOVE the raw
+// syscall-enter in the call stack, so bpf_get_stack here can reach a caller
+// that the syscall-leaf WAITSTACK in handle_sys_enter resolves only to the
+// libc wrapper. Gated to INFINITE waits (NULL timeout pointer = the hooked
+// function's "no timeout" convention) to bound volume to the hang-prone class,
+// same intent as the syscall-enter path.
 // Raw stack + registers for the offline scan. bpf_get_stack's frame-pointer walk
-// is useless on Wine ntdll (no FP -- it returns frame 0 then garbage), so instead
-// we capture RIP + a slice of the stack at RSP and let the analyzer resolve each
-// stack word against the maps sidecar to name the winepulse caller.
+// is useless on frame-pointer-less code (no FP -- it returns frame 0 then
+// garbage), so instead we capture RIP + a slice of the stack at RSP and let
+// the analyzer resolve each stack word against the maps sidecar to name the
+// caller.
 static __always_inline void emit_wait_rawstack(void *ctx, u64 obj) {
   u64 pt = bpf_get_current_pid_tgid();
   u32 pid = pt >> 32;

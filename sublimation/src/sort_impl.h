@@ -818,13 +818,22 @@ void SUB_TYPED(sublimation)(SUB_TYPE *restrict arr, size_t n) {
 #ifdef SUB_TYPE_IS_I64
     if (n >= SUB_PARALLEL_THRESHOLD) {
         size_t workers = sub_default_num_workers();
-        if (workers >= 2) {
+        // Condition the pool dispatch on worker count. The IPS4o pool only beats
+        // the serial AVX2 PCF expert once there is enough work to amortize thread
+        // spin-up AND enough workers to parallelize over. Measured on random i64:
+        // at >=4 workers the pool wins from SUB_PARALLEL_THRESHOLD up, but at 2
+        // workers it loses to the serial PCF below ~1M (it ties at 1M). So a
+        // few-worker box needs ~4x the data before the pool pays off; below that
+        // the serial PCF expert is the faster path. (montauk sorts u64, which has
+        // no parallel entry -- this only affects direct i64 callers at scale.)
+        size_t par_threshold = (workers >= 4) ? SUB_PARALLEL_THRESHOLD
+                                              : (size_t)4 * SUB_PARALLEL_THRESHOLD;
+        if (workers >= 2 && n >= par_threshold) {
             sublimation_i64_parallel(arr, n, workers);
             return;
         }
-        // Only 1 worker available (taskset/cgroup). Restore the AVX2 PCF
-        // random expert for large random data -- it is faster than the
-        // generic adaptive flow on a single core.
+        // 1 worker (taskset/cgroup), or too few workers to beat serial at this n:
+        // the AVX2 PCF random expert, faster than the generic adaptive flow here.
 #if defined(__AVX2__)
         if (profile.disorder == SUB_RANDOM && n >= 64) {
             sub_random_sort_i64(arr, n);

@@ -10,8 +10,8 @@ namespace montauk::app {
 // ($XDG_RUNTIME_DIR/montauk/providers/<name>.sock), serving one Prometheus-text
 // snapshot per connection — the exact contract montauk's own ProviderCollector
 // ingests from other producers. This makes montauk a producer peer in the same
-// structured emitter mesh as triskelion, rather than dumping its state to
-// stderr. A consumer connects, reads to EOF, and gets the cached snapshot.
+// structured emitter mesh as any other producer, rather than dumping its state
+// to stderr. A consumer connects, reads to EOF, and gets the cached snapshot.
 //
 // The listener thread only reads the cached string under a short lock; the
 // producer swaps it via update() on its snapshot tick, so a slow reader never

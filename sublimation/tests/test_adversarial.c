@@ -49,9 +49,7 @@ static void run_pattern(const char *pattern_name, fill_fn filler) {
     }
 }
 
-// ============================================================
 // CLASSIFIER CONFUSION (attacks the RSK presort gate)
-// ============================================================
 
 // 1. sorted_random_splice: first 90% sorted, last 10% random.
 //    Fools run-count into "nearly sorted" when the tail needs partition.
@@ -105,9 +103,7 @@ static void fill_sorted_with_periodic_spikes(int64_t *arr, size_t n) {
         arr[i] = (int64_t)(lcg_next() >> 16);
 }
 
-// ============================================================
 // PIVOT KILLERS (attacks partition)
-// ============================================================
 
 // 6. pipe_organ_nested: 4 segments, each is a pipe organ [0..n/4..0].
 static void fill_pipe_organ_nested(int64_t *arr, size_t n) {
@@ -148,9 +144,7 @@ static void fill_repeated_element_noise(int64_t *arr, size_t n) {
     }
 }
 
-// ============================================================
 // MERGE PATHOLOGY (attacks R_eff merge)
-// ============================================================
 
 // 9. interleaved_sorted: two sorted sequences woven together.
 //    [0, n/2, 1, n/2+1, 2, n/2+2, ...]. Maximum merge cost.
@@ -185,9 +179,7 @@ static void fill_anti_merge_runs(int64_t *arr, size_t n) {
     }
 }
 
-// ============================================================
 // DISTRIBUTION EDGE CASES
-// ============================================================
 
 // 11. zipfian: power-law distributed values.
 //     Element i gets value floor(n / (rank+1)) where rank is random.
@@ -221,9 +213,7 @@ static void fill_displacement_k(int64_t *arr, size_t n) {
     }
 }
 
-// ============================================================
 // ADVERSARIAL STABILITY
-// ============================================================
 
 // 14. all_equal_except_endpoints: [INT64_MAX, 0, 0, ..., 0, INT64_MIN].
 //     Two elements maximally displaced.
@@ -256,9 +246,7 @@ static void fill_organ_of_organs(int64_t *arr, size_t n) {
     }
 }
 
-// ============================================================
 // McILROY DYNAMIC ADVERSARY (1999)
-// ============================================================
 //
 // Constructs worst-case input DURING sorting by observing which
 // comparisons the sort makes. When two "gas" (undecided) elements
@@ -365,9 +353,7 @@ static void test_mcilroy_adversary(void) {
     }
 }
 
-// ============================================================
 // COMPARISON BOUND ENFORCEMENT
-// ============================================================
 //
 // Uses sublimation_i64_stats() to get exact comparison counts.
 // Enforces comparisons <= n * ceil(log2(n)) * 3 on adversarial
@@ -446,9 +432,7 @@ static void test_comparison_bounds(void) {
     }
 }
 
-// ============================================================
 // MAIN
-// ============================================================
 
 int main(void) {
     printf("[sublimation] adversarial correctness tests\n\n");

@@ -174,6 +174,30 @@ int main(int argc, char** argv) {
   ts += 100'000;
   sched_evt(SCHED_OP_WAKE2RUN, 0, 7, -1, 0, /*lat*/5'000'000, 0, ts + 5'000'000);
 
+  // ENQUEUE events carrying cls_weight in score bits 48+, to exercise REPORT
+  // classmix (added v7.12.0): a spread of classes across distinct pids -- one
+  // LAT_CRITICAL, two LATENCY pids, one INTERACTIVE, one BATCH.
+  ts += 100'000;
+  {
+    struct { int32_t pid; uint64_t clsw; } enq[] = {
+        {1000, 32}, {1001, 8}, {1002, 8}, {1003, 4}, {1004, 1},
+    };
+    for (int rep = 0; rep < 20; ++rep)
+      for (auto& e : enq) {
+        montauk_sched_event ev{};
+        ev.type = TRACE_EVT_SCHED;
+        ev.op = SCHED_OP_ENQUEUE;
+        ev.cpu = 0;
+        ev.pid = e.pid;
+        ev.secondary_pid = -1;
+        ev.last_cpu = -1;
+        ev.score = e.clsw << 48;
+        ts += 1'000;
+        ev.timestamp_ns = ts;
+        emit(&ev, sizeof(ev));
+      }
+  }
+
   // ntsync: create an event + semaphore + mutex, then a wait left parked at
   // trace end (endstate dead-producer), plus set/reset/release pairings.
   ts += 100'000;

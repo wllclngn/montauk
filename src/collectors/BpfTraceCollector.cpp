@@ -5,6 +5,7 @@
 #include "util/Log.hpp"
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
+#include <bpf/btf.h>
 #include "montauk_trace.skel.h"
 #include <cstdio>
 #include <cstdlib>
@@ -13,6 +14,8 @@
 #include <ctime>
 #include <fcntl.h>
 #include <unistd.h>
+#include <cerrno>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <map>
@@ -58,9 +61,7 @@ void populate_cache_domain_map(int map_fd) {
 
 namespace montauk::collectors {
 
-// ---------------------------------------------------------------------------
 // Syscall decode table (x86_64, curated)
-// ---------------------------------------------------------------------------
 const char* BpfTraceCollector::syscall_name(int nr) {
   switch (nr) {
     case 0:   return "read";
@@ -103,18 +104,16 @@ const char* BpfTraceCollector::syscall_name(int nr) {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Constructor / lifecycle
-// ---------------------------------------------------------------------------
 BpfTraceCollector::BpfTraceCollector(montauk::app::TraceBuffers& buffers,
                                      std::string pattern)
     : buffers_(buffers), pattern_(std::move(pattern)) {
   // --trace accepts a comma-separated list of comm substrings (e.g.
-  // "triskelion,Wedding Witch") — match if ANY token matches. The first token
+  // "gameserver,physicsd") — match if ANY token matches. The first token
   // is the primary: written to the BPF .rodata fast-path for instant exec-time
   // tracking. The rest are matched only by the userspace rescan (sub-second),
-  // which is sufficient for long-lived processes such as the triskelion daemon
-  // (montauk attaches long after it is up, so instant exec capture is moot).
+  // which is sufficient for long-lived processes already running before
+  // montauk attaches (instant exec capture is moot for them).
   size_t start = 0;
   while (start <= pattern_.size()) {
     size_t comma = pattern_.find(',', start);
@@ -173,9 +172,16 @@ void BpfTraceCollector::stop() {
 
 void BpfTraceCollector::set_binary_output(const std::string& path) {
   if (path.empty()) return;
+  // Create the parent directory if it does not exist -- otherwise open() fails
+  // ENOENT and the capture silently writes nothing (e.g. --trace-out
+  // /tmp/montauk/x.bin before /tmp/montauk exists).
+  std::error_code ec;
+  std::filesystem::path parent = std::filesystem::path(path).parent_path();
+  if (!parent.empty()) std::filesystem::create_directories(parent, ec);
+  trace_dir_ = parent.empty() ? "." : parent.string();
   int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (fd < 0) {
-    montauk::util::log_error("--trace-out: cannot open '%s'", path.c_str());
+    montauk::util::log_error("--trace-out: cannot open '%s': %s", path.c_str(), std::strerror(errno));
     return;
   }
 
@@ -241,11 +247,6 @@ void BpfTraceCollector::append_provider_snapshots() {
   uint64_t now_ns = static_cast<uint64_t>(mono.tv_sec) * 1000000000ull + mono.tv_nsec;
   std::vector<uint8_t> rec;
   for (const auto& p : provs) {
-    // quark announces its wineserver daemon pid as a daemon_pid label. Track it
-    // into the BPF proc_map the moment we can read the announcement, so the
-    // daemon and all its threads are traced regardless of comm or spawn timing.
-    if (p.name.find("quark") != std::string::npos)
-      track_daemon_from_provider(p.raw_text);
     montauk_provider_event ev{};
     ev.type = TRACE_EVT_PROVIDER;
     ev.timestamp_ns = now_ns;
@@ -294,30 +295,6 @@ void BpfTraceCollector::append_scx_storm_sample() {
   scx_preempt_last_ = preempt;
   scx_reenq_last_ = reenq;
   scx_sample_last_ns_ = now_ns;
-}
-
-// Track the wineserver daemon by the pid quark publishes as a daemon_pid="N"
-// label in its provider text (the same label montauk_analyze reads to build the
-// (daemon_pid,fd)->obj_ptr bridge). Writing that pid into the BPF proc_map makes
-// is_tracked() true for the daemon and every one of its threads, so its ntsync
-// signaler ops are emitted into the trace. This is the kernel-direct alternative
-// to string-matching a comm the daemon's worker threads never carry: quark knows
-// its own pid, so it tells us, and we flip one map entry. Idempotent via the
-// proc_map lookup, so the once-per-cycle call re-tracks only on a daemon restart.
-void BpfTraceCollector::track_daemon_from_provider(const std::string& text) {
-  if (!skel_) return;
-  size_t pos = text.find("daemon_pid=\"");
-  if (pos == std::string::npos) return;
-  pos += 12; // strlen("daemon_pid=\"")
-  long pid = std::strtol(text.c_str() + pos, nullptr, 10);
-  if (pid <= 1) return;
-  uint32_t key = static_cast<uint32_t>(pid);
-  int pf = bpf_map__fd(skel_->maps.proc_map);
-  struct proc_bpf_info dummy;
-  if (pf >= 0 && bpf_map_lookup_elem(pf, &key, &dummy) == 0) return; // already tracked
-  montauk::util::log_info(
-      "DAEMON pid=%ld tracked from quark provider daemon_pid label", pid);
-  track_pid(static_cast<int32_t>(pid), 0, true, "triskelion");
 }
 
 // Generic cpu -> cache-hierarchy snapshot embedded once in the binary trace.
@@ -382,9 +359,7 @@ void BpfTraceCollector::append_cache_topology_snapshot() {
   trace_append(rec.data(), rec.size());
 }
 
-// ---------------------------------------------------------------------------
 // ntsync op name decode
-// ---------------------------------------------------------------------------
 static const char* ntsync_op_name(uint8_t op) {
   switch (op) {
     case 0:  return "create_sem";
@@ -405,9 +380,7 @@ static const char* ntsync_op_name(uint8_t op) {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Ring buffer event handler — NO /proc reads
-// ---------------------------------------------------------------------------
 
 // Per-event stderr printing is a single-app debugging aid (e.g. --trace firefox).
 // For a high-rate workload it is a firehose that dominates overhead and slows the
@@ -432,11 +405,12 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
   self->trace_append(data, len);
 
   // Lazy per-pid maps snapshot. track_pid only fires for pattern-matched
-  // ROOTS (wine-preloader); the game/aborting process is a fork-inherited
-  // DESCENDANT tracked in-BPF, so it never hit track_pid's snapshot and the
-  // death-time snapshot races the reap (empty file). Snapshot on the first
-  // HEAP event from any pid — the process is provably alive and allocating,
-  // and its module mappings are loaded. Once per pid (cheap set guard).
+  // ROOTS (a launcher/preloader process); the aborting process itself is a
+  // fork-inherited DESCENDANT tracked in-BPF, so it never hit track_pid's
+  // snapshot and the death-time snapshot races the reap (empty file). Snapshot
+  // on the first HEAP event from any pid — the process is provably alive and
+  // allocating, and its module mappings are loaded. Once per pid (cheap set
+  // guard).
   if (len >= sizeof(uint32_t)) {
     uint32_t etype = *static_cast<const uint32_t*>(data);
     if (etype == TRACE_EVT_HEAP && len >= sizeof(struct montauk_heap_event)) {
@@ -510,6 +484,7 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
           case SCHED_OP_PREEMPT_TICK:   op = "PREEMPT_TICK"; break;
           case SCHED_OP_PREEMPT_WAKEUP: op = "PREEMPT_WAKEUP"; break;
           case SCHED_OP_CPU_IDLE:       op = "CPU_IDLE"; break;
+          case SCHED_OP_FIELD_GATE:     op = "FIELD_GATE"; break;
         }
         if (s->op == SCHED_OP_ENQUEUE) {
           std::fprintf(stderr, "montauk: SCHED %s pid=%d cpu=%u last_cpu=%d sub=%u score=%llu ts=%llu\n",
@@ -532,6 +507,11 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
           std::fprintf(stderr, "montauk: SCHED %s waker=%d wakee=%d cpu=%u ts=%llu\n",
                        op, s->secondary_pid, s->pid, s->cpu,
                        (unsigned long long)s->timestamp_ns);
+        } else if (s->op == SCHED_OP_FIELD_GATE) {
+          std::fprintf(stderr, "montauk: SCHED %s cpu=%u sig=%llu prev=%llu changed=%u ts=%llu\n",
+                       op, s->cpu, (unsigned long long)s->score,
+                       (unsigned long long)s->runtime_ns, s->sub_idx,
+                       (unsigned long long)s->timestamp_ns);
         }
       }
       return 0;
@@ -547,6 +527,13 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
     auto* hdr = static_cast<const uint32_t*>(data);
     if (*hdr == TRACE_EVT_SIGNAL) {
       auto* sig = static_cast<const struct montauk_signal_event*>(data);
+      // A clean exit -- WIFEXITED, even with a non-zero status (grep returning 1;
+      // a build runs thousands of non-matching greps) -- is NOT abnormal and must
+      // not flood stderr with a per-exit stack dump. The binary trace log already
+      // recorded it above; only signal-killed exits (WIFSIGNALED, low 7 bits of the
+      // exit code set) and delivered signals get the verbose WARN + user-stack here.
+      bool signal_killed = (sig->signal_nr != 0) || ((sig->exit_code & 0x7f) != 0);
+      if (sig->kind != SIGEVT_DELIVER && !signal_killed) return 0;
       const char* signame;
       switch (sig->signal_nr) {
         case 4:  signame = "SIGILL";  break;
@@ -588,9 +575,9 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
       // SIGSEGV/SIGABRT the core-dump/exit path usually gives us time;
       // for SIGKILL or fast-exit we'll get ENOENT and just print raw IPs.
       //
-      // Also dump the full maps to a sidecar file. Wine PE-loaded DLLs use
-      // anonymous mmap regions whose path in /proc/maps is empty, so
-      // inline resolution returns just an offset for them. The sidecar
+      // Also dump the full maps to a sidecar file. A loaded module mapped
+      // anonymously (path in /proc/maps empty) resolves to just an offset
+      // inline, so the sidecar
       // lets the operator manually correlate after the fact via the maps
       // contents (and via /proc/PID/map_files/ symlinks while the process
       // is still alive).
@@ -756,7 +743,7 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
       self->track_pid(pid, 0, true, evt->comm);
     }
   } else if (evt->type == TRACE_EVT_COMM_CHANGE) {
-    // Wine prctl(PR_SET_NAME) — re-evaluate pattern match
+    // A process renamed itself via prctl(PR_SET_NAME) — re-evaluate pattern match
     // Read updated comm from BPF proc_map
     if (!self->skel_) return 0;
     uint32_t key = static_cast<uint32_t>(pid);
@@ -778,9 +765,7 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
   return 0;
 }
 
-// ---------------------------------------------------------------------------
 // Track a PID in the BPF proc_map
-// ---------------------------------------------------------------------------
 void BpfTraceCollector::track_pid(int32_t pid, int32_t ppid, bool is_root,
                                    const char* comm) {
   struct proc_bpf_info info = {};
@@ -816,16 +801,14 @@ void BpfTraceCollector::track_pid(int32_t pid, int32_t ppid, bool is_root,
 // ONLY when the read was non-empty, so a reap-time empty read can never
 // destroy the last good snapshot.
 void BpfTraceCollector::snapshot_maps(uint32_t pid) {
+  if (trace_dir_.empty()) return;  // no --trace-out: no trace file to correlate against
   char maps_path[64];
   std::snprintf(maps_path, sizeof(maps_path), "/proc/%u/maps", pid);
   FILE* mf = std::fopen(maps_path, "r");
   if (!mf) return;
-  char sidecar_path[96], tmp_path[112];
-  std::snprintf(sidecar_path, sizeof(sidecar_path),
-                "/tmp/quark/incidents/%u.maps", pid);
-  std::snprintf(tmp_path, sizeof(tmp_path),
-                "/tmp/quark/incidents/.%u.maps.tmp", pid);
-  FILE* tmp = std::fopen(tmp_path, "w");
+  std::string sidecar_path = trace_dir_ + "/" + std::to_string(pid) + ".maps";
+  std::string tmp_path = trace_dir_ + "/." + std::to_string(pid) + ".maps.tmp";
+  FILE* tmp = std::fopen(tmp_path.c_str(), "w");
   if (tmp) {
     char line[1024];
     size_t bytes = 0;
@@ -833,16 +816,14 @@ void BpfTraceCollector::snapshot_maps(uint32_t pid) {
       bytes += std::fputs(line, tmp) >= 0 ? std::strlen(line) : 0;
     std::fclose(tmp);
     if (bytes > 0)
-      ::rename(tmp_path, sidecar_path);   // atomic replace, keeps last-good
+      ::rename(tmp_path.c_str(), sidecar_path.c_str());  // atomic replace, keeps last-good
     else
-      ::remove(tmp_path);                 // empty read: leave existing intact
+      ::remove(tmp_path.c_str());          // empty read: leave existing intact
   }
   std::fclose(mf);
 }
 
-// ---------------------------------------------------------------------------
 // Build self-exclusion set — uses getpid/getppid syscalls, NOT /proc
-// ---------------------------------------------------------------------------
 void BpfTraceCollector::build_self_exclusion() {
   pid_t pid = getpid();
   while (pid > 1) {
@@ -857,11 +838,9 @@ void BpfTraceCollector::build_self_exclusion() {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Periodic re-scan of BPF proc_map comms for pattern matching
-// Catches Wine prctl(PR_SET_NAME) and delayed comm changes
+// Catches prctl(PR_SET_NAME) self-renames and delayed comm changes
 // All data from BPF maps — zero /proc reads
-// ---------------------------------------------------------------------------
 void BpfTraceCollector::rescan_comms() {
   if (!skel_) return;
   int proc_fd = bpf_map__fd(skel_->maps.proc_map);
@@ -906,9 +885,7 @@ void BpfTraceCollector::rescan_comms() {
     snapshot_maps(pid);
 }
 
-// ---------------------------------------------------------------------------
 // Snapshot from BPF maps → TraceSnapshot — zero /proc reads
-// ---------------------------------------------------------------------------
 void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) {
   uint64_t now_ns = 0;
   {
@@ -1136,9 +1113,7 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
   last_snapshot_ns_ = now_ns;
 }
 
-// ---------------------------------------------------------------------------
 // Main run loop — zero /proc reads after BPF attach
-// ---------------------------------------------------------------------------
 void BpfTraceCollector::run(std::stop_token st) {
   skel_ = montauk_trace_bpf__open();
   if (!skel_) {
@@ -1168,6 +1143,9 @@ void BpfTraceCollector::run(std::stop_token st) {
   // sched_op counters are maintained regardless, so the snapshot always sees
   // the decision rates.
   skel_->rodata->sched_stream = (trace_fd_ >= 0) ? 1 : 0;
+  // --sched-detail: emit the per-CPU idle-boundary firehose only when explicitly
+  // asked (off by default, so a generic --trace does not pay the ~6x cost).
+  skel_->rodata->sched_detail = sched_detail_ ? 1 : 0;
 
   // Heap caller-stack capture: MONTAUK_HEAP_STACK_SIZE=<bytes> makes every
   // malloc/calloc of exactly that size emit a TRACE_EVT_HEAPSTACK with the
@@ -1193,6 +1171,28 @@ void BpfTraceCollector::run(std::stop_token st) {
     }
   }
 
+  // scx storm probes are fentry/fexit trampolines on sched_ext's OWN kfuncs
+  // (scx_bpf_kick_cpu / scx_bpf_reenqueue_local). fentry resolves its BTF
+  // target at LOAD time, so on a kernel without sched_ext the missing kfunc
+  // fails the ENTIRE skeleton load -- every universal handler dies with it
+  // (the silica bench guest: libbpf "failed to find kernel BTF type ID of
+  // 'scx_bpf_kick_cpu': -ESRCH" killed the whole capture). Autoload them
+  // only when the running kernel's BTF actually carries the kfunc; the
+  // attach side already gates them behind MONTAUK_SCX_STORM.
+  {
+    struct btf* vmlinux_btf = btf__load_vmlinux_btf();
+    bool have_scx = vmlinux_btf &&
+        btf__find_by_name_kind(vmlinux_btf, "scx_bpf_kick_cpu",
+                               BTF_KIND_FUNC) > 0;
+    btf__free(vmlinux_btf);
+    if (!have_scx) {
+      bpf_program__set_autoload(skel_->progs.handle_scx_kick,  false);
+      bpf_program__set_autoload(skel_->progs.handle_scx_reenq, false);
+      montauk::util::log_info("kernel BTF lacks sched_ext kfuncs; "
+                              "scx storm probes disabled for this boot");
+    }
+  }
+
   int err = montauk_trace_bpf__load(skel_);
   if (err) {
     montauk::util::log_error("failed to load BPF programs (need root or CAP_BPF)");
@@ -1209,8 +1209,8 @@ void BpfTraceCollector::run(std::stop_token st) {
 
   // Generic scheduler-decision programs, attached at RUNTIME to the active
   // scheduler's tracepoints. The bindings come from MONTAUK_SCHED_TRACEPOINTS as
-  // up to 5 comma-separated category:name entries, in role order:
-  //   enqueue, pick, pick_empty, preempt_tick, preempt_wakeup
+  // up to 6 comma-separated category:name entries, in role order:
+  //   enqueue, pick, pick_empty, preempt_tick, preempt_wakeup, field_gate
   // montauk names no scheduler in source; unset or missing bindings are simply
   // skipped, so the universal sched_switch/fork/exec/syscall trace always
   // attaches regardless of which scheduler (if any) is loaded. System-agnostic.
@@ -1221,6 +1221,7 @@ void BpfTraceCollector::run(std::stop_token st) {
     {skel_->progs.handle_sched_pick_empty,     &skel_->links.handle_sched_pick_empty},
     {skel_->progs.handle_sched_preempt_tick,   &skel_->links.handle_sched_preempt_tick},
     {skel_->progs.handle_sched_preempt_wakeup, &skel_->links.handle_sched_preempt_wakeup},
+    {skel_->progs.handle_sched_field_gate,     &skel_->links.handle_sched_field_gate},
   };
   // Neutral placeholder SECs never auto-attach; we bind them by hand below.
   for (const auto &dp : decision_progs)
@@ -1293,7 +1294,7 @@ void BpfTraceCollector::run(std::stop_token st) {
     char *saveptr = nullptr;
     size_t role = 0;
     for (char *tok = strtok_r(buf, ",", &saveptr);
-         tok && role < 5;
+         tok && role < 6;
          tok = strtok_r(nullptr, ",", &saveptr), ++role) {
       char *colon = std::strchr(tok, ':');
       if (!colon) continue;
@@ -1411,22 +1412,36 @@ void BpfTraceCollector::run(std::stop_token st) {
     }
   }
 
-  // ── Keyed-event (critical-section) uprobes ────────────────────
+  // ── Keyed-event (critical-section) + wait-site uprobes ────────────────────
   // Wine critical sections (loader_section, etc.) wait/wake via
   // NtWaitForKeyedEvent/NtReleaseKeyedEvent in ntdll.so, passing the
   // CRITICAL_SECTION address as the key. Capturing it makes CS contention
   // traceable by lock identity (the layer futex/ntsync capture misses). The
   // ntdll.so path is install-specific (Proton/Wine), so it's provided at
   // runtime via MONTAUK_NTDLL_PATH; unset → silently skipped (best-effort).
+  //
+  // The wait-site pair (uprobe_wait_single/uprobe_wait_multiple) captures a raw
+  // stack + RIP/RSP/RBP for offline unwinding of frame-pointer-less code -- a
+  // generic capability (any FP-less binary benefits), so the two function names
+  // it attaches to are operator-configurable via MONTAUK_WAITSTACK_FUNC1/2
+  // rather than fixed, defaulting to Wine's NtWaitForSingleObject/
+  // NtWaitForMultipleObjects since that's the capability's motivating case. A
+  // retargeted function must share the hooked slot's calling convention (the
+  // BPF side reads a NULL-pointer-as-timeout argument to gate on infinite
+  // waits), so this isn't a blind rename -- the operator is on the hook for
+  // pointing it at a compatible signature.
   {
+    const char *waitstack_func1 = getenv("MONTAUK_WAITSTACK_FUNC1");
+    if (!waitstack_func1 || !*waitstack_func1) waitstack_func1 = "NtWaitForSingleObject";
+    const char *waitstack_func2 = getenv("MONTAUK_WAITSTACK_FUNC2");
+    if (!waitstack_func2 || !*waitstack_func2) waitstack_func2 = "NtWaitForMultipleObjects";
+
     struct KevtAttach { bpf_program *prog; bpf_link **link; const char *func; };
     const KevtAttach kattaches[] = {
       { skel_->progs.uprobe_keyed_wait,    &skel_->links.uprobe_keyed_wait,    "NtWaitForKeyedEvent" },
       { skel_->progs.uprobe_keyed_release, &skel_->links.uprobe_keyed_release, "NtReleaseKeyedEvent" },
-      // Wait-site stacks: capture the user stack at the Wine wait function (above
-      // the syscall leaf) so a parked thread resolves to its winepulse/Wine caller.
-      { skel_->progs.uprobe_wait_single,   &skel_->links.uprobe_wait_single,   "NtWaitForSingleObject" },
-      { skel_->progs.uprobe_wait_multiple, &skel_->links.uprobe_wait_multiple, "NtWaitForMultipleObjects" },
+      { skel_->progs.uprobe_wait_single,   &skel_->links.uprobe_wait_single,   waitstack_func1 },
+      { skel_->progs.uprobe_wait_multiple, &skel_->links.uprobe_wait_multiple, waitstack_func2 },
     };
     const char *ntdll_path = getenv("MONTAUK_NTDLL_PATH");
     if (ntdll_path && access(ntdll_path, R_OK) == 0) {
@@ -1467,10 +1482,9 @@ void BpfTraceCollector::run(std::stop_token st) {
   if (!emitter_.start())
     montauk::util::log_warn("provider emitter bind failed (continuing)");
 
-  // The daemon is tracked in-kernel: discovery_map sees every syscalling process
-  // (now keyed by the group_leader comm, so the daemon's worker threads no longer
-  // mask the process name), and append_provider_snapshots tracks the exact
-  // daemon pid quark announces. No /proc discovery scan.
+  // Discovery is tracked in-kernel: discovery_map sees every syscalling process,
+  // keyed by the group_leader comm so a multi-threaded target's worker threads
+  // never mask the process name. No /proc discovery scan.
 
   while (!st.stop_requested()) {
     ring_buffer__poll(rb_, 100);
@@ -1480,7 +1494,7 @@ void BpfTraceCollector::run(std::stop_token st) {
     // fires under bursts).
     trace_flush();
 
-    // Periodic re-scan for comm changes (catches Wine prctl PR_SET_NAME)
+    // Periodic re-scan for comm changes (catches prctl PR_SET_NAME self-renames)
     rescan_comms();
 
     auto& snap = buffers_.back();

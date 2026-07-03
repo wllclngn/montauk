@@ -1,0 +1,190 @@
+$ sublimation sort
+0
+1
+2
+3
+3
+4
+5
+6
+7
+8
+8
+9
+$ sublimation sort --desc
+9
+8
+8
+7
+6
+5
+4
+3
+3
+2
+1
+0
+$ sublimation quantile 0.5
+5
+$ sublimation quantile 0.99 --nearest
+9
+$ sublimation select 3
+3
+$ sublimation searchsorted 5
+6
+$ sublimation sum
+56
+$ sublimation mean
+4.66666666667
+$ sublimation min
+0
+$ sublimation max
+9
+$ sublimation count
+12
+$ sublimation distinct
+10
+$ sublimation stdev
+2.96443566094
+$ sublimation variance
+8.78787878788
+$ sublimation classify
+RANDOM  n=12  inversion_ratio=0.515  lis=5  distinct~10  runs=6
+$ sublimation characterize
+RANDOM  rand_confidence=0.510  n=12
+$ sublimation rand
+confidence=0.510  (k=3/4 agree)
+  hook         --
+  lis          --
+  inv          0.97
+  distinct     0.83
+  hvg          0.58
+  bandt-pompe  0.87
+$ sublimation grep a
+alpha 10 x
+beta 20 y
+gamma 30 z
+alpha 40 w
+$ sublimation grep -n a
+1:alpha 10 x
+2:beta 20 y
+3:gamma 30 z
+4:alpha 40 w
+$ sublimation grep -c a
+4
+$ sublimation grep -v a
+$ sublimation contains beta
+beta 20 y
+$ sublimation field 2
+10
+20
+30
+40
+$ sublimation field 1,3
+alpha x
+beta y
+gamma z
+alpha w
+$ sublimation where 2 > 15
+beta 20 y
+gamma 30 z
+alpha 40 w
+$ sublimation tally
+3 a
+2 b
+1 c
+$ sublimation tally --field 1
+2 alpha
+1 gamma
+1 beta
+$ sublimation distinct
+3
+$ sublimation describe
+count  12
+mean   4.66666666667
+stdev  2.96443566094
+min    0
+25%    3
+50%    5
+75%    8
+max    9
+$ sublimation group 1 sum 2
+alpha 50
+beta 20
+gamma 30
+$ sublimation group 1 count
+alpha 2
+beta 1
+gamma 1
+$ sublimation group 1 mean 2
+alpha 25
+beta 20
+gamma 30
+$ sublimation outliers
+100
+$ sublimation histogram
+0                 1  ████████████████████
+0.9               1  ████████████████████
+1.8               1  ████████████████████
+2.7               2  ████████████████████████████████████████
+3.6               1  ████████████████████
+4.5               1  ████████████████████
+5.4               1  ████████████████████
+6.3               1  ████████████████████
+7.2               2  ████████████████████████████████████████
+8.1               1  ████████████████████
+$ sublimation uniq
+a
+b
+c
+$ sublimation uniq -d
+a
+c
+$ sublimation tac
+3
+2
+1
+$ sublimation cut 2-4
+ell
+orl
+$ sublimation column
+alpha  10  x
+beta   20  y
+gamma  30  z
+alpha  40  w
+$ sublimation paste -s
+a	b	c
+$ sublimation intersect tests/fixtures/setb.txt
+b
+c
+$ sublimation subtract tests/fixtures/setb.txt
+a
+$ sublimation union tests/fixtures/setb.txt
+a
+b
+c
+d
+$ sublimation join 1 tests/fixtures/joinb.txt
+a 1 a x
+b 2 b y
+$ sublimation replace foo X
+X bar X
+$ sublimation replace [0-9] -
+a-b-c-
+$ sublimation replace X+ _
+a_b_c
+$ sublimation locate sorted --window 4 --values
+1
+2
+3
+4
+5
+6
+7
+8
+$ sublimation contains foo
+foo
+$ sublimation contains -i foo
+foo
+FOO
+Foo

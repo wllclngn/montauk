@@ -124,9 +124,9 @@ enum signal_event_kind {
 };
 
 // Max stack frames captured via bpf_get_stack. 32 is generous for typical
-// crashes (Wine SEH dispatcher + game stack rarely exceed 16); the verifier
-// limits us to ~127 anyway, but allocating 32 * 8 = 256 bytes per event
-// keeps ringbuf pressure manageable.
+// crashes (an exception-dispatcher-plus-app stack rarely exceeds 16); the
+// verifier limits us to ~127 anyway, but allocating 32 * 8 = 256 bytes per
+// event keeps ringbuf pressure manageable.
 #define TRACE_STACK_MAX_FRAMES 32
 
 struct montauk_signal_event {
@@ -202,9 +202,9 @@ struct montauk_heapstack_event {
 
 // User stack captured at an INFINITE ntsync wait-enter. A thread parked at trace
 // end never reaches sys_exit, so its LAST waitstack names WHERE in the code it is
-// blocked (resolved against the maps sidecar -> module+offset, e.g. winepulse
-// pulse.c). Gated to infinite-timeout waits to bound volume -- those are exactly
-// the hang-prone ones that become dead-producer parks.
+// blocked (resolved against the maps sidecar -> module+offset). Gated to
+// infinite-timeout waits to bound volume -- those are exactly the hang-prone
+// ones that become dead-producer parks.
 struct montauk_waitstack_event {
   __u32 type;          // TRACE_EVT_WAITSTACK
   __u32 pid;
@@ -303,6 +303,18 @@ enum sched_trace_op {
                                 //   bound (switch_in_fallback) -- so slice/service derive picks
                                 //   from the universal sched_switch for any scheduler (EEVDF, or
                                 //   an scx mode that does not export pick). Idle is CPU_IDLE.
+  SCHED_OP_FIELD_GATE     = 10, // an adaptive scheduler's structural-reclassification gate --
+                                //   fired each time the scheduler re-evaluates its discrete
+                                //   workload classification (the "field"). score = current field
+                                //   signature (a discrete code/bitmap), runtime_ns = previous
+                                //   signature, sub_idx = 1 if the signature CHANGED this tick (the
+                                //   gate re-derived) / 0 if it HELD (the gate persisted the prior
+                                //   classification), cpu = reporting CPU. The field-persist report
+                                //   measures whether the signature moves over the capture (a live
+                                //   classifier) or is pinned to one value (a latched classifier
+                                //   that cannot distinguish two operating states it committed
+                                //   between at start). Generic: any adaptive scheduler with a
+                                //   discrete regime/field gate emits to this role.
 };
 
 // Per-CPU aggregation of scheduler-decision counts, indexed by sched_trace_op.
@@ -310,7 +322,7 @@ enum sched_trace_op {
 // (one bump, no shared ringbuf reserve) keeps tracing near-zero-overhead there.
 // Userspace sums across CPUs at snapshot time. Per-event streaming is opt-in
 // (binary --trace-out only); the contract struct above is the streamed form.
-#define MONTAUK_SCHED_OP_MAX 10  /* index by sched_trace_op (1..9); 0 unused */
+#define MONTAUK_SCHED_OP_MAX 11  /* index by sched_trace_op (1..10); 0 unused */
 struct sched_op_counters {
   __u64 op[MONTAUK_SCHED_OP_MAX];
 };

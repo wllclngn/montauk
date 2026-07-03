@@ -56,7 +56,7 @@ struct Family {
   std::map<std::string, Cell> cells;  // cell key -> cell
 };
 
-// ---- Prometheus text parsing -------------------------------------------------
+// Prometheus text parsing
 
 std::string strip(const std::string& s) {
   size_t a = 0, b = s.size();
@@ -202,6 +202,12 @@ void parse_file(const std::string& path, const PopOptions& opt,
   std::string version = "unknown";
   std::string commit = "unknown";
   const std::string capture = capture_key_from_path(path);
+  // Explicit A/B group for this file (--group NAME=path), injected as `group`.
+  std::string group;
+  {
+    auto git = opt.file_group.find(path);
+    if (git != opt.file_group.end()) group = git->second;
+  }
   // TYPE lines precede their series in the bench .prom, so a single pass works.
   // family -> cellkey -> axis value -> cumulative-bucket histogram.
   std::map<std::string, std::map<std::string, std::map<std::string, Hist>>> file_hist;
@@ -280,6 +286,7 @@ void parse_file(const std::string& path, const PopOptions& opt,
       labels.emplace_back("version", version);
       labels.emplace_back("commit", commit);
       labels.emplace_back("capture", capture);
+      if (!group.empty()) labels.emplace_back("group", group);
       std::string axv = label_get(labels, opt.compare_axis);
       if (axv.empty()) continue;
       std::string ck = cell_key(labels, drop_for_cell);  // drops le + axis
@@ -295,6 +302,7 @@ void parse_file(const std::string& path, const PopOptions& opt,
     labels.emplace_back("version", version);
     labels.emplace_back("commit", commit);
     labels.emplace_back("capture", capture);
+    if (!group.empty()) labels.emplace_back("group", group);
     std::string axis = label_get(labels, opt.compare_axis);
     if (axis.empty()) continue;  // cannot place without the compare axis
     std::string ck = cell_key(labels, drop_for_cell);
@@ -324,7 +332,7 @@ void parse_file(const std::string& path, const PopOptions& opt,
   }
 }
 
-// ---- report + prom ----------------------------------------------------------
+// report + prom
 
 std::string short_axis(const std::string& v) {
   std::string n;

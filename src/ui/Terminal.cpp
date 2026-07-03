@@ -127,7 +127,21 @@ void restore_terminal_minimal() {
   best_effort_write(STDOUT_FILENO, reset, std::char_traits<char>::length(reset));
 }
 
-void on_sigint(int){ restore_terminal_minimal(); g_stop.store(true); }
+void on_sigint(int){
+  // First Ctrl+C requests a graceful stop (drains the ring, flushes --trace-out,
+  // detaches BPF). A second Ctrl+C forces exit: BPF link/uprobe detach across a
+  // large traced process tree can take seconds, and once g_stop is set there is
+  // nothing more a repeated graceful request can do -- so escalate to _exit so a
+  // slow teardown can always be cut. Async-signal-safe: atomics, write(2), _exit.
+  static std::atomic<int> hits{0};
+  restore_terminal_minimal();
+  if (hits.fetch_add(1) > 0) {
+    const char* m = "\nmontauk: second interrupt -- forcing exit\n";
+    best_effort_write(STDERR_FILENO, m, std::char_traits<char>::length(m));
+    _exit(130);
+  }
+  g_stop.store(true);
+}
 
 void on_atexit_restore(){
   // Ensure all buffered output is written, then restore terminal state

@@ -361,7 +361,7 @@ void NetlinkProcessCollector::send_control_message(int op) {
   (void)::send(nl_sock_, &msg, sizeof(msg), 0);
 }
 
-// ===== Helpers replicated from traditional collector (kept local to avoid refactoring now) =====
+// Helpers replicated from traditional collector (kept local to avoid refactoring now)
 
 uint64_t NetlinkProcessCollector::read_cpu_total() {
   auto txt = montauk::util::read_file_string("/proc/stat"); if (!txt) return 0;

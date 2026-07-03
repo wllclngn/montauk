@@ -39,6 +39,7 @@ const char* sched_op_name(uint32_t op) {
     case SCHED_OP_PREEMPT_WAKEUP: return "PREEMPT_WAKEUP";
     case SCHED_OP_WAKEUP:         return "WAKEUP";
     case SCHED_OP_WAKE2RUN:       return "WAKE2RUN";
+    case SCHED_OP_FIELD_GATE:     return "FIELD_GATE";
     default:                      return "?";
   }
 }

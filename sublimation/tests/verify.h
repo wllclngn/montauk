@@ -27,9 +27,7 @@
 static int _verify_pass = 0;
 static int _verify_fail = 0;
 
-// ============================================================
 // TYPE-GENERIC VERIFICATION (macro-generated per type)
-// ============================================================
 
 #define VERIFY_DEFINE_TYPE(T, FMT, SUFFIX)                                     \
                                                                                \
@@ -94,9 +92,7 @@ VERIFY_DEFINE_TYPE(uint64_t, "%lu", u64)
 VERIFY_DEFINE_TYPE(float,    "%f",  f32)
 VERIFY_DEFINE_TYPE(double,   "%f",  f64)
 
-// ============================================================
 // CONVENIENCE MACROS
-// ============================================================
 
 // Full save-sort-verify-free cycle for any type
 // NOTE: name can be a string literal OR a char[] variable.
@@ -109,9 +105,7 @@ VERIFY_DEFINE_TYPE(double,   "%f",  f64)
     _verify_saved_##SUFFIX = NULL;                                             \
 } while (0)
 
-// ============================================================
 // LEGACY i64 API (backward compatible with existing tests)
-// ============================================================
 
 // save a copy of the input before sorting
 static int64_t *verify_save(const int64_t *arr, size_t n) {

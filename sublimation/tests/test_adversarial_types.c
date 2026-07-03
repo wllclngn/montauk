@@ -27,9 +27,7 @@ static uint64_t at_lcg_next(void) {
     return _at_lcg_state;
 }
 
-// ============================================================
 // PATTERN FILL FUNCTIONS (generic via macro)
-// ============================================================
 
 #define DEFINE_ADVERSARIAL_PATTERNS(T, SUFFIX, sort_fn, T_MAX, T_MIN)          \
                                                                                \
@@ -131,9 +129,7 @@ DEFINE_ADVERSARIAL_PATTERNS(float,    f32, sublimation_f32,
 DEFINE_ADVERSARIAL_PATTERNS(double,   f64, sublimation_f64,
                             (double)DBL_MAX, (double)(-DBL_MAX))
 
-// ============================================================
 // MAIN
-// ============================================================
 
 int main(void) {
     printf("[sublimation] Multi-type adversarial pattern testing\n");

@@ -11,11 +11,14 @@
 
 namespace sublimation {
 
-// Boyer-Moore-Horspool literal substring search (ASCII case-insensitive).
+// Boyer-Moore-Horspool literal substring search (ASCII case-insensitive --
+// montauk's substring UX, e.g. "fire" matches "Firefox"). The C engine now
+// defaults to case-sensitive (grep -F semantics); this wrapper pins the fold on
+// to keep montauk's filter behavior unchanged.
 class BMH {
 public:
     explicit BMH(std::string_view pattern) {
-        sublimation_bmh_compile(&b_, pattern.data(), pattern.size());
+        sublimation_bmh_compile_ex(&b_, pattern.data(), pattern.size(), /*icase=*/1);
     }
     // Offset of the first match, or -1.
     [[nodiscard]] long search(std::string_view text) const {

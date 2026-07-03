@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,13 @@ struct PopOptions {
   bool lower_is_better = true;
   bool emit_prom = true;
   bool full = false;  // Path A: within-run Games-Howell on the histograms
+  // Explicit A/B: input path -> comparison-group name, injected as a synthetic
+  // `group` label. Set by --group NAME=path; when non-empty the CLI forces
+  // compare_axis="group". Lets two run-sets whose committed labels are identical
+  // (an in-place kernel A/B: same scheduler, same version, same commit) compare
+  // on their per-run distributions -- the bimodal cliff A/B that `capture`
+  // (per-filename stamp) cannot express for same-named per-run `.prom` files.
+  std::map<std::string, std::string> file_group;
 };
 
 // Analyze the given `.prom` files as a population. Prints the report and

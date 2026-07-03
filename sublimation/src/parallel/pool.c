@@ -193,7 +193,7 @@ void sub_parallel_sort_i64(int64_t *arr, size_t n, size_t num_workers,
 
     size_t num_splitters = k - 1;
 
-    // ===== ALLOCATE =====
+    // ALLOCATE
     size_t scratch_bytes, buckets_bytes;
     if (ckd_mul(&scratch_bytes, n, sizeof(int64_t)) ||
         ckd_mul(&buckets_bytes, n, sizeof(uint16_t))) {
@@ -221,10 +221,10 @@ void sub_parallel_sort_i64(int64_t *arr, size_t n, size_t num_workers,
         return;
     }
 
-    // ===== PHASE 1: SAMPLE SPLITTERS =====
+    // PHASE 1: SAMPLE SPLITTERS
     sample_splitters(arr, n, splitters, k);
 
-    // ===== PHASE 2: PARALLEL CLASSIFICATION =====
+    // PHASE 2: PARALLEL CLASSIFICATION
     size_t chunk_size = (n + num_workers - 1) / num_workers;
 
     for (size_t w = 0; w < num_workers; w++) {
@@ -254,7 +254,7 @@ void sub_parallel_sort_i64(int64_t *arr, size_t n, size_t num_workers,
         if (threads[w]) pthread_join(threads[w], nullptr);
     }
 
-    // ===== PHASE 3: PREFIX-SUM MERGE (sequential, O(k * num_workers)) =====
+    // PHASE 3: PREFIX-SUM MERGE (sequential, O(k * num_workers))
     for (size_t b = 0; b < k; b++) {
         size_t total = 0;
         for (size_t w = 0; w < num_workers; w++) {
@@ -276,7 +276,7 @@ void sub_parallel_sort_i64(int64_t *arr, size_t n, size_t num_workers,
         }
     }
 
-    // ===== PHASE 4: PARALLEL SCATTER =====
+    // PHASE 4: PARALLEL SCATTER
     for (size_t w = 0; w < num_workers; w++) {
         distrib_ctxs[w].phase = 1;
         if (pthread_create(&threads[w], nullptr, worker_distrib_fn, &distrib_ctxs[w]) != 0) {
@@ -291,7 +291,7 @@ void sub_parallel_sort_i64(int64_t *arr, size_t n, size_t num_workers,
 
     memcpy(arr, scratch, n * sizeof(int64_t));
 
-    // ===== PHASE 5: PARALLEL PER-BUCKET SORT =====
+    // PHASE 5: PARALLEL PER-BUCKET SORT
     // Greedy load-balanced assignment: sort buckets by size descending,
     // assign each bucket to the least-loaded worker.
     // Single wave of num_workers threads.

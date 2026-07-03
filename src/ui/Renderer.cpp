@@ -150,6 +150,7 @@ Renderer::~Renderer() = default;
 void Renderer::seed_from_config() {
   const auto& cfg = config();
   impl_->right_column.set_system_focus(cfg.ui.system_focus);
+  impl_->cpu_view = cfg.ui.cpu_topology;  // left rect starts in CPU TOPOLOGY if configured
   impl_->right_column.set_show_gpumon(true);
   impl_->right_column.set_show_thermal(true);
 

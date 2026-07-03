@@ -17,9 +17,7 @@ static uint64_t now_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-// ============================================================
 // LCG
-// ============================================================
 
 static uint64_t _bench_lcg_state;
 static void bench_lcg_seed(uint64_t s) { _bench_lcg_state = s; }
@@ -29,9 +27,7 @@ static uint64_t bench_lcg_next(void) {
     return _bench_lcg_state;
 }
 
-// ============================================================
 // PATTERN FILL (macro-generated per type)
-// ============================================================
 
 #define DEFINE_FILL(T, SUFFIX)                                                 \
                                                                                \
@@ -155,9 +151,7 @@ DEFINE_FILL(uint64_t, u64)
 DEFINE_FILL(float,    f32)
 DEFINE_FILL(double,   f64)
 
-// ============================================================
 // QSORT COMPARATORS
-// ============================================================
 
 #define DEFINE_CMP(T, SUFFIX)                                                  \
 static int cmp_##SUFFIX(const void *a, const void *b) {                        \
@@ -172,9 +166,7 @@ DEFINE_CMP(uint64_t, u64)
 DEFINE_CMP(float,    f32)
 DEFINE_CMP(double,   f64)
 
-// ============================================================
 // INLINE INTROSORT (pdqsort-lite reference, i64 only for backward compat)
-// ============================================================
 
 static void intro_insertion(int64_t *arr, size_t n) {
     for (size_t i = 1; i < n; i++) {
@@ -235,9 +227,7 @@ static void introsort_i64(int64_t *arr, size_t n) {
     introsort_impl(arr, n, depth);
 }
 
-// ============================================================
 // BENCHMARK DRIVER (macro-generated per type)
-// ============================================================
 
 #define DEFINE_BENCH(T, SUFFIX, sort_fn, cmp_fn)                               \
                                                                                \
@@ -314,9 +304,7 @@ DEFINE_BENCH(uint64_t, u64, sublimation_u64, cmp_u64)
 DEFINE_BENCH(float,    f32, sublimation_f32, cmp_f32)
 DEFINE_BENCH(double,   f64, sublimation_f64, cmp_f64)
 
-// ============================================================
 // MAIN
-// ============================================================
 
 int main(int argc, char **argv) {
     if (argc < 4) {

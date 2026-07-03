@@ -522,9 +522,9 @@ def cmd_install(args, source_dir: Path) -> bool:
     # The generic profile harness (montauk_profile): a montauk feature any
     # application uses to turn a montauk capture into a montauk_analyze report --
     # capture (launch/attach/existing trace), run the reports, assemble. Installed
-    # importable as a module (apps add this dir to sys.path for their own harness,
-    # e.g. quark's diagnose script) plus a `montauk-profile` CLI shim for the
-    # generic command/attach/trace path.
+    # importable as a module (apps add this dir to sys.path for their own diagnose
+    # script) plus a `montauk-profile` CLI shim for the generic command/attach/
+    # trace path.
     profile_src = source_dir / "profiles" / "montauk_profile.py"
     if profile_src.exists():
         lib_dest = prefix / "lib" / "montauk" / "montauk_profile.py"

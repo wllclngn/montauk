@@ -3,7 +3,7 @@
 // Requires SUB_TYPE and SUB_SUFFIX to be defined before inclusion.
 // E.g. #define SUB_TYPE int64_t / #define SUB_SUFFIX _i64
 
-// ---------- AVX2 VECTORIZED SORTED/REVERSED DETECTION (int64_t only) ----------
+// AVX2 VECTORIZED SORTED/REVERSED DETECTION (int64_t only)
 // Defined once (guarded) as concrete int64_t functions.  Called from the
 // templated sub_classify_internal via a compile-time sizeof+signedness gate
 // that the compiler constant-folds away for non-i64 instantiations.
@@ -517,7 +517,7 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
         return p;
     }
 
-    // --- AVX2 fast-path: detect sorted/reversed/equal in ~0.25 cycles/element ---
+    // AVX2 fast-path: detect sorted/reversed/equal in ~0.25 cycles/element
     // Compile-time gate: _Generic resolves to 1 only for int64_t, constant-folded
     // to eliminate dead code for all other type instantiations (including double).
 #ifdef __AVX2__

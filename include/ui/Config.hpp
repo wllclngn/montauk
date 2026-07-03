@@ -37,7 +37,8 @@ struct Config {
   // [ui]
   struct UI {
     bool alt_screen = true;
-    bool system_focus = false;
+    bool system_focus = false;             // right column starts in SYSTEM focus
+    bool cpu_topology = false;             // left rect starts in CPU TOPOLOGY (vs PROCESS MONITOR)
     std::string cpu_scale = "total";        // "total" | "core"
     std::string gpu_scale = "utilization";  // "utilization" | "capacity"
     std::string time_format;

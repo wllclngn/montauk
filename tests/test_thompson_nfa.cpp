@@ -1,7 +1,25 @@
 #include "minitest.hpp"
-#include "util/ThompsonNFA.hpp"
+#include "sublimation_text.h"   // the Thompson NFA moved into sublimation (C engine)
 
-using montauk::util::ThompsonNFA;
+#include <string_view>
+#include <utility>
+
+// The NFA moved from a montauk C++ class into sublimation's C engine. This thin
+// adapter preserves the test surface (ctor / valid / full_match / find) over the
+// sublimation_nfa_* C API, so the cases below keep their coverage on the new home.
+namespace {
+struct ThompsonNFA {
+    sublimation_nfa nfa_;
+    explicit ThompsonNFA(std::string_view pat) { sublimation_nfa_compile(&nfa_, pat.data(), pat.size()); }
+    bool valid() const { return sublimation_nfa_valid(&nfa_) != 0; }
+    bool full_match(std::string_view s) const { return sublimation_nfa_full_match(&nfa_, s.data(), s.size()) != 0; }
+    std::pair<long, long> find(std::string_view s) const {
+        long end = -1;
+        long start = sublimation_nfa_find(&nfa_, s.data(), s.size(), &end);
+        return start < 0 ? std::pair<long, long>{-1, -1} : std::pair<long, long>{start, end};
+    }
+};
+}  // namespace
 
 // ============================================================================
 // BASIC LITERALS

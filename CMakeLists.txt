@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 7.11.0 LANGUAGES C CXX)
+project(montauk VERSION 7.12.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -301,6 +301,11 @@ if(MONTAUK_BUILD_TESTS)
   target_include_directories(montauk_sink_c_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_compile_options(montauk_sink_c_test PRIVATE -Wall -Wextra -Werror -Wshadow)
 
-  add_custom_target(check COMMAND montauk_tests DEPENDS montauk_tests montauk_sink_c_test
-                          COMMAND montauk_sink_c_test)
+  # One entry point for the whole suite -- tests/run.py orchestrates the unit
+  # (C++ montauk_tests + C23 sink test), gate (Python byte-identical) and trace
+  # (root-gated, skipped without root) layers. --no-build because the DEPENDS
+  # below already builds the binaries run.py invokes.
+  add_custom_target(check
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/run.py --no-build
+    DEPENDS montauk_tests montauk_sink_c_test montauk_analyze montauk_trace_decode sublimation_cli)
 endif()

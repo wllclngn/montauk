@@ -27,11 +27,18 @@ typedef struct {
     int           bad_char[256];
     unsigned char pattern[SUBLIMATION_BMH_MAX_PATTERN];
     int           pattern_len;
+    int           icase;   // ASCII case-fold at match time (off by default)
 } sublimation_bmh;
 
 // Compile `pattern` (len bytes) into `out`. len == 0 or len > 256 leaves an
 // empty pattern (search returns 0). No allocation; `out` is caller-owned.
+// Case-SENSITIVE -- mirrors sublimation_nfa_compile and grep -F. Use _ex for
+// case-insensitive folding.
 SUB_API void sublimation_bmh_compile(sublimation_bmh *out, const char *pattern, size_t len);
+
+// As sublimation_bmh_compile, but folds ASCII case at match time when icase != 0
+// (A-Z and a-z compare equal). UTF-8 case folding is not done.
+SUB_API void sublimation_bmh_compile_ex(sublimation_bmh *out, const char *pattern, size_t len, int icase);
 
 // Offset of the first match of the compiled pattern in text[0..n), or -1.
 SUB_API long sublimation_bmh_search(const sublimation_bmh *bmh, const char *text, size_t n);

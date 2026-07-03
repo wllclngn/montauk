@@ -270,6 +270,24 @@ firehose, a human-eyeball aid for low-rate single-app debugging) and of
 \-\-log (the Prometheus flight recorder). Use whichever fits: stderr for
 watching live, \-\-log for aggregate post-mortem, \-\-trace-out for
 full-fidelity per-event capture without measurement distortion.
+.SS Scheduler-decision detail stream (\-\-sched-detail)
+Two per-switch records carry the heavy scheduler-decision detail the placement /
+slice / stall reports need: the per-CPU idle boundary (answers \(lqwas a CPU idle
+at this wake instant\(rq \(em the placement-race signal, consumed by placement-race,
+dispatch-stall, kstrand and cold-wake) and the SWITCH_IN pick fallback (the pick
+the slice / service reports need on a scheduler that exports no pick tracepoint,
+EEVDF and pick-less scx modes). On a CPU-cycling workload (a
+.B make \-jN
+kernel build: thousands of short-lived processes, every core flipping
+idle\(<->busy millions of times) these dominate the capture \(em ~82% of events,
+a ~6x trace slowdown \(em so both are gated behind
+.B \-\-sched-detail
+and OFF by default. A generic
+.B \-\-trace
+pays nothing for them; pass
+.B \-\-sched-detail
+when you want the scheduler placement / slice / stall reports. Without it those
+reports read the signal as absent, exactly as a pre-CPU_IDLE capture does.
 .SS Hardware PMU Counters
 Trace mode additionally samples hardware performance counters via
 perf_event_open: per-CPU L2 cache misses/references (AMD Zen raw events),
@@ -331,8 +349,18 @@ ntsync ioctl operations from traced processes (Wine/Proton sync primitives)
 .TP
 .B montauk_sched_op_total
 Scheduler decision counts by op: enqueue, pick, pick_empty, preempt_tick,
-preempt_wakeup (aggregated per-CPU in BPF; per-event streaming only with
-\-\-trace-out)
+preempt_wakeup, field_gate (aggregated per-CPU in BPF; per-event streaming only
+with \-\-trace-out). The field_gate role is an adaptive scheduler's
+structural-reclassification gate; the analyzer's
+.B field-persist
+report reads its per-event stream to tell a live classifier (the field signature
+moves over the capture) from a latched one (pinned to a single signature the whole
+run, so two operating states it committed between at start are indistinguishable to
+it \(em the per-boot bistable tell). Bindings come from
+.B MONTAUK_SCHED_TRACEPOINTS
+as up to six comma-separated category:name entries in role order (enqueue, pick,
+pick_empty, preempt_tick, preempt_wakeup, field_gate); montauk names no scheduler
+in source and skips any unbound role.
 .TP
 .B montauk_pmu_*
 Hardware counter gauges when PMU access is available: IPC, L2 miss percent
@@ -401,7 +429,10 @@ Number of top processes to enrich with full details (default: MONTAUK_MAX_PROCS)
 Use alternate screen buffer (default: 1). Set to 0 to disable.
 .TP
 .B MONTAUK_SYSTEM_FOCUS
-Start in system focus mode (default: 0)
+Start with the right column in SYSTEM focus (default: 0). TOML: [ui] system_focus.
+.TP
+.B MONTAUK_CPU_TOPOLOGY
+Start the left panel in CPU TOPOLOGY instead of PROCESS MONITOR (default: 0). TOML: [ui] cpu_topology.
 .TP
 .B MONTAUK_TIME_FORMAT
 Time display format
@@ -660,6 +691,6 @@ Report issues at: https://github.com/wllclngn/montauk/issues
 .SH COPYRIGHT
 MIT License. See LICENSE file in repository.
 .SH VERSION
-montauk 7.11.0
+montauk 7.12.0
 .br
 June 2026

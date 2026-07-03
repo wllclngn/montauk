@@ -13,7 +13,7 @@ namespace montauk::app {
 
 namespace {
 // Same location ProviderCollector scans, so montauk's emitter sits in the mesh
-// alongside every other producer (e.g. triskelion's quark.sock).
+// alongside every other producer's own socket.
 std::string providers_dir() {
   const char* xdg = std::getenv("XDG_RUNTIME_DIR");
   if (xdg && *xdg) return std::string(xdg) + "/montauk/providers";

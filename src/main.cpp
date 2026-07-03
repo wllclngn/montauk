@@ -55,6 +55,7 @@ int main(int argc, char** argv) {
   bool headless = false;     // --headless: skip TUI, daemon mode
   std::string trace_pattern; // --trace PATTERN: trace process group
   std::string trace_out;     // --trace-out FILE: raw binary event log
+  bool sched_detail = false;   // --sched-detail: stream per-CPU idle boundaries (off by default)
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--iterations" && i + 1 < argc) iterations = std::stoi(argv[++i]);
@@ -65,6 +66,7 @@ int main(int argc, char** argv) {
     else if (a == "--headless") headless = true;
     else if (a == "--trace" && i + 1 < argc) trace_pattern = argv[++i];
     else if (a == "--trace-out" && i + 1 < argc) trace_out = argv[++i];
+    else if (a == "--sched-detail") sched_detail = true;
     else if (a == "--init-theme") {
       auto colors = montauk::ui::detect_palette();
       montauk::util::TomlReader toml;
@@ -107,6 +109,7 @@ int main(int argc, char** argv) {
       };
       set_bool_default("ui", "alt_screen", true);
       set_bool_default("ui", "system_focus", false);
+      set_bool_default("ui", "cpu_topology", false);
       set_str_default("ui", "cpu_scale", "total");
       set_str_default("ui", "gpu_scale", "utilization");
       // Write default process settings
@@ -145,7 +148,7 @@ int main(int argc, char** argv) {
     else if (a == "-h" || a == "--help") {
       montauk_sink_appendf(&g_out, "Usage: montauk [--self-test-seconds S] [--iterations N]\n");
       montauk_sink_appendf(&g_out, "               [--metrics PORT] [--log DIR] [--log-interval-ms MS] [--headless]\n");
-      montauk_sink_appendf(&g_out, "               [--trace PATTERN] [--trace-out FILE] [--init-theme]\n");
+      montauk_sink_appendf(&g_out, "               [--trace PATTERN] [--trace-out FILE] [--sched-detail] [--init-theme]\n");
       montauk_sink_appendf(&g_out, "Notes: Text UI runs until Ctrl+C by default.\n");
       montauk_sink_appendf(&g_out, "       --metrics PORT        Enable Prometheus endpoint on PORT\n");
       montauk_sink_appendf(&g_out, "       --log DIR             Write timestamped snapshots to DIR\n");
@@ -153,6 +156,7 @@ int main(int argc, char** argv) {
       montauk_sink_appendf(&g_out, "       --headless            Daemon mode (no TUI, requires --metrics or --log)\n");
       montauk_sink_appendf(&g_out, "       --trace PATTERN       Trace process group matching PATTERN (headless)\n");
       montauk_sink_appendf(&g_out, "       --trace-out FILE      Write raw binary event log; decode with montauk_trace_decode\n");
+      montauk_sink_appendf(&g_out, "       --sched-detail        Stream the heavy per-switch scheduler-decision detail -- per-CPU idle boundaries and the EEVDF pick fallback (off by default; the placement/slice/stall reports need it, ~6x cost on CPU-cycling workloads)\n");
       montauk_sink_appendf(&g_out, "       --init-theme          Detect terminal palette and write config.toml\n");
       return 0;
     }
@@ -184,6 +188,7 @@ int main(int argc, char** argv) {
       trace_collector = std::make_unique<montauk::collectors::BpfTraceCollector>(
           *trace_buffers, trace_pattern);
       if (!trace_out.empty()) trace_collector->set_binary_output(trace_out);
+      trace_collector->set_sched_detail(sched_detail);  // before start(): sets a frozen rodata bit
       trace_collector->start();
     }
 #else
@@ -224,7 +229,7 @@ int main(int argc, char** argv) {
       }
 #endif
       while (!g_stop.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));  // snappy Ctrl+C response
       }
 #ifdef MONTAUK_HAVE_BPF
       if (trace_collector) trace_collector->stop();

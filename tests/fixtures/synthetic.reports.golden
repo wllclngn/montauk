@@ -1,0 +1,158 @@
+REPORT classmix
+VERDICT: 5 distinct enqueued pids; class mix (cls_weight in score bits 48+):
+  cls_weight 1   BATCH         :     1 distinct pids,       20 enqueues (20.0%)
+  cls_weight 4   INTERACTIVE   :     1 distinct pids,       20 enqueues (20.0%)
+  cls_weight 8   LATENCY       :     2 distinct pids,       40 enqueues (40.0%)
+  cls_weight 32  LAT_CRITICAL  :     1 distinct pids,       20 enqueues (20.0%)
+  (a UNIFORM worker pool should sit in ONE class; many distinct pids across MULTIPLE classes = mis-classification -> cross-class starvation no within-class warp/age/svc lever can override)
+
+
+REPORT field-persist
+VERDICT: no field-gate events (adaptive reclassification gate not streamed)
+
+
+REPORT locality
+VERDICT: no cache_topology snapshot in the trace -- cannot map migration distance (recapture with montauk >= 7.8.0)
+
+
+REPORT summary
+VERDICT: 8.6k events in 0.1 s (73.0k/s), dominated by SCHED WAKE2RUN (23%)
+pattern         synthetic
+start           10:06:40.000
+format_version  1
+first_event_ms  0.050
+duration_s      0.118
+events          8609
+events_per_sec  72988
+type    subtype          count
+NTSYNC  create_sem                  1
+NTSYNC  sem_release                16
+NTSYNC  wait_any.enter              1
+NTSYNC  create_mutex                1
+NTSYNC  create_event                1
+NTSYNC  event_set                  64
+NTSYNC  event_reset                64
+IO      read                       32
+IO      write                      32
+IO      ppoll                       1
+SCHED   ENQUEUE                   100
+SCHED   PREEMPT_TICK             2000
+SCHED   WAKEUP                   2000
+SCHED   WAKE2RUN                 2001
+SCHED   CPU_IDLE                  286
+SCHED   SWITCH_IN                2000
+HEAP    malloc                      2
+HEAP    free                        3
+UNKNOWN type=18                     4
+
+REPORT iowait
+VERDICT: 1 thread(s) parked in a blocking I/O-wait at trace end (asleep on its data source -- e.g. poll() on a socket or pipe fd); longest tid=1002 'worker' in ppoll(fd=9) 0.0s
+tid      pid      comm             syscall      fd     parked_s
+1002     1000     worker           ppoll        9      0.0
+
+REPORT sched
+VERDICT: 2.0k wake2run; p50 17us p99 4000us p999 5000us worst 18000us; 99.0% fast(<100us) / 0.0% mid / 1.0% tick-floor(>=900us); 33.3% cross-domain
+cross-domain wake2run: 667 events; p50 17us p99 4000us worst 18000us (high here = scatter feeds the slow mode)
+STRUCTURE: latency-over-trace RANDOM; ~2001 distinct values; inversion ratio 0.48
+
+
+REPORT work-conservation
+VERDICT: no idle strands >= 50ms (work-conserving, or PICK events not streamed)
+
+
+REPORT placement-race
+VERDICT: 21 tick-floored wakes (>=900us); PLACEMENT-MISS 100% (idle CPU was free) / SATURATED 0% (all busy); avg 3.0 idle CPUs free at a miss
+  (high PLACEMENT-MISS % = wakees queued behind a busy CPU while idle CPUs sat free -- the wakeup-placement race; high SATURATED % = unavoidable queueing, fix the busy CPU)
+  REROUTABLE 100.0% of the floor: that fraction had an idle CPU and an idle-pull/placement fix could move it; the remaining 0.0% is genuine saturation -- only a busy-CPU fix (pick order / wakeup-preempt / shorter slice) cuts it
+
+
+REPORT dispatch-stall
+VERDICT: 21 saturated floored wakes; PREEMPT-STARVED 100% (0 intervening picks) / ORDER-STARVED 0% (CPU served others first); avg 0.0 pass-overs, p99 0 pass-overs
+  PREEMPT split: no CPU_IDLE events -- cannot separate DARK (idle strand) from HELD (busy hog); recapture with a montauk that streams CPU_IDLE
+  LANE: 0% of pass-over picks via MIRROR / 100% via SUB; floored wakees finally served 0% MIRROR / 100% SUB
+  CLASS: pass-over tasks vs the wakee's class -- 0% HIGHER (cross-class: class beats age) / 0% SAME / 0% LOWER (priority inversion)
+  SAME-class age: 0% of same-class pass-overs were NEWER than the wakee (FIFO violation -- newer served ahead of older); rest older (legit drain)
+  (LOWER + SAME-NEWER are the illegitimate pass-overs the score key should have prevented -- a cache-fragmented dispatch serving its local best, not the global oldest)
+  CONCENTRATION: avg 0.0 DISTINCT pass-over tasks per floored wake vs avg 0.0 pass-over PICKS -- ratio 0.00 (low = a few hogs re-picked, fair-share/lag fix; ~1.0 = deep distinct backlog, deadline fix)
+
+  CEILING: p99 pass-overs 0 total -> 0 if ALL inversions removed (0% remains = LEGIT backlog only eligibility/lag can cut; 100% is the mirror-coherence headroom)
+
+
+REPORT kstrand
+VERDICT: no per-CPU kthread strands over threshold (no I/O-completion starvation captured)
+
+
+REPORT slice
+VERDICT: 2.0k dispatched slices; p50 201.2us p90 201.2us p99 201.2us worst 372.4us; mean 200.1us
+  (long slices x pass-over depth = the saturation tail; a shorter effective slice drains a deep runqueue faster)
+TRAJECTORY: slice p50 over 8 segments (us): 201 201 201 201 201 201 201 201; shape=SORTED inv=0.00 -- coherent (quantum settles with load)
+PREEMPT-OVERRUN: >2ms 0 (0.00%)  >5ms 0 (0.00%)  >8ms 0 (0.00%)  -- ~0 distinct slice lengths
+
+
+REPORT storm
+VERDICT: no sched_ext kick activity captured (non-scx scheduler, or no cpu_release storm)
+
+
+REPORT service
+VERDICT: 2 PIDs ran; per-PID service p50 199.7ms p99 199.7ms max 199.7ms; fair-share 199.6ms
+  SKEW: top-1 PID 50.0% of all CPU / top-5 100.0%; p99 PID ran 1.0x its fair share
+  (high skew -> a few tasks over-consume; a fair-share/lag term frees the starved wakee = the cliff lever. uniform -> symmetric load, fair-share has nothing to redistribute)
+
+
+REPORT wakers
+VERDICT: 1 waker pids, 0 hot (messengers, >=16000 wakes); 2.0k total wakes
+  MESSENGER wake2run (0 samples): p50 0us p99 0us p999 0us
+  WORKER    wake2run (2.0k samples): p50 17us p99 4000us p999 5000us
+  (messenger tail >> worker tail -> the cliff is the waker critical path; protect the wakers, don't deprioritize them)
+
+
+REPORT waits
+VERDICT: no sync wait completions in trace (NTSYNC or futex)
+
+REPORT spins
+VERDICT: no spin runs detected
+criteria: inter-wait gap < 1.0 ms sustained >= 1000 iterations
+
+REPORT pairing
+VERDICT: all waited fds have plausible signalers
+flag: waits > 100x signals (min 1000 waits) = waits with no plausible signaler
+fd     waits      event_set  event_reset sem_release mutex_unlock signals    flag
+10     0          64         64          0           0            128        
+11     0          0          0           16          0            16         
+
+REPORT abortpm
+VERDICT: no abort events in trace
+
+REPORT signals
+VERDICT: no signal events in trace
+
+REPORT endstate
+VERDICT: 1 thread(s) stuck in an ntsync wait (1 genuine stall victims, 0 woke/lost-compl); longest tid=1002 'worker' parked 0.0s; EVENT last wakeup BEFORE the park — producer went quiet
+tid      pid      comm             open_s    act_after_ms  status         objs  timeout_ns
+1002     1000     worker           0.0       0.2           PARKED         1     0
+
+parked-thread wait objects (signal history):
+tid      obj                  fd     type   signals  waits     verdict
+1002     0x00000000000e0000 10     EVENT  64       1         last signal -0.2ms BEFORE park by tid=1001 (event_set)
+
+REPORT futex
+VERDICT: no threads blocked on a futex at trace end
+
+REPORT keyedevt
+VERDICT: no keyed-event activity (was a keyed-event uprobe configured when the trace was captured?)
+
+REPORT heapstk
+VERDICT: no heapstack captures in trace (set MONTAUK_HEAP_STACK_SIZE)
+
+REPORT doublefree
+VERDICT: 1 double-free(s) in 3 frees — 0 cross-thread (race), 1 same-thread (logic)
+addr               size     freed_by_1            freed_by_2           kind
+0x0000000000bbbb00 256      tid=1001    worker     tid=1001    worker     same-thread(logic)
+
+REPORT fractal
+TIMELINE: 2.0k dispatches, 667 cross-domain over 0.1s; bin 10us -> 11795 bins
+SERIES                 H(DFA)     H(R/S)    D=2-H  decades  VERDICT
+dispatch-rate        0.618±0.109      0.322    1.382     2.87  indistinguishable from uncorrelated
+migration-rate       0.496±0.073      0.288    1.504     2.87  indistinguishable from uncorrelated
+NOTE: raw-event timeline spans 2.9 decades of scale -- a rigorous read, not the <1-decade .prom-scrape estimate
+

@@ -159,6 +159,7 @@ const Config& config() {
     // --- [ui] ---
     c.ui.alt_screen    = resolve_bool(toml, have_toml, "ui", "alt_screen",    "MONTAUK_ALT_SCREEN", true);
     c.ui.system_focus  = resolve_bool(toml, have_toml, "ui", "system_focus",  "MONTAUK_SYSTEM_FOCUS", false);
+    c.ui.cpu_topology  = resolve_bool(toml, have_toml, "ui", "cpu_topology",  "MONTAUK_CPU_TOPOLOGY", false);
     c.ui.cpu_scale     = resolve_string(toml, have_toml, "ui", "cpu_scale",   "MONTAUK_PROC_CPU_SCALE", "total");
     c.ui.gpu_scale     = resolve_string(toml, have_toml, "ui", "gpu_scale",   nullptr, "utilization");
     c.ui.time_format   = resolve_string(toml, have_toml, "ui", "time_format", "MONTAUK_TIME_FORMAT", "");

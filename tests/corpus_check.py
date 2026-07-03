@@ -68,6 +68,28 @@ CLI_CASES = [
     (["tally"], _FREQ),
     (["tally", "--field", "1"], _ROWS),
     (["distinct"], _FREQ),
+    (["describe"], _NUMS),
+    (["group", "1", "sum", "2"], _ROWS),
+    (["group", "1", "count"], _ROWS),
+    (["group", "1", "mean", "2"], _ROWS),
+    (["outliers"], "1\n2\n3\n4\n5\n6\n7\n8\n9\n100\n"),
+    (["histogram"], _NUMS),
+    (["uniq"], "a\na\nb\nc\nc\n"),
+    (["uniq", "-d"], "a\na\nb\nc\nc\n"),
+    (["tac"], "1\n2\n3\n"),
+    (["cut", "2-4"], "hello\nworld\n"),
+    (["column"], _ROWS),
+    (["paste", "-s"], "a\nb\nc\n"),
+    (["intersect", "tests/fixtures/setb.txt"], "a\nb\nc\n"),
+    (["subtract", "tests/fixtures/setb.txt"], "a\nb\nc\n"),
+    (["union", "tests/fixtures/setb.txt"], "a\nb\nc\n"),
+    (["join", "1", "tests/fixtures/joinb.txt"], "a 1\nb 2\nc 3\n"),
+    (["replace", "foo", "X"], "foo bar foo\n"),
+    (["replace", "[0-9]", "-"], "a1b2c3\n"),
+    (["replace", "X+", "_"], "aXXbXXc\n"),
+    (["locate", "sorted", "--window", "4", "--values"], "1\n2\n3\n4\n5\n6\n7\n8\n2\n9\n0\n5\n"),
+    (["contains", "foo"], "foo\nFOO\nFoo\nbar\n"),        # case-SENSITIVE default (grep -F)
+    (["contains", "-i", "foo"], "foo\nFOO\nFoo\nbar\n"),  # -i folds ASCII case
 ]
 
 
@@ -133,8 +155,9 @@ def cli_blob() -> str:
     """Run every CLI case and concatenate stdout under a per-case header."""
     parts = []
     for argv, stdin in CLI_CASES:
+        # cwd=ROOT so relative fixture paths (set-ops/join FILE args) resolve.
         proc = subprocess.run([str(SUBLIMATION), *argv], input=stdin,
-                              capture_output=True, text=True)
+                              cwd=ROOT, capture_output=True, text=True)
         parts.append(f"$ sublimation {' '.join(argv)}\n{proc.stdout}")
     return "".join(parts)
 
@@ -166,11 +189,21 @@ def check_cli(update: bool) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--update", action="store_true",
-                    help="re-freeze goldens instead of checking")
+                    help="re-freeze ALL goldens instead of checking")
+    ap.add_argument("--surface", choices=list(SURFACES) + ["cli"],
+                    help="re-freeze only this surface's golden (implies update) -- "
+                         "use when another surface is mid-change and must not be stamped")
     args = ap.parse_args()
 
     with tempfile.TemporaryDirectory() as td:
         regenerate_fixture(Path(td))
+        if args.surface:  # per-surface freeze, leaving the others untouched
+            if args.surface == "cli":
+                CLI_GOLDEN.write_text(cli_blob())
+                note(f"updated cli golden ({len(CLI_CASES)} cases)")
+            else:
+                check_surface(args.surface, update=True)
+            return 0
         ok = all(check_surface(label, args.update) for label in SURFACES)
         ok = check_cli(args.update) and ok
 
