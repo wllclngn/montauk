@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 7.12.0 LANGUAGES C CXX)
+project(montauk VERSION 7.13.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -80,6 +80,7 @@ add_library(montauk_core
     src/app/Alerts.cpp
     src/app/Filter.cpp
     src/app/PrometheusSerializer.cpp
+    src/app/JsonSerializer.cpp
     src/app/ProviderEmitter.cpp
     src/app/LogWriter.cpp
     src/collectors/MemoryCollector.cpp
@@ -301,11 +302,16 @@ if(MONTAUK_BUILD_TESTS)
   target_include_directories(montauk_sink_c_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_compile_options(montauk_sink_c_test PRIVATE -Wall -Wextra -Werror -Wshadow)
 
+  add_executable(montauk_json_test tests/test_json.c)
+  set_target_properties(montauk_json_test PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
+  target_include_directories(montauk_json_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_options(montauk_json_test PRIVATE -Wall -Wextra -Werror -Wshadow)
+
   # One entry point for the whole suite -- tests/run.py orchestrates the unit
   # (C++ montauk_tests + C23 sink test), gate (Python byte-identical) and trace
   # (root-gated, skipped without root) layers. --no-build because the DEPENDS
   # below already builds the binaries run.py invokes.
   add_custom_target(check
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/run.py --no-build
-    DEPENDS montauk_tests montauk_sink_c_test montauk_analyze montauk_trace_decode sublimation_cli)
+    DEPENDS montauk_tests montauk_sink_c_test montauk_json_test montauk_analyze montauk_trace_decode sublimation_cli)
 endif()

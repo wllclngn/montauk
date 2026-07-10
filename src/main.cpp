@@ -55,10 +55,15 @@ int main(int argc, char** argv) {
   bool headless = false;     // --headless: skip TUI, daemon mode
   std::string trace_pattern; // --trace PATTERN: trace process group
   std::string trace_out;     // --trace-out FILE: raw binary event log
+  std::string stream_out;    // --stream-out DEVICE: second binary stream, meant for a character
+                              //   device (e.g. a qemu-backed serial port) so it survives a hang
+                              //   that takes --trace-out's own filesystem down with it
   bool sched_detail = false;   // --sched-detail: stream per-CPU idle boundaries (off by default)
+  bool json_once = false;      // --json: one-shot structured snapshot to stdout, then exit
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--iterations" && i + 1 < argc) iterations = std::stoi(argv[++i]);
+    else if (a == "--json") json_once = true;
     else if (a == "--self-test-seconds" && i + 1 < argc) self_test_secs = std::stoi(argv[++i]);
     else if (a == "--metrics" && i + 1 < argc) metrics_port = static_cast<uint16_t>(std::stoi(argv[++i]));
     else if (a == "--log" && i + 1 < argc) log_dir = argv[++i];
@@ -66,6 +71,7 @@ int main(int argc, char** argv) {
     else if (a == "--headless") headless = true;
     else if (a == "--trace" && i + 1 < argc) trace_pattern = argv[++i];
     else if (a == "--trace-out" && i + 1 < argc) trace_out = argv[++i];
+    else if (a == "--stream-out" && i + 1 < argc) stream_out = argv[++i];
     else if (a == "--sched-detail") sched_detail = true;
     else if (a == "--init-theme") {
       auto colors = montauk::ui::detect_palette();
@@ -148,7 +154,7 @@ int main(int argc, char** argv) {
     else if (a == "-h" || a == "--help") {
       montauk_sink_appendf(&g_out, "Usage: montauk [--self-test-seconds S] [--iterations N]\n");
       montauk_sink_appendf(&g_out, "               [--metrics PORT] [--log DIR] [--log-interval-ms MS] [--headless]\n");
-      montauk_sink_appendf(&g_out, "               [--trace PATTERN] [--trace-out FILE] [--sched-detail] [--init-theme]\n");
+      montauk_sink_appendf(&g_out, "               [--trace PATTERN] [--trace-out FILE] [--stream-out DEVICE] [--sched-detail] [--init-theme]\n");
       montauk_sink_appendf(&g_out, "Notes: Text UI runs until Ctrl+C by default.\n");
       montauk_sink_appendf(&g_out, "       --metrics PORT        Enable Prometheus endpoint on PORT\n");
       montauk_sink_appendf(&g_out, "       --log DIR             Write timestamped snapshots to DIR\n");
@@ -156,8 +162,10 @@ int main(int argc, char** argv) {
       montauk_sink_appendf(&g_out, "       --headless            Daemon mode (no TUI, requires --metrics or --log)\n");
       montauk_sink_appendf(&g_out, "       --trace PATTERN       Trace process group matching PATTERN (headless)\n");
       montauk_sink_appendf(&g_out, "       --trace-out FILE      Write raw binary event log; decode with montauk_trace_decode\n");
+      montauk_sink_appendf(&g_out, "       --stream-out DEVICE   Second, independent binary stream (same format as --trace-out), meant for a character device (e.g. a qemu-backed serial port) so capture survives a hang that takes --trace-out's filesystem down with it\n");
       montauk_sink_appendf(&g_out, "       --sched-detail        Stream the heavy per-switch scheduler-decision detail -- per-CPU idle boundaries and the EEVDF pick fallback (off by default; the placement/slice/stall reports need it, ~6x cost on CPU-cycling workloads)\n");
       montauk_sink_appendf(&g_out, "       --init-theme          Detect terminal palette and write config.toml\n");
+      montauk_sink_appendf(&g_out, "       --json                One-shot structured system snapshot to stdout, then exit\n");
       return 0;
     }
   }
@@ -179,6 +187,21 @@ int main(int argc, char** argv) {
     if (!trace_pattern.empty()) producer.enable_pmu();
     producer.start();
 
+    // --json: one-shot structured snapshot. Warm up two producer cycles so the
+    // rate deltas (cpu ctxt/s, net bps, disk bps) are real, read one snapshot
+    // via the seqlock, serialize to JSON, print and exit. No TUI, no server, no
+    // daemon -- the agent-facing analog of `montauk_analyze --json` for the live
+    // monitor.
+    if (json_once) {
+      for (int spins = 0; buffers.seq() < 2 && !g_stop.load() && spins < 4000; ++spins)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      montauk::app::MetricsSnapshot ms = montauk::app::read_metrics_snapshot(buffers);
+      std::string js = montauk::app::snapshot_to_json(ms);
+      montauk_sink_append(&g_out, js.data(), js.size());
+      producer.stop();
+      return 0;
+    }
+
     // Trace subsystem (optional, parallel to main pipeline)
     std::unique_ptr<montauk::app::TraceBuffers> trace_buffers;
 #ifdef MONTAUK_HAVE_BPF
@@ -188,6 +211,7 @@ int main(int argc, char** argv) {
       trace_collector = std::make_unique<montauk::collectors::BpfTraceCollector>(
           *trace_buffers, trace_pattern);
       if (!trace_out.empty()) trace_collector->set_binary_output(trace_out);
+      if (!stream_out.empty()) trace_collector->set_stream_output(stream_out);
       trace_collector->set_sched_detail(sched_detail);  // before start(): sets a frozen rodata bit
       trace_collector->start();
     }

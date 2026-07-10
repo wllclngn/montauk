@@ -13,6 +13,7 @@
 #include <charconv>
 #include <ctime>
 #include <fcntl.h>
+#include <termios.h>
 #include <unistd.h>
 #include <cerrno>
 #include <filesystem>
@@ -163,10 +164,14 @@ void BpfTraceCollector::stop() {
   }
   // Final flush + close after the collector thread is joined, so no
   // concurrent appends race the close.
+  if (trace_fd_ >= 0 || stream_fd_ >= 0) trace_flush();
   if (trace_fd_ >= 0) {
-    trace_flush();
     ::close(trace_fd_);
     trace_fd_ = -1;
+  }
+  if (stream_fd_ >= 0) {
+    ::close(stream_fd_);
+    stream_fd_ = -1;
   }
 }
 
@@ -213,29 +218,108 @@ void BpfTraceCollector::set_binary_output(const std::string& path) {
   trace_buf_.reserve(kTraceFlushThreshold + 4096);
 }
 
+void BpfTraceCollector::set_stream_output(const std::string& path) {
+  if (path.empty()) return;
+  // No parent-directory creation, no O_CREAT/O_TRUNC: the target is a
+  // character device (a qemu-backed serial port) that already exists, not a
+  // regular file on a filesystem this stream exists specifically to not
+  // depend on.
+  int fd = ::open(path.c_str(), O_WRONLY);
+  if (fd < 0) {
+    montauk::util::log_error("--stream-out: cannot open '%s': %s", path.c_str(), std::strerror(errno));
+    return;
+  }
+
+  // If this is a tty (a serial port is one), it defaults to canonical mode:
+  // the line discipline echoes, interprets control characters, and can
+  // apply XON/XOFF software flow control -- any of which corrupts a raw
+  // binary stream (a stray 0x13 in the data can even stall the whole port).
+  // Force raw mode before writing a single byte, including the header.
+  if (::isatty(fd)) {
+    struct termios tio{};
+    if (::tcgetattr(fd, &tio) == 0) {
+      ::cfmakeraw(&tio);
+      ::tcsetattr(fd, TCSANOW, &tio);
+    }
+  }
+
+  timespec mono{}, real{};
+  clock_gettime(CLOCK_MONOTONIC, &mono);
+  clock_gettime(CLOCK_REALTIME, &real);
+
+  montauk::model::TraceFileHeader hdr{};
+  std::memcpy(hdr.magic, montauk::model::kTraceMagic, sizeof(hdr.magic));
+  hdr.version        = montauk::model::kTraceFormatVersion;
+  hdr.flags          = 0;
+  hdr.mono_anchor_ns = static_cast<uint64_t>(mono.tv_sec) * 1000000000ull + mono.tv_nsec;
+  hdr.real_anchor_ns = static_cast<uint64_t>(real.tv_sec) * 1000000000ull + real.tv_nsec;
+  std::snprintf(hdr.pattern, sizeof(hdr.pattern), "%s", pattern_.c_str());
+
+  size_t off = 0;
+  const auto* p = reinterpret_cast<const uint8_t*>(&hdr);
+  while (off < sizeof(hdr)) {
+    ssize_t n = ::write(fd, p + off, sizeof(hdr) - off);
+    if (n <= 0) { ::close(fd); return; }
+    off += static_cast<size_t>(n);
+  }
+
+  stream_fd_ = fd;
+  stream_buf_.reserve(kTraceFlushThreshold + 4096);
+}
+
 void BpfTraceCollector::trace_append(const void* data, size_t len) {
-  if (trace_fd_ < 0) return;
+  if (trace_fd_ < 0 && stream_fd_ < 0) return;
   montauk::model::TraceRecordLen l = static_cast<montauk::model::TraceRecordLen>(len);
   const auto* lp = reinterpret_cast<const uint8_t*>(&l);
-  trace_buf_.insert(trace_buf_.end(), lp, lp + sizeof(l));
   const auto* dp = reinterpret_cast<const uint8_t*>(data);
-  trace_buf_.insert(trace_buf_.end(), dp, dp + len);
-  if (trace_buf_.size() >= kTraceFlushThreshold) trace_flush();
+  if (trace_fd_ >= 0) {
+    trace_buf_.insert(trace_buf_.end(), lp, lp + sizeof(l));
+    trace_buf_.insert(trace_buf_.end(), dp, dp + len);
+    if (trace_buf_.size() >= kTraceFlushThreshold) trace_flush();
+  }
+  if (stream_fd_ >= 0) {
+    // Flushed unconditionally on every poll cycle (see run loop), not
+    // threshold-gated like trace_buf_: the whole point of this sink is
+    // getting bytes out promptly, not batching for efficiency.
+    stream_buf_.insert(stream_buf_.end(), lp, lp + sizeof(l));
+    stream_buf_.insert(stream_buf_.end(), dp, dp + len);
+  }
 }
 
 void BpfTraceCollector::trace_flush() {
-  if (trace_fd_ < 0 || trace_buf_.empty()) return;
-  size_t off = 0;
-  while (off < trace_buf_.size()) {
-    ssize_t n = ::write(trace_fd_, trace_buf_.data() + off, trace_buf_.size() - off);
-    if (n <= 0) break;  // best-effort: drop on error rather than spin
-    off += static_cast<size_t>(n);
+  if (trace_fd_ >= 0 && !trace_buf_.empty()) {
+    size_t off = 0;
+    while (off < trace_buf_.size()) {
+      ssize_t n = ::write(trace_fd_, trace_buf_.data() + off, trace_buf_.size() - off);
+      if (n <= 0) break;  // best-effort: drop on error rather than spin
+      off += static_cast<size_t>(n);
+    }
+    trace_buf_.clear();
+    // write() only lands data in the page cache; on a journaled filesystem
+    // (ext4/xfs) it is not durable on the actual block device until the next
+    // journal commit (ext4 default: 5s) or an explicit fsync. This trace log
+    // exists specifically to survive a hang, so force the commit every flush
+    // rather than trust the periodic one to land before a freeze does. If the
+    // freeze itself involves the journal/writeback path, fsync can block too --
+    // best-effort, same as the write() above; a stream sink independent of the
+    // filesystem is the robust complement, not a substitute.
+    ::fsync(trace_fd_);
   }
-  trace_buf_.clear();
+  if (stream_fd_ >= 0 && !stream_buf_.empty()) {
+    size_t off = 0;
+    while (off < stream_buf_.size()) {
+      ssize_t n = ::write(stream_fd_, stream_buf_.data() + off, stream_buf_.size() - off);
+      if (n <= 0) break;  // best-effort: drop on error rather than spin
+      off += static_cast<size_t>(n);
+    }
+    stream_buf_.clear();
+    // A character device has no journal to force -- the write() above either
+    // reached qemu's host-side backing already or it did not. No fsync here.
+  }
 }
 
 void BpfTraceCollector::append_provider_snapshots() {
-  if (trace_fd_ < 0) return;
+  if (trace_fd_ < 0 && stream_fd_ < 0) return;  // either binary sink accepts these records
   if (!cache_topo_emitted_) {
     append_cache_topology_snapshot();
     cache_topo_emitted_ = true;
@@ -265,7 +349,7 @@ void BpfTraceCollector::append_provider_snapshots() {
 // one TRACE_EVT_SCX_STORM sample. The deltas + interval give per-CPU-summed kick /
 // preempt-kick / reenqueue rates -- the cpu_release storm, straight from the trace.
 void BpfTraceCollector::append_scx_storm_sample() {
-  if (trace_fd_ < 0 || !skel_) return;
+  if ((trace_fd_ < 0 && stream_fd_ < 0) || !skel_) return;
   int fd = bpf_map__fd(skel_->maps.scx_storm);
   if (fd < 0) return;
   int ncpu = libbpf_num_possible_cpus();
@@ -302,7 +386,7 @@ void BpfTraceCollector::append_scx_storm_sample() {
 // socket. The analyzer reads this to give every migration a cache-tier distance
 // with no live /sys read. Hardware fact, no scheduler named.
 void BpfTraceCollector::append_cache_topology_snapshot() {
-  if (trace_fd_ < 0) return;
+  if (trace_fd_ < 0 && stream_fd_ < 0) return;  // either binary sink accepts these records
   int ncpu = libbpf_num_possible_cpus();
   if (ncpu <= 0) ncpu = 1;
   if (ncpu > TRACE_MAX_CPUS) ncpu = TRACE_MAX_CPUS;
@@ -1142,7 +1226,7 @@ void BpfTraceCollector::run(std::stop_token st) {
   // path; keep it off unless the binary --trace-out log is active. The per-CPU
   // sched_op counters are maintained regardless, so the snapshot always sees
   // the decision rates.
-  skel_->rodata->sched_stream = (trace_fd_ >= 0) ? 1 : 0;
+  skel_->rodata->sched_stream = (trace_fd_ >= 0 || stream_fd_ >= 0) ? 1 : 0;
   // --sched-detail: emit the per-CPU idle-boundary firehose only when explicitly
   // asked (off by default, so a generic --trace does not pay the ~6x cost).
   skel_->rodata->sched_detail = sched_detail_ ? 1 : 0;
@@ -1244,16 +1328,20 @@ void BpfTraceCollector::run(std::stop_token st) {
   bpf_program__set_autoattach(skel_->progs.uprobe_libc_message, false);
   bpf_program__set_autoattach(skel_->progs.uprobe_abort,        false);
 
-  // scx storm probes OFF by default. handle_scx_kick / handle_scx_reenq are the
-  // only montauk programs that trampoline sched_ext's OWN kfuncs
-  // (fentry/scx_bpf_kick_cpu, fexit/scx_bpf_reenqueue_local). Attaching a BPF
-  // trampoline patches live kernel text, and those kfuncs are exactly what an scx
-  // scheduler hammers at storm rates (~100k/s). On 7.1+ that patch cannot
-  // synchronize across CPUs while scx saturates them -- a silent box-wide freeze.
-  // The pervasive --trace path must never carry them; opt in below with
-  // MONTAUK_SCX_STORM for a deliberate storm capture. Skip auto-attach here.
-  bpf_program__set_autoattach(skel_->progs.handle_scx_kick,  false);
-  bpf_program__set_autoattach(skel_->progs.handle_scx_reenq, false);
+  // scx storm probes OFF by default. handle_scx_kick / handle_scx_reenq /
+  // handle_resched_curr are the only montauk programs that trampoline a
+  // kernel hot path an scx scheduler hammers at storm rates (~100k/s):
+  // fentry/scx_bpf_kick_cpu, fexit/scx_bpf_reenqueue_local, and
+  // fentry/resched_curr (called from every kick, plus preemption and wakeup
+  // paths generally -- hotter than the kick kfunc itself). Attaching a BPF
+  // trampoline patches live kernel text, and on 7.1+ that patch cannot
+  // synchronize across CPUs while scx saturates them -- a silent box-wide
+  // freeze. The pervasive --trace path must never carry any of them; opt in
+  // below with MONTAUK_SCX_STORM for a deliberate storm capture. Skip
+  // auto-attach here.
+  bpf_program__set_autoattach(skel_->progs.handle_scx_kick,    false);
+  bpf_program__set_autoattach(skel_->progs.handle_scx_reenq,   false);
+  bpf_program__set_autoattach(skel_->progs.handle_resched_curr, false);
 
   // Atomic skeleton attach now covers only the universal handlers -- always
   // present, so this cannot fail on a missing scheduler tracepoint.
@@ -1273,9 +1361,11 @@ void BpfTraceCollector::run(std::stop_token st) {
   // simply empty, never a freeze.
   if (const char* sv = std::getenv("MONTAUK_SCX_STORM");
       sv && sv[0] && sv[0] != '0') {
-    skel_->links.handle_scx_kick  = bpf_program__attach(skel_->progs.handle_scx_kick);
-    skel_->links.handle_scx_reenq = bpf_program__attach(skel_->progs.handle_scx_reenq);
-    if (skel_->links.handle_scx_kick && skel_->links.handle_scx_reenq)
+    skel_->links.handle_scx_kick    = bpf_program__attach(skel_->progs.handle_scx_kick);
+    skel_->links.handle_scx_reenq   = bpf_program__attach(skel_->progs.handle_scx_reenq);
+    skel_->links.handle_resched_curr = bpf_program__attach(skel_->progs.handle_resched_curr);
+    if (skel_->links.handle_scx_kick && skel_->links.handle_scx_reenq &&
+        skel_->links.handle_resched_curr)
       montauk::util::log_info("scx storm probes attached (MONTAUK_SCX_STORM)");
     else
       montauk::util::log_warn("scx storm probes requested but attach failed -- "

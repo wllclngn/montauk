@@ -33,6 +33,10 @@ struct MetricsSnapshot {
 // Serialize a MetricsSnapshot into Prometheus text exposition format (version 0.0.4).
 [[nodiscard]] std::string snapshot_to_prometheus(const MetricsSnapshot& snap);
 
+// Serialize a MetricsSnapshot into one structured JSON object (see JsonSerializer.cpp).
+// The `montauk --json` one-shot surface: an agent reads live system state as JSON.
+[[nodiscard]] std::string snapshot_to_json(const MetricsSnapshot& snap);
+
 // Serialize a TraceSnapshot into Prometheus text exposition format.
 [[nodiscard]] std::string trace_to_prometheus(const montauk::model::TraceSnapshot& snap);
 

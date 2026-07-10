@@ -44,7 +44,7 @@ def build():
 
 def layer_unit():
     ok = True
-    for exe in ("montauk_tests", "montauk_sink_c_test"):
+    for exe in ("montauk_tests", "montauk_sink_c_test", "montauk_json_test"):
         p = BUILD / exe
         if not p.exists():
             print(f"[run] unit: missing {exe} -- build first (drop --no-build)")

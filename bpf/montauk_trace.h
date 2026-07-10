@@ -315,6 +315,27 @@ enum sched_trace_op {
                                 //   that cannot distinguish two operating states it committed
                                 //   between at start). Generic: any adaptive scheduler with a
                                 //   discrete regime/field gate emits to this role.
+  SCHED_OP_KICK_ISSUE     = 11, // a kick was issued at a CPU (kfunc scx_bpf_kick_cpu, any sched_ext
+                                //   scheduler, any workload -- generic to the framework, not tied to
+                                //   one scheduler). cpu=target CPU being kicked, last_cpu=issuing CPU,
+                                //   score=kick flags (SCX_KICK_* bitmask), pid=-1. Pair against
+                                //   SCHED_OP_RESCHED on the same target cpu within a short window to
+                                //   see whether an issued kick actually resulted in a resched, or was
+                                //   swallowed (e.g. by the idle-kick skip-check racing a CPU's own
+                                //   idle-entry decision).
+  SCHED_OP_RESCHED        = 12, // resched_curr() fired for a CPU's runqueue -- the actual mechanism
+                                //   that would wake a CPU sitting idle, regardless of what triggered it
+                                //   (a kick, preemption, or anything else). cpu=target CPU (rq->cpu),
+                                //   last_cpu=CPU executing resched_curr, pid=-1. The absence of a
+                                //   RESCHED shortly after a KICK_ISSUE for the same target CPU is the
+                                //   direct, generic signature of a swallowed/lost kick.
+  SCHED_OP_TICK_STOP      = 13, // a CPU's periodic tick stop was evaluated (kernel tp/timer/tick_stop,
+                                //   universal to any NOHZ_FULL-capable kernel, not sched_ext-specific).
+                                //   cpu=the CPU evaluating its own tick, sub_idx=success (1 tick
+                                //   actually stopped / 0 blocked by a dependency), score=dependency
+                                //   bitmask (TICK_DEP_MASK_*, valid only when sub_idx=0), pid=-1.
+                                //   Correlate against KICK_ISSUE/RESCHED on the same CPU to see whether
+                                //   a CPU went tickless right as a kick targeting it was in flight.
 };
 
 // Per-CPU aggregation of scheduler-decision counts, indexed by sched_trace_op.
@@ -322,7 +343,7 @@ enum sched_trace_op {
 // (one bump, no shared ringbuf reserve) keeps tracing near-zero-overhead there.
 // Userspace sums across CPUs at snapshot time. Per-event streaming is opt-in
 // (binary --trace-out only); the contract struct above is the streamed form.
-#define MONTAUK_SCHED_OP_MAX 11  /* index by sched_trace_op (1..10); 0 unused */
+#define MONTAUK_SCHED_OP_MAX 14  /* index by sched_trace_op (1..13); 0 unused */
 struct sched_op_counters {
   __u64 op[MONTAUK_SCHED_OP_MAX];
 };

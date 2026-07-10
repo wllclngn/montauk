@@ -32,7 +32,7 @@ fi
 
 pkgver=7.8.0.r79.g4fd29ea0
 pkgrel=1
-pkgdesc='High-performance Linux system monitor with kernel module, eBPF tracing, GPU attribution, and pixel-rendered area charts'
+pkgdesc='Linux observability platform: event-driven monitor, eBPF tracer and analyzer on an in-tree flow-model sort/search engine, with kernel-module telemetry and GPU attribution'
 arch=('x86_64')
 url='https://github.com/wllclngn/montauk'
 license=('GPL-2.0-only')

@@ -53,3 +53,7 @@ core
 
 # Development test scripts
 tests/show_colors.py
+
+# Python bytecode
+__pycache__/
+*.pyc

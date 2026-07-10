@@ -13,10 +13,13 @@ TEST(gpu_collector_nvidia_proc_fallback) {
       "Total                       : 4096 MiB\n"
       "Used                        : 1024 MiB\n";
   setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  setenv("MONTAUK_GPU_DISABLE_NATIVE", "1", 1);  // isolate the proc parser from a live NVML GPU
   montauk::collectors::GpuCollector c; montauk::model::GpuVram v{};
   ASSERT_TRUE(c.sample(v));
   ASSERT_EQ(v.total_mb, 4096u);
   ASSERT_EQ(v.used_mb, 1024u);
+  unsetenv("MONTAUK_PROC_ROOT");
+  unsetenv("MONTAUK_GPU_DISABLE_NATIVE");
 }
 
 TEST(gpu_collector_amd_sysfs_fallback) {
@@ -26,8 +29,15 @@ TEST(gpu_collector_amd_sysfs_fallback) {
   std::ofstream(root / "sys/class/drm/card0/device/mem_info_vram_total") << (512ull * 1024ull * 1024ull);
   std::ofstream(root / "sys/class/drm/card0/device/mem_info_vram_used") << (128ull * 1024ull * 1024ull);
   setenv("MONTAUK_SYS_ROOT", root.c_str(), 1);
+  setenv("MONTAUK_GPU_DISABLE_NATIVE", "1", 1);  // isolate the sysfs parser from a live NVML GPU
+  // Point the proc root at this sandbox (which has no proc/driver/nvidia) so the
+  // NVIDIA proc reader finds nothing and the AMD sysfs reader is what answers.
+  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
   montauk::collectors::GpuCollector c; montauk::model::GpuVram v{};
   ASSERT_TRUE(c.sample(v));
   ASSERT_EQ(v.total_mb, 512u);
   ASSERT_EQ(v.used_mb, 128u);
+  unsetenv("MONTAUK_SYS_ROOT");
+  unsetenv("MONTAUK_PROC_ROOT");
+  unsetenv("MONTAUK_GPU_DISABLE_NATIVE");
 }

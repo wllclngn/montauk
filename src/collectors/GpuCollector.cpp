@@ -21,6 +21,12 @@ namespace fs = std::filesystem;
 namespace montauk::collectors {
 
 static std::string find_nvidia_smi_path() {
+  // Env override wins over the cached config singleton: config() is built once
+  // on first access, so a MONTAUK_NVIDIA_SMI_PATH set later (a test injecting a
+  // fake nvidia-smi) would otherwise be ignored. Read it live here.
+  if (const char* env = std::getenv("MONTAUK_NVIDIA_SMI_PATH");
+      env && *env && std::string(env) != "auto")
+    return env;
   const auto& smi = montauk::ui::config().nvidia.smi_path;
   if (smi != "auto" && !smi.empty()) return smi;
   // Try PATH
@@ -52,6 +58,15 @@ static std::string find_nvidia_smi_path() {
 
 static bool read_nvidia_smi_device(montauk::model::GpuVram& out) {
   if (!montauk::ui::config().nvidia.smi_dev) return false;
+  // Hermetic mode (MONTAUK_GPU_DISABLE_NATIVE=1): the real system nvidia-smi is
+  // an unsandboxed hardware probe, so skip it -- unless an explicit
+  // MONTAUK_NVIDIA_SMI_PATH was injected (a fake for a test), which stays
+  // sandboxed and is allowed to answer.
+  {
+    const char* no_native = std::getenv("MONTAUK_GPU_DISABLE_NATIVE");
+    if (no_native && no_native[0] == '1' && !std::getenv("MONTAUK_NVIDIA_SMI_PATH"))
+      return false;
+  }
   static auto last_call = std::chrono::steady_clock::time_point{};
   static montauk::model::GpuVram cached{};
   static bool have_cache = false;
@@ -460,10 +475,20 @@ static void log_backend_once(const char* tag) {
 
 bool GpuCollector::sample(montauk::model::GpuVram& out) const {
   out = {};
-  // Prefer runtime NVML loader if available
-  if (read_nvml_dyn(out)) { log_backend_once("nvml-dyn"); return true; }
-  // Fall back to compiled NVML if present
-  if (read_nvml_compiled(out)) { log_backend_once("nvml-compiled"); return true; }
+  // MONTAUK_GPU_DISABLE_NATIVE=1 skips the unsandboxable hardware probes (NVML
+  // here, real system nvidia-smi in read_nvidia_smi_device), so only sandboxed
+  // sources answer: an injected MONTAUK_NVIDIA_SMI_PATH, or the proc / sysfs
+  // roots. Operator hook to force the non-NVML backend (debug an NVML-vs-sysfs
+  // disagreement or a flaky NVML load), and the only way the fallback-parser
+  // tests run hermetically on a box with a live GPU. Read via getenv, not the
+  // cached config singleton, so it takes effect per call.
+  const char* no_native = std::getenv("MONTAUK_GPU_DISABLE_NATIVE");
+  if (!(no_native && no_native[0] == '1')) {
+    // Prefer runtime NVML loader if available
+    if (read_nvml_dyn(out)) { log_backend_once("nvml-dyn"); return true; }
+    // Fall back to compiled NVML if present
+    if (read_nvml_compiled(out)) { log_backend_once("nvml-compiled"); return true; }
+  }
   // NVIDIA device-level fallback via nvidia-smi
   if (read_nvidia_smi_device(out)) { log_backend_once("smi-device"); return true; }
   bool ok = false;

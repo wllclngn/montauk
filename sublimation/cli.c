@@ -209,6 +209,26 @@ static char *field_token(char *line, int field, const char *delim) {
     return tok;
 }
 
+// Non-mutating field extractor: returns a pointer to the 1-based `field` column
+// within [line, line+len) and writes its length to *flen; NULL if the column is
+// absent. Matches field_token/strtok semantics (runs of delimiters collapse, no
+// empty fields) but copies nothing and truncates nothing, so it is correct on
+// lines of any length -- unlike the fixed-buffer copy callers used to make
+// before tokenizing (which silently truncated past the buffer size).
+static const char *field_span(const char *line, size_t len, int field,
+                              const char *delim, size_t *flen) {
+    if (field <= 0) { *flen = len; return line; }
+    size_t i = 0; int col = 0;
+    while (i < len) {
+        while (i < len && strchr(delim, line[i])) i++;
+        if (i >= len) break;
+        size_t start = i;
+        while (i < len && !strchr(delim, line[i])) i++;
+        if (++col == field) { *flen = i - start; return line + start; }
+    }
+    return NULL;
+}
+
 // Read stdin into `out`, parsing one double per line (or per --field column).
 // Lines whose field does not parse as a number are skipped (and counted).
 static size_t read_values(Vec *out, int field, const char *delim) {
@@ -217,16 +237,13 @@ static size_t read_values(Vec *out, int field, const char *delim) {
     ssize_t len;
     size_t skipped = 0;
     while ((len = getline(&line, &cap, stdin)) != -1) {
-        char buf[4096];
-        // strtok mutates; work on a bounded copy so long lines are safe.
         const char *src = line;
         if (field > 0) {
-            size_t n = (size_t)len < sizeof(buf) ? (size_t)len : sizeof(buf) - 1;
-            memcpy(buf, line, n);
-            buf[n] = '\0';
-            char *tok = field_token(buf, field, delim);
-            if (!tok) { skipped++; continue; }
-            src = tok;
+            size_t flen;
+            src = field_span(line, (size_t)len, field, delim, &flen);
+            if (!src) { skipped++; continue; }
+            // src points into line and is followed by a delimiter/newline, so
+            // strtod stops at the field boundary with no null terminator needed.
         }
         char *end = NULL;
         double x = strtod(src, &end);
@@ -538,11 +555,8 @@ int main(int argc, char **argv) {
                 if (!in) { fprintf(stderr, "sublimation: cannot open '%s'\n", fname); continue; }
             }
             while ((len = getline(&line, &cap, in)) != -1) {
-                char buf[4096];
-                size_t n = (size_t)len < sizeof(buf) ? (size_t)len : sizeof(buf) - 1;
-                memcpy(buf, line, n);
-                buf[n] = '\0';
-                char *tok = field_token(buf, (int)col, delim);
+                size_t flen;
+                const char *tok = field_span(line, (size_t)len, (int)col, delim, &flen);
                 double x = tok ? strtod(tok, NULL) : 0.0;  // missing / non-numeric -> 0
                 int keep;
                 switch (op) {
@@ -609,18 +623,17 @@ int main(int argc, char **argv) {
         char *line = NULL; size_t lcap = 0; ssize_t len;
         while ((len = getline(&line, &lcap, stdin)) != -1) {
             if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
-            char kbuf[4096], vbuf[4096];
-            size_t n = (size_t)len < sizeof(kbuf) ? (size_t)len : sizeof(kbuf) - 1;
-            memcpy(kbuf, line, n); kbuf[n] = '\0';
-            char *ktok = field_token(kbuf, keyf, delim);
-            if (!ktok) continue;  // no key column -> skip the row
+            size_t klen; const char *kspan = field_span(line, (size_t)len, keyf, delim, &klen);
+            if (!kspan) continue;  // no key column -> skip the row
             double val = 0.0; int have_val = 0;
             if (!is_count) {
-                memcpy(vbuf, line, n); vbuf[n] = '\0';
-                char *vtok = field_token(vbuf, valf, delim);
-                if (vtok) { char *end = NULL; val = strtod(vtok, &end); have_val = (end != vtok); }
+                size_t vlen; const char *vspan = field_span(line, (size_t)len, valf, delim, &vlen);
+                if (vspan) { char *end = NULL; val = strtod(vspan, &end); have_val = (end != vspan); }
                 if (!have_val) continue;  // sum/mean/min/max need a numeric VAL
             }
+            // Null-terminate the key field in place for the hash/strcmp/strdup
+            // below; group emits aggregates, not the original line, so this is safe.
+            char *ktok = (char *)kspan; ktok[klen] = '\0';
             if ((gn + 1) * 2 >= hcap) {  // grow hash at 50% load, re-insert
                 size_t ncap = hcap * 2;
                 char  **nk = (char **)calloc(ncap, sizeof(char *));
@@ -850,18 +863,18 @@ int main(int argc, char **argv) {
         while ((fll = getline(&fl, &flc, ff)) != -1) {
             size_t l = (fll > 0 && fl[fll - 1] == '\n') ? (size_t)fll - 1 : (size_t)fll;
             fl[l] = '\0';
-            char tmp[4096]; size_t tl = l < sizeof(tmp) ? l : sizeof(tmp) - 1; memcpy(tmp, fl, tl); tmp[tl] = '\0';
-            char *tok = field_token(tmp, jf, delim);
-            if (tok) smap_put(&fm, tok, fl);
+            size_t klen; const char *ks = field_span(fl, l, jf, delim, &klen);
+            if (ks) { char *kc = strndup(ks, klen); if (kc) { smap_put(&fm, kc, fl); free(kc); } }
         }
         free(fl); fclose(ff);
         char *line = NULL; size_t lcap = 0; ssize_t len;
         while ((len = getline(&line, &lcap, stdin)) != -1) {
             size_t l = (len > 0 && line[len - 1] == '\n') ? (size_t)len - 1 : (size_t)len;
             line[l] = '\0';
-            char tmp[4096]; size_t tl = l < sizeof(tmp) ? l : sizeof(tmp) - 1; memcpy(tmp, line, tl); tmp[tl] = '\0';
-            char *tok = field_token(tmp, jf, delim);
-            const char *match = tok ? smap_get(&fm, tok) : NULL;
+            size_t klen; const char *ks = field_span(line, l, jf, delim, &klen);
+            char *kc = ks ? strndup(ks, klen) : NULL;
+            const char *match = kc ? smap_get(&fm, kc) : NULL;
+            free(kc);
             if (match) {
                 montauk_sink_append(&g_out, line, l);
                 montauk_sink_appendc(&g_out, ' ');
@@ -927,14 +940,12 @@ int main(int argc, char **argv) {
         char *line = NULL; size_t lcap = 0; ssize_t len;
         while ((len = getline(&line, &lcap, stdin)) != -1) {
             if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
-            char buf[4096];
             const char *tok = line;
             if (field > 0) {
-                size_t n = (size_t)len < sizeof(buf) ? (size_t)len : sizeof(buf) - 1;
-                memcpy(buf, line, n); buf[n] = '\0';
-                char *t = field_token(buf, field, delim);
-                if (!t) continue;  // missing column -- skip, like read_values
-                tok = t;
+                size_t flen; const char *sp = field_span(line, (size_t)len, field, delim, &flen);
+                if (!sp) continue;  // missing column -- skip, like read_values
+                char *p = (char *)sp; p[flen] = '\0';  // in place; tally emits keys, not the line
+                tok = p;
             }
             if ((used + 1) * 2 >= hcap) {  // grow at 50% load
                 size_t ncap = hcap * 2;
@@ -999,14 +1010,11 @@ int main(int argc, char **argv) {
         size_t idx = 0, skipped = 0;
         while ((len = getline(&line, &lcap, stdin)) != -1) {
             if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
-            char buf[4096];
             const char *src = line;
             if (field > 0) {
-                size_t n = (size_t)len < sizeof(buf) ? (size_t)len : sizeof(buf) - 1;
-                memcpy(buf, line, n); buf[n] = '\0';
-                char *tok = field_token(buf, field, delim);
-                if (!tok) { skipped++; continue; }
-                src = tok;
+                size_t flen;
+                src = field_span(line, (size_t)len, field, delim, &flen);
+                if (!src) { skipped++; continue; }  // missing column -> skip the row
             }
             char *end = NULL;
             double x = strtod(src, &end);

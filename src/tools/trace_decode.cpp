@@ -39,7 +39,12 @@ const char* sched_op_name(uint32_t op) {
     case SCHED_OP_PREEMPT_WAKEUP: return "PREEMPT_WAKEUP";
     case SCHED_OP_WAKEUP:         return "WAKEUP";
     case SCHED_OP_WAKE2RUN:       return "WAKE2RUN";
+    case SCHED_OP_CPU_IDLE:       return "CPU_IDLE";
+    case SCHED_OP_SWITCH_IN:      return "SWITCH_IN";
     case SCHED_OP_FIELD_GATE:     return "FIELD_GATE";
+    case SCHED_OP_KICK_ISSUE:     return "KICK_ISSUE";
+    case SCHED_OP_RESCHED:        return "RESCHED";
+    case SCHED_OP_TICK_STOP:      return "TICK_STOP";
     default:                      return "?";
   }
 }
@@ -157,7 +162,12 @@ int main(int argc, char** argv) {
             montauk_sink_appendf(&g_out, " wake2run=%" PRIu64 "us%s", (uint64_t)s->runtime_ns / 1000,
                         s->sub_idx ? " CROSS-DOMAIN" : "");
             if (s->freq_mhz) montauk_sink_appendf(&g_out, " freq=%uMHz", s->freq_mhz);
-          }
+          } else if (s->op == SCHED_OP_KICK_ISSUE)
+            montauk_sink_appendf(&g_out, " issuing_cpu=%d flags=0x%" PRIx64, s->last_cpu, (uint64_t)s->score);
+          else if (s->op == SCHED_OP_RESCHED)
+            montauk_sink_appendf(&g_out, " calling_cpu=%d", s->last_cpu);
+          else if (s->op == SCHED_OP_TICK_STOP)
+            montauk_sink_appendf(&g_out, " success=%u dependency=0x%" PRIx64, s->sub_idx, (uint64_t)s->score);
           montauk_sink_appendf(&g_out, "\n");
         }
         break;

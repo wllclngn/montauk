@@ -209,6 +209,7 @@ static std::string redact_comm(const char* comm) {
 #include "sublimation_order.hpp" // sublimation_order_u64/_f64: struct-by-key ordering
 #include "sublimation_search.h" // structural locator: where a disorder pattern sits
 #include "util/sink.h"          // buffered stdout sink: one drain, not a printf per line
+#include "util/json.h"          // write-only JSON serializer on the sink (the --json renderer)
 
 #include <algorithm>
 #include <chrono>
@@ -354,6 +355,9 @@ const char* sched_op_name(uint32_t op) {
     case SCHED_OP_CPU_IDLE:       return "CPU_IDLE";
     case SCHED_OP_SWITCH_IN:      return "SWITCH_IN";
     case SCHED_OP_FIELD_GATE:     return "FIELD_GATE";
+    case SCHED_OP_KICK_ISSUE:     return "KICK_ISSUE";
+    case SCHED_OP_RESCHED:        return "RESCHED";
+    case SCHED_OP_TICK_STOP:      return "TICK_STOP";
     default:                      return "?";
   }
 }
@@ -630,16 +634,85 @@ struct Offender {
   int sev{0};          // 0 low, 1 med, 2 high -- set by the contributing report
 };
 
+// Shared spine of every report's typed result: the uniform part of the JSON
+// envelope and the single source of truth the renderers read. A report's typed
+// result (e.g. SchedResult) extends this with its own strongly-typed findings.
+// compute() populates it once after fold(); emit() (text), prom() (scalars),
+// offenders() (objects) and json() all render from it, so they cannot disagree.
+struct ReportResult {
+  std::string verdict;
+  std::vector<PromMetric> gauges;
+  std::vector<Offender> offenders;
+};
+
 struct Report {
   virtual ~Report() = default;
   virtual const char* name() const = 0;
   virtual void fold(uint32_t type, const uint8_t* data, uint32_t len) = 0;
+  // Finalize the typed result once, after all fold() calls and before any renderer.
+  // Default no-op for reports not yet migrated to the typed-result model.
+  virtual void compute() {}
   virtual void emit(const montauk::model::TraceReader& reader) = 0;
   // Called after emit(); appends this report's montauk_analysis_* samples.
   virtual void prom(std::vector<PromMetric>& out) { (void)out; }
   // Called after emit(); contributes this report's misbehaving entities to the
   // consolidated ranked view. Default: none.
   virtual void offenders(std::vector<Offender>& out) { (void)out; }
+  // Render this report as one JSON object {name, gauges, offenders}. The --json
+  // driver wraps the array. This default serializes the SAME structured data the
+  // .prom scrape and the ranked-offender view read -- the report's prom() gauges
+  // (each with its prom_help description) and offenders() entities -- so an agent
+  // reads exactly what Prometheus does, one model. A report with richer typed
+  // findings (see sched) overrides this to add a verdict and its detail blocks.
+  virtual void json(montauk_json& j) {
+    montauk_json_obj_begin(&j);
+    montauk_json_kstr(&j, "name", name());
+    json_gauges(j);
+    json_offenders(j);
+    montauk_json_obj_end(&j);
+  }
+  // Shared serializers for the two structured surfaces every report already
+  // produces; a typed-result override calls these after its own detail blocks.
+  void json_gauges(montauk_json& j) {
+    std::vector<PromMetric> g;
+    prom(g);
+    json_gauges_from(j, g);
+  }
+  // Serialize an already-computed gauge vector (a typed override builds the
+  // vector once in compute() and passes it here, avoiding a second prom() call).
+  static void json_gauges_from(montauk_json& j, const std::vector<PromMetric>& g) {
+    if (g.empty()) return;
+    montauk_json_key(&j, "gauges");
+    montauk_json_arr_begin(&j);
+    for (const auto& m : g) {
+      montauk_json_obj_begin(&j);
+      montauk_json_kstr(&j, "name", m.name);
+      montauk_json_knum(&j, "value", m.value);
+      if (!m.labels.empty()) montauk_json_kstr(&j, "labels", m.labels.c_str());
+      const char* help = prom_help(m.name);
+      if (help && *help) montauk_json_kstr(&j, "help", help);
+      montauk_json_obj_end(&j);
+    }
+    montauk_json_arr_end(&j);
+  }
+  void json_offenders(montauk_json& j) {
+    std::vector<Offender> offs;
+    offenders(offs);
+    if (offs.empty()) return;
+    montauk_json_key(&j, "offenders");
+    montauk_json_arr_begin(&j);
+    for (const auto& o : offs) {
+      montauk_json_obj_begin(&j);
+      montauk_json_kstr(&j, "kind", o.kind.c_str());
+      montauk_json_kstr(&j, "id", o.id.c_str());
+      if (!o.obj.empty()) montauk_json_kstr(&j, "obj", o.obj.c_str());
+      montauk_json_kstr(&j, "metric", o.metric.c_str());
+      montauk_json_knum(&j, "value", o.value);
+      montauk_json_ki64(&j, "sev", o.sev);
+      montauk_json_obj_end(&j);
+    }
+    montauk_json_arr_end(&j);
+  }
   // Every report opens with "REPORT <name>". Shared so the 23 emit() bodies do
   // not each hand-roll it (R2 consolidation); name() is the report's identity.
   void header() const { montauk_sink_appendf(&g_out, "REPORT %s\n", name()); }
@@ -2518,13 +2591,36 @@ static const char* disorder_name(sub_disorder_t d) {
   return "?";
 }
 
+// Typed result for the sched report (the T3 proof of the compute->render
+// pattern). compute() fills it once after fold(); emit() (text), prom()
+// (scalars) and json() all render from it, so the three surfaces cannot
+// disagree on a single number.
+struct SchedResult : ReportResult {
+  bool empty = true;                              // no WAKE2RUN events in the trace
+  double n = 0.0;                                 // wake2run event count
+  double p50 = 0, p99 = 0, p999 = 0, worst = 0;   // wake2run quantiles (us)
+  double fastpct = 0, midpct = 0, tickpct = 0, crosspct = 0;
+  bool has_cross = false;                         // any cross-domain wakes
+  double cross_n = 0, cross_p50 = 0, cross_p99 = 0, cross_worst = 0;
+  sub_disorder_t disorder = SUB_RANDOM;           // arrival-order flow-model class
+  size_t phase_boundary = 0;                      // regime-change index (0 = none)
+  double phase_pct = 0;                           // phase_boundary as % of trace
+  size_t distinct_estimate = 0;                   // flow-model distinct-value estimate
+  float inversion_ratio = 0.0f;
+  double structured_pct = 0.0;                    // % of timeline carrying structure
+  struct RegionPct { sub_disorder_t cls; double start_pct, end_pct; };
+  std::vector<RegionPct> regions;                 // located structured stretches
+  bool has_cold = false;                          // any wakes onto a >=20ms-idle core
+  double cold_n = 0, cold_p50 = 0, cold_p99 = 0, cold_worst = 0;
+  bool cold_have_freq = false;
+  uint32_t cold_fmin = 0, cold_slowq = 0;         // min / slowest-quartile-median MHz
+  const char* cold_freq_verdict = "";             // RAMP/DISPATCH-BOUND / inconclusive
+};
+
 struct SchedLatencyReport final : Report {
   std::vector<uint64_t> lat_;        // wake2run latencies (ns)
   std::vector<uint64_t> cross_lat_;  // cross-domain subset (ns)
-  sub_profile_t prof_{};             // flow-model profile of lat_ in arrival order
-  struct Region { size_t start, end; sub_disorder_t cls; };
-  std::vector<Region> regions_;      // where structure sits in the timeline (locator)
-  double structured_frac_ = 0.0;     // fraction of windows carrying structure
+  SchedResult result_;               // typed result the renderers read (filled by compute())
 
   // Cold-wake correlation: a wake landing on a core that had been idle a while,
   // tagged with that core's frequency at the wake instant (freq_mhz from the
@@ -2558,26 +2654,26 @@ struct SchedLatencyReport final : Report {
       cold_.push_back({s->runtime_ns, s->freq_mhz, s->timestamp_ns - it->second});
   }
 
-  // v must already be sorted ascending.
+  // Finalize the typed result once: classify + locate (arrival order), sort,
+  // quantiles, band split, cold-wake correlation, and the Prometheus gauges.
+  // The renderers below only read result_ -- they never compute.
+  void compute() override {
+    if (lat_.empty()) { result_.empty = true; return; }
+    result_.empty = false;
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
-    if (lat_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no WAKE2RUN events in trace "
-                  "(wake-to-run tracepoint not streamed?)\n\n");
-      return;
-    }
     // Classify the latency sequence in ARRIVAL order first -- the flow-model
     // reads temporal structure the quantiles can't: a mid-trace regime change
     // (PHASED), quantization onto a few tick values (FEW_UNIQUE), or monotonic
     // drift (NEARLY_SORTED). Must run before the in-place sort destroys the
     // timeline. classify is pure (reads, never writes), so lat_ is untouched.
-    prof_ = sublimation_classify_u64(lat_.data(), lat_.size());
+    const double dn = static_cast<double>(lat_.size());
+    sub_profile_t prof = sublimation_classify_u64(lat_.data(), lat_.size());
 
     // Locate WHERE structure sits in the arrival-order timeline (the third
     // sublimation primitive: search). classify above says WHAT the whole
     // sequence is; the locator slides it across the stream and names the
     // stretches that carry exploitable structure. Also runs before the sort.
+    double structured_frac = 0.0;
     if (lat_.size() >= 1024) {
       const size_t win = std::min<size_t>(512, lat_.size() / 8);
       std::vector<sub_match_t> wins(lat_.size() / win + 2);
@@ -2586,14 +2682,16 @@ struct SchedLatencyReport final : Report {
       size_t structured = 0;
       for (size_t i = 0; i < nw; ++i)
         if (wins[i].disorder != SUB_RANDOM) ++structured;
-      structured_frac_ = nw ? static_cast<double>(structured) / static_cast<double>(nw) : 0.0;
-      // Coalesce adjacent same-class non-random windows into regions.
+      structured_frac = nw ? static_cast<double>(structured) / static_cast<double>(nw) : 0.0;
+      // Coalesce adjacent same-class non-random windows into regions (as % of trace).
       for (size_t i = 0; i < nw;) {
         if (wins[i].disorder == SUB_RANDOM) { ++i; continue; }
         sub_disorder_t cls = wins[i].disorder;
         size_t start = wins[i].start, j = i;
         while (j < nw && wins[j].disorder == cls) ++j;
-        regions_.push_back({start, wins[j - 1].start + wins[j - 1].len, cls});
+        size_t end = wins[j - 1].start + wins[j - 1].len;
+        result_.regions.push_back({cls, 100.0 * static_cast<double>(start) / dn,
+                                   100.0 * static_cast<double>(end) / dn});
         i = j;
       }
     }
@@ -2602,7 +2700,6 @@ struct SchedLatencyReport final : Report {
     sublimation_u64(lat_.data(), lat_.size());
     if (!cross_lat_.empty()) sublimation_u64(cross_lat_.data(), cross_lat_.size());
 
-    const size_t n = lat_.size();
     constexpr uint64_t kFastNs = 100000;  // 100us: cache-hot fast mode
     constexpr uint64_t kTickNs = 900000;  // ~one 1000Hz tick: CONFIG_HZ floor
     size_t fast = 0, tick = 0;
@@ -2610,51 +2707,37 @@ struct SchedLatencyReport final : Report {
       if (v < kFastNs) ++fast;
       else if (v >= kTickNs) ++tick;
     }
-    const double dn = static_cast<double>(n);
-    const double fastpct = 100.0 * static_cast<double>(fast) / dn;
-    const double tickpct = 100.0 * static_cast<double>(tick) / dn;
-    const double midpct = 100.0 - fastpct - tickpct;
-    const double crosspct = 100.0 * static_cast<double>(cross_lat_.size()) / dn;
+    result_.n = dn;
+    result_.p50 = q_us(lat_, 0.50);
+    result_.p99 = q_us(lat_, 0.99);
+    result_.p999 = q_us(lat_, 0.999);
+    result_.worst = us(lat_.back());
+    result_.fastpct = 100.0 * static_cast<double>(fast) / dn;
+    result_.tickpct = 100.0 * static_cast<double>(tick) / dn;
+    result_.midpct = 100.0 - result_.fastpct - result_.tickpct;
+    result_.crosspct = 100.0 * static_cast<double>(cross_lat_.size()) / dn;
 
-    montauk_sink_appendf(&g_out, "VERDICT: %s wake2run; p50 %.0fus p99 %.0fus p999 %.0fus "
-                "worst %.0fus; %.1f%% fast(<100us) / %.1f%% mid / "
-                "%.1f%% tick-floor(>=900us); %.1f%% cross-domain\n",
-                fmt_count(dn).c_str(), q_us(lat_, 0.50), q_us(lat_, 0.99),
-                q_us(lat_, 0.999), us(lat_.back()), fastpct, midpct, tickpct,
-                crosspct);
-    if (!cross_lat_.empty())
-      montauk_sink_appendf(&g_out, "cross-domain wake2run: %s events; p50 %.0fus p99 %.0fus "
-                  "worst %.0fus (high here = scatter feeds the slow mode)\n",
-                  fmt_count(static_cast<double>(cross_lat_.size())).c_str(),
-                  q_us(cross_lat_, 0.50), q_us(cross_lat_, 0.99),
-                  us(cross_lat_.back()));
-    // Temporal structure from the flow-model classify (arrival order).
-    montauk_sink_appendf(&g_out, "STRUCTURE: latency-over-trace %s", disorder_name(prof_.disorder));
-    if (prof_.phase_boundary)
-      montauk_sink_appendf(&g_out, " (regime change at ~%.0f%% of trace)",
-                  100.0 * static_cast<double>(prof_.phase_boundary) / dn);
-    montauk_sink_appendf(&g_out, "; ~%zu distinct values", prof_.distinct_estimate);
-    if (prof_.inversion_ratio > 0.0f)
-      montauk_sink_appendf(&g_out, "; inversion ratio %.2f",
-                  static_cast<double>(prof_.inversion_ratio));
-    montauk_sink_appendf(&g_out, "\n");
-    // Where that structure sits in the timeline (the locator).
-    if (!regions_.empty()) {
-      montauk_sink_appendf(&g_out, "LOCATED: %zu structured region(s) —", regions_.size());
-      size_t shown = 0;
-      for (const auto& r : regions_) {
-        if (shown++ >= 5) { montauk_sink_appendf(&g_out, " +%zu more", regions_.size() - 5); break; }
-        montauk_sink_appendf(&g_out, " %s[%.0f%%..%.0f%%]", disorder_name(r.cls),
-                    100.0 * static_cast<double>(r.start) / dn,
-                    100.0 * static_cast<double>(r.end) / dn);
-      }
-      montauk_sink_appendf(&g_out, "\n");
+    if (!cross_lat_.empty()) {
+      result_.has_cross = true;
+      result_.cross_n = static_cast<double>(cross_lat_.size());
+      result_.cross_p50 = q_us(cross_lat_, 0.50);
+      result_.cross_p99 = q_us(cross_lat_, 0.99);
+      result_.cross_worst = us(cross_lat_.back());
     }
+
+    result_.disorder = prof.disorder;
+    result_.phase_boundary = prof.phase_boundary;
+    result_.phase_pct = 100.0 * static_cast<double>(prof.phase_boundary) / dn;
+    result_.distinct_estimate = prof.distinct_estimate;
+    result_.inversion_ratio = prof.inversion_ratio;
+    result_.structured_pct = 100.0 * structured_frac;
+
     // COLD-WAKE: wakes onto a core idle >=20ms, correlated with the core's
     // frequency at the wake. Slow cold-wakes at the minimum frequency seen are
     // the ramp from deep idle (governor / architecture); at nominal frequency
     // they are dispatch (the scheduler wake path). The dispatch-vs-ramp answer.
     if (!cold_.empty()) {
+      result_.has_cold = true;
       std::vector<ColdWake> c = cold_;
       std::sort(c.begin(), c.end(),
                 [](const ColdWake& a, const ColdWake& b) { return a.lat_ns < b.lat_ns; });
@@ -2662,6 +2745,10 @@ struct SchedLatencyReport final : Report {
         size_t i = std::min(c.size() - 1, static_cast<size_t>(c.size() * f));
         return us(c[i].lat_ns);
       };
+      result_.cold_n = static_cast<double>(c.size());
+      result_.cold_p50 = cq(0.50);
+      result_.cold_p99 = cq(0.99);
+      result_.cold_worst = us(c.back().lat_ns);
       uint32_t fmin = 0;
       bool have_freq = false;
       for (const auto& w : c)
@@ -2673,17 +2760,108 @@ struct SchedLatencyReport final : Report {
           if (c[i].freq_mhz) sf.push_back(c[i].freq_mhz);
         if (!sf.empty()) { std::sort(sf.begin(), sf.end()); slowq = sf[sf.size() / 2]; }
       }
+      result_.cold_have_freq = have_freq;
+      result_.cold_fmin = fmin;
+      result_.cold_slowq = slowq;
+      if (have_freq)
+        result_.cold_freq_verdict =
+            (slowq && fmin && slowq <= fmin + fmin / 4)
+                ? "RAMP-BOUND (slow cold-wakes at min freq -- governor/arch, not dispatch)"
+                : (slowq ? "DISPATCH-BOUND (slow cold-wakes at nominal freq -- scheduler wake path)"
+                         : "inconclusive (freq spread too sparse)");
+    }
+
+    // A compact conclusion string for the JSON verdict field (the same numbers
+    // the text VERDICT line renders, read from the same result_).
+    char vb[256];
+    std::snprintf(vb, sizeof vb,
+                  "%s wake2run; p50 %.0fus p99 %.0fus p999 %.0fus worst %.0fus; "
+                  "%.1f%% fast / %.1f%% mid / %.1f%% tick-floor; %.1f%% cross-domain",
+                  fmt_count(result_.n).c_str(), result_.p50, result_.p99,
+                  result_.p999, result_.worst, result_.fastpct, result_.midpct,
+                  result_.tickpct, result_.crosspct);
+    result_.verdict = vb;
+
+    build_gauges();
+  }
+
+  // The Prometheus gauges, built once from result_ so text/prom/json agree.
+  void build_gauges() {
+    auto& g = result_.gauges;
+    auto q = [&](const char* ql, double v) {
+      g.push_back({"montauk_analysis_wake2run_us",
+                   std::string("quantile=\"") + ql + "\"", v});
+    };
+    q("0.5", result_.p50);
+    q("0.99", result_.p99);
+    q("0.999", result_.p999);
+    q("worst", result_.worst);
+    g.push_back({"montauk_analysis_wake2run_fast_pct", "", result_.fastpct});
+    g.push_back({"montauk_analysis_wake2run_mid_pct", "", result_.midpct});
+    g.push_back({"montauk_analysis_wake2run_tickfloor_pct", "", result_.tickpct});
+    g.push_back({"montauk_analysis_wake2run_crossdomain_pct", "", result_.crosspct});
+    g.push_back({"montauk_analysis_wake2run_distinct", "",
+                 static_cast<double>(result_.distinct_estimate)});
+    g.push_back({"montauk_analysis_wake2run_structured_pct", "", result_.structured_pct});
+    if (result_.has_cold) {
+      g.push_back({"montauk_analysis_coldwake_count", "", result_.cold_n});
+      g.push_back({"montauk_analysis_coldwake_wake2run_us", "quantile=\"0.5\"", result_.cold_p50});
+      g.push_back({"montauk_analysis_coldwake_wake2run_us", "quantile=\"0.99\"", result_.cold_p99});
+      g.push_back({"montauk_analysis_coldwake_wake2run_us", "quantile=\"worst\"", result_.cold_worst});
+      g.push_back({"montauk_analysis_coldwake_freq_min_mhz", "",
+                   static_cast<double>(result_.cold_fmin)});
+      g.push_back({"montauk_analysis_coldwake_freq_slowq_mhz", "",
+                   static_cast<double>(result_.cold_slowq)});
+    }
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (result_.empty) {
+      montauk_sink_appendf(&g_out, "VERDICT: no WAKE2RUN events in trace "
+                  "(wake-to-run tracepoint not streamed?)\n\n");
+      return;
+    }
+    montauk_sink_appendf(&g_out, "VERDICT: %s wake2run; p50 %.0fus p99 %.0fus p999 %.0fus "
+                "worst %.0fus; %.1f%% fast(<100us) / %.1f%% mid / "
+                "%.1f%% tick-floor(>=900us); %.1f%% cross-domain\n",
+                fmt_count(result_.n).c_str(), result_.p50, result_.p99,
+                result_.p999, result_.worst, result_.fastpct, result_.midpct,
+                result_.tickpct, result_.crosspct);
+    if (result_.has_cross)
+      montauk_sink_appendf(&g_out, "cross-domain wake2run: %s events; p50 %.0fus p99 %.0fus "
+                  "worst %.0fus (high here = scatter feeds the slow mode)\n",
+                  fmt_count(result_.cross_n).c_str(), result_.cross_p50,
+                  result_.cross_p99, result_.cross_worst);
+    // Temporal structure from the flow-model classify (arrival order).
+    montauk_sink_appendf(&g_out, "STRUCTURE: latency-over-trace %s", disorder_name(result_.disorder));
+    if (result_.phase_boundary)
+      montauk_sink_appendf(&g_out, " (regime change at ~%.0f%% of trace)", result_.phase_pct);
+    montauk_sink_appendf(&g_out, "; ~%zu distinct values", result_.distinct_estimate);
+    if (result_.inversion_ratio > 0.0f)
+      montauk_sink_appendf(&g_out, "; inversion ratio %.2f",
+                  static_cast<double>(result_.inversion_ratio));
+    montauk_sink_appendf(&g_out, "\n");
+    // Where that structure sits in the timeline (the locator).
+    if (!result_.regions.empty()) {
+      montauk_sink_appendf(&g_out, "LOCATED: %zu structured region(s) —", result_.regions.size());
+      size_t shown = 0;
+      for (const auto& r : result_.regions) {
+        if (shown++ >= 5) { montauk_sink_appendf(&g_out, " +%zu more", result_.regions.size() - 5); break; }
+        montauk_sink_appendf(&g_out, " %s[%.0f%%..%.0f%%]", disorder_name(r.cls),
+                    r.start_pct, r.end_pct);
+      }
+      montauk_sink_appendf(&g_out, "\n");
+    }
+    if (result_.has_cold) {
       montauk_sink_appendf(&g_out, "COLD-WAKE (idle >=20ms): %s wakes; wake2run p50 %.0fus "
                   "p99 %.0fus worst %.0fus\n",
-                  fmt_count(static_cast<double>(c.size())).c_str(),
-                  cq(0.50), cq(0.99), us(c.back().lat_ns));
-      if (have_freq)
+                  fmt_count(result_.cold_n).c_str(),
+                  result_.cold_p50, result_.cold_p99, result_.cold_worst);
+      if (result_.cold_have_freq)
         montauk_sink_appendf(&g_out, "  freq-at-wake: min %u MHz seen; slowest-quartile median "
-                    "%u MHz -> %s\n", fmin, slowq,
-                    (slowq && fmin && slowq <= fmin + fmin / 4)
-                        ? "RAMP-BOUND (slow cold-wakes at min freq -- governor/arch, not dispatch)"
-                        : (slowq ? "DISPATCH-BOUND (slow cold-wakes at nominal freq -- scheduler wake path)"
-                                 : "inconclusive (freq spread too sparse)"));
+                    "%u MHz -> %s\n", result_.cold_fmin, result_.cold_slowq,
+                    result_.cold_freq_verdict);
       else
         montauk_sink_appendf(&g_out, "  freq-at-wake: unavailable (no cpu_frequency transitions in trace)\n");
     }
@@ -2691,71 +2869,75 @@ struct SchedLatencyReport final : Report {
   }
 
   void prom(std::vector<PromMetric>& out) override {
-    if (lat_.empty()) return;  // already sorted in emit()
-    auto push = [&](const char* ql, double v) {
-      out.push_back({"montauk_analysis_wake2run_us",
-                     std::string("quantile=\"") + ql + "\"", v});
-    };
-    push("0.5", q_us(lat_, 0.50));
-    push("0.99", q_us(lat_, 0.99));
-    push("0.999", q_us(lat_, 0.999));
-    push("worst", us(lat_.back()));
-    const double dn = static_cast<double>(lat_.size());
-    // Same bands as the VERDICT line: fast <100us, tick-floor >=900us, mid
-    // between. Emitting all three (not just the floor) lets the population pass
-    // score the fast-mode share -- the clearest under-load discriminator.
-    size_t fast = 0, tick = 0;
-    for (uint64_t v : lat_) {
-      if (v < 100000) ++fast;
-      else if (v >= 900000) ++tick;
-    }
-    const double fastpct = 100.0 * static_cast<double>(fast) / dn;
-    const double tickpct = 100.0 * static_cast<double>(tick) / dn;
-    out.push_back({"montauk_analysis_wake2run_fast_pct", "", fastpct});
-    out.push_back({"montauk_analysis_wake2run_mid_pct", "",
-                   100.0 - fastpct - tickpct});
-    out.push_back({"montauk_analysis_wake2run_tickfloor_pct", "", tickpct});
-    out.push_back({"montauk_analysis_wake2run_crossdomain_pct", "",
-                   100.0 * static_cast<double>(cross_lat_.size()) / dn});
-    // Flow-model distinct-value estimate: a low count on a large trace means
-    // latency is quantized onto a few values (a fixed timer/quantum).
-    out.push_back({"montauk_analysis_wake2run_distinct", "",
-                   static_cast<double>(prof_.distinct_estimate)});
-    // Locator: fraction of the timeline carrying exploitable structure.
-    out.push_back({"montauk_analysis_wake2run_structured_pct", "",
-                   100.0 * structured_frac_});
-    // COLD-WAKE metrics: count, wake2run quantiles, and the freq discriminator
-    // (min freq seen, median freq of the slowest quartile). The bench reads these
-    // to score ramp-bound vs dispatch-bound without re-deriving.
-    if (!cold_.empty()) {
-      std::vector<ColdWake> c = cold_;
-      std::sort(c.begin(), c.end(),
-                [](const ColdWake& a, const ColdWake& b) { return a.lat_ns < b.lat_ns; });
-      auto cq = [&](double f) {
-        size_t i = std::min(c.size() - 1, static_cast<size_t>(c.size() * f));
-        return us(c[i].lat_ns);
-      };
-      out.push_back({"montauk_analysis_coldwake_count", "",
-                     static_cast<double>(c.size())});
-      out.push_back({"montauk_analysis_coldwake_wake2run_us", "quantile=\"0.5\"", cq(0.50)});
-      out.push_back({"montauk_analysis_coldwake_wake2run_us", "quantile=\"0.99\"", cq(0.99)});
-      out.push_back({"montauk_analysis_coldwake_wake2run_us", "quantile=\"worst\"",
-                     us(c.back().lat_ns)});
-      uint32_t fmin = 0;
-      for (const auto& w : c)
-        if (w.freq_mhz && (!fmin || w.freq_mhz < fmin)) fmin = w.freq_mhz;
-      out.push_back({"montauk_analysis_coldwake_freq_min_mhz", "",
-                     static_cast<double>(fmin)});
-      uint32_t slowq = 0;
-      if (c.size() >= 4) {
-        std::vector<uint32_t> sf;
-        for (size_t i = c.size() - c.size() / 4; i < c.size(); ++i)
-          if (c[i].freq_mhz) sf.push_back(c[i].freq_mhz);
-        if (!sf.empty()) { std::sort(sf.begin(), sf.end()); slowq = sf[sf.size() / 2]; }
+    out.insert(out.end(), result_.gauges.begin(), result_.gauges.end());
+  }
+
+  void json(montauk_json& j) override {
+    montauk_json_obj_begin(&j);
+    montauk_json_kstr(&j, "name", name());
+    montauk_json_kstr(&j, "verdict", result_.verdict.c_str());
+    if (!result_.empty) {
+      montauk_json_key(&j, "wake2run");
+      montauk_json_obj_begin(&j);
+        montauk_json_ku64(&j, "count", static_cast<uint64_t>(result_.n));
+        montauk_json_knum(&j, "p50_us", result_.p50);
+        montauk_json_knum(&j, "p99_us", result_.p99);
+        montauk_json_knum(&j, "p999_us", result_.p999);
+        montauk_json_knum(&j, "worst_us", result_.worst);
+        montauk_json_knum(&j, "fast_pct", result_.fastpct);
+        montauk_json_knum(&j, "mid_pct", result_.midpct);
+        montauk_json_knum(&j, "tickfloor_pct", result_.tickpct);
+        montauk_json_knum(&j, "crossdomain_pct", result_.crosspct);
+      montauk_json_obj_end(&j);
+      if (result_.has_cross) {
+        montauk_json_key(&j, "cross_domain");
+        montauk_json_obj_begin(&j);
+          montauk_json_ku64(&j, "count", static_cast<uint64_t>(result_.cross_n));
+          montauk_json_knum(&j, "p50_us", result_.cross_p50);
+          montauk_json_knum(&j, "p99_us", result_.cross_p99);
+          montauk_json_knum(&j, "worst_us", result_.cross_worst);
+        montauk_json_obj_end(&j);
       }
-      out.push_back({"montauk_analysis_coldwake_freq_slowq_mhz", "",
-                     static_cast<double>(slowq)});
+      montauk_json_key(&j, "structure");
+      montauk_json_obj_begin(&j);
+        montauk_json_kstr(&j, "class", disorder_name(result_.disorder));
+        if (result_.phase_boundary) montauk_json_knum(&j, "phase_pct", result_.phase_pct);
+        montauk_json_ku64(&j, "distinct_estimate",
+                          static_cast<uint64_t>(result_.distinct_estimate));
+        montauk_json_knum(&j, "inversion_ratio",
+                          static_cast<double>(result_.inversion_ratio));
+        montauk_json_knum(&j, "structured_pct", result_.structured_pct);
+      montauk_json_obj_end(&j);
+      if (!result_.regions.empty()) {
+        montauk_json_key(&j, "located_regions");
+        montauk_json_arr_begin(&j);
+        for (const auto& r : result_.regions) {
+          montauk_json_obj_begin(&j);
+            montauk_json_kstr(&j, "class", disorder_name(r.cls));
+            montauk_json_knum(&j, "start_pct", r.start_pct);
+            montauk_json_knum(&j, "end_pct", r.end_pct);
+          montauk_json_obj_end(&j);
+        }
+        montauk_json_arr_end(&j);
+      }
+      if (result_.has_cold) {
+        montauk_json_key(&j, "cold_wake");
+        montauk_json_obj_begin(&j);
+          montauk_json_ku64(&j, "count", static_cast<uint64_t>(result_.cold_n));
+          montauk_json_knum(&j, "p50_us", result_.cold_p50);
+          montauk_json_knum(&j, "p99_us", result_.cold_p99);
+          montauk_json_knum(&j, "worst_us", result_.cold_worst);
+          montauk_json_kbool(&j, "have_freq", result_.cold_have_freq ? 1 : 0);
+          if (result_.cold_have_freq) {
+            montauk_json_ku64(&j, "freq_min_mhz", result_.cold_fmin);
+            montauk_json_ku64(&j, "freq_slowq_mhz", result_.cold_slowq);
+            montauk_json_kstr(&j, "freq_verdict", result_.cold_freq_verdict);
+          }
+        montauk_json_obj_end(&j);
+      }
     }
+    json_gauges_from(j, result_.gauges);
+    montauk_json_obj_end(&j);
   }
 };
 
@@ -2801,6 +2983,12 @@ struct WorkConservationReport final : Report {
   }
 
 
+  // Sort the strand durations once so prom()/json() read sorted quantiles
+  // without emit() having run.
+  void compute() override {
+    if (!strand_ns_.empty()) sublimation_u64(strand_ns_.data(), strand_ns_.size());
+  }
+
   void emit(const montauk::model::TraceReader&) override {
     header();
     if (strand_ns_.empty()) {
@@ -2808,7 +2996,6 @@ struct WorkConservationReport final : Report {
                   "(work-conserving, or PICK events not streamed)\n\n");
       return;
     }
-    sublimation_u64(strand_ns_.data(), strand_ns_.size());
     uint64_t n = pulled_ + local_;
     double pull_pct  = n ? 100.0 * static_cast<double>(pulled_) / static_cast<double>(n) : 0.0;
     double local_pct = n ? 100.0 * static_cast<double>(local_) / static_cast<double>(n) : 0.0;
@@ -2904,18 +3091,13 @@ struct PlacementRaceReport final : Report {
     return lo > 0 && ev[lo - 1].second == 1;
   }
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
-    if (idle_evt_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no CPU_IDLE events -- trace captured by a montauk "
-                  "without per-CPU idle streaming; re-capture to resolve\n\n");
-      return;
-    }
-    if (floored_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no tick-floored wakeups (>=900us) -- nothing to "
-                  "attribute\n\n");
-      return;
-    }
+  double miss_pct_ = 0, sat_pct_ = 0, avg_idle_ = 0;
+  uint64_t floored_n_ = 0;
+
+  // Attribute each floored wake to placement-miss vs saturation once, so
+  // prom()/json() read the scalars without emit() having run. emit() renders.
+  void compute() override {
+    if (idle_evt_.empty() || floored_.empty()) return;
     for (auto& kv : idle_evt_)
       sublimation_order_u64(kv.second, false,
                             [](const std::pair<uint64_t, uint8_t>& p) { return p.first; });
@@ -2934,13 +3116,28 @@ struct PlacementRaceReport final : Report {
       else ++saturated;
     }
     uint64_t n = miss + saturated;
-    double miss_pct = n ? 100.0 * (double)miss / (double)n : 0.0;
-    double sat_pct  = n ? 100.0 * (double)saturated / (double)n : 0.0;
-    double avg_idle = miss ? (double)idle_cpu_sum / (double)miss : 0.0;
+    miss_pct_ = n ? 100.0 * (double)miss / (double)n : 0.0;
+    sat_pct_  = n ? 100.0 * (double)saturated / (double)n : 0.0;
+    avg_idle_ = miss ? (double)idle_cpu_sum / (double)miss : 0.0;
+    floored_n_ = n;
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (idle_evt_.empty()) {
+      montauk_sink_appendf(&g_out, "VERDICT: no CPU_IDLE events -- trace captured by a montauk "
+                  "without per-CPU idle streaming; re-capture to resolve\n\n");
+      return;
+    }
+    if (floored_.empty()) {
+      montauk_sink_appendf(&g_out, "VERDICT: no tick-floored wakeups (>=900us) -- nothing to "
+                  "attribute\n\n");
+      return;
+    }
     montauk_sink_appendf(&g_out, "VERDICT: %s tick-floored wakes (>=900us); PLACEMENT-MISS %.0f%% "
                 "(idle CPU was free) / SATURATED %.0f%% (all busy); "
                 "avg %.1f idle CPUs free at a miss\n",
-                fmt_count((double)n).c_str(), miss_pct, sat_pct, avg_idle);
+                fmt_count((double)floored_n_).c_str(), miss_pct_, sat_pct_, avg_idle_);
     montauk_sink_appendf(&g_out, "  (high PLACEMENT-MISS %% = wakees queued behind a busy CPU "
                 "while idle CPUs sat free -- the wakeup-placement race; "
                 "high SATURATED %% = unavoidable queueing, fix the busy CPU)\n");
@@ -2948,12 +3145,8 @@ struct PlacementRaceReport final : Report {
                 "and an idle-pull/placement fix could move it; the remaining "
                 "%.1f%% is genuine saturation -- only a busy-CPU fix (pick "
                 "order / wakeup-preempt / shorter slice) cuts it\n\n",
-                miss_pct, sat_pct);
-    miss_pct_ = miss_pct; sat_pct_ = sat_pct; avg_idle_ = avg_idle; floored_n_ = n;
+                miss_pct_, sat_pct_);
   }
-
-  double miss_pct_ = 0, sat_pct_ = 0, avg_idle_ = 0;
-  uint64_t floored_n_ = 0;
 
   void prom(std::vector<PromMetric>& out) override {
     if (!floored_n_) return;
@@ -3039,9 +3232,30 @@ struct CpuHolderLedger {
   std::unordered_map<uint32_t, std::string> name_;  // tid -> comm
   bool sorted_ = false;
 
+  // Two-tier: a FALLBACK name (learn) only fills a gap, never overwrites --
+  // for sources that catch a tid's comm incidentally (IO, KSTRAND, WAITSTACK,
+  // FORK's parent-inherited guess for the child) and may be stale by
+  // construction. An AUTHORITATIVE name (learn_authoritative) always
+  // overwrites -- for sources that are explicitly reporting a rename at the
+  // moment it happens (EXEC, COMM_CHANGE, THREAD_NAME's live next_comm read).
+  // Confirmed bug this fixes: a forked-then-exec'd child's very first
+  // scheduling moment (fork returned, execve not yet run) is legitimately
+  // named after its parent for a few dozen microseconds; a fallback learn()
+  // from that moment used to lock in forever under the old write-once
+  // policy, permanently misattributing every later strand on that tid to the
+  // parent's name instead of the child's real, exec'd identity (a
+  // forked-then-exec'd child held a CPU for 79ms attributed to "init", its
+  // parent, verified against raw SWITCH_IN ground truth once trace_decode
+  // could tell SWITCH_IN from CPU_IDLE -- see the sched_op_name fix landing
+  // in this same release).
   void learn(uint32_t tid, const char* comm) {
     if (!comm || !comm[0]) return;
     if (name_.find(tid) == name_.end()) name_.emplace(tid, redact_comm(comm));
+  }
+
+  void learn_authoritative(uint32_t tid, const char* comm) {
+    if (!comm || !comm[0]) return;
+    name_[tid] = redact_comm(comm);
   }
 
   void fold(uint32_t type, const uint8_t* data, uint32_t len) {
@@ -3063,12 +3277,20 @@ struct CpuHolderLedger {
     } else if ((type == TRACE_EVT_FORK || type == TRACE_EVT_EXEC ||
                 type == TRACE_EVT_COMM_CHANGE || type == TRACE_EVT_THREAD_NAME) &&
                len >= sizeof(montauk_ring_event)) {
-      // fork/exec/rename + the deduped THREAD_NAME binding carry the thread's tid
-      // (child_pid on fork) + comm -- the system-wide name source for a CPU-bound
-      // worker that emits no syscall and predates the trace.
       const auto* e = reinterpret_cast<const montauk_ring_event*>(data);
-      learn(e->pid, e->comm);
-      if (e->child_pid) learn(e->child_pid, e->comm);
+      bool authoritative = type != TRACE_EVT_FORK;
+      if (authoritative) {
+        learn_authoritative(e->pid, e->comm);
+        if (e->child_pid) learn_authoritative(e->child_pid, e->comm);
+      } else {
+        // FORK: the child's comm here is the parent's, inherited at fork
+        // time (handle_fork's own comment: "Child inherits parent comm
+        // initially; exec will update it") -- a guess, never authoritative.
+        // The parent's own comm at fork time is genuinely its own, current
+        // name, so that half stays a normal (harmless either way) learn.
+        learn(e->pid, e->comm);
+        if (e->child_pid) learn(e->child_pid, e->comm);
+      }
     }
   }
 
@@ -3188,14 +3410,14 @@ struct DispatchStallReport final : Report {
   double ceiling_remains_pct_ = 0;      // % of p99 pass-overs left after removing inversions (legit-backlog = lag prize)
   uint64_t dark_ = 0, n_dark_idle_ = 0; bool have_idle_ = false;
   uint64_t worst_dark_ns_ = 0;
+  uint64_t p99_ = 0, p99_legit_ = 0;    // pass-over p99 (total / legit-only), for the CEILING line
   uint64_t n_ = 0;
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
-    if (floored_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no tick-floored wakes -- nothing to attribute\n\n");
-      return;
-    }
+  // Attribute every floored wake (preempt/order, dark/held, lane, class, age,
+  // concentration) and the two pass-over p99s once, so prom()/json() read the
+  // scalars without emit() having run. emit() renders from the members.
+  void compute() override {
+    if (floored_.empty()) return;
     for (auto& kv : picks_)
       sublimation_order_u64(kv.second, false, [](const Pk& e) { return e.ts; });
     idle_.finalize();
@@ -3310,13 +3532,26 @@ struct DispatchStallReport final : Report {
     avg_distinct_ = n_ ? (double)distinct_sum / (double)n_ : 0.0;
     (void)same_older;
     sublimation_u64(inter_v.data(), inter_v.size());
-    uint64_t p99 = inter_v[(size_t)((double)inter_v.size() * 0.99)];
-    passover_p99_ = (double)p99;
+    p99_ = inter_v[(size_t)((double)inter_v.size() * 0.99)];
+    passover_p99_ = (double)p99_;
+    // CEILING of a mirror-coherence (inversion-only) fix: p99 of the LEGIT-only
+    // pass-overs is the floor a coherence fix alone could reach.
+    sublimation_u64(legit_v.data(), legit_v.size());
+    p99_legit_ = legit_v[(size_t)((double)legit_v.size() * 0.99)];
+    ceiling_remains_pct_ = p99_ ? 100.0 * (double)p99_legit_ / (double)p99_ : 0.0;
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (floored_.empty()) {
+      montauk_sink_appendf(&g_out, "VERDICT: no tick-floored wakes -- nothing to attribute\n\n");
+      return;
+    }
     montauk_sink_appendf(&g_out, "VERDICT: %s saturated floored wakes; PREEMPT-STARVED %.0f%% "
                 "(0 intervening picks) / ORDER-STARVED %.0f%% (CPU served others "
                 "first); avg %.1f pass-overs, p99 %llu pass-overs\n",
                 fmt_count((double)n_).c_str(), preempt_pct_, order_pct_, avg_inter_,
-                (unsigned long long)p99);
+                (unsigned long long)p99_);
     if (have_idle_)
       montauk_sink_appendf(&g_out, "  PREEMPT split: %.0f%% DARK (run-CPU IDLE through the wait -- "
                   "tickless, no tick, no rescue scan = the strand; worst %.1fms) / "
@@ -3413,19 +3648,14 @@ struct DispatchStallReport final : Report {
           "rotating backlog)\n");
     }
     montauk_sink_appendf(&g_out, "\n");
-    /* CEILING of a mirror-coherence (inversion-only) fix: remove the
-     * illegitimate pass-overs per wake, recompute the pass-over p99. The
-     * legit-only p99 is the floor a coherence fix alone could reach; the
-     * residual above it is the eligibility/lag (legit-backlog) gap. */
-    sublimation_u64(legit_v.data(), legit_v.size());
-    uint64_t p99_legit = legit_v[(size_t)((double)legit_v.size() * 0.99)];
-    double keep = p99 ? 100.0 * (double)p99_legit / (double)p99 : 0.0;
-    ceiling_remains_pct_ = keep;
+    /* CEILING of a mirror-coherence (inversion-only) fix: the legit-only p99
+     * (computed in compute()) is the floor a coherence fix alone could reach;
+     * the residual above it is the eligibility/lag (legit-backlog) gap. */
     montauk_sink_appendf(&g_out, "  CEILING: p99 pass-overs %llu total -> %llu if ALL inversions "
                 "removed (%.0f%% remains = LEGIT backlog only eligibility/lag can "
                 "cut; %.0f%% is the mirror-coherence headroom)\n\n",
-                (unsigned long long)p99, (unsigned long long)p99_legit,
-                keep, 100.0 - keep);
+                (unsigned long long)p99_, (unsigned long long)p99_legit_,
+                ceiling_remains_pct_, 100.0 - ceiling_remains_pct_);
   }
 
   void prom(std::vector<PromMetric>& out) override {
@@ -3458,6 +3688,122 @@ struct DispatchStallReport final : Report {
   }
 };
 
+// REPORT kick-latency: pairs SCHED_OP_KICK_ISSUE against the next
+// SCHED_OP_RESCHED on the SAME cpu to answer a question dispatch-stall's DARK
+// classification cannot: was a kick issued for a CPU that went dark actually
+// delivered (resulted in a resched), or silently swallowed? Generic to any
+// sched_ext scheduler and any tickless (NOHZ_FULL) kernel -- not tied to one
+// scheduler or one bug. A kick with no RESCHED before the next kick on that
+// cpu (or before the trace ends) is UNANSWERED; if a SCHED_OP_TICK_STOP with
+// success=1 landed on that cpu shortly before the unanswered kick, the CPU
+// had just gone tickless right as the kick fired -- the direct, observable
+// fingerprint of a kick racing a CPU's own idle-entry decision.
+struct KickLatencyReport final : Report {
+  struct Ev { uint64_t ts; uint32_t issuer_or_caller; uint64_t aux; };
+  std::unordered_map<uint32_t, std::vector<Ev>> kicks_;   // cpu -> kick issues
+  std::unordered_map<uint32_t, std::vector<uint64_t>> resched_;  // cpu -> resched timestamps
+  std::unordered_map<uint32_t, std::vector<Ev>> tick_stop_;      // cpu -> tick-stop evals (aux=success)
+  uint64_t last_ts_ = 0;
+
+  const char* name() const override { return "kick-latency"; }
+
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
+    const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    if (s->timestamp_ns > last_ts_) last_ts_ = s->timestamp_ns;
+    if (s->op == SCHED_OP_KICK_ISSUE)
+      kicks_[s->cpu].push_back({s->timestamp_ns, (uint32_t)s->last_cpu, s->score});
+    else if (s->op == SCHED_OP_RESCHED)
+      resched_[s->cpu].push_back(s->timestamp_ns);
+    else if (s->op == SCHED_OP_TICK_STOP)
+      tick_stop_[s->cpu].push_back({s->timestamp_ns, (uint32_t)s->sub_idx, s->score});
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (kicks_.empty()) {
+      montauk_sink_appendf(&g_out, "VERDICT: no kicks captured (scx_bpf_kick_cpu never fired, or "
+                  "--sched-detail off)\n\n");
+      return;
+    }
+    uint64_t total = 0, unanswered = 0, tickless_race = 0;
+    std::vector<uint64_t> latencies_ns;
+    struct Miss { uint32_t cpu; uint64_t ts; bool tickless; };
+    std::vector<Miss> misses;
+
+    for (auto& [cpu, kv] : kicks_) {
+      std::vector<uint64_t> rs = resched_[cpu];
+      std::sort(rs.begin(), rs.end());
+      std::vector<Ev> ks = kv;
+      std::sort(ks.begin(), ks.end(), [](const Ev& a, const Ev& b) { return a.ts < b.ts; });
+      std::vector<Ev> tstop = tick_stop_[cpu];
+      std::sort(tstop.begin(), tstop.end(), [](const Ev& a, const Ev& b) { return a.ts < b.ts; });
+
+      for (size_t i = 0; i < ks.size(); ++i) {
+        uint64_t kick_ts = ks[i].ts;
+        uint64_t bound = (i + 1 < ks.size()) ? ks[i + 1].ts : last_ts_;
+        ++total;
+        auto it = std::lower_bound(rs.begin(), rs.end(), kick_ts);
+        if (it != rs.end() && *it <= bound) {
+          latencies_ns.push_back(*it - kick_ts);
+          continue;
+        }
+        ++unanswered;
+        // Was this cpu's tick freshly (within 5ms) and successfully stopped
+        // right before the kick that never got answered?
+        bool tickless = false;
+        for (auto rit = tstop.rbegin(); rit != tstop.rend(); ++rit) {
+          if (rit->ts > kick_ts) continue;
+          if (kick_ts - rit->ts <= 5'000'000ULL && rit->issuer_or_caller == 1)
+            tickless = true;
+          break;
+        }
+        if (tickless) ++tickless_race;
+        misses.push_back({cpu, kick_ts, tickless});
+      }
+    }
+
+    montauk_sink_appendf(&g_out, "%" PRIu64 " kicks, %" PRIu64 " unanswered (no resched observed "
+                "before the next kick or trace end), %" PRIu64 " of those raced a fresh tick-stop\n",
+                total, unanswered, tickless_race);
+    if (!latencies_ns.empty()) {
+      sublimation_u64(latencies_ns.data(), latencies_ns.size());
+      montauk_sink_appendf(&g_out, "answered kick->resched latency: p50=%.1fus p99=%.1fus worst=%.1fus\n",
+                  q_us(latencies_ns, 0.50), q_us(latencies_ns, 0.99), q_us(latencies_ns, 1.0));
+    }
+    if (!misses.empty()) {
+      montauk_sink_appendf(&g_out, "\nunanswered kicks (ranked, tick-stop-raced first):\n");
+      std::sort(misses.begin(), misses.end(),
+                [](const Miss& a, const Miss& b) { return a.tickless > b.tickless; });
+      size_t shown = 0;
+      for (auto& m : misses) {
+        if (shown++ >= 20) break;
+        montauk_sink_appendf(&g_out, "  cpu=%-3u t=%.3fms%s\n", m.cpu, ms(m.ts),
+                    m.tickless ? "  TICK-STOP-RACED" : "");
+      }
+    }
+    montauk_sink_appendf(&g_out, "\n");
+  }
+
+  void offenders(std::vector<Offender>& out) override {
+    for (auto& [cpu, kv] : kicks_) {
+      std::vector<uint64_t> rs = resched_[cpu];
+      std::sort(rs.begin(), rs.end());
+      std::vector<Ev> ks = kv;
+      std::sort(ks.begin(), ks.end(), [](const Ev& a, const Ev& b) { return a.ts < b.ts; });
+      uint64_t unanswered = 0;
+      for (size_t i = 0; i < ks.size(); ++i) {
+        uint64_t bound = (i + 1 < ks.size()) ? ks[i + 1].ts : last_ts_;
+        auto it = std::lower_bound(rs.begin(), rs.end(), ks[i].ts);
+        if (it == rs.end() || *it > bound) ++unanswered;
+      }
+      if (unanswered)
+        out.push_back({"kick-latency", "cpu" + std::to_string(cpu), "", "unanswered_kicks",
+                       (double)unanswered, unanswered >= 3 ? 2 : 1});
+    }
+  }
+};
+
 // REPORT slice: per-CPU dispatched-slice length = the interval between
 // consecutive PICKs on one CPU (how long the picked task ran before the CPU
 // picked again). If the saturation tail is "wakee waits behind N tasks each
@@ -3468,6 +3814,8 @@ struct SliceReport final : Report {
   std::unordered_map<uint32_t, std::vector<uint64_t>> switch_ts_;  // cpu -> sched_switch fallback ts
   std::vector<uint64_t> slices_;
   std::vector<std::pair<uint64_t, uint64_t>> tl_;  // (slice start ts, duration) for the wall-clock trajectory
+  std::vector<uint64_t> seg_med_;  // per-segment median slice (us), for the TRAJECTORY line
+  sub_disorder_t traj_disorder_ = SUB_RANDOM;
   double traj_inversion_ = 0.0;
   bool traj_ok_ = false;
 
@@ -3481,8 +3829,9 @@ struct SliceReport final : Report {
   }
 
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
+  // Derive the slice distribution (sorted) and the wall-clock trajectory once,
+  // so prom()/json() are correct without emit() having run. emit() renders.
+  void compute() override {
     static constexpr uint64_t kStrandNs = 10000000ULL;  // >10ms gap = idle, not a slice
     // Prefer the scheduler's own PICK stream; fall back to the sched_switch-derived
     // SWITCH_IN when no pick tracepoint was bound (EEVDF / scx modes without pick).
@@ -3498,21 +3847,8 @@ struct SliceReport final : Report {
         }
       }
     }
-    if (slices_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no slices (PICK stream absent)\n\n");
-      return;
-    }
+    if (slices_.empty()) return;
     sublimation_u64(slices_.data(), slices_.size());
-    double mean = 0;
-    for (uint64_t s : slices_) mean += (double)s;
-    mean /= (double)slices_.size();
-    montauk_sink_appendf(&g_out, "VERDICT: %s dispatched slices; p50 %.1fus p90 %.1fus p99 %.1fus "
-                "worst %.1fus; mean %.1fus\n",
-                fmt_count((double)slices_.size()).c_str(),
-                q_us(slices_, 0.50), q_us(slices_, 0.90), q_us(slices_, 0.99),
-                us(slices_.back()), mean / 1000.0);
-    montauk_sink_appendf(&g_out, "  (long slices x pass-over depth = the saturation tail; a "
-                "shorter effective slice drains a deep runqueue faster)\n");
     // TRAJECTORY: is the dispatched-slice length steady, drifting smoothly, or
     // hunting? Segment the run by wall-clock, take each segment's median slice in
     // TIME order (NOT the quantile sort), and classify the sequence's shape. A
@@ -3528,7 +3864,7 @@ struct SliceReport final : Report {
       uint64_t t0 = tl_.front().first, t1 = tl_.back().first;
       if (t1 > t0) {
         uint64_t span = t1 - t0;
-        std::vector<uint64_t> seg_med, bucket;
+        std::vector<uint64_t> bucket;
         for (size_t g = 0; g < kSegs; ++g) {
           uint64_t lo = t0 + span * g / kSegs;
           uint64_t hi = t0 + span * (g + 1) / kSegs;
@@ -3538,21 +3874,42 @@ struct SliceReport final : Report {
               bucket.push_back(pr.second);
           if (bucket.empty()) continue;
           sublimation_u64(bucket.data(), bucket.size());
-          seg_med.push_back(bucket[bucket.size() / 2]);
+          seg_med_.push_back(bucket[bucket.size() / 2]);
         }
-        if (seg_med.size() >= 3) {
-          sub_profile_t tp = sublimation_classify_u64(seg_med.data(), seg_med.size());
+        if (seg_med_.size() >= 3) {
+          sub_profile_t tp = sublimation_classify_u64(seg_med_.data(), seg_med_.size());
           traj_inversion_ = (double)tp.inversion_ratio;
+          traj_disorder_ = tp.disorder;
           traj_ok_ = true;
-          montauk_sink_appendf(&g_out, "TRAJECTORY: slice p50 over %zu segments (us):", seg_med.size());
-          for (uint64_t m : seg_med) montauk_sink_appendf(&g_out, " %.0f", us(m));
-          montauk_sink_appendf(&g_out, "; shape=%s inv=%.2f -- %s\n", disorder_name(tp.disorder),
-                      traj_inversion_,
-                      tp.disorder != SUB_RANDOM
-                          ? "coherent (quantum settles with load)"
-                          : "chatter (quantum hunting, not converging)");
         }
       }
+    }
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (slices_.empty()) {
+      montauk_sink_appendf(&g_out, "VERDICT: no slices (PICK stream absent)\n\n");
+      return;
+    }
+    double mean = 0;
+    for (uint64_t s : slices_) mean += (double)s;
+    mean /= (double)slices_.size();
+    montauk_sink_appendf(&g_out, "VERDICT: %s dispatched slices; p50 %.1fus p90 %.1fus p99 %.1fus "
+                "worst %.1fus; mean %.1fus\n",
+                fmt_count((double)slices_.size()).c_str(),
+                q_us(slices_, 0.50), q_us(slices_, 0.90), q_us(slices_, 0.99),
+                us(slices_.back()), mean / 1000.0);
+    montauk_sink_appendf(&g_out, "  (long slices x pass-over depth = the saturation tail; a "
+                "shorter effective slice drains a deep runqueue faster)\n");
+    if (traj_ok_) {
+      montauk_sink_appendf(&g_out, "TRAJECTORY: slice p50 over %zu segments (us):", seg_med_.size());
+      for (uint64_t m : seg_med_) montauk_sink_appendf(&g_out, " %.0f", us(m));
+      montauk_sink_appendf(&g_out, "; shape=%s inv=%.2f -- %s\n", disorder_name(traj_disorder_),
+                  traj_inversion_,
+                  traj_disorder_ != SUB_RANDOM
+                      ? "coherent (quantum settles with load)"
+                      : "chatter (quantum hunting, not converging)");
     }
     // PER-CPU PREEMPT FAILURE EVIDENCE: with a ~1ms slice quantum the per-CPU tick
     // preempt should chop any slice whose CPU holds a waiter past ~1ms. Slices that
@@ -3596,7 +3953,8 @@ struct StormReport final : Report {
   struct Sample { uint64_t kicks, preempt, reenq; uint32_t interval_ms; };
   std::vector<Sample> samples_;
   uint64_t tot_kicks_ = 0, tot_preempt_ = 0, tot_reenq_ = 0, tot_ms_ = 0;
-  double storm_pct_ = 0.0, peak_reenq_rate_ = 0.0;
+  double storm_pct_ = 0.0, peak_reenq_rate_ = 0.0, p50_reenq_ = 0.0;
+  size_t storm_intervals_ = 0;
 
   static constexpr double kStormReenqPerS = 50000.0; // a core reenqueuing this hard is storming
   static constexpr double kHardFrac = 0.5;           // preempt >= frac*reenq => real IPI storm
@@ -3615,13 +3973,10 @@ struct StormReport final : Report {
     return s.interval_ms ? (double)s.reenq * 1000.0 / (double)s.interval_ms : 0.0;
   }
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
-    if (samples_.empty() || tot_ms_ == 0) {
-      montauk_sink_appendf(&g_out, "VERDICT: no sched_ext kick activity captured (non-scx scheduler, "
-                  "or no cpu_release storm)\n\n");
-      return;
-    }
+  // Derive storm rate/peak/percent once so prom()/offenders() are correct in the
+  // digest path (which calls compute() but not emit()). emit() renders.
+  void compute() override {
+    if (samples_.empty() || tot_ms_ == 0) return;
     std::vector<uint64_t> rr;
     rr.reserve(samples_.size());
     size_t storm_intervals = 0;
@@ -3630,19 +3985,29 @@ struct StormReport final : Report {
       rr.push_back((uint64_t)r);
       if (r >= kStormReenqPerS) ++storm_intervals;
     }
+    storm_intervals_ = storm_intervals;
     storm_pct_ = 100.0 * (double)storm_intervals / (double)samples_.size();
     sublimation_u64(rr.data(), rr.size());
     peak_reenq_rate_ = (double)rr.back();
-    double p50 = (double)rr[rr.size() / 2];
+    p50_reenq_ = (double)rr[rr.size() / 2];
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (samples_.empty() || tot_ms_ == 0) {
+      montauk_sink_appendf(&g_out, "VERDICT: no sched_ext kick activity captured (non-scx scheduler, "
+                  "or no cpu_release storm)\n\n");
+      return;
+    }
     double secs = (double)tot_ms_ / 1000.0;
     bool real_ipi = tot_reenq_ && (double)tot_preempt_ >= kHardFrac * (double)tot_reenq_;
-    const char* kind = storm_intervals == 0 ? "clean -- no storm intervals"
+    const char* kind = storm_intervals_ == 0 ? "clean -- no storm intervals"
                        : real_ipi ? "REAL IPI storm (preempt-kick dominant)"
                                   : "IDLE re-enqueue churn (kicks no-op on busy CPUs)";
     montauk_sink_appendf(&g_out, "VERDICT: %s; storm %zu/%zu intervals (%.1f%%); reenq/s p50=%.0f "
                 "peak=%.0f; kick/s=%.0f (preempt %.0f) reenq/s=%.0f\n",
-                kind, storm_intervals, samples_.size(), storm_pct_,
-                p50, peak_reenq_rate_, (double)tot_kicks_ / secs,
+                kind, storm_intervals_, samples_.size(), storm_pct_,
+                p50_reenq_, peak_reenq_rate_, (double)tot_kicks_ / secs,
                 (double)tot_preempt_ / secs, (double)tot_reenq_ / secs);
     montauk_sink_appendf(&g_out, "  (storm interval = reenqueue rate >= %.0f/s; REAL when preempt-kicks "
                 ">= %.0f%% of reenqueues)\n\n", kStormReenqPerS, kHardFrac * 100.0);
@@ -3688,8 +4053,9 @@ struct ServiceReport final : Report {
   }
 
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
+  // Derive the per-PID service distribution (sorted) once, so prom()/json() are
+  // correct without emit() having run. emit() renders from svc_.
+  void compute() override {
     static constexpr uint64_t kStrandNs = 10000000ULL;
     std::unordered_map<int, uint64_t> by_pid;
     // Prefer the scheduler's own PICK stream; fall back to the sched_switch-derived
@@ -3703,12 +4069,8 @@ struct ServiceReport final : Report {
         if (d > 0 && d < kStrandNs) by_pid[v[i - 1].second] += d;
       }
     }
-    if (by_pid.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no service (PICK stream absent)\n\n");
-      return;
-    }
-    uint64_t total = 0;
-    for (auto& kv : by_pid) { svc_.push_back(kv.second); total += kv.second; }
+    if (by_pid.empty()) return;  // svc_ stays empty -> emit prints "no service"
+    for (auto& kv : by_pid) svc_.push_back(kv.second);
     sublimation_u64(svc_.data(), svc_.size());  // ascending
     // Env-gated raw dump: per-PID service in microseconds, one per line, for
     // sublimation classify/locate/quantile over the real distribution shape.
@@ -3719,6 +4081,16 @@ struct ServiceReport final : Report {
         std::fclose(df);
       }
     }
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (svc_.empty()) {
+      montauk_sink_appendf(&g_out, "VERDICT: no service (PICK stream absent)\n\n");
+      return;
+    }
+    uint64_t total = 0;
+    for (uint64_t s : svc_) total += s;
     size_t np = svc_.size();
     uint64_t top1 = svc_.back();
     uint64_t top5 = 0;
@@ -4343,6 +4715,7 @@ struct FieldPersistReport final : Report {
   std::vector<G> gates_;
   size_t distinct_ = 0;
   uint64_t rederivations_ = 0;
+  uint64_t dom_sig_ = 0;
   double dominant_dwell_pct_ = 0.0;
 
   const char* name() const override { return "field-persist"; }
@@ -4354,13 +4727,10 @@ struct FieldPersistReport final : Report {
     gates_.push_back({s->timestamp_ns, s->score, s->sub_idx});
   }
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
-    if (gates_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no field-gate events (adaptive "
-                  "reclassification gate not streamed)\n\n");
-      return;
-    }
+  // Derive distinct/re-derivations/dominant-dwell once so prom()/offenders() are
+  // correct in the digest path (compute() runs, emit() does not). emit() renders.
+  void compute() override {
+    if (gates_.empty()) return;
     std::sort(gates_.begin(), gates_.end(),
               [](const G& a, const G& b) { return a.ts < b.ts; });
     // Dwell per signature = time to the next gate tick; distinct signatures and
@@ -4379,7 +4749,18 @@ struct FieldPersistReport final : Report {
       if (kv.second > dom_dwell) { dom_dwell = kv.second; dom_sig = kv.first; }
     distinct_ = seen.size();
     rederivations_ = rederiv;
+    dom_sig_ = dom_sig;
     dominant_dwell_pct_ = span ? 100.0 * (double)dom_dwell / (double)span : 100.0;
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (gates_.empty()) {
+      montauk_sink_appendf(&g_out, "VERDICT: no field-gate events (adaptive "
+                  "reclassification gate not streamed)\n\n");
+      return;
+    }
+    uint64_t span = gates_.back().ts - gates_.front().ts;
     double dur_s = span / 1e9;
     double rate = dur_s > 0 ? (double)gates_.size() / dur_s : 0.0;
 
@@ -4391,7 +4772,7 @@ struct FieldPersistReport final : Report {
           "states that share this signature (the per-boot bistable tell -- a scalar "
           "regime/target reads identical in both basins).\n\n",
           fmt_count((double)gates_.size()).c_str(), dur_s, rate,
-          (unsigned long long)dom_sig, (unsigned long long)rederivations_);
+          (unsigned long long)dom_sig_, (unsigned long long)rederivations_);
     } else {
       montauk_sink_appendf(&g_out,
           "VERDICT: LIVE -- %s gate fires over %.1fs (%.1f/s); %zu distinct signatures, "
@@ -4399,7 +4780,7 @@ struct FieldPersistReport final : Report {
           "  (many distinct + high re-derivation = the classifier tracks the workload; "
           "few distinct + a dominant near 100%% = it barely moves)\n\n",
           fmt_count((double)gates_.size()).c_str(), dur_s, rate, distinct_,
-          (unsigned long long)rederivations_, (unsigned long long)dom_sig,
+          (unsigned long long)rederivations_, (unsigned long long)dom_sig_,
           dominant_dwell_pct_);
     }
   }
@@ -4432,6 +4813,7 @@ std::vector<std::unique_ptr<Report>> make_reports() {
   reports.push_back(std::make_unique<WorkConservationReport>());
   reports.push_back(std::make_unique<PlacementRaceReport>());
   reports.push_back(std::make_unique<DispatchStallReport>());
+  reports.push_back(std::make_unique<KickLatencyReport>());
   reports.push_back(std::make_unique<KStrandReport>());
   reports.push_back(std::make_unique<SliceReport>());
   reports.push_back(std::make_unique<StormReport>());
@@ -4502,6 +4884,7 @@ int run_digest(const std::string& dir, bool redact) {
     (void)reader.for_each([&](uint32_t t, const uint8_t* d, uint32_t l) {
       for (auto& r : reports) r->fold(t, d, l);
     });
+    for (auto& r : reports) r->compute();  // finalize typed results once, before any renderer
   }
 
   // FRONT AND CENTER: a scheduler that crashed/ejected makes every number below
@@ -4575,12 +4958,13 @@ int main(int argc, char** argv) {
                    (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h");
   if (argc < 2 || want_help) {
     std::fprintf(want_help ? stdout : stderr,
-        "usage: montauk_analyze TRACE [--report name[,name...]]\n"
+        "usage: montauk_analyze TRACE [--report name[,name...]] [--json]\n"
         "                       [--sig N|NAME] [--comm SUBSTR] [--pid N] [--tid N]\n"
         "                       [--window SECONDS]\n"
-        "                       (row qualifiers; consumed by per-event reports,\n"
-        "                        currently: signals. --window bounds the trailing\n"
-        "                        capture-teardown split, default 2s)\n"
+        "                       (--json emits the structured envelope instead of\n"
+        "                        the text report. row qualifiers are consumed by\n"
+        "                        per-event reports, currently: signals. --window\n"
+        "                        bounds the trailing capture-teardown split, def 2s)\n"
         "       montauk_analyze DIR|FILE.prom [more.prom...] [--by axis]\n"
         "                       [--metric substr] [--full] [--higher-better]\n"
         "                       [--seed n] [--quantile q] [--no-emit]\n"
@@ -4671,10 +5055,13 @@ int main(int argc, char** argv) {
 
   std::vector<Report*> active;
   std::string report_list;
+  bool want_json = false;
   for (int i = 2; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--redact") {
       g_redact_comm = true;
+    } else if (a == "--json") {
+      want_json = true;
     } else if (a == "--report" && i + 1 < argc) {
       report_list = argv[++i];
     } else if (a == "--sig" && i + 1 < argc) {
@@ -4697,7 +5084,7 @@ int main(int argc, char** argv) {
       }
     } else {
       std::fprintf(stderr,
-          "usage: montauk_analyze FILE [--report name[,name...]] [--redact]\n"
+          "usage: montauk_analyze FILE [--report name[,name...]] [--redact] [--json]\n"
           "                       [--sig N|NAME] [--comm SUBSTR] [--pid N] [--tid N]\n"
           "                       [--window SECONDS]\n");
       return 2;
@@ -4760,6 +5147,38 @@ int main(int argc, char** argv) {
   } else if (status == montauk::model::TraceReadStatus::TruncatedRecord) {
     log_warn("truncated record at event %" PRIu64 "; reporting on data read so far",
              reader.events_read());
+  }
+
+  for (Report* r : active) r->compute();  // finalize typed results once, before any renderer
+
+  // --json: the structured surface. Same typed results the text/prom renderers
+  // read, wrapped in one envelope: trace context + the reports array. An agent
+  // reads this instead of scraping the human report. Pure alternate output --
+  // no text report, no .prom write, no offenders block.
+  if (want_json) {
+    const auto& mh = reader.header();
+    char mpat[33];
+    std::snprintf(mpat, sizeof mpat, "%.*s",
+                  static_cast<int>(sizeof(mh.pattern)), mh.pattern);
+    montauk_json j;
+    montauk_json_init(&j, &g_out);
+    montauk_json_obj_begin(&j);
+      montauk_json_ku64(&j, "schema_version", 1u);
+      montauk_json_key(&j, "trace");
+      montauk_json_obj_begin(&j);
+        montauk_json_kstr(&j, "path", path);
+        montauk_json_kstr(&j, "pattern", mpat);
+        montauk_json_ku64(&j, "format_version", mh.version);
+        montauk_json_ku64(&j, "events", reader.events_read());
+        montauk_json_ku64(&j, "start_unix_ns", mh.real_anchor_ns);
+      montauk_json_obj_end(&j);
+      montauk_json_key(&j, "reports");
+      montauk_json_arr_begin(&j);
+        for (Report* r : active) r->json(j);
+      montauk_json_arr_end(&j);
+    montauk_json_obj_end(&j);
+    montauk_sink_appendc(&g_out, '\n');
+    return 0;
   }
 
   bool first = true;

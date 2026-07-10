@@ -1,6 +1,6 @@
-.TH MONTAUK 1 "June 2026" "montauk 7.8.0" "User Commands"
+.TH MONTAUK 1 "July 2026" "montauk 7.13.0" "User Commands"
 .SH NAME
-montauk \- high-performance Linux system monitor with kernel module support
+montauk \- Linux observability platform: monitor, eBPF tracer and analyzer
 .SH SYNOPSIS
 .B montauk
 .RB [ \-\-metrics
@@ -21,9 +21,11 @@ montauk \- high-performance Linux system monitor with kernel module support
 .IR N ]
 .SH DESCRIPTION
 .B montauk
-is a C++23 system monitor for Linux terminals featuring a custom kernel module
-for zero-overhead process telemetry, multi-vendor GPU attribution, and
-production-grade sorting algorithms.
+is a C++23 Linux observability platform \(em an event-driven monitor, an eBPF
+flight-recorder tracer and an offline analyzer \(em over sublimation, its in-tree
+flow-model sort/search/match core. A custom kernel module gives zero-overhead
+process telemetry, with multi-vendor GPU attribution and eBPF-level system
+tracing.
 .PP
 Key features:
 .IP \(bu 2
@@ -97,6 +99,16 @@ trace-time overhead \(em suited to high-rate scheduler-decision tracing
 where text formatting would perturb the workload. Decode offline with
 .BR montauk_trace_decode (1).
 See TRACE MODE for details.
+.TP
+.B \-\-json
+Print one structured JSON snapshot of live system state to stdout, then exit.
+Warms two producer cycles so the rate deltas (CPU context switches, network and
+disk throughput) are real, then serializes system specs, CPU, PMU, memory, GPU,
+thermal, network, disk, filesystems and the ranked top processes as one JSON
+object. The live-monitor analog of
+.B montauk_analyze \-\-json
+(which emits the diagnostic reports as JSON): a structured surface for an agent
+or a script to read instead of scraping the TUI. No TUI, no server, no daemon.
 .TP
 .B \-\-init\-theme
 Detect terminal palette and write ~/.config/montauk/config.toml with
@@ -264,6 +276,11 @@ with scheduler-stability and clean-room state above the system specs.
 .B montauk_analyze \-\-version
 prints the project version and exits, so a consumer can tell a current install
 from a stale one.
+.B montauk_analyze \-\-json
+emits the same reports as one structured JSON envelope (schema_version, trace
+context and a reports array) instead of the text report. It renders the same
+typed results the text and Prometheus renderers read, so an agent or a script
+consumes the diagnostics without parsing prose.
 .PP
 \-\-trace-out is independent of MONTAUK_TRACE_VERBOSE (the per-event stderr
 firehose, a human-eyeball aid for low-rate single-app debugging) and of
@@ -691,6 +708,6 @@ Report issues at: https://github.com/wllclngn/montauk/issues
 .SH COPYRIGHT
 MIT License. See LICENSE file in repository.
 .SH VERSION
-montauk 7.12.0
+montauk 7.13.0
 .br
-June 2026
+July 2026

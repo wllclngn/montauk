@@ -25,10 +25,13 @@ TEST(gpu_collector_nvidia_smi_device_fallback) {
   // Ensure device-level fallback is enabled and cache interval is small
   ::setenv("MONTAUK_NVIDIA_SMI_DEV", "1", 1);
   ::setenv("MONTAUK_SMI_MIN_INTERVAL_MS", "0", 1);
+  // Skip native NVML so the injected nvidia-smi is what answers, not a live GPU.
+  ::setenv("MONTAUK_GPU_DISABLE_NATIVE", "1", 1);
 
   montauk::collectors::GpuCollector c; montauk::model::GpuVram v{};
   ASSERT_TRUE(c.sample(v));
   ASSERT_EQ(v.total_mb, 4096u);
   ASSERT_EQ(v.used_mb, 1024u);
   ASSERT_TRUE(v.has_util);
+  ::unsetenv("MONTAUK_GPU_DISABLE_NATIVE");
 }

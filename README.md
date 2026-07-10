@@ -7,11 +7,11 @@
 ╚═╝     ╚═╝  ╚═════╝  ╚═╝  ╚═══╝    ╚═╝    ╚═╝  ╚═╝  ╚═════╝  ╚═╝  ╚═╝
 ```
 
-**montauk · sublimation** — a Linux system monitor, metrics generator, tracer and analyzer, built on sublimation, its in-tree flow-model sort and search/match core.
+A Linux observability platform: An event-driven monitor, eBPF tracer and offline analyzer that utilizes sublimation, a flow-model sort and search/match core.
 
 ## Overview
 
-montauk is a Linux **system monitor, metrics generator, tracer and analyzer** — three tools in one offline-friendly C++23 binary — built on **sublimation**, its in-tree flow-model sort and search/match core: the ordering, the disorder classification, the entropy detection and every substring and regex match montauk makes. The monitor (plain `montauk`) is an event-driven TUI with deep GPU attribution and Prometheus export. The tracer (`--trace`) is an eBPF flight recorder over a whole process tree — sync objects, heap, signals, scheduler decisions, hardware counters. The analyzer (`montauk_analyze` / `montauk_trace_decode`) folds a capture once into diagnostic reports.
+montauk is a Linux **observability platform** — an event-driven monitor, an eBPF tracer and an offline analyzer in one offline-friendly C++23 binary — built on **sublimation**, its in-tree flow-model sort and search/match core: the ordering, the disorder classification, the entropy detection and every substring and regex match montauk makes. The monitor (plain `montauk`) is an event-driven TUI with deep GPU attribution and Prometheus export. The tracer (`--trace`) is an eBPF flight recorder over a whole process tree — sync objects, heap, signals, scheduler decisions, hardware counters. The analyzer (`montauk_analyze` / `montauk_trace_decode`) folds a capture once into diagnostic reports. Every surface, the live snapshot and the analyzer's reports alike, renders as text, Prometheus **and** structured JSON (`--json`) from one typed result, so an AI agent or a script reads the exact data, one schema, provably consistent with the human report.
 
 sublimation is a **sub-system montauk builds**, vendored in `montauk/sublimation/`, and it is montauk's search and sort *everywhere*: the process table, every ordering the analyzer emits, the latency-structure classification the reports read and the kernel-thread, `/`-search and `--trace` text matching. Two systems, one tree. No system packages, no fetch step — NVML and liburing are auto-detected and optional; everything else lives in the repo.
 
@@ -21,16 +21,18 @@ montauk — one C++23 binary, three tools, one in-tree sort
   │    ├─ collectors — CPU, memory, GPU (NVML / AMD sysfs / Intel fdinfo), disk, net, thermal, process
   │    ├─ UI — OUROBOROS-derived Canvas / Component / FlexLayout, cell-clipped, no rubberbanding
   │    ├─ charts — pixel-rendered area charts (Kitty t=t /dev/shm transport, Sixel fallback)
-  │    └─ /metrics — Prometheus endpoint over io_uring (optional)
+  │    ├─ /metrics — Prometheus endpoint over io_uring (optional)
+  │    └─ --json — one-shot structured snapshot of live system state
   ├─ tracer  (`--trace PATTERN`)
   │    ├─ eBPF on kernel tracepoints + libc/ntdll uprobes — no ptrace
   │    ├─ capture — ntsync / keyed-event / futex sync, heap, signal, abort, mmap
   │    ├─ scheduler decisions + wake-to-run latency, hardware PMU (perf_event_open)
   │    └─ binary trace log (`--trace-out`) — batched writes, near-zero observer effect
   ├─ analyzer  (`montauk_analyze`, `montauk_trace_decode`)
-  │    └─ single-pass reports — waits, spins, pairing, abortpm, endstate,
-  │       heapstk, doublefree, futex, keyedevt, sched (wake-to-run latency + structure),
-  │       slice (per-CPU dispatched-slice length)
+  │    ├─ single-pass reports — waits, spins, pairing, abortpm, endstate,
+  │    │  heapstk, doublefree, futex, keyedevt, sched (wake-to-run latency + structure),
+  │    │  slice (per-CPU dispatched-slice length)
+  │    └─ --json — the reports as one structured envelope (text / Prometheus / JSON, one result)
   └─ sublimation  (in-tree search / sort / match core)
        ├─ disorder classifier — builds a level graph, routes the sort; the analyzer reads its verdict
        ├─ index sorts (32-bit pack / 64-bit LSD radix) + hybrid prefix-pack / MSD-radix string sort
@@ -44,9 +46,9 @@ montauk is one binary that wears three faces, plus the sort beneath them. Each f
 
 | Tool | Invocation | Role |
 |---|---|---|
-| **monitor** | `montauk` | Event-driven TUI. Per-process CPU and multi-vendor GPU attribution (NVIDIA NVML + `nvidia-smi` fallbacks, AMD sysfs, Intel fdinfo), thermal margins, security findings, live Boyer-Moore-Horspool search and Thompson-NFA classification. OUROBOROS-derived cell-clipped UI, pixel-rendered area charts (Kitty `t=t` /dev/shm transport, Sixel fallback), three column-swappable views. Optional Prometheus `/metrics` over io_uring and hourly `.prom` logging. |
+| **monitor** | `montauk` | Event-driven TUI. Per-process CPU and multi-vendor GPU attribution (NVIDIA NVML + `nvidia-smi` fallbacks, AMD sysfs, Intel fdinfo), thermal margins, security findings, live Boyer-Moore-Horspool search and Thompson-NFA classification. OUROBOROS-derived cell-clipped UI, pixel-rendered area charts (Kitty `t=t` /dev/shm transport, Sixel fallback), three column-swappable views. Optional Prometheus `/metrics` over io_uring, hourly `.prom` logging and a one-shot structured `--json` snapshot. |
 | **tracer** | `montauk --trace PATTERN` | eBPF flight recorder over a whole process tree — event-driven discovery, no ptrace, no `/proc`. Per-thread state and syscalls, ntsync / futex / keyed-event sync, heap traffic, signals and aborts, file I/O, file-backed mmap, scheduler decisions with wake-to-run latency, CCX-bucketed migrations and hardware PMU counters via `perf_event_open`. Composes with `--metrics`, `--log` and a near-zero-overhead binary log (`--trace-out`). |
-| **analyzer** | `montauk_analyze`, `montauk_trace_decode` | Folds a capture once into single-pass diagnostic reports — `waits`, `spins`, `pairing`, `abortpm`, `endstate`, `heapstk`, `doublefree`, `futex`, `keyedevt`, `sched`, `slice` — over logs reaching 450 MB+, plus recording-directory digests and cross-run population statistics. No live target, no privileges. |
+| **analyzer** | `montauk_analyze`, `montauk_trace_decode` | Folds a capture once into single-pass diagnostic reports — `waits`, `spins`, `pairing`, `abortpm`, `endstate`, `heapstk`, `doublefree`, `futex`, `keyedevt`, `sched`, `slice` — over logs reaching 450 MB+, plus recording-directory digests and cross-run population statistics. Renders each report as text, Prometheus or `--json` from one typed result. No live target, no privileges. |
 | **sublimation** | in-tree sub-system + `sublimation` CLI | montauk's search, sort and match core, used everywhere: the process table, every ordering the analyzer emits, the disorder classification its reports read and all of montauk's text matching. It sorts, classifies, locates structure and greps text (Boyer-Moore-Horspool substring + Thompson NFA / RE2-lineage regex); the `sublimation` CLI exposes all of them and a modern stream toolkit -- stats (sort / quantile / select / searchsorted / sum / mean / stdev / min / max / count / distinct / describe / histogram / outliers), structure (classify / characterize / locate `--values` / rand), text (grep / contains / replace / field / where / cut / column / uniq / tac / paste / tally) and the relational lane (group / intersect / subtract / union / join), with grep exit codes and `-i`/`-o`/`-v`/`-c`/`-n`. See the dedicated section below. |
 
 An optional kernel module (`montauk-kernel`) and the external-metrics provider sockets are the only seams to the outside; everything else is one statically-linked C++23 binary. sublimation is vendored under `montauk/sublimation/` with its own tests — one license, one tree, one README for both. NVML and liburing are auto-detected and optional; no system packages, no fetch step.
@@ -142,17 +144,17 @@ For maximum efficiency, montauk includes an optional kernel module (`montauk-ker
 ## Screenshots
 
 ### Main Interface
-![Main](screenshot-default.png)
+![Main](assets/screenshot-default.png)
 
 Default view. PROCESS MONITOR on the left; pixel-rendered area charts (PROCESSOR, GPU, VRAM, GPU MEM, ENC, DEC, MEMORY, NETWORK) stacked on the right. Charts emit through Kitty's `t=t` /dev/shm transport (Sixel fallback) and update at 1 Hz over a 60-second rolling window.
 
 ### SYSTEM Focus (`s`)
-![SYSTEM](screenshot-system.png)
+![SYSTEM](assets/screenshot-system.png)
 
 `s` swaps the right-column chart stack for a comprehensive text panel: identity (hostname, kernel, uptime), runtime (collector, scheduler, process states), CPU (model, threads, freq/governor, load avg, ctxt-sw rate), GPU (model, util, NVML, power, p-state), memory, disk I/O, network, thermal margins and process-security findings — severity-coloured in place.
 
 ### CPU Topology (`Shift+C`)
-![Topology](screenshot-topology.png)
+![Topology](assets/screenshot-topology.png)
 
 `Shift+C` swaps PROCESS MONITOR for a dynamic grid of bordered boxes — one per logical CPU. Each box renders a pixel-rasterized area chart of that core's last-N-seconds utilization (60s default, configurable via `[chart] history_seconds`), with live util% centered on the top border. Grid columns auto-fit to the rect (target ~2.5:1 cell aspect); high-core-count systems fall into scroll mode at minimum cell height. Same monotone-cubic AA rasterizer and Kitty/Sixel emit path as the right-column charts. Right column (charts or SYSTEM focus) is unaffected by the toggle.
 
@@ -272,6 +274,8 @@ montauk --trace myapp --log /tmp/trace # Trace mode + flight recorder
 montauk --trace myapp --trace-out t.bin # Trace mode + raw binary event log
 montauk_trace_decode t.bin             # Decode a binary log to text (--csv for CSV)
 montauk_analyze t.bin --report waits   # Run an analysis report over a binary log
+montauk --json                         # One-shot structured system snapshot (JSON), then exit
+montauk_analyze t.bin --json           # Emit the diagnostic reports as one JSON envelope
 montauk --init-theme                   # Detect terminal palette, write config.toml
 ```
 
@@ -296,6 +300,15 @@ Requires liburing at build time. Without liburing, montauk compiles normally wit
 When `--log DIR` is specified, montauk writes timestamped Prometheus exposition snapshots to disk. Files rotate hourly with the naming convention `montauk_YYYY-MM-DD_HH.prom`. Each block is prefixed with a `# montauk_scrape_timestamp_ms` comment for replay and analysis. The LogWriter reads from the same SnapshotBuffers as the TUI and metrics endpoint.
 
 No additional dependencies required. Works independently of or alongside `--metrics`.
+
+**Structured JSON (`--json`):**
+
+Both the monitor and the analyzer emit their state as JSON, so an agent or a script consumes montauk's observability without scraping the TUI or parsing prose.
+
+- `montauk --json` prints one structured snapshot of live system state to stdout and exits. It warms two producer cycles so the rate deltas (CPU context switches, network and disk throughput) are real, then serializes system specs, CPU (with per-core), PMU, memory, GPU, thermal, network, disk, filesystems and the ranked top processes as one JSON object. No TUI, no server, no daemon.
+- `montauk_analyze FILE --json` emits the diagnostic reports as one JSON envelope: a `schema_version`, the trace context (path, pattern, event count, format version, start time) and a `reports` array. Each report carries its verdict, its typed findings, its gauges (each with the same help text the Prometheus export uses) and its offenders.
+
+The JSON is a renderer, not a second computation. Every report computes a typed result once; the text (`emit`), Prometheus (`prom`) and JSON (`json`) surfaces all render from that one result, so they cannot disagree on a number. A byte-identical corpus gate holds a `json` surface over a synthetic capture, and a per-report parity pass verifies each report emits identical gauges in text (`.prom`) and JSON. The writer is a single in-tree serializer (`include/util/json.h`, ~120 lines, no third-party dependency) shared by both surfaces; montauk only ever writes JSON, never parses it. This is the interface an AI agent reads to reason over the machine: the exact data, one schema, provably consistent with what Prometheus and the human report show.
 
 **Trace Mode (eBPF):**
 
@@ -356,7 +369,7 @@ The periodic Prometheus snapshot is the data path for aggregate per-thread state
 Two tools read the binary log offline, sharing one record-walk (validate magic+version, length-authoritative iteration so an older decoder skips newer event types cleanly), with no `montauk_core` or BPF link:
 
 - `montauk_trace_decode FILE [--csv]` — renders one line per event with elapsed and absolute timestamps. Text by default, CSV for tooling.
-- `montauk_analyze FILE [--report name[,name...]]` — single-pass diagnostic reports (default: all). Each folds events once over the file (`montauk_analyze --version` prints the version and exits, so a consumer can tell a current install from a stale one):
+- `montauk_analyze FILE [--report name[,name...]] [--json]` — single-pass diagnostic reports (default: all). Each folds events once over the file (`montauk_analyze --version` prints the version and exits, so a consumer can tell a current install from a stale one). `--json` emits the same reports as one structured JSON envelope instead of the text report (see **Structured JSON** above), rendered from the same typed results, so text, Prometheus and JSON never disagree:
   - `summary` — header, duration, throughput, per type+subtype counts, and the trace-derived scheduler rates `montauk_analysis_dispatches_per_sec` / `montauk_analysis_preempts_per_sec`
   - `waits` — per `(tid,fd)` NTSYNC wait-completion stats
   - `spins` — livelock detector: streaks of sub-tick wait completions on one `(tid,fd)` sustained past a threshold, with a verdict
@@ -547,7 +560,9 @@ cmake --build build -j
 ./build/montauk_tests
 ```
 
-When built with liburing, this includes Prometheus serializer tests (CPU gauge, memory byte conversion, per-core labels, top-N process output, empty snapshot safety).
+When built with liburing, this includes Prometheus serializer tests (CPU gauge, memory byte conversion, per-core labels, top-N process output, empty snapshot safety). A standalone `montauk_json_test` checks the in-tree JSON writer (`include/util/json.h`) byte-for-byte and validates its output through `python -m json.tool`.
+
+**Output gate (`tests/run.py`):** one runner over three layers, the C++ unit tests, a byte-identical corpus gate (`tests/corpus_check.py`) and, under root, the live BPF trace harness. The corpus gate freezes the analyzer's `reports`, the decoder's output, the `sublimation` CLI **and** the analyzer's `--json` envelope against goldens over a deterministic synthetic capture, so a change that alters any surface's bytes fails the gate; the `json` surface is additionally parsed for well-formedness. A companion per-report parity pass asserts every report emits identical gauges in its text (`.prom`) and JSON renderings, the proof the two surfaces read the same typed result.
 
 **Self-test mode:**
 ```bash
@@ -598,6 +613,7 @@ montauk_trace_decode trace.bin --csv    # CSV for tooling
 montauk_analyze trace.bin                       # all reports
 montauk_analyze trace.bin --report doublefree   # one report
 montauk_analyze trace.bin --report waits,spins  # several
+montauk_analyze trace.bin --json                # all reports as one JSON envelope
 montauk_analyze RECORDING_DIR --digest          # one-call shareable digest
 montauk_analyze --version                       # print version, exit
 ```

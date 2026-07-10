@@ -78,6 +78,10 @@ VERDICT: 21 saturated floored wakes; PREEMPT-STARVED 100% (0 intervening picks) 
   CEILING: p99 pass-overs 0 total -> 0 if ALL inversions removed (0% remains = LEGIT backlog only eligibility/lag can cut; 100% is the mirror-coherence headroom)
 
 
+REPORT kick-latency
+VERDICT: no kicks captured (scx_bpf_kick_cpu never fired, or --sched-detail off)
+
+
 REPORT kstrand
 VERDICT: no per-CPU kthread strands over threshold (no I/O-completion starvation captured)
 

@@ -33,6 +33,18 @@ public:
   // batches. No-op if path is empty.
   void set_binary_output(const std::string& path);
 
+  // Enable a SECOND, independent binary stream (the --stream-out target),
+  // identical wire format to --trace-out, meant to point at a character
+  // device (a qemu-backed serial port) rather than a file on a journaled
+  // filesystem. --trace-out's durability depends on the filesystem/block
+  // layer eventually committing it -- exactly the layer a kernel hang can
+  // take down with it. A character device write goes straight to qemu's own
+  // host-side file backing, bypassing the guest's filesystem entirely, so it
+  // survives a guest hang as long as the emitting thread itself still runs
+  // (pin it off any NOHZ_FULL CPU). Must be called before start(). No-op if
+  // path is empty.
+  void set_stream_output(const std::string& path);
+
   // --sched-detail: enable the per-CPU idle-boundary stream (off by default). Must
   // be called before start() -- it sets a const-volatile rodata bit, frozen at load.
   void set_sched_detail(bool on) { sched_detail_ = on; }
@@ -124,6 +136,11 @@ private:
   std::string trace_dir_;
   bool sched_detail_{false};   // --sched-detail: stream per-CPU idle boundaries
   std::vector<uint8_t> trace_buf_;
+  // Second binary stream (--stream-out), same wire format, independent fd and
+  // buffer -- a character-device target that must keep working even if
+  // trace_fd_'s filesystem is the thing wedged. -1 = disabled.
+  int stream_fd_{-1};
+  std::vector<uint8_t> stream_buf_;
   ProviderCollector providers_{};
 
 public:

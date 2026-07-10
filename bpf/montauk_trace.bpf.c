@@ -531,6 +531,27 @@ int handle_exec(struct trace_event_raw_sched_process_exec *ctx) {
     }
   }
 
+  // TRACE_EVT_EXEC: previously computed but never submitted, leaving
+  // CpuHolderLedger with no authoritative rename signal for a forked-then-
+  // exec'd task -- only THREAD_NAME's one-binding-per-tid snapshot, which is
+  // wrong if it happens to land pre-exec (the child briefly carries its
+  // parent's inherited comm, per handle_fork's own comment). Checked AFTER
+  // the auto-track block so a process that just became tracked BY this exec
+  // (the common case: a fork+exec child whose new name matches the trace
+  // pattern) is included, not only processes tracked before it ran.
+  if (is_tracked(pid)) {
+    struct montauk_ring_event *ee = bpf_ringbuf_reserve(&events, sizeof(*ee), 0);
+    if (ee) {
+      ee->type      = TRACE_EVT_EXEC;
+      ee->pid       = pid;
+      ee->ppid      = 0;
+      ee->child_pid = 0;
+      bpf_get_current_comm(ee->comm, sizeof(ee->comm));
+      __builtin_memcpy(ee->filename, filename, sizeof(ee->filename));
+      bpf_ringbuf_submit(ee, 0);
+    }
+  }
+
   return 0;
 }
 
@@ -1360,16 +1381,94 @@ int BPF_PROG(handle_kpcpu_wakeup, struct task_struct *p)
 SEC("fentry/scx_bpf_kick_cpu")
 int BPF_PROG(handle_scx_kick, s32 cpu, u64 flags)
 {
-  (void)cpu;
+  sched_op_bump(SCHED_OP_KICK_ISSUE);
   if (!sched_stream)
     return 0;
   u32 zero = 0;
   struct scx_storm_counters *c = bpf_map_lookup_elem(&scx_storm, &zero);
-  if (!c)
+  if (c) {
+    c->kicks++;
+    if (flags & SCX_KICK_PREEMPT)
+      c->preempt_kicks++;
+  }
+
+  // KICK_ISSUE: target cpu being kicked (cpu), issuing cpu (last_cpu), kick
+  // flags (score) -- generic to any sched_ext scheduler. Pair against
+  // SCHED_OP_RESCHED on the same target cpu to see whether the kick actually
+  // resulted in a resched, or was swallowed.
+  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return 0;
+  e->type          = TRACE_EVT_SCHED;
+  e->op            = SCHED_OP_KICK_ISSUE;
+  e->cpu           = (u32)cpu;
+  e->pid           = -1;
+  e->secondary_pid = -1;
+  e->last_cpu      = (s32)bpf_get_smp_processor_id();
+  e->sub_idx       = 0;
+  e->score         = flags;
+  e->runtime_ns    = 0;
+  e->budget_ns     = 0;
+  e->timestamp_ns  = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(e, 0);
+  return 0;
+}
+
+SEC("fentry/resched_curr")
+int BPF_PROG(handle_resched_curr, struct rq *rq)
+{
+  sched_op_bump(SCHED_OP_RESCHED);
+  if (!sched_stream)
     return 0;
-  c->kicks++;
-  if (flags & SCX_KICK_PREEMPT)
-    c->preempt_kicks++;
+
+  // RESCHED: resched_curr() fired for a CPU's runqueue -- the actual
+  // wake mechanism, regardless of what triggered it (kick, preemption,
+  // or anything else). Universal to any scheduling class, not sched_ext-
+  // specific. Absence of a RESCHED shortly after a KICK_ISSUE for the same
+  // target cpu is the generic signature of a swallowed/lost kick.
+  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return 0;
+  e->type          = TRACE_EVT_SCHED;
+  e->op            = SCHED_OP_RESCHED;
+  e->cpu           = (u32)BPF_CORE_READ(rq, cpu);
+  e->pid           = -1;
+  e->secondary_pid = -1;
+  e->last_cpu      = (s32)bpf_get_smp_processor_id();
+  e->sub_idx       = 0;
+  e->score         = 0;
+  e->runtime_ns    = 0;
+  e->budget_ns     = 0;
+  e->timestamp_ns  = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(e, 0);
+  return 0;
+}
+
+SEC("tp/timer/tick_stop")
+int handle_tick_stop(struct trace_event_raw_tick_stop *ctx)
+{
+  sched_op_bump(SCHED_OP_TICK_STOP);
+  if (!sched_stream)
+    return 0;
+
+  // TICK_STOP: a CPU's periodic tick stop was evaluated (NOHZ_FULL, universal
+  // to any tickless-capable kernel, not sched_ext-specific). sub_idx=success
+  // (1 actually stopped / 0 blocked by a dependency), score=dependency
+  // bitmask (TICK_DEP_MASK_*, meaningful only when sub_idx=0). Correlate
+  // against KICK_ISSUE/RESCHED on the same cpu to see whether a CPU went
+  // tickless right as a kick targeting it was in flight.
+  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  if (!e) return 0;
+  e->type          = TRACE_EVT_SCHED;
+  e->op            = SCHED_OP_TICK_STOP;
+  e->cpu           = (u32)bpf_get_smp_processor_id();
+  e->pid           = -1;
+  e->secondary_pid = -1;
+  e->last_cpu      = -1;
+  e->sub_idx       = (u32)ctx->success;
+  e->score         = (u64)ctx->dependency;
+  e->runtime_ns    = 0;
+  e->budget_ns     = 0;
+  e->timestamp_ns  = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(e, 0);
   return 0;
 }
 

@@ -24,10 +24,11 @@ FIXTURE = ROOT / "tests" / "fixtures" / "synthetic.mtk"
 ANALYZE = ROOT / "build" / "montauk_analyze"
 DECODE = ROOT / "build" / "montauk_trace_decode"
 
-# label -> (binary, golden path)
+# label -> (binary, golden path, extra args)
 SURFACES = {
-    "reports": (ANALYZE, ROOT / "tests" / "fixtures" / "synthetic.reports.golden"),
-    "decode": (DECODE, ROOT / "tests" / "fixtures" / "synthetic.decode.golden"),
+    "reports": (ANALYZE, ROOT / "tests" / "fixtures" / "synthetic.reports.golden", []),
+    "decode": (DECODE, ROOT / "tests" / "fixtures" / "synthetic.decode.golden", []),
+    "json": (ANALYZE, ROOT / "tests" / "fixtures" / "synthetic.json.golden", ["--json"]),
 }
 
 SUBLIMATION = ROOT / "build" / "sublimation"
@@ -112,20 +113,31 @@ def regenerate_fixture(tmp: Path) -> None:
     subprocess.run([str(gen), str(FIXTURE)], capture_output=True)
 
 
-def run_stdout(binary: Path) -> str:
+def run_stdout(binary: Path, args: list) -> str:
     """Run a tool over the fixture, returning stdout only (stderr discarded)."""
     proc = subprocess.run(
-        [str(binary), str(FIXTURE)], capture_output=True, text=True,
+        [str(binary), str(FIXTURE), *args], capture_output=True, text=True,
     )
     return proc.stdout
 
 
 def check_surface(label: str, update: bool) -> bool:
-    binary, golden = SURFACES[label]
+    binary, golden, args = SURFACES[label]
     if not binary.exists():
         note(f"FAIL: missing {binary.relative_to(ROOT)} (build first)")
         return False
-    got = run_stdout(binary)
+    got = run_stdout(binary, args)
+
+    # The json surface must also be well-formed, not just byte-stable -- an agent
+    # parses it. A malformed envelope fails the gate even if it matches a stale
+    # golden.
+    if label == "json":
+        import json
+        try:
+            json.loads(got)
+        except json.JSONDecodeError as e:
+            note(f"FAIL: {label} is not valid JSON ({e})")
+            return False
 
     if update:
         golden.write_text(got)
