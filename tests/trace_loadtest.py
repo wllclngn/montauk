@@ -33,16 +33,12 @@ import tempfile
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-MONTAUK = ROOT / "build" / "montauk"
-DECODE = ROOT / "build" / "montauk_trace_decode"
-SUBL = ROOT / "build" / "sublimation"
+import harness
+from harness import ROOT, MONTAUK, MONTAUK_TRACE_DECODE as DECODE, SUBLIMATION as SUBL
 
 fails = 0
 
-
-def note(msg):
-    print(f"[trace-loadtest] {msg}", flush=True)
+note = harness.logger("trace-loadtest")
 
 
 def emit_csv(dest, header, rows):
@@ -65,9 +61,9 @@ def check(ok, label):
 
 
 def need_bins(*bins):
-    missing = [str(b) for b in bins if not b.exists()]
+    missing = harness.missing_bins(*bins)
     if missing:
-        note(f"build first -- missing: {', '.join(missing)}")
+        note(f"build first -- missing: {', '.join(str(b) for b in missing)}")
         sys.exit(1)
 
 
@@ -83,8 +79,7 @@ def op_counts(binpath):
     the pipe stays binary/native until sublimation has reduced it. tally is
     sublimation's sort|uniq -c|sort -rn, so each line is `count category`.
     """
-    dec = subprocess.run([str(DECODE), str(binpath)],
-                         capture_output=True, text=True)
+    dec = harness.run_text([str(DECODE), str(binpath)])
     if dec.returncode != 0:
         note(f"decode failed for {binpath} (rc={dec.returncode}): {dec.stderr.strip()}")
         return None
@@ -93,12 +88,9 @@ def op_counts(binpath):
         return {}
     body = "\n".join(rows) + "\n"
     # Strip the "[   ts]" prefix (split on ']'), then TYPE+subtype = first two tokens.
-    after_ts = subprocess.run([str(SUBL), "field", "2", "--delim", "]"],
-                              input=body, capture_output=True, text=True)
-    cat = subprocess.run([str(SUBL), "field", "1,2"],
-                         input=after_ts.stdout, capture_output=True, text=True)
-    tally = subprocess.run([str(SUBL), "tally"],
-                           input=cat.stdout, capture_output=True, text=True)
+    after_ts = harness.run_text([str(SUBL), "field", "2", "--delim", "]"], input=body)
+    cat = harness.run_text([str(SUBL), "field", "1,2"], input=after_ts.stdout)
+    tally = harness.run_text([str(SUBL), "tally"], input=cat.stdout)
     counts = {}
     for line in tally.stdout.splitlines():
         parts = line.split(None, 1)

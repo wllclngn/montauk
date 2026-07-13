@@ -187,22 +187,9 @@ int main(int argc, char** argv) {
     if (!trace_pattern.empty()) producer.enable_pmu();
     producer.start();
 
-    // --json: one-shot structured snapshot. Warm up two producer cycles so the
-    // rate deltas (cpu ctxt/s, net bps, disk bps) are real, read one snapshot
-    // via the seqlock, serialize to JSON, print and exit. No TUI, no server, no
-    // daemon -- the agent-facing analog of `montauk_analyze --json` for the live
-    // monitor.
-    if (json_once) {
-      for (int spins = 0; buffers.seq() < 2 && !g_stop.load() && spins < 4000; ++spins)
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      montauk::app::MetricsSnapshot ms = montauk::app::read_metrics_snapshot(buffers);
-      std::string js = montauk::app::snapshot_to_json(ms);
-      montauk_sink_append(&g_out, js.data(), js.size());
-      producer.stop();
-      return 0;
-    }
-
-    // Trace subsystem (optional, parallel to main pipeline)
+    // Trace subsystem (optional, parallel to main pipeline). Constructed
+    // before the --json one-shot branch below so that branch can warm it up
+    // and emit trace_to_json too, when --trace PATTERN is also given.
     std::unique_ptr<montauk::app::TraceBuffers> trace_buffers;
 #ifdef MONTAUK_HAVE_BPF
     std::unique_ptr<montauk::collectors::BpfTraceCollector> trace_collector;
@@ -222,6 +209,34 @@ int main(int argc, char** argv) {
       return 1;
     }
 #endif
+
+    // --json: one-shot structured snapshot. Warm up two producer cycles so the
+    // rate deltas (cpu ctxt/s, net bps, disk bps) are real, read one snapshot
+    // via the seqlock, serialize to JSON, print and exit. No TUI, no server, no
+    // daemon -- the agent-facing analog of `montauk_analyze --json` for the live
+    // monitor. With --trace PATTERN also given, a second JSON line follows with
+    // the trace snapshot (JSON-lines style: one structured record per line).
+    if (json_once) {
+      for (int spins = 0; buffers.seq() < 2 && !g_stop.load() && spins < 4000; ++spins)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      montauk::app::MetricsSnapshot ms = montauk::app::read_metrics_snapshot(buffers);
+      std::string js = montauk::app::snapshot_to_json(ms);
+      montauk_sink_append(&g_out, js.data(), js.size());
+
+      if (trace_buffers) {
+        for (int spins = 0; trace_buffers->seq() < 2 && !g_stop.load() && spins < 4000; ++spins)
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        montauk::model::TraceSnapshot ts = montauk::app::read_trace_snapshot(*trace_buffers);
+        std::string tjs = montauk::app::trace_to_json(ts);
+        montauk_sink_append(&g_out, tjs.data(), tjs.size());
+      }
+
+#ifdef MONTAUK_HAVE_BPF
+      if (trace_collector) trace_collector->stop();
+#endif
+      producer.stop();
+      return 0;
+    }
 
     std::unique_ptr<montauk::app::MetricsServer> metrics;
     if (metrics_port > 0) {

@@ -1,3 +1,5 @@
+// montauk_sink (C++ side): append/format/grow-past-SBO behavior of the
+// shared C23/C++23 output sink.
 #include "minitest.hpp"
 #include "util/sink.h"
 

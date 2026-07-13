@@ -1,3 +1,4 @@
+// Producer: per-process GPU utilization cache persists across samples.
 #include "minitest.hpp"
 #include "app/Producer.hpp"
 #include "app/SnapshotBuffers.hpp"

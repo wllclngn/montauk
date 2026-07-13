@@ -1,3 +1,4 @@
+// SnapshotBuffers: double-buffer publish/seqlock semantics.
 #include "minitest.hpp"
 #include "app/SnapshotBuffers.hpp"
 

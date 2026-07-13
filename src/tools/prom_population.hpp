@@ -62,16 +62,59 @@ HotCpu l2_hot_cpu(const std::string& dir);
 // All `*.prom` in `dir` except the analyzer's own `analysis-*` outputs.
 std::vector<std::string> glob_proms(const std::string& dir);
 
+// Structured system specs parsed from a recording dir's montauk_system_info{}
+// scrape -- the data behind system_info_block(), so a JSON digest can emit
+// these fields directly instead of re-parsing the text block.
+struct SystemInfo {
+  bool found{false};
+  std::string cpu_model, physical_cores, logical_cpus, cache_domains,
+      mem_total_gib, gpu, kernel, sched;
+};
+SystemInfo system_info_data(const std::string& dir);
+
 // Format the montauk_system_info{} from a recording dir's scrapes into a
 // human SYSTEM specs block (cpu, memory, gpu, kernel, scheduler) for the digest
 // header. Empty string if no system-info line is present.
 std::string system_info_block(const std::string& dir);
+
+// One scx ejection event, structured -- the data behind scx_stability_block()'s
+// "EJECTED ..." lines.
+struct ScxEjection {
+  std::string scheduler, reason, phase, cores;
+};
+
+// Structured scx stability data -- crash/ejection + clean-room + watchdog
+// proximity, the data behind scx_stability_block().
+struct ScxStability {
+  std::vector<ScxEjection> ejections;
+  std::string cleanroom_verdict, cleanroom_detail;
+  double watchdog_worst_pct{-1.0};  // -1 = not present
+  std::string watchdog_where;
+};
+ScxStability scx_stability_data(const std::string& dir);
 
 // CRASH/EJECTION + CLEAN-ROOM + watchdog-proximity, formatted to LEAD the digest
 // (a scheduler that got ejected invalidates every latency number under it).
 // Scrapes the montauk_scx_ejected / montauk_cleanroom / montauk_watchdog_proximity
 // markers bench-enduser writes into the recording. Empty when none are present.
 std::string scx_stability_block(const std::string& dir);
+
+// Structured thermal/power aggregates -- the data behind thermal_power_block().
+// A `*_n == 0` (or `energy_joules_total < 0`) field means that metric family
+// was never scraped in this recording.
+struct ThermalPower {
+  double temp_peak_c{0.0}, temp_avg_c{0.0}; int temp_n{0};
+  double fan_peak_rpm{0.0};
+  double power_avg_w{0.0}, power_peak_w{0.0}; int power_n{0};
+  double energy_joules_total{-1.0};
+  double freq_avg_mhz{0.0}, freq_peak_mhz{0.0}; int freq_n{0};
+  double energy_per_instr_pj{0.0}; int epi_n{0};
+  double ctx_switches_per_sec{0.0}; int ctx_n{0};
+  double migrations_per_sec{0.0}; int mig_n{0};
+  double branch_misses_per_sec{0.0}; int br_n{0};
+  std::string dominant_cstate; double dominant_cstate_pct{-1.0};
+};
+ThermalPower thermal_power_data(const std::string& dir);
 
 // Summarize montauk_thermal_*/montauk_power_watts across a recording's scrapes
 // into a THERMAL/POWER block (peak/avg cpu temp, peak fan, avg/peak watts) for

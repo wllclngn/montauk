@@ -1,3 +1,5 @@
+// Security: suspicious-process heuristics (root-owned /tmp binaries, fake
+// kernel threads, curl|bash pipelines).
 #include "minitest.hpp"
 #include "app/Security.hpp"
 #include "model/Snapshot.hpp"

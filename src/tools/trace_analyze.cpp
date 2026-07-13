@@ -9,6 +9,7 @@
 //   montauk_analyze FILE [--report name[,name...]]   # default: all reports
 
 #include "model/TraceReader.hpp"
+#include "model/TraceEnumNames.hpp"
 #include "montauk_trace.h"
 #include "prom_population.hpp"
 #include "prom_stats.hpp"
@@ -18,6 +19,7 @@
 #include <cctype>
 #include <cinttypes>
 #include <cstdlib>
+#include <deque>
 #include <dirent.h>
 #include <fstream>
 #include <string>
@@ -28,7 +30,7 @@ using montauk::util::log_info;
 using montauk::util::log_warn;
 using montauk::util::log_error;
 
-// ── Address resolution against captured /proc/PID/maps sidecars ──────────────
+// Address resolution against captured /proc/PID/maps sidecars
 //
 // montauk writes a <PID>.maps sidecar beside the trace at track time. A wait on
 // a futex names the lock by its userspace address (the uaddr); resolving that
@@ -265,61 +267,10 @@ constexpr uint64_t kPairingMinWaits = 1000;
 // Distinct result values shown per row in the waits table.
 constexpr size_t kWaitsTopResults = 4;
 
-const char* ntsync_op_name(uint8_t op) {
-  switch (op) {
-    case NTS_CREATE_SEM:   return "create_sem";
-    case NTS_SEM_RELEASE:  return "sem_release";
-    case NTS_WAIT_ANY:     return "wait_any";
-    case NTS_WAIT_ALL:     return "wait_all";
-    case NTS_CREATE_MUTEX: return "create_mutex";
-    case NTS_MUTEX_UNLOCK: return "mutex_unlock";
-    case NTS_MUTEX_KILL:   return "mutex_kill";
-    case NTS_CREATE_EVENT: return "create_event";
-    case NTS_EVENT_SET:    return "event_set";
-    case NTS_EVENT_RESET:  return "event_reset";
-    case NTS_EVENT_PULSE:  return "event_pulse";
-    case NTS_SEM_READ:     return "sem_read";
-    case NTS_MUTEX_READ:   return "mutex_read";
-    case NTS_EVENT_READ:   return "event_read";
-    default:               return "unknown";
-  }
-}
-
-const char* io_syscall_name(int32_t nr) {
-  switch (nr) {
-    case 0:   return "read";
-    case 1:   return "write";
-    case 5:   return "fstat";
-    case 8:   return "lseek";
-    case 17:  return "pread64";
-    case 257: return "openat";
-    case 7:   return "poll";
-    case 271: return "ppoll";
-    case 232: return "epoll_wait";
-    case 281: return "epoll_pwait";
-    case 47:  return "recvmsg";
-    case 45:  return "recvfrom";
-    case 23:  return "select";
-    case 270: return "pselect6";
-    case 16:  return "ioctl";
-    default:  return "?";
-  }
-}
-
-// Signal number -> canonical name, nullptr when unnamed. Shared by the
-// signals report and the --sig qualifier parser.
-const char* signal_name(int32_t n) {
-  switch (n) {
-    case 1:  return "SIGHUP";  case 2:  return "SIGINT";  case 3:  return "SIGQUIT";
-    case 4:  return "SIGILL";  case 5:  return "SIGTRAP"; case 6:  return "SIGABRT";
-    case 7:  return "SIGBUS";  case 8:  return "SIGFPE";  case 9:  return "SIGKILL";
-    case 10: return "SIGUSR1"; case 11: return "SIGSEGV"; case 12: return "SIGUSR2";
-    case 13: return "SIGPIPE"; case 14: return "SIGALRM"; case 15: return "SIGTERM";
-    case 17: return "SIGCHLD"; case 19: return "SIGSTOP"; case 24: return "SIGXCPU";
-    case 25: return "SIGXFSZ"; case 31: return "SIGSYS";
-    default: return nullptr;
-  }
-}
+using montauk::model::sched_op_name;
+using montauk::model::ntsync_op_name;
+using montauk::model::io_syscall_name;
+using montauk::model::signal_name;
 
 std::string signal_label(int32_t n) {
   if (const char* s = signal_name(n)) return s;
@@ -341,25 +292,6 @@ int32_t signal_nr_from(const std::string& s) {
     if (nm && want == nm) return n;
   }
   return -1;
-}
-
-const char* sched_op_name(uint32_t op) {
-  switch (op) {
-    case SCHED_OP_ENQUEUE:        return "ENQUEUE";
-    case SCHED_OP_PICK:           return "PICK";
-    case SCHED_OP_PICK_EMPTY:     return "PICK_EMPTY";
-    case SCHED_OP_PREEMPT_TICK:   return "PREEMPT_TICK";
-    case SCHED_OP_PREEMPT_WAKEUP: return "PREEMPT_WAKEUP";
-    case SCHED_OP_WAKEUP:         return "WAKEUP";
-    case SCHED_OP_WAKE2RUN:       return "WAKE2RUN";
-    case SCHED_OP_CPU_IDLE:       return "CPU_IDLE";
-    case SCHED_OP_SWITCH_IN:      return "SWITCH_IN";
-    case SCHED_OP_FIELD_GATE:     return "FIELD_GATE";
-    case SCHED_OP_KICK_ISSUE:     return "KICK_ISSUE";
-    case SCHED_OP_RESCHED:        return "RESCHED";
-    case SCHED_OP_TICK_STOP:      return "TICK_STOP";
-    default:                      return "?";
-  }
 }
 
 // Format an absolute wall-clock ns-since-epoch into HH:MM:SS.mmm.
@@ -387,7 +319,7 @@ bool is_wakeup_op(uint8_t op) {
          op == NTS_MUTEX_UNLOCK;
 }
 
-// ── Generic synchronization model ────────────────────────────────────────────
+// Generic synchronization model
 // The wait/spin/contention reports fold over this unified shape so the SAME
 // analysis applies to NTSYNC objects AND futexes (and any future primitive) --
 // a generic interface, not a Wine-only one. A wait COMPLETION carries the
@@ -473,6 +405,14 @@ const char* prom_help(const char* name) {
   static constexpr struct { const char* name; const char* help; } kHelp[] = {
     {"montauk_analysis_events_total",
      "Event count per type+subtype over the whole trace"},
+    {"montauk_analysis_iolat_pwrite64_count",
+     "Tracked pwrite64 completions -- true O_DIRECT block-I/O completion latency, enter to exit"},
+    {"montauk_analysis_iolat_pwrite64_p50_ms",
+     "pwrite64 completion latency, p50, in ms"},
+    {"montauk_analysis_iolat_pwrite64_p99_ms",
+     "pwrite64 completion latency, p99, in ms"},
+    {"montauk_analysis_iolat_pwrite64_worst_ms",
+     "pwrite64 completion latency, worst observed, in ms"},
     {"montauk_analysis_dispatches_per_sec",
      "Scheduler dispatch (PICK) rate per second over the trace"},
     {"montauk_analysis_preempts_per_sec",
@@ -2646,6 +2586,7 @@ struct SchedLatencyReport final : Report {
       return;
     }
     if (s->op != SCHED_OP_WAKE2RUN) return;
+    if (!qual_match(-1, (uint32_t)s->pid, (uint32_t)s->pid, "")) return;
     lat_.push_back(s->runtime_ns);
     if (s->sub_idx) cross_lat_.push_back(s->runtime_ns);
     auto it = cpu_idle_enter_.find(s->cpu);
@@ -3397,6 +3338,11 @@ struct DispatchStallReport final : Report {
     if (s->op != SCHED_OP_WAKE2RUN) return;
     uint64_t wait = s->runtime_ns;
     if (wait < kTickFloorNs) return;
+    // Row qualifiers narrow WHICH floored wakes get analyzed, not the
+    // pass-over context around them: picks_/idle_/holder_ above stay
+    // unfiltered so the CLASS/CONCENTRATION/HELD-vs-DARK attribution below
+    // still sees the full set of tasks that passed the qualified wakee over.
+    if (!qual_match(-1, (uint32_t)s->pid, (uint32_t)s->pid, "")) return;
     uint64_t run_ts = s->timestamp_ns;
     floored_.push_back({(run_ts > wait) ? (run_ts - wait) : 0, run_ts, s->cpu, s->pid});
   }
@@ -4139,10 +4085,13 @@ struct WakersReport final : Report {
     if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
     const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
     if (s->op == SCHED_OP_WAKEUP) {
+      // Unfiltered by design: the messenger/hot-waker classification below is
+      // relative across ALL wakers in the trace, not just a qualified subset.
       if (s->secondary_pid >= 0) { ++wake_count_[s->secondary_pid]; ++total_wakes_; }
       return;
     }
-    if (s->op == SCHED_OP_WAKE2RUN)
+    if (s->op == SCHED_OP_WAKE2RUN &&
+        qual_match(-1, (uint32_t)s->pid, (uint32_t)s->pid, ""))
       w2r_by_pid_[s->pid].push_back(s->runtime_ns);
   }
 
@@ -4211,7 +4160,8 @@ struct FractalReport final : Report {
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
     if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
     const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
-    if (s->op == SCHED_OP_WAKE2RUN) {
+    if (s->op == SCHED_OP_WAKE2RUN &&
+        qual_match(-1, (uint32_t)s->pid, (uint32_t)s->pid, "")) {
       disp_ts_.push_back(s->timestamp_ns);
       if (s->sub_idx) mig_ts_.push_back(s->timestamp_ns);  // cross-domain landing
     }
@@ -4513,6 +4463,11 @@ class LocalityReport : public Report {
     }
     if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
     const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    // Row qualifiers narrow to one task's own migrations. Safe to filter at the
+    // top here (unlike dispatch-stall/wakers below): every field this report
+    // tracks (last_lane_, last_mig_ts_, tier_) is keyed per-pid already, so
+    // there is no cross-task context to lose by scoping the whole fold.
+    if (!qual_match(-1, (uint32_t)s->pid, (uint32_t)s->pid, "")) return;
     // Trace active span over ALL sched ops -- the denominator for migrations/s.
     if (ts_min_ == 0 || s->timestamp_ns < ts_min_) ts_min_ = s->timestamp_ns;
     if (s->timestamp_ns > ts_max_) ts_max_ = s->timestamp_ns;
@@ -4802,8 +4757,124 @@ struct FieldPersistReport final : Report {
   }
 };
 
+// REPORT iolat: per-syscall I/O completion latency, broken out by the
+// syscall the thread actually blocked in. A
+// blocking pwrite64() on an O_DIRECT fd does not return until the write has
+// genuinely completed at the device, so its enter->exit wall time IS the
+// true block-I/O completion latency -- no separate block-layer bio hook is
+// needed. The same reasoning generalizes to any other syscall a thread
+// blocks in until an I/O it issued elsewhere completes: io_getevents()
+// (Linux AIO's completion-reap call -- the async analog of pwrite64 for
+// io_submit()-based backends, e.g. qemu's aio=native drive threads) and the
+// generic iowait syscalls (poll/ppoll/epoll_wait/epoll_pwait/recvmsg/
+// recvfrom/select/pselect6/a non-ntsync ioctl), which used to be tracked as
+// pending/parked markers only (duration_ns always 0) and now carry a real
+// enter->exit duration too. Built to answer "was any individual I/O
+// operation abnormally stalled, or is this ordinary queueing under load" --
+// the question sched_ext's kstrand/dispatch-stall reports cannot answer,
+// because they see the WAITER's task-scheduling latency, not the underlying
+// I/O's own completion time. Grouped and reported per syscall so whichever
+// call a given workload actually blocks in surfaces on its own, without
+// having to know in advance which one that will be.
+struct IolatReport final : Report {
+  struct Call { uint64_t dur_ns; uint32_t tid; char comm[16]; };
+  struct Series {
+    std::vector<Call> calls;
+    std::vector<uint64_t> durs;  // sorted ascending after compute()
+  };
+  std::map<int32_t, Series> by_syscall_;  // syscall_nr -> series
+  std::deque<std::string> prom_names_;    // owns strings behind PromMetric::name
+                                          // (a non-owning const char*); deque
+                                          // never invalidates existing elements
+                                          // on push_back, so pointers stay valid
+
+  const char* name() const override { return "iolat"; }
+
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_IO || len < sizeof(montauk_io_event)) return;
+    const auto* e = reinterpret_cast<const montauk_io_event*>(data);
+    if (e->duration_ns == 0) return;  // tracked call sites only
+    Call c{}; c.dur_ns = e->duration_ns; c.tid = e->tid;
+    std::memcpy(c.comm, e->comm, sizeof(c.comm));
+    by_syscall_[e->syscall_nr].calls.push_back(c);
+  }
+
+  void compute() override {
+    for (auto& [nr, s] : by_syscall_) {
+      (void)nr;
+      if (s.calls.empty()) continue;
+      s.durs.reserve(s.calls.size());
+      for (const auto& c : s.calls) s.durs.push_back(c.dur_ns);
+      sublimation_u64(s.durs.data(), s.durs.size());  // ascending
+    }
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (by_syscall_.empty()) {
+      montauk_sink_appendf(&g_out, "VERDICT: no tracked I/O completions in this trace\n\n");
+      return;
+    }
+    for (const auto& [nr, s] : by_syscall_) {
+      if (s.durs.empty()) continue;
+      montauk_sink_appendf(&g_out,
+          "VERDICT[%s]: %zu completions; p50 %.3fms p99 %.3fms p999 %.3fms worst %.3fms\n",
+          io_syscall_name(nr), s.durs.size(), q_ms(s.durs, 0.50), q_ms(s.durs, 0.99),
+          q_ms(s.durs, 0.999), ms(s.durs.back()));
+      // Name the worst individual calls directly -- exactly the outliers this
+      // report exists to find, not just a summary that hides them in a p999.
+      std::vector<Call> worst = s.calls;
+      std::sort(worst.begin(), worst.end(),
+                [](const Call& a, const Call& b) { return a.dur_ns > b.dur_ns; });
+      size_t shown = std::min<size_t>(5, worst.size());
+      if (shown) {
+        montauk_sink_appendf(&g_out, "  WORST CALLS:\n");
+        for (size_t i = 0; i < shown; ++i)
+          montauk_sink_appendf(&g_out, "    tid=%u %-16s %.3fms\n",
+                      worst[i].tid, worst[i].comm, ms(worst[i].dur_ns));
+      }
+    }
+    montauk_sink_appendf(&g_out, "\n");
+  }
+
+  void prom(std::vector<PromMetric>& out) override {
+    for (const auto& [nr, s] : by_syscall_) {
+      if (s.durs.empty()) continue;
+      std::string base = std::string("montauk_analysis_iolat_") + io_syscall_name(nr) + "_";
+      auto named = [&](const char* suffix, double v) {
+        prom_names_.push_back(base + suffix);
+        out.push_back({prom_names_.back().c_str(), "", v});
+      };
+      named("count", (double)s.durs.size());
+      named("p50_ms", q_ms(s.durs, 0.50));
+      named("p99_ms", q_ms(s.durs, 0.99));
+      named("worst_ms", ms(s.durs.back()));
+    }
+  }
+
+  void offenders(std::vector<Offender>& out) override {
+    for (const auto& [nr, s] : by_syscall_) {
+      if (s.calls.empty()) continue;
+      std::vector<Call> worst = s.calls;
+      std::sort(worst.begin(), worst.end(),
+                [](const Call& a, const Call& b) { return a.dur_ns > b.dur_ns; });
+      size_t shown = std::min<size_t>(5, worst.size());
+      std::string label = std::string(io_syscall_name(nr)) + "-slow";
+      for (size_t i = 0; i < shown; ++i) {
+        double d_ms = ms(worst[i].dur_ns);
+        // >1s is the severity line: an ordinary O_DIRECT/AIO completion under
+        // load is sub-100ms; multi-second is the class this report catches.
+        int sev = d_ms >= 1000.0 ? 2 : (d_ms >= 100.0 ? 1 : 0);
+        out.push_back({label, std::to_string(worst[i].tid), worst[i].comm,
+                       "duration_ms", d_ms, sev});
+      }
+    }
+  }
+};
+
 std::vector<std::unique_ptr<Report>> make_reports() {
   std::vector<std::unique_ptr<Report>> reports;
+  reports.push_back(std::make_unique<IolatReport>());
   reports.push_back(std::make_unique<ClassMixReport>());
   reports.push_back(std::make_unique<FieldPersistReport>());
   reports.push_back(std::make_unique<LocalityReport>());
@@ -4836,17 +4907,24 @@ std::vector<std::unique_ptr<Report>> make_reports() {
 // Rank offenders by severity (then value) and print the POORLY-BEHAVING ITEMS
 // table, appending the reusable montauk_offender{} family to prom. Shared by
 // the full-report main() and the compact digest.
-void rank_and_emit_offenders(std::vector<Offender>& offs,
-                             std::vector<PromMetric>& prom) {
-  if (offs.empty()) {
-    montauk_sink_appendf(&g_out, "\nPOORLY-BEHAVING ITEMS: none detected\n");
-    return;
-  }
+// Split so the --digest --json path can rank offenders the same way the text
+// digest does without also writing the "POORLY-BEHAVING ITEMS" text into
+// g_out: rank_offenders sorts in place; emit_offenders_text (assumes already
+// ranked) writes the text table and folds each offender into `prom`.
+void rank_offenders(std::vector<Offender>& offs) {
   std::sort(offs.begin(), offs.end(),
             [](const Offender& a, const Offender& b) {
               if (a.sev != b.sev) return a.sev > b.sev;
               return a.value > b.value;
             });
+}
+
+void emit_offenders_text(const std::vector<Offender>& offs,
+                          std::vector<PromMetric>& prom) {
+  if (offs.empty()) {
+    montauk_sink_appendf(&g_out, "\nPOORLY-BEHAVING ITEMS: none detected\n");
+    return;
+  }
   montauk_sink_appendf(&g_out, "\nPOORLY-BEHAVING ITEMS (ranked)\n");
   montauk_sink_appendf(&g_out, "%-14s %-18s %-16s %14s  sev\n", "kind", "id", "metric", "value");
   for (const Offender& o : offs) {
@@ -4861,11 +4939,130 @@ void rank_and_emit_offenders(std::vector<Offender>& offs,
   }
 }
 
+// The JSON envelope for --digest --json: the same data the text digest reads
+// (SystemInfo/ScxStability/ThermalPower/HotCpu/Offender/Report::json()), one
+// parse per source, two renderings -- same discipline as --report --json.
+void emit_digest_json(const std::string& dir, bool have_events,
+                       const std::vector<std::unique_ptr<Report>>& reports,
+                       const std::vector<Offender>& offs,
+                       const montauk::pop::HotCpu& hot) {
+  montauk::pop::SystemInfo sys = montauk::pop::system_info_data(dir);
+  montauk::pop::ScxStability stab = montauk::pop::scx_stability_data(dir);
+  montauk::pop::ThermalPower tp = montauk::pop::thermal_power_data(dir);
+
+  montauk_json j;
+  montauk_json_init(&j, &g_out);
+  montauk_json_obj_begin(&j);
+    montauk_json_ku64(&j, "schema_version", 1u);
+    montauk_json_key(&j, "digest");
+    montauk_json_obj_begin(&j);
+      montauk_json_kstr(&j, "dir", dir.c_str());
+      montauk_json_kbool(&j, "has_events", have_events);
+    montauk_json_obj_end(&j);
+
+    if (sys.found) {
+      montauk_json_key(&j, "system");
+      montauk_json_obj_begin(&j);
+        montauk_json_kstr(&j, "cpu_model", sys.cpu_model.c_str());
+        montauk_json_kstr(&j, "physical_cores", sys.physical_cores.c_str());
+        montauk_json_kstr(&j, "logical_cpus", sys.logical_cpus.c_str());
+        if (!sys.cache_domains.empty()) montauk_json_kstr(&j, "cache_domains", sys.cache_domains.c_str());
+        montauk_json_kstr(&j, "mem_total_gib", sys.mem_total_gib.c_str());
+        if (!sys.gpu.empty()) montauk_json_kstr(&j, "gpu", sys.gpu.c_str());
+        montauk_json_kstr(&j, "kernel", sys.kernel.c_str());
+        montauk_json_kstr(&j, "scheduler", sys.sched.c_str());
+      montauk_json_obj_end(&j);
+    }
+
+    if (!stab.ejections.empty() || !stab.cleanroom_verdict.empty() || stab.watchdog_worst_pct >= 0) {
+      montauk_json_key(&j, "stability");
+      montauk_json_obj_begin(&j);
+        montauk_json_key(&j, "ejections");
+        montauk_json_arr_begin(&j);
+          for (const auto& e : stab.ejections) {
+            montauk_json_obj_begin(&j);
+              montauk_json_kstr(&j, "scheduler", e.scheduler.c_str());
+              montauk_json_kstr(&j, "reason", e.reason.c_str());
+              if (!e.phase.empty()) montauk_json_kstr(&j, "phase", e.phase.c_str());
+              if (!e.cores.empty()) montauk_json_kstr(&j, "cores", e.cores.c_str());
+            montauk_json_obj_end(&j);
+          }
+        montauk_json_arr_end(&j);
+        if (!stab.cleanroom_verdict.empty()) {
+          montauk_json_kstr(&j, "cleanroom_verdict", stab.cleanroom_verdict.c_str());
+          if (!stab.cleanroom_detail.empty()) montauk_json_kstr(&j, "cleanroom_detail", stab.cleanroom_detail.c_str());
+        }
+        if (stab.watchdog_worst_pct >= 0) {
+          montauk_json_knum(&j, "watchdog_worst_pct", stab.watchdog_worst_pct);
+          if (!stab.watchdog_where.empty()) montauk_json_kstr(&j, "watchdog_where", stab.watchdog_where.c_str());
+        }
+      montauk_json_obj_end(&j);
+    }
+
+    if (tp.temp_n > 0 || tp.power_n > 0 || tp.fan_peak_rpm > 0.0 || tp.freq_n > 0 ||
+        tp.ctx_n > 0 || tp.mig_n > 0 || !tp.dominant_cstate.empty() || tp.energy_joules_total >= 0.0) {
+      montauk_json_key(&j, "thermal_power");
+      montauk_json_obj_begin(&j);
+        if (tp.temp_n > 0) { montauk_json_knum(&j, "cpu_temp_peak_c", tp.temp_peak_c); montauk_json_knum(&j, "cpu_temp_avg_c", tp.temp_avg_c); }
+        if (tp.fan_peak_rpm > 0.0) montauk_json_knum(&j, "fan_peak_rpm", tp.fan_peak_rpm);
+        if (tp.power_n > 0) { montauk_json_knum(&j, "power_avg_w", tp.power_avg_w); montauk_json_knum(&j, "power_peak_w", tp.power_peak_w); }
+        if (tp.energy_joules_total >= 0.0) montauk_json_knum(&j, "energy_joules_total", tp.energy_joules_total);
+        if (tp.freq_n > 0) { montauk_json_knum(&j, "cpu_clock_avg_mhz", tp.freq_avg_mhz); montauk_json_knum(&j, "cpu_clock_peak_mhz", tp.freq_peak_mhz); }
+        if (tp.epi_n > 0) montauk_json_knum(&j, "energy_per_instr_pj", tp.energy_per_instr_pj);
+        if (tp.ctx_n > 0) montauk_json_knum(&j, "context_switches_per_sec", tp.ctx_switches_per_sec);
+        if (tp.mig_n > 0) montauk_json_knum(&j, "migrations_per_sec", tp.migrations_per_sec);
+        if (tp.br_n > 0) montauk_json_knum(&j, "branch_misses_per_sec", tp.branch_misses_per_sec);
+        if (!tp.dominant_cstate.empty()) {
+          montauk_json_kstr(&j, "dominant_cstate", tp.dominant_cstate.c_str());
+          montauk_json_knum(&j, "dominant_cstate_pct", tp.dominant_cstate_pct);
+        }
+      montauk_json_obj_end(&j);
+    }
+
+    if (hot.found) {
+      montauk_json_key(&j, "hot_cpu");
+      montauk_json_obj_begin(&j);
+        montauk_json_ki64(&j, "cpu", hot.cpu);
+        montauk_json_knum(&j, "share_pct", hot.share_pct);
+        montauk_json_knum(&j, "uniform_pct", hot.uniform_pct);
+        montauk_json_ki64(&j, "sev", hot.sev);
+      montauk_json_obj_end(&j);
+    }
+
+    montauk_json_key(&j, "offenders");
+    montauk_json_arr_begin(&j);
+      for (const auto& o : offs) {
+        montauk_json_obj_begin(&j);
+          montauk_json_kstr(&j, "kind", o.kind.c_str());
+          montauk_json_kstr(&j, "id", o.id.c_str());
+          if (!o.obj.empty()) montauk_json_kstr(&j, "obj", o.obj.c_str());
+          montauk_json_kstr(&j, "metric", o.metric.c_str());
+          montauk_json_knum(&j, "value", o.value);
+          montauk_json_ki64(&j, "sev", o.sev);
+        montauk_json_obj_end(&j);
+      }
+    montauk_json_arr_end(&j);
+
+    if (have_events) {
+      montauk_json_key(&j, "reports");
+      montauk_json_arr_begin(&j);
+        for (auto& r : reports)
+          if (std::string(r->name()) == "sched" ||
+              std::string(r->name()) == "dispatch-stall" ||
+              std::string(r->name()) == "kstrand")
+            r->json(j);
+      montauk_json_arr_end(&j);
+    }
+  montauk_json_obj_end(&j);
+  montauk_sink_appendc(&g_out, '\n');
+}
+
 // Compact, specs-first report over a montauk --trace RECORDING DIR: SYSTEM
 // specs (from the dir's scrapes), POORLY-BEHAVING ITEMS (offenders over the
 // sibling .events), then KEY METRICS (the wake2run verdict). The single-call
 // shareable digest; the dir is the one input, both halves read from it.
-int run_digest(const std::string& dir, bool redact) {
+// --json emits the structured envelope (see emit_digest_json) instead of text.
+int run_digest(const std::string& dir, bool redact, bool want_json) {
   g_redact_comm = redact;
   std::string base = dir;
   while (!base.empty() && base.back() == '/') base.pop_back();
@@ -4887,6 +5084,24 @@ int run_digest(const std::string& dir, bool redact) {
     for (auto& r : reports) r->compute();  // finalize typed results once, before any renderer
   }
 
+  std::vector<PromMetric> prom;
+  std::vector<Offender> offs;
+  if (have_events)
+    for (auto& r : reports) r->offenders(offs);
+  // The L2 hot-CPU offender is computed from the .prom scrapes, so it ranks even
+  // for a .prom-only recording -- a cachyos capture still names its hottest core
+  // instead of reporting "not analyzed."
+  montauk::pop::HotCpu hot = montauk::pop::l2_hot_cpu(dir);
+  if (hot.found)
+    offs.push_back({"hot-cpu", std::to_string(hot.cpu), "", "l2_miss_share",
+                    hot.share_pct, hot.sev});
+  rank_offenders(offs);
+
+  if (want_json) {
+    emit_digest_json(dir, have_events, reports, offs, hot);
+    return 0;
+  }
+
   // FRONT AND CENTER: a scheduler that crashed/ejected makes every number below
   // it meaningless, and a NOISY clean-room makes them untrustworthy -- so this
   // leads the digest, above SYSTEM, before the reader sees a single latency.
@@ -4899,18 +5114,7 @@ int run_digest(const std::string& dir, bool redact) {
   std::string tp = montauk::pop::thermal_power_block(dir);
   if (!tp.empty()) montauk_sink_appendf(&g_out, "\n%s", tp.c_str());
 
-  std::vector<PromMetric> prom;
-  std::vector<Offender> offs;
-  if (have_events)
-    for (auto& r : reports) r->offenders(offs);
-  // The L2 hot-CPU offender is computed from the .prom scrapes, so it ranks even
-  // for a .prom-only recording -- a cachyos capture still names its hottest core
-  // instead of reporting "not analyzed."
-  montauk::pop::HotCpu hot = montauk::pop::l2_hot_cpu(dir);
-  if (hot.found)
-    offs.push_back({"hot-cpu", std::to_string(hot.cpu), "", "l2_miss_share",
-                    hot.share_pct, hot.sev});
-  rank_and_emit_offenders(offs, prom);
+  emit_offenders_text(offs, prom);
 
   if (have_events) {
     montauk_sink_appendf(&g_out, "\nKEY METRICS\n");
@@ -4962,14 +5166,17 @@ int main(int argc, char** argv) {
         "                       [--sig N|NAME] [--comm SUBSTR] [--pid N] [--tid N]\n"
         "                       [--window SECONDS]\n"
         "                       (--json emits the structured envelope instead of\n"
-        "                        the text report. row qualifiers are consumed by\n"
-        "                        per-event reports, currently: signals. --window\n"
-        "                        bounds the trailing capture-teardown split, def 2s)\n"
+        "                        the text report. --pid/--tid narrow to one task's\n"
+        "                        events in sched, locality, dispatch-stall, wakers\n"
+        "                        and fractal, and to one thread's in signals; --sig\n"
+        "                        and --comm remain signals-only (sched events carry\n"
+        "                        no signal number or comm). --window bounds the\n"
+        "                        trailing capture-teardown split, def 2s)\n"
         "       montauk_analyze DIR|FILE.prom [more.prom...] [--by axis]\n"
         "                       [--metric substr] [--full] [--higher-better]\n"
         "                       [--seed n] [--quantile q] [--no-emit]\n"
         "                       (axis: scheduler | version | commit | capture)\n"
-        "       montauk_analyze RECORDING_DIR --digest [--redact]\n"
+        "       montauk_analyze RECORDING_DIR --digest [--redact] [--json]\n"
         "       montauk_analyze RECORDING_DIR --l2-by-cpu\n");
     return want_help ? 0 : 2;
   }
@@ -4989,14 +5196,15 @@ int main(int argc, char** argv) {
       // Recording-dir modes (vs cross-run population stats):
       //   --digest    compact specs+offenders+aggregates report
       //   --l2-by-cpu per-CPU cache-miss localization
-      bool want_digest = false, want_l2 = false, redact = false;
+      bool want_digest = false, want_l2 = false, redact = false, want_digest_json = false;
       for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--digest") want_digest = true;
         else if (a == "--l2-by-cpu") want_l2 = true;
         else if (a == "--redact") redact = true;
+        else if (a == "--json") want_digest_json = true;
       }
-      if (want_digest) return run_digest(path, redact);
+      if (want_digest) return run_digest(path, redact, want_digest_json);
       if (want_l2) return montauk::pop::run_l2_by_cpu(path);
       montauk::pop::PopOptions opt;
       std::vector<std::string> files;

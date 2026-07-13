@@ -42,7 +42,6 @@ private:
   bool recv_snapshot(montauk::model::ProcessSnapshot& out);
   uint64_t read_cpu_total();
   int read_cpu_count();
-  std::string read_cmdline(int32_t pid);
 };
 
 } // namespace montauk::collectors

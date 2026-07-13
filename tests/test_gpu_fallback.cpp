@@ -1,4 +1,6 @@
+// GpuCollector: NVIDIA /proc and AMD sysfs fallback parsers.
 #include "minitest.hpp"
+#include "env_guard.hpp"
 #include "collectors/GpuCollector.hpp"
 #include <filesystem>
 #include <fstream>
@@ -12,14 +14,12 @@ TEST(gpu_collector_nvidia_proc_fallback) {
   std::ofstream(root / "proc/driver/nvidia/gpus/0000:01:00.0/fb_memory_usage") <<
       "Total                       : 4096 MiB\n"
       "Used                        : 1024 MiB\n";
-  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
-  setenv("MONTAUK_GPU_DISABLE_NATIVE", "1", 1);  // isolate the proc parser from a live NVML GPU
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
+  TempRootGuard gpu_disable("MONTAUK_GPU_DISABLE_NATIVE", "1");  // isolate the proc parser from a live NVML GPU
   montauk::collectors::GpuCollector c; montauk::model::GpuVram v{};
   ASSERT_TRUE(c.sample(v));
   ASSERT_EQ(v.total_mb, 4096u);
   ASSERT_EQ(v.used_mb, 1024u);
-  unsetenv("MONTAUK_PROC_ROOT");
-  unsetenv("MONTAUK_GPU_DISABLE_NATIVE");
 }
 
 TEST(gpu_collector_amd_sysfs_fallback) {
@@ -28,16 +28,13 @@ TEST(gpu_collector_amd_sysfs_fallback) {
   fs::create_directories(root / "sys/class/drm/card0/device");
   std::ofstream(root / "sys/class/drm/card0/device/mem_info_vram_total") << (512ull * 1024ull * 1024ull);
   std::ofstream(root / "sys/class/drm/card0/device/mem_info_vram_used") << (128ull * 1024ull * 1024ull);
-  setenv("MONTAUK_SYS_ROOT", root.c_str(), 1);
-  setenv("MONTAUK_GPU_DISABLE_NATIVE", "1", 1);  // isolate the sysfs parser from a live NVML GPU
+  TempRootGuard sys_root("MONTAUK_SYS_ROOT", root.string());
+  TempRootGuard gpu_disable("MONTAUK_GPU_DISABLE_NATIVE", "1");  // isolate the sysfs parser from a live NVML GPU
   // Point the proc root at this sandbox (which has no proc/driver/nvidia) so the
   // NVIDIA proc reader finds nothing and the AMD sysfs reader is what answers.
-  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
   montauk::collectors::GpuCollector c; montauk::model::GpuVram v{};
   ASSERT_TRUE(c.sample(v));
   ASSERT_EQ(v.total_mb, 512u);
   ASSERT_EQ(v.used_mb, 128u);
-  unsetenv("MONTAUK_SYS_ROOT");
-  unsetenv("MONTAUK_PROC_ROOT");
-  unsetenv("MONTAUK_GPU_DISABLE_NATIVE");
 }

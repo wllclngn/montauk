@@ -18,11 +18,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+import harness
+from harness import ROOT, MONTAUK_ANALYZE as ANALYZE, MONTAUK_TRACE_DECODE as DECODE, SUBLIMATION
+
 GEN_SRC = ROOT / "tests" / "gen_synthetic_trace.cpp"
 FIXTURE = ROOT / "tests" / "fixtures" / "synthetic.mtk"
-ANALYZE = ROOT / "build" / "montauk_analyze"
-DECODE = ROOT / "build" / "montauk_trace_decode"
 
 # label -> (binary, golden path, extra args)
 SURFACES = {
@@ -31,7 +31,6 @@ SURFACES = {
     "json": (ANALYZE, ROOT / "tests" / "fixtures" / "synthetic.json.golden", ["--json"]),
 }
 
-SUBLIMATION = ROOT / "build" / "sublimation"
 CLI_GOLDEN = ROOT / "tests" / "fixtures" / "synthetic.cli.golden"
 
 # Deterministic CLI cases: each is (args, stdin). The output of every case is
@@ -93,9 +92,7 @@ CLI_CASES = [
     (["contains", "-i", "foo"], "foo\nFOO\nFoo\nbar\n"),  # -i folds ASCII case
 ]
 
-
-def note(msg: str) -> None:
-    print(f"[corpus] {msg}")
+note = harness.logger("corpus")
 
 
 def regenerate_fixture(tmp: Path) -> None:
@@ -115,15 +112,12 @@ def regenerate_fixture(tmp: Path) -> None:
 
 def run_stdout(binary: Path, args: list) -> str:
     """Run a tool over the fixture, returning stdout only (stderr discarded)."""
-    proc = subprocess.run(
-        [str(binary), str(FIXTURE), *args], capture_output=True, text=True,
-    )
-    return proc.stdout
+    return harness.run_text([str(binary), str(FIXTURE), *args]).stdout
 
 
 def check_surface(label: str, update: bool) -> bool:
     binary, golden, args = SURFACES[label]
-    if not binary.exists():
+    if harness.missing_bins(binary):
         note(f"FAIL: missing {binary.relative_to(ROOT)} (build first)")
         return False
     got = run_stdout(binary, args)
@@ -154,12 +148,7 @@ def check_surface(label: str, update: bool) -> bool:
         return True
 
     note(f"FAIL {label} -- stdout diverged from golden:")
-    import difflib
-    diff = difflib.unified_diff(
-        want.splitlines(keepends=True), got.splitlines(keepends=True),
-        fromfile=f"{label}.golden", tofile=f"{label}.actual",
-    )
-    sys.stdout.writelines(list(diff)[:40])
+    harness.print_diff(label, want, got)
     return False
 
 
@@ -168,14 +157,13 @@ def cli_blob() -> str:
     parts = []
     for argv, stdin in CLI_CASES:
         # cwd=ROOT so relative fixture paths (set-ops/join FILE args) resolve.
-        proc = subprocess.run([str(SUBLIMATION), *argv], input=stdin,
-                              cwd=ROOT, capture_output=True, text=True)
+        proc = harness.run_text([str(SUBLIMATION), *argv], input=stdin, cwd=ROOT)
         parts.append(f"$ sublimation {' '.join(argv)}\n{proc.stdout}")
     return "".join(parts)
 
 
 def check_cli(update: bool) -> bool:
-    if not SUBLIMATION.exists():
+    if harness.missing_bins(SUBLIMATION):
         note(f"FAIL: missing {SUBLIMATION.relative_to(ROOT)} (build first)")
         return False
     got = cli_blob()
@@ -190,11 +178,7 @@ def check_cli(update: bool) -> bool:
         note(f"PASS cli ({len(CLI_CASES)} cases)")
         return True
     note("FAIL cli -- stdout diverged from golden:")
-    import difflib
-    diff = difflib.unified_diff(
-        CLI_GOLDEN.read_text().splitlines(keepends=True),
-        got.splitlines(keepends=True), fromfile="cli.golden", tofile="cli.actual")
-    sys.stdout.writelines(list(diff)[:40])
+    harness.print_diff("cli", CLI_GOLDEN.read_text(), got)
     return False
 
 

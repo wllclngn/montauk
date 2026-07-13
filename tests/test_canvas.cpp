@@ -1,3 +1,4 @@
+// Canvas + Component widget primitives: drawing, clipping, virtual dispatch.
 #include "minitest.hpp"
 #include "ui/widget/Canvas.hpp"
 #include "ui/widget/Component.hpp"
@@ -148,7 +149,7 @@ public:
 };
 }  // namespace
 
-TEST(component_virtual_dispatch) {
+TEST(canvas_component_virtual_dispatch) {
   Canvas c(20, 3);
   montauk::model::Snapshot snap;
   LayoutRect rect{2, 1, 18, 2};

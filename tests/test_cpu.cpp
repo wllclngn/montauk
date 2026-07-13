@@ -1,4 +1,6 @@
+// CpuCollector: delta-based usage percentage from /proc/stat.
 #include "minitest.hpp"
+#include "env_guard.hpp"
 #include "collectors/CpuCollector.hpp"
 #include <filesystem>
 #include <fstream>
@@ -17,7 +19,7 @@ TEST(cpu_collector_delta_usage) {
   // First sample
   std::ofstream(root / "proc/stat") << "cpu  100 0 100 1000 0 0 0 0\n"
                                         "cpu0 100 0 100 1000 0 0 0 0\n";
-  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
   montauk::collectors::CpuCollector c; montauk::model::CpuSnapshot s{};
   ASSERT_TRUE(c.sample(s));
   // Second sample with more work and total

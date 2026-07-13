@@ -7,14 +7,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-// ── Op codes (mirror C++ enum class Op) ────────────────────────────────
+// Op codes (mirror C++ enum class Op)
 enum { OP_CHAR = 0, OP_CLASS = 1, OP_SPLIT = 2, OP_MATCH = 3 };
 
 #define MAX_STATES SUBLIMATION_NFA_MAX_STATES
 #define SETWORDS   (MAX_STATES / 64)   // 4
 #define MAX_OUTS   MAX_STATES          // a fragment's dangling outputs <= states
 
-// ── CharClass helpers ───────────────────────────────────────────────────
+// CharClass helpers
 static inline void cc_clear(sublimation_nfa_class *c) { memset(c->bits, 0, 32); }
 static inline void cc_set(sublimation_nfa_class *c, uint8_t v) { c->bits[v >> 3] |= (uint8_t)(1u << (v & 7)); }
 static inline int  cc_test(const sublimation_nfa_class *c, uint8_t v) { return (c->bits[v >> 3] >> (v & 7)) & 1; }
@@ -22,13 +22,13 @@ static inline void cc_set_range(sublimation_nfa_class *c, uint8_t lo, uint8_t hi
     for (int v = lo; v <= hi; ++v) cc_set(c, (uint8_t)v);
 }
 
-// ── Bitset helpers (simulation) ──────────────────────────────────────────
+// Bitset helpers (simulation)
 static inline void set_bit(uint64_t *s, int i)  { s[i >> 6] |= (1ULL << (i & 63)); }
 static inline int  test_bit(const uint64_t *s, int i) { return (s[i >> 6] & (1ULL << (i & 63))) != 0; }
 static inline void clear_set(uint64_t *s) { for (int i = 0; i < SETWORDS; ++i) s[i] = 0; }
 static inline int  empty_set(const uint64_t *s) { for (int i = 0; i < SETWORDS; ++i) if (s[i]) return 0; return 1; }
 
-// ── UTF-8 (verbatim from the C++) ────────────────────────────────────────
+// UTF-8 (verbatim from the C++)
 static int decode_utf8(const char *s, size_t len, uint32_t *cp) {
     if (len == 0) return 0;
     uint8_t c = (uint8_t)s[0];
@@ -59,7 +59,7 @@ static int encode_utf8(uint32_t cp, uint8_t out[4]) {
     return 4;
 }
 
-// ── Tokens / ranges / fragments ──────────────────────────────────────────
+// Tokens / ranges / fragments
 enum {
     T_LITERAL, T_DOT, T_STAR, T_PLUS, T_QUES, T_PIPE,
     T_LPAREN, T_RPAREN, T_ANCHOR_S, T_ANCHOR_E, T_CLASS, T_CONCAT
@@ -70,7 +70,7 @@ typedef struct { uint8_t type; uint32_t cp; uint8_t class_idx; uint8_t negated; 
 typedef struct { int16_t state; uint8_t is_out1; } patch_t;
 typedef struct { int start; patch_t outs[MAX_OUTS]; int n_outs; } frag_t;
 
-// ── State / class construction ───────────────────────────────────────────
+// State / class construction
 static int nfa_add_state(sublimation_nfa *n, uint8_t op, int16_t out, int16_t out1) {
     if (n->num_states >= MAX_STATES) return -1;
     sublimation_nfa_state *s = &n->states[n->num_states];
@@ -124,7 +124,7 @@ static int prec(uint8_t t) {
     return 0;
 }
 
-// ── Fragment builders (the C++ lambdas, as functions) ────────────────────
+// Fragment builders (the C++ lambdas, as functions)
 
 // Single codepoint -> chain of CHAR states.
 static frag_t make_codepoint_frag(sublimation_nfa *n, uint32_t cp, int *ok) {
@@ -366,7 +366,7 @@ static frag_t make_class_frag(sublimation_nfa *n, const cprange *ranges, int nr,
     return result;
 }
 
-// ── Compile ───────────────────────────────────────────────────────────────
+// Compile
 static int nfa_compile(sublimation_nfa *n, const char *pattern, size_t plen) {
     n->num_states = 0; n->num_classes = 0;
     n->start = -1; n->anchored_start = 0; n->anchored_end = 0;
@@ -614,7 +614,7 @@ done:
     return rc;
 }
 
-// ── Simulation ──────────────────────────────────────────────────────────
+// Simulation
 static void eps_closure(const sublimation_nfa *n, uint64_t *set, int s) {
     if (s < 0 || s >= n->num_states) return;
     if (test_bit(set, s)) return;
@@ -660,7 +660,7 @@ static int nfa_has_match(const sublimation_nfa *n, const uint64_t *set) {
     return 0;
 }
 
-// ── Public API ────────────────────────────────────────────────────────────
+// Public API
 void sublimation_nfa_compile(sublimation_nfa *out, const char *pattern, size_t len) {
     out->icase = 0;
     out->valid = nfa_compile(out, pattern, len);

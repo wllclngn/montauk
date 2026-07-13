@@ -769,26 +769,39 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "column")) {
         char **lines = NULL; size_t ln = 0, lcapn = 0;
         char *line = NULL; size_t lcap = 0; ssize_t len;
-        size_t maxw[256]; for (size_t i = 0; i < 256; i++) maxw[i] = 0;
+        size_t *maxw = NULL; size_t maxw_cap = 0;
         while ((len = getline(&line, &lcap, stdin)) != -1) {
             size_t l = (len > 0 && line[len - 1] == '\n') ? (size_t)len - 1 : (size_t)len;
             char *s = (char *)malloc(l + 1); memcpy(s, line, l); s[l] = '\0';
             if (ln == lcapn) { lcapn = lcapn ? lcapn * 2 : 256; lines = (char **)realloc(lines, lcapn * sizeof(char *)); }
             lines[ln++] = s;
-            char tmp[4096]; size_t tl = l < sizeof(tmp) ? l : sizeof(tmp) - 1; memcpy(tmp, s, tl); tmp[tl] = '\0';
+            // Scratch copy for strtok_r (it writes NULs into the buffer); s
+            // itself is kept intact for the render pass below.
+            char *tmp = (char *)malloc(l + 1); memcpy(tmp, s, l); tmp[l] = '\0';
             char *save = NULL; size_t c = 0;
             for (char *tok = strtok_r(tmp, delim, &save); tok; tok = strtok_r(NULL, delim, &save)) {
                 size_t w = strlen(tok);
-                if (c < 256 && w > maxw[c]) maxw[c] = w;
+                if (c >= maxw_cap) {
+                    size_t new_cap = maxw_cap ? maxw_cap * 2 : 64;
+                    while (new_cap <= c) new_cap *= 2;
+                    maxw = (size_t *)realloc(maxw, new_cap * sizeof(size_t));
+                    for (size_t k = maxw_cap; k < new_cap; k++) maxw[k] = 0;
+                    maxw_cap = new_cap;
+                }
+                if (w > maxw[c]) maxw[c] = w;
                 c++;
             }
+            free(tmp);
         }
         free(line);
         for (size_t i = 0; i < ln; i++) {
-            char tmp[4096]; size_t tl = strlen(lines[i]); if (tl >= sizeof(tmp)) tl = sizeof(tmp) - 1;
-            memcpy(tmp, lines[i], tl); tmp[tl] = '\0';
-            char *save = NULL; char *toks[256]; size_t nt = 0;
-            for (char *tok = strtok_r(tmp, delim, &save); tok && nt < 256; tok = strtok_r(NULL, delim, &save)) toks[nt++] = tok;
+            size_t tl = strlen(lines[i]);
+            char *tmp = (char *)malloc(tl + 1); memcpy(tmp, lines[i], tl); tmp[tl] = '\0';
+            char *save = NULL; char **toks = NULL; size_t toks_cap = 0, nt = 0;
+            for (char *tok = strtok_r(tmp, delim, &save); tok; tok = strtok_r(NULL, delim, &save)) {
+                if (nt == toks_cap) { toks_cap = toks_cap ? toks_cap * 2 : 64; toks = (char **)realloc(toks, toks_cap * sizeof(char *)); }
+                toks[nt++] = tok;
+            }
             for (size_t c = 0; c < nt; c++) {
                 montauk_sink_append(&g_out, toks[c], strlen(toks[c]));
                 if (c + 1 < nt) {  // pad to the column width + 2; last column flush-left
@@ -797,9 +810,12 @@ int main(int argc, char **argv) {
                 }
             }
             montauk_sink_appendc(&g_out, '\n');
+            free(toks);
+            free(tmp);
             free(lines[i]);
         }
         free(lines);
+        free(maxw);
         return 0;
     }
 

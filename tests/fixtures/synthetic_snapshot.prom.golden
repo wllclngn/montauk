@@ -1,0 +1,260 @@
+# HELP montauk_system_info System specs: cpu model, cores, memory, gpu, kernel, scheduler
+# TYPE montauk_system_info gauge
+montauk_system_info{cpu_model="Test CPU",physical_cores="6",logical_cpus="12",mem_total_gib="62.7",gpu="Test GPU",kernel="7.1.3-arch1-2",sched="pandemonium",cache_domain="2"} 1
+# HELP montauk_cpu_usage_percent Aggregate CPU utilization
+# TYPE montauk_cpu_usage_percent gauge
+montauk_cpu_usage_percent 42.5
+# HELP montauk_cpu_user_percent CPU user time percent
+# TYPE montauk_cpu_user_percent gauge
+montauk_cpu_user_percent 20
+# HELP montauk_cpu_system_percent CPU system time percent
+# TYPE montauk_cpu_system_percent gauge
+montauk_cpu_system_percent 15
+# HELP montauk_cpu_iowait_percent CPU I/O wait percent
+# TYPE montauk_cpu_iowait_percent gauge
+montauk_cpu_iowait_percent 5
+# HELP montauk_cpu_irq_percent CPU IRQ handling percent
+# TYPE montauk_cpu_irq_percent gauge
+montauk_cpu_irq_percent 1.5
+# HELP montauk_cpu_steal_percent CPU steal percent
+# TYPE montauk_cpu_steal_percent gauge
+montauk_cpu_steal_percent 1
+# HELP montauk_cpu_frequency_mhz_avg Average current CPU frequency across online cores (MHz)
+# TYPE montauk_cpu_frequency_mhz_avg gauge
+montauk_cpu_frequency_mhz_avg 3800
+# HELP montauk_cpu_context_switches_per_second Context switches per second
+# TYPE montauk_cpu_context_switches_per_second gauge
+montauk_cpu_context_switches_per_second 12345
+# HELP montauk_cpu_interrupts_per_second Hardware interrupts per second
+# TYPE montauk_cpu_interrupts_per_second gauge
+montauk_cpu_interrupts_per_second 6789
+# HELP montauk_cpu_physical_cores Physical CPU cores
+# TYPE montauk_cpu_physical_cores gauge
+montauk_cpu_physical_cores 6
+# HELP montauk_cpu_logical_threads Logical CPU threads
+# TYPE montauk_cpu_logical_threads gauge
+montauk_cpu_logical_threads 12
+# HELP montauk_cpu_core_usage_percent Per-core CPU utilization
+# TYPE montauk_cpu_core_usage_percent gauge
+montauk_cpu_core_usage_percent{core="0"} 10
+montauk_cpu_core_usage_percent{core="1"} 20
+montauk_cpu_core_usage_percent{core="2"} 30
+montauk_cpu_core_usage_percent{core="3"} 40
+# HELP montauk_pmu_available Core PMU counters available
+# TYPE montauk_pmu_available gauge
+montauk_pmu_available 1
+# HELP montauk_pmu_l2_misses_per_second L2 cache misses per second (sysfs cache-misses event)
+# TYPE montauk_pmu_l2_misses_per_second gauge
+montauk_pmu_l2_misses_per_second 1000
+# HELP montauk_pmu_l2_miss_percent L2 misses as percent of L2 references
+# TYPE montauk_pmu_l2_miss_percent gauge
+montauk_pmu_l2_miss_percent 5.5
+# HELP montauk_pmu_ipc Instructions per cycle (interval)
+# TYPE montauk_pmu_ipc gauge
+montauk_pmu_ipc 1.25
+# HELP montauk_pmu_cycles_per_l2_miss Cycles per L2 miss (interval)
+# TYPE montauk_pmu_cycles_per_l2_miss gauge
+montauk_pmu_cycles_per_l2_miss 200
+# HELP montauk_pmu_l2_misses_interval L2 misses this interval
+# TYPE montauk_pmu_l2_misses_interval gauge
+montauk_pmu_l2_misses_interval 500
+# HELP montauk_pmu_instructions_per_second Instructions per second (interval)
+# TYPE montauk_pmu_instructions_per_second gauge
+montauk_pmu_instructions_per_second 2e+06
+# HELP montauk_pmu_context_switches_per_second Context switches per second
+# TYPE montauk_pmu_context_switches_per_second gauge
+montauk_pmu_context_switches_per_second 300
+# HELP montauk_pmu_cpu_migrations_per_second CPU migrations per second
+# TYPE montauk_pmu_cpu_migrations_per_second gauge
+montauk_pmu_cpu_migrations_per_second 4
+# HELP montauk_pmu_branch_misses_per_second Branch mispredictions per second
+# TYPE montauk_pmu_branch_misses_per_second gauge
+montauk_pmu_branch_misses_per_second 55
+# HELP montauk_energy_per_instruction_pj Energy per retired instruction (picojoules), RAPL power / IPS
+# TYPE montauk_energy_per_instruction_pj gauge
+montauk_energy_per_instruction_pj 22600000
+# HELP montauk_pmu_l2_misses_per_cpu L2 misses this interval, per logical CPU
+# TYPE montauk_pmu_l2_misses_per_cpu gauge
+montauk_pmu_l2_misses_per_cpu{cpu="0"} 100
+montauk_pmu_l2_misses_per_cpu{cpu="1"} 200
+# HELP montauk_pmu_l2_miss_percent_per_cpu L2 miss percent, per logical CPU
+# TYPE montauk_pmu_l2_miss_percent_per_cpu gauge
+montauk_pmu_l2_miss_percent_per_cpu{cpu="0"} 10
+montauk_pmu_l2_miss_percent_per_cpu{cpu="1"} 10
+# HELP montauk_pmu_l3_available amd_l3 uncore PMU available
+# TYPE montauk_pmu_l3_available gauge
+montauk_pmu_l3_available 1
+# HELP montauk_pmu_l3_misses_interval L3 misses this interval, per cache domain domain
+# TYPE montauk_pmu_l3_misses_interval gauge
+montauk_pmu_l3_misses_interval{cache_domain="0"} 250
+montauk_pmu_l3_misses_interval{cache_domain="6"} 300
+# HELP montauk_pmu_l3_accesses_interval L3 accesses this interval, per cache domain domain
+# TYPE montauk_pmu_l3_accesses_interval gauge
+montauk_pmu_l3_accesses_interval{cache_domain="0"} 5000
+montauk_pmu_l3_accesses_interval{cache_domain="6"} 6000
+# HELP montauk_pmu_l3_miss_percent L3 miss percent, per cache domain domain
+# TYPE montauk_pmu_l3_miss_percent gauge
+montauk_pmu_l3_miss_percent{cache_domain="0"} 5
+montauk_pmu_l3_miss_percent{cache_domain="6"} 5
+# HELP montauk_memory_total_bytes Total physical memory
+# TYPE montauk_memory_total_bytes gauge
+montauk_memory_total_bytes 67335630848
+# HELP montauk_memory_used_bytes Used physical memory
+# TYPE montauk_memory_used_bytes gauge
+montauk_memory_used_bytes 4311257088
+# HELP montauk_memory_available_bytes Available memory (MemAvailable)
+# TYPE montauk_memory_available_bytes gauge
+montauk_memory_available_bytes 63024373760
+# HELP montauk_memory_cached_bytes Cached memory
+# TYPE montauk_memory_cached_bytes gauge
+montauk_memory_cached_bytes 2356297728
+# HELP montauk_memory_buffers_bytes Buffer memory
+# TYPE montauk_memory_buffers_bytes gauge
+montauk_memory_buffers_bytes 1022119936
+# HELP montauk_memory_swap_total_bytes Total swap space
+# TYPE montauk_memory_swap_total_bytes gauge
+montauk_memory_swap_total_bytes 0
+# HELP montauk_memory_swap_used_bytes Used swap space
+# TYPE montauk_memory_swap_used_bytes gauge
+montauk_memory_swap_used_bytes 0
+# HELP montauk_memory_used_percent Memory utilization percent
+# TYPE montauk_memory_used_percent gauge
+montauk_memory_used_percent 6.4
+# HELP montauk_gpu_vram_total_bytes_aggregate Total GPU VRAM
+# TYPE montauk_gpu_vram_total_bytes_aggregate gauge
+montauk_gpu_vram_total_bytes_aggregate 6442450944
+# HELP montauk_gpu_vram_used_bytes_aggregate Used GPU VRAM
+# TYPE montauk_gpu_vram_used_bytes_aggregate gauge
+montauk_gpu_vram_used_bytes_aggregate 890241024
+# HELP montauk_gpu_vram_used_percent GPU VRAM utilization percent
+# TYPE montauk_gpu_vram_used_percent gauge
+montauk_gpu_vram_used_percent 13.8
+# HELP montauk_gpu_utilization_percent GPU core utilization
+# TYPE montauk_gpu_utilization_percent gauge
+montauk_gpu_utilization_percent 18
+# HELP montauk_gpu_memory_controller_percent GPU memory controller utilization
+# TYPE montauk_gpu_memory_controller_percent gauge
+montauk_gpu_memory_controller_percent 14
+# HELP montauk_gpu_encoder_percent GPU encoder utilization
+# TYPE montauk_gpu_encoder_percent gauge
+montauk_gpu_encoder_percent 3
+# HELP montauk_gpu_decoder_percent GPU decoder utilization
+# TYPE montauk_gpu_decoder_percent gauge
+montauk_gpu_decoder_percent 2
+# HELP montauk_gpu_power_draw_watts GPU power draw
+# TYPE montauk_gpu_power_draw_watts gauge
+montauk_gpu_power_draw_watts 24.19
+# HELP montauk_gpu_power_limit_watts GPU power limit
+# TYPE montauk_gpu_power_limit_watts gauge
+montauk_gpu_power_limit_watts 160
+# HELP montauk_gpu_vram_total_bytes Per-device GPU VRAM total
+# TYPE montauk_gpu_vram_total_bytes gauge
+montauk_gpu_vram_total_bytes{device="Test GPU"} 6442450944
+# HELP montauk_gpu_vram_used_bytes Per-device GPU VRAM used
+# TYPE montauk_gpu_vram_used_bytes gauge
+montauk_gpu_vram_used_bytes{device="Test GPU"} 890241024
+# HELP montauk_gpu_temperature_edge_celsius GPU edge temperature
+# TYPE montauk_gpu_temperature_edge_celsius gauge
+montauk_gpu_temperature_edge_celsius{device="Test GPU"} 57
+# HELP montauk_gpu_temperature_hotspot_celsius GPU hotspot temperature
+# TYPE montauk_gpu_temperature_hotspot_celsius gauge
+montauk_gpu_temperature_hotspot_celsius{device="Test GPU"} 68
+# HELP montauk_gpu_fan_speed_percent GPU fan speed percent
+# TYPE montauk_gpu_fan_speed_percent gauge
+montauk_gpu_fan_speed_percent{device="Test GPU"} 0
+# HELP montauk_thermal_cpu_temperature_celsius CPU max temperature
+# TYPE montauk_thermal_cpu_temperature_celsius gauge
+montauk_thermal_cpu_temperature_celsius 52.25
+# HELP montauk_thermal_fan_speed_rpm CPU fan speed RPM
+# TYPE montauk_thermal_fan_speed_rpm gauge
+montauk_thermal_fan_speed_rpm 1200
+# HELP montauk_power_watts Package power draw from RAPL/powercap (energy delta per interval)
+# TYPE montauk_power_watts gauge
+montauk_power_watts 45.2
+# HELP montauk_package_energy_joules_total Cumulative package energy from RAPL/powercap (joules, wrap-safe); window-integral energy is the counter delta
+# TYPE montauk_package_energy_joules_total counter
+montauk_package_energy_joules_total 987654
+# HELP montauk_cstate_residency_percent Idle-state residency this interval, per state (across CPUs)
+# TYPE montauk_cstate_residency_percent gauge
+montauk_cstate_residency_percent{state="C2"} 60
+montauk_cstate_residency_percent{state="C6"} 30
+# HELP montauk_network_receive_bps_total Aggregate receive bytes/sec
+# TYPE montauk_network_receive_bps_total gauge
+montauk_network_receive_bps_total 8759.98
+# HELP montauk_network_transmit_bps_total Aggregate transmit bytes/sec
+# TYPE montauk_network_transmit_bps_total gauge
+montauk_network_transmit_bps_total 107977.3
+# HELP montauk_network_interface_receive_bps Per-interface receive bytes/sec
+# TYPE montauk_network_interface_receive_bps gauge
+montauk_network_interface_receive_bps{interface="enp5s0"} 8759.98
+montauk_network_interface_receive_bps{interface="wlan0"} 0
+# HELP montauk_network_interface_transmit_bps Per-interface transmit bytes/sec
+# TYPE montauk_network_interface_transmit_bps gauge
+montauk_network_interface_transmit_bps{interface="enp5s0"} 107977.3
+montauk_network_interface_transmit_bps{interface="wlan0"} 0
+# HELP montauk_disk_read_bps_total Aggregate disk read bytes/sec
+# TYPE montauk_disk_read_bps_total gauge
+montauk_disk_read_bps_total 0
+# HELP montauk_disk_write_bps_total Aggregate disk write bytes/sec
+# TYPE montauk_disk_write_bps_total gauge
+montauk_disk_write_bps_total 0
+# HELP montauk_disk_device_read_bps Per-device read bytes/sec
+# TYPE montauk_disk_device_read_bps gauge
+montauk_disk_device_read_bps{device="sda"} 0
+montauk_disk_device_read_bps{device="nvme0n1"} 100
+# HELP montauk_disk_device_write_bps Per-device write bytes/sec
+# TYPE montauk_disk_device_write_bps gauge
+montauk_disk_device_write_bps{device="sda"} 0
+montauk_disk_device_write_bps{device="nvme0n1"} 50
+# HELP montauk_disk_device_utilization_percent Per-device I/O utilization
+# TYPE montauk_disk_device_utilization_percent gauge
+montauk_disk_device_utilization_percent{device="sda"} 0
+montauk_disk_device_utilization_percent{device="nvme0n1"} 2.5
+# HELP montauk_filesystem_total_bytes Filesystem total size
+# TYPE montauk_filesystem_total_bytes gauge
+montauk_filesystem_total_bytes{device="/dev/nvme0n1p2",mountpoint="/",fstype="ext4"} 244466741248
+montauk_filesystem_total_bytes{device="/dev/nvme0n1p1",mountpoint="/boot",fstype="vfat"} 535805952
+# HELP montauk_filesystem_used_bytes Filesystem used bytes
+# TYPE montauk_filesystem_used_bytes gauge
+montauk_filesystem_used_bytes{device="/dev/nvme0n1p2",mountpoint="/",fstype="ext4"} 165133987840
+montauk_filesystem_used_bytes{device="/dev/nvme0n1p1",mountpoint="/boot",fstype="vfat"} 243392512
+# HELP montauk_filesystem_available_bytes Filesystem available bytes
+# TYPE montauk_filesystem_available_bytes gauge
+montauk_filesystem_available_bytes{device="/dev/nvme0n1p2",mountpoint="/",fstype="ext4"} 79332753408
+montauk_filesystem_available_bytes{device="/dev/nvme0n1p1",mountpoint="/boot",fstype="vfat"} 292413440
+# HELP montauk_filesystem_used_percent Filesystem utilization percent
+# TYPE montauk_filesystem_used_percent gauge
+montauk_filesystem_used_percent{device="/dev/nvme0n1p2",mountpoint="/",fstype="ext4"} 67.5
+montauk_filesystem_used_percent{device="/dev/nvme0n1p1",mountpoint="/boot",fstype="vfat"} 45.4
+# HELP test_metric a test metric
+# TYPE test_metric gauge
+test_metric 1
+# HELP montauk_processes_total Total processes
+# TYPE montauk_processes_total gauge
+montauk_processes_total 305
+# HELP montauk_processes_running Running processes
+# TYPE montauk_processes_running gauge
+montauk_processes_running 2
+# HELP montauk_processes_sleeping Sleeping processes
+# TYPE montauk_processes_sleeping gauge
+montauk_processes_sleeping 300
+# HELP montauk_processes_zombie Zombie processes
+# TYPE montauk_processes_zombie gauge
+montauk_processes_zombie 0
+# HELP montauk_threads_total Total threads
+# TYPE montauk_threads_total gauge
+montauk_threads_total 900
+# HELP montauk_process_cpu_percent Per-process CPU utilization
+# TYPE montauk_process_cpu_percent gauge
+montauk_process_cpu_percent{pid="805",cmd="montauk"} 1.5
+montauk_process_cpu_percent{pid="939",cmd="gpu-process"} 0.5
+# HELP montauk_process_memory_bytes Per-process resident memory
+# TYPE montauk_process_memory_bytes gauge
+montauk_process_memory_bytes{pid="805",cmd="montauk"} 46641152
+montauk_process_memory_bytes{pid="939",cmd="gpu-process"} 274423808
+# HELP montauk_process_gpu_utilization_percent Per-process GPU utilization
+# TYPE montauk_process_gpu_utilization_percent gauge
+montauk_process_gpu_utilization_percent{pid="939",cmd="gpu-process"} 9
+# HELP montauk_process_gpu_memory_bytes Per-process GPU memory
+# TYPE montauk_process_gpu_memory_bytes gauge
+montauk_process_gpu_memory_bytes{pid="939",cmd="gpu-process"} 56303616

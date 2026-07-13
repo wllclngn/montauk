@@ -1,4 +1,6 @@
+// DiskCollector: /proc/diskstats parsing, rate deltas, utilization percent.
 #include "minitest.hpp"
+#include "env_guard.hpp"
 #include "collectors/DiskCollector.hpp"
 #include <filesystem>
 #include <fstream>
@@ -16,7 +18,7 @@ static fs::path make_root_disk() {
 TEST(disk_collector_parses_and_deltas) {
   auto root = make_root_disk();
   std::ofstream(root / "proc/diskstats") << "   8       0 sda 100 0 1000 0  200 0 2000 0  0  100 0\n";
-  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
   montauk::collectors::DiskCollector c; montauk::model::DiskSnapshot s{};
   ASSERT_TRUE(c.sample(s));
   std::this_thread::sleep_for(std::chrono::milliseconds(120));
@@ -31,7 +33,7 @@ TEST(disk_collector_util_percent) {
   fs::create_directories(root / "proc");
   // initial sample with low time in io
   std::ofstream(root / "proc/diskstats") << "   8       0 sda 100 0 1000 0  200 0 2000 0  0  100 0\n";
-  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
   montauk::collectors::DiskCollector c; montauk::model::DiskSnapshot s{};
   ASSERT_TRUE(c.sample(s));
   // second sample with increased sectors and time in IO

@@ -29,8 +29,6 @@ private:
   std::chrono::steady_clock::time_point last_run_{};
   unsigned ncpu_{0};
 
-  static bool parse_stat_line(const std::string& content, char& state, int32_t& ppid, uint64_t& utime, uint64_t& stime, int64_t& rss_pages, std::string& comm);
-  static std::string read_cmdline(int32_t pid);
   static std::string user_from_status(int32_t pid);
   static StatusInfo info_from_status(int32_t pid);
 };

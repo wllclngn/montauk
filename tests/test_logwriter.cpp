@@ -1,3 +1,4 @@
+// LogWriter: periodic Prometheus-format snapshot logging to disk.
 #include "minitest.hpp"
 #include "app/LogWriter.hpp"
 #include "app/Producer.hpp"

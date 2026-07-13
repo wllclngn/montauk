@@ -3,6 +3,7 @@
 #include "model/TraceBinary.hpp"
 #include "app/MetricsServer.hpp"
 #include "util/Log.hpp"
+#include "util/Procfs.hpp"
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include <bpf/btf.h>
@@ -17,7 +18,6 @@
 #include <unistd.h>
 #include <cerrno>
 #include <filesystem>
-#include <fstream>
 #include <string>
 #include <map>
 
@@ -25,6 +25,16 @@ namespace {
 // Flush the binary trace buffer once it crosses this size — one write()
 // per ~256 KB instead of per event.
 constexpr size_t kTraceFlushThreshold = 256 * 1024;
+
+// Read a /sys attribute (one line, sysfs-root-aware via util::Procfs) and
+// return just its first line, trimmed. Empty string if unreadable.
+std::string read_sys_line(const std::string& path) {
+  auto s = montauk::util::read_file_string(path);
+  if (!s) return {};
+  auto nl = s->find('\n');
+  if (nl != std::string::npos) s->erase(nl);
+  return *s;
+}
 
 // Build cpu -> cache domain/L3-domain id from sysfs and push it into the BPF cpu_cache_domain map.
 // CPUs sharing an L3 (one cache domain) get the same id; a monolithic single-L3 part maps
@@ -41,9 +51,7 @@ void populate_cache_domain_map(int map_fd) {
     char path[128];
     std::snprintf(path, sizeof(path),
         "/sys/devices/system/cpu/cpu%d/cache/index3/shared_cpu_list", cpu);
-    std::ifstream f(path);
-    std::string list;
-    if (f) std::getline(f, list);
+    std::string list = read_sys_line(path);
     uint32_t domain;
     if (list.empty()) {
       domain = 0;  // no L3 info (monolithic / offline) -> single domain
@@ -396,9 +404,7 @@ void BpfTraceCollector::append_cache_topology_snapshot() {
                   uint32_t& next) -> uint32_t {
     char path[160];
     std::snprintf(path, sizeof(path), fmt, cpu);
-    std::ifstream f(path);
-    std::string s;
-    if (f) std::getline(f, s);
+    std::string s = read_sys_line(path);
     if (s.empty()) return 0;
     auto it = m.find(s);
     if (it != m.end()) return it->second;
@@ -417,9 +423,7 @@ void BpfTraceCollector::append_cache_topology_snapshot() {
       char path[160];
       std::snprintf(path, sizeof(path),
                     "/sys/devices/system/cpu/cpu%d/topology/physical_package_id", cpu);
-      std::ifstream f(path);
-      std::string s;
-      if (f) std::getline(f, s);
+      std::string s = read_sys_line(path);
       if (!s.empty()) sock = static_cast<uint32_t>(std::strtoul(s.c_str(), nullptr, 10));
     }
     char line[160];
@@ -1434,7 +1438,7 @@ void BpfTraceCollector::run(std::stop_token st) {
     return;
   }
 
-  // ── Heap uprobes ──────────────────────────────────────────────
+  // Heap uprobes
   // Attach malloc/free/realloc/calloc uprobes to libc. Without these,
   // syscall-level traces miss ~99% of allocations (libc's arena services
   // most malloc calls without touching the kernel). Best-effort: a libc
@@ -1502,7 +1506,7 @@ void BpfTraceCollector::run(std::stop_token st) {
     }
   }
 
-  // ── Keyed-event (critical-section) + wait-site uprobes ────────────────────
+  // Keyed-event (critical-section) + wait-site uprobes
   // Wine critical sections (loader_section, etc.) wait/wake via
   // NtWaitForKeyedEvent/NtReleaseKeyedEvent in ntdll.so, passing the
   // CRITICAL_SECTION address as the key. Capturing it makes CS contention

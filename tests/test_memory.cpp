@@ -1,4 +1,6 @@
+// MemoryCollector: /proc/meminfo parsing.
 #include "minitest.hpp"
+#include "env_guard.hpp"
 #include "collectors/MemoryCollector.hpp"
 #include <filesystem>
 #include <fstream>
@@ -23,7 +25,7 @@ TEST(memory_collector_parses_meminfo) {
     "MemFree:         524288 kB\n"
     "Buffers:         131072 kB\n"
     "Cached:          262144 kB\n";
-  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
   montauk::collectors::MemoryCollector c; montauk::model::Memory m{}; 
   ASSERT_TRUE(c.sample(m));
   ASSERT_EQ(m.total_kb, 2097152u);

@@ -15,6 +15,11 @@ cmake-build-*/
 /install_manifest.txt
 /compile_commands.json
 
+# Cargo build output (montauk-mcp/, any future Rust crate). Cargo.lock stays
+# tracked -- montauk-mcp is a binary crate, and binaries commit their lock
+# file by convention; only the build output itself is ignored.
+target/
+
 # Binary outputs (if ever created at repo root)
 /montauk
 /montauk_analyze

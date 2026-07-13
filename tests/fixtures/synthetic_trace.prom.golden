@@ -1,0 +1,72 @@
+
+# Trace
+# HELP montauk_trace_waiting Trace mode waiting for pattern match
+# TYPE montauk_trace_waiting gauge
+montauk_trace_waiting 0
+# HELP montauk_trace_group_size Number of processes in traced group
+# TYPE montauk_trace_group_size gauge
+montauk_trace_group_size 1
+# HELP montauk_trace_thread_total Total threads across traced group
+# TYPE montauk_trace_thread_total gauge
+montauk_trace_thread_total 2
+# HELP montauk_trace_process_info Traced process group member
+# TYPE montauk_trace_process_info gauge
+montauk_trace_process_info{pid="1000",ppid="1",cmd="worker.exe",root="1",exited="0",exit_status="0",exit_signal="0",exec_file="/usr/bin/worker",fork_ts="1000",exec_ts="1500",exit_ts="0"} 1
+# HELP montauk_sched_op_total Scheduler-decision tracepoint counts (per op, summed across CPUs)
+# TYPE montauk_sched_op_total counter
+montauk_sched_op_total{op="enqueue"} 100
+montauk_sched_op_total{op="pick"} 200
+montauk_sched_op_total{op="pick_empty"} 5
+montauk_sched_op_total{op="preempt_tick"} 50
+montauk_sched_op_total{op="preempt_wakeup"} 25
+montauk_sched_op_total{op="wakeup"} 300
+# HELP montauk_trace_thread_state Per-thread state for traced group
+# TYPE montauk_trace_thread_state gauge
+montauk_trace_thread_state{pid="1000",tid="1000",comm="worker.A",state="R"} 1
+montauk_trace_thread_state{pid="1000",tid="1001",comm="worker.B",state="S"} 1
+# HELP montauk_trace_thread_cpu_percent Per-thread CPU utilization
+# TYPE montauk_trace_thread_cpu_percent gauge
+montauk_trace_thread_cpu_percent{pid="1000",tid="1000",comm="worker.A"} 12.5
+montauk_trace_thread_cpu_percent{pid="1000",tid="1001",comm="worker.B"} 0
+# HELP montauk_trace_thread_cpu Per-thread current on-CPU core
+# TYPE montauk_trace_thread_cpu gauge
+montauk_trace_thread_cpu{pid="1000",tid="1000",comm="worker.A"} 2
+montauk_trace_thread_cpu{pid="1000",tid="1001",comm="worker.B"} -1
+# HELP montauk_trace_thread_migrations Per-thread cross-CPU migration count
+# TYPE montauk_trace_thread_migrations counter
+montauk_trace_thread_migrations{pid="1000",tid="1000",comm="worker.A"} 3
+montauk_trace_thread_migrations{pid="1000",tid="1001",comm="worker.B"} 0
+# HELP montauk_trace_thread_syscall Per-thread current syscall
+# TYPE montauk_trace_thread_syscall gauge
+montauk_trace_thread_syscall{pid="1000",tid="1000",comm="worker.A",syscall="",wchan=""} -1
+montauk_trace_thread_syscall{pid="1000",tid="1001",comm="worker.B",syscall="read",wchan="futex_wait"} 0
+# HELP montauk_trace_thread_io Per-thread last I/O syscall details
+# TYPE montauk_trace_thread_io gauge
+montauk_trace_thread_io{pid="1000",tid="1001",comm="worker.B",syscall="read",fd="10",count="4096",result="4096",whence="0"} 123456789
+# HELP montauk_trace_migrations_intra_domain Cross-core migrations within one cache domain/L3 domain
+# TYPE montauk_trace_migrations_intra_domain counter
+montauk_trace_migrations_intra_domain 10
+# HELP montauk_trace_migrations_cross_domain Cross-core migrations across cache domain/L3 domains (cross-domain interconnect)
+# TYPE montauk_trace_migrations_cross_domain counter
+montauk_trace_migrations_cross_domain 3
+# HELP montauk_trace_migrations_unknown_domain Cross-core migrations with unmapped cache domain (topology not pushed)
+# TYPE montauk_trace_migrations_unknown_domain counter
+montauk_trace_migrations_unknown_domain 0
+# HELP montauk_trace_migrations_intra_wake Intra-domain migrations that placed a woken task (select_cpu / enqueue spill push)
+# TYPE montauk_trace_migrations_intra_wake counter
+montauk_trace_migrations_intra_wake 4
+# HELP montauk_trace_migrations_intra_steal Intra-domain migrations that pulled an already-runnable task at dispatch (steal)
+# TYPE montauk_trace_migrations_intra_steal counter
+montauk_trace_migrations_intra_steal 2
+# HELP montauk_trace_migrations_cross_wake Cross-domain wake-placements (select_cpu / enqueue spill push)
+# TYPE montauk_trace_migrations_cross_wake counter
+montauk_trace_migrations_cross_wake 1
+# HELP montauk_trace_migrations_cross_steal Cross-domain dispatch steals (pull)
+# TYPE montauk_trace_migrations_cross_steal counter
+montauk_trace_migrations_cross_steal 1
+# HELP montauk_trace_ntsync ntsync synchronization operations
+# TYPE montauk_trace_ntsync gauge
+montauk_trace_ntsync{pid="1000",tid="1000",comm="worker.A",op="sem_release",fd="10",result="0",arg0="1",arg1="0",owner="0"} 987654321
+# HELP montauk_trace_fd_target Per-process fd targets
+# TYPE montauk_trace_fd_target gauge
+montauk_trace_fd_target{pid="1000",fd="10",target="anon_inode:[ntsync]"} 1

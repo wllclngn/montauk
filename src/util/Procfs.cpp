@@ -44,8 +44,12 @@ auto map_sys_path(const std::string& abs) -> std::string {
   return p.string();
 }
 
+static std::string map_path(const std::string& abs) {
+  return map_sys_path(map_proc_path(abs));
+}
+
 auto read_file_string(const std::string& abs) -> std::optional<std::string> {
-  std::ifstream in(map_proc_path(abs));
+  std::ifstream in(map_path(abs));
   if (!in) return std::nullopt;
   try {
     std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -58,7 +62,7 @@ auto read_file_string(const std::string& abs) -> std::optional<std::string> {
 }
 
 auto read_file_bytes(const std::string& abs) -> std::optional<std::vector<unsigned char>> {
-  std::ifstream in(map_proc_path(abs), std::ios::binary);
+  std::ifstream in(map_path(abs), std::ios::binary);
   if (!in) return std::nullopt;
   try {
     std::vector<unsigned char> buf((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -72,7 +76,7 @@ auto read_file_bytes(const std::string& abs) -> std::optional<std::vector<unsign
 
 auto list_dir(const std::string& abs) -> std::vector<std::string> {
   std::vector<std::string> out;
-  auto path = map_proc_path(abs);
+  auto path = map_path(abs);
   DIR* d = ::opendir(path.c_str());
   if (!d) return out;
   while (auto* ent = ::readdir(d)) {
@@ -85,7 +89,7 @@ auto list_dir(const std::string& abs) -> std::vector<std::string> {
 }
 
 auto read_symlink(const std::string& abs) -> std::optional<std::string> {
-  auto path = map_proc_path(abs);
+  auto path = map_path(abs);
   char buf[PATH_MAX];
   ssize_t len = ::readlink(path.c_str(), buf, sizeof(buf) - 1);
   if (len < 0) return std::nullopt;

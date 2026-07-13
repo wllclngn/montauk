@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """montauk test runner -- one entry point for the whole suite.
 
-Three layers, one command, a clear split:
+Four layers, one command, a clear split:
   unit   -- the C++ montauk_tests aggregate + the C23 montauk_sink_c_test
   gate   -- the Python byte-identical output gate (corpus_check.py): analyzer /
             decoder / sublimation CLI stdout vs frozen goldens
   trace  -- the live BPF trace harness (trace_loadtest.py); needs root, so it is
             skipped (not failed) when not run as root
+  mcp    -- montauk-mcp's own `cargo test`; skipped (not failed) if the crate
+            isn't built yet (no Cargo.toml)
 
 Usage:
   python3 tests/run.py                 # build, then run every layer (trace skipped w/o root)
@@ -67,7 +69,16 @@ def layer_trace():
     return run([sys.executable, str(ROOT / "tests" / "trace_loadtest.py")]) == 0
 
 
-LAYERS = {"unit": layer_unit, "gate": layer_gate, "trace": layer_trace}
+def layer_mcp():
+    mcp_dir = ROOT / "montauk-mcp"
+    if not (mcp_dir / "Cargo.toml").exists():
+        print("[run] mcp: SKIP (montauk-mcp/Cargo.toml not present)")
+        return True  # a skip is not a failure
+    print(f"  $ cargo test --release  (in {mcp_dir})")
+    return subprocess.run(["cargo", "test", "--release"], cwd=str(mcp_dir)).returncode == 0
+
+
+LAYERS = {"unit": layer_unit, "gate": layer_gate, "trace": layer_trace, "mcp": layer_mcp}
 
 
 def main():

@@ -1,0 +1,27 @@
+[package]
+name = "montauk-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "montauk_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "montauk-mcp"
+path = "src/main.rs"
+
+# Every montauk-mcp test lives under the repo's real ./tests/ directory
+# alongside test_*.cpp/test_*.py, not scattered as inline #[cfg(test)]
+# blocks in src/ -- these paths point Cargo's test harness there explicitly,
+# since Cargo's own `tests/` convention is crate-relative by default.
+[[test]]
+name = "mcp_json"
+path = "../tests/test_mcp_json.rs"
+
+[[test]]
+name = "mcp_rpc"
+path = "../tests/test_mcp_rpc.rs"
+
+[profile.release]
+opt-level = 2

@@ -1,18 +1,17 @@
 #include "collectors/PmuCollector.hpp"
 #include "util/Log.hpp"
+#include "util/Procfs.hpp"
 
 #include <linux/perf_event.h>
 #include <sys/syscall.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
-#include <dirent.h>
 
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
-#include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -28,10 +27,13 @@ static long perf_event_open(struct perf_event_attr* attr, pid_t pid, int cpu,
 // SYSFS HELPERS
 
 static bool read_sysfs_str(const std::string& path, std::string& out) {
-  std::ifstream f(path);
-  if (!f.is_open()) return false;
-  std::getline(f, out);
-  // trim trailing whitespace/newline
+  auto s = montauk::util::read_file_string(path);
+  if (!s) return false;
+  out = *s;
+  // sysfs attrs are one line; drop anything past it, then trailing
+  // whitespace/newline.
+  auto nl = out.find('\n');
+  if (nl != std::string::npos) out.erase(nl);
   while (!out.empty() && (out.back() == '\n' || out.back() == '\r' ||
                           out.back() == ' ' || out.back() == '\t'))
     out.pop_back();
@@ -85,13 +87,9 @@ struct L3Format {
 static std::vector<L3Format> read_l3_formats(const std::string& l3_dir) {
   std::vector<L3Format> fmts;
   std::string fmt_dir = l3_dir + "/format";
-  DIR* d = ::opendir(fmt_dir.c_str());
-  if (!d) return fmts;
-  struct dirent* e;
-  while ((e = ::readdir(d)) != nullptr) {
-    if (e->d_name[0] == '.') continue;
+  for (const auto& name : montauk::util::list_dir(fmt_dir)) {
     std::string spec;
-    if (!read_sysfs_str(fmt_dir + "/" + e->d_name, spec)) continue;
+    if (!read_sysfs_str(fmt_dir + "/" + name, spec)) continue;
     // spec looks like "config:0-7" or "config:8" (single bit).
     auto colon = spec.find(':');
     if (colon == std::string::npos) continue;
@@ -106,9 +104,8 @@ static std::vector<L3Format> read_l3_formats(const std::string& l3_dir) {
       lo = std::atoi(bits.c_str());
       hi = std::atoi(bits.c_str() + dash + 1);
     }
-    fmts.push_back(L3Format{e->d_name, lo, hi});
+    fmts.push_back(L3Format{name, lo, hi});
   }
-  ::closedir(d);
   return fmts;
 }
 
@@ -147,30 +144,23 @@ static L3Events resolve_l3_events(const std::string& l3_dir,
                                   const std::vector<L3Format>& fmts) {
   L3Events ev{};
   std::string ev_dir = l3_dir + "/events";
-  DIR* d = ::opendir(ev_dir.c_str());
-  if (d) {
-    struct dirent* e;
-    while ((e = ::readdir(d)) != nullptr) {
-      if (e->d_name[0] == '.') continue;
-      std::string name = e->d_name;
-      // amd_l3 typically exposes names like:
-      //   "l3_lookup_state.all_l3_req"  (accesses / lookups)
-      //   "l3_comb_clstr_state.request_miss" (L3 misses)
-      // but exact names vary by kernel, so match by substring.
-      std::string lname = name;
-      for (auto& ch : lname) ch = static_cast<char>(::tolower(ch));
-      std::string spec;
-      if (!read_sysfs_str(ev_dir + "/" + name, spec)) continue;
-      uint64_t cfg = encode_l3_event(spec, fmts);
-      if (lname.find("miss") != std::string::npos) {
-        if (!ev.have_miss) { ev.miss_config = cfg; ev.have_miss = true; }
-      } else if (lname.find("access") != std::string::npos ||
-                 lname.find("lookup") != std::string::npos ||
-                 lname.find("req") != std::string::npos) {
-        if (!ev.have_access) { ev.access_config = cfg; ev.have_access = true; }
-      }
+  for (const auto& name : montauk::util::list_dir(ev_dir)) {
+    // amd_l3 typically exposes names like:
+    //   "l3_lookup_state.all_l3_req"  (accesses / lookups)
+    //   "l3_comb_clstr_state.request_miss" (L3 misses)
+    // but exact names vary by kernel, so match by substring.
+    std::string lname = name;
+    for (auto& ch : lname) ch = static_cast<char>(::tolower(ch));
+    std::string spec;
+    if (!read_sysfs_str(ev_dir + "/" + name, spec)) continue;
+    uint64_t cfg = encode_l3_event(spec, fmts);
+    if (lname.find("miss") != std::string::npos) {
+      if (!ev.have_miss) { ev.miss_config = cfg; ev.have_miss = true; }
+    } else if (lname.find("access") != std::string::npos ||
+               lname.find("lookup") != std::string::npos ||
+               lname.find("req") != std::string::npos) {
+      if (!ev.have_access) { ev.access_config = cfg; ev.have_access = true; }
     }
-    ::closedir(d);
   }
   // Documented Zen2 fallback for accesses: event=0x04, umask=0xff (all L3
   // requests). Encode it through the same format mapping so bit positions

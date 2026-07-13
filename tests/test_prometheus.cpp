@@ -1,3 +1,4 @@
+// snapshot_to_prometheus: the Prometheus text exposition renderer.
 #include "minitest.hpp"
 #include "app/MetricsServer.hpp"
 #include <string>

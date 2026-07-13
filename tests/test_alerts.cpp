@@ -1,3 +1,4 @@
+// Alerts engine: CPU/memory threshold alerting.
 #include "minitest.hpp"
 #include "app/Alerts.hpp"
 

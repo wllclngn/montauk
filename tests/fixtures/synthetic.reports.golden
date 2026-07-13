@@ -1,3 +1,7 @@
+REPORT iolat
+VERDICT: no tracked I/O completions in this trace
+
+
 REPORT classmix
 VERDICT: 5 distinct enqueued pids; class mix (cls_weight in score bits 48+):
   cls_weight 1   BATCH         :     1 distinct pids,       20 enqueues (20.0%)

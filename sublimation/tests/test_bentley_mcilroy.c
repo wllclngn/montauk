@@ -9,7 +9,7 @@
 #include <string.h>
 #include <time.h>
 
-// ── Deterministic RNG (LCG) ────────────────────────────────────────
+// Deterministic RNG (LCG)
 static uint64_t bm_rng_state = 0xDEADBEEF42ULL;
 
 static uint64_t bm_rand(void) {
@@ -21,7 +21,7 @@ static void bm_seed(uint64_t s) {
     bm_rng_state = s;
 }
 
-// ── Distributions ──────────────────────────────────────────────────
+// Distributions
 // Each generates values in [0, n-1] with structural bias controlled by m.
 
 static int64_t dist_sawtooth(size_t i, size_t m) {
@@ -46,7 +46,7 @@ static int64_t dist_shuffle(size_t i, size_t m) {
     return (bm_rand() % m) ? (int64_t)(bm_rand() % m) : 0;
 }
 
-// ── Modes (applied to generated array) ─────────────────────────────
+// Modes (applied to generated array)
 
 static void mode_copy(int64_t *arr, size_t n) {
     // identity -- do nothing
@@ -96,7 +96,7 @@ static void mode_dither(int64_t *arr, size_t n) {
     }
 }
 
-// ── Driver ─────────────────────────────────────────────────────────
+// Driver
 
 static const char *dist_names[] = {
     "sawtooth", "rand", "stagger", "plateau", "shuffle"

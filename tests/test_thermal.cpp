@@ -1,4 +1,7 @@
+// ThermalCollector: hwmon/thermal_zone temperature reading, with sysfs root
+// redirection.
 #include "minitest.hpp"
+#include "env_guard.hpp"
 #include "collectors/ThermalCollector.hpp"
 #include <filesystem>
 #include <fstream>
@@ -14,7 +17,7 @@ TEST(thermal_collector_reads_hwmon_with_sys_root) {
   // also provide thermal_zone fallback
   fs::create_directories(root / "sys/class/thermal/thermal_zone0");
   std::ofstream(root / "sys/class/thermal/thermal_zone0/temp") << 56000 << "\n";
-  setenv("MONTAUK_SYS_ROOT", root.c_str(), 1);
+  TempRootGuard sys_root("MONTAUK_SYS_ROOT", root.string());
   // Sanity: mapped paths exist
   ASSERT_TRUE(std::filesystem::exists(montauk::util::map_sys_path("/sys/class/hwmon")));
   ASSERT_TRUE(std::filesystem::exists(montauk::util::map_sys_path("/sys/class/thermal")));

@@ -12,6 +12,7 @@
 //   montauk_trace_decode FILE --csv    # CSV (type,ts_ns,wall_ns,fields...)
 
 #include "model/TraceReader.hpp"
+#include "model/TraceEnumNames.hpp"
 #include "montauk_trace.h"
 #include "util/Log.hpp"
 #include "util/sink.h"
@@ -30,56 +31,10 @@ namespace {
 montauk_sink g_out;
 void drain_out() { montauk_sink_drain(&g_out); }
 
-const char* sched_op_name(uint32_t op) {
-  switch (op) {
-    case SCHED_OP_ENQUEUE:        return "ENQUEUE";
-    case SCHED_OP_PICK:           return "PICK";
-    case SCHED_OP_PICK_EMPTY:     return "PICK_EMPTY";
-    case SCHED_OP_PREEMPT_TICK:   return "PREEMPT_TICK";
-    case SCHED_OP_PREEMPT_WAKEUP: return "PREEMPT_WAKEUP";
-    case SCHED_OP_WAKEUP:         return "WAKEUP";
-    case SCHED_OP_WAKE2RUN:       return "WAKE2RUN";
-    case SCHED_OP_CPU_IDLE:       return "CPU_IDLE";
-    case SCHED_OP_SWITCH_IN:      return "SWITCH_IN";
-    case SCHED_OP_FIELD_GATE:     return "FIELD_GATE";
-    case SCHED_OP_KICK_ISSUE:     return "KICK_ISSUE";
-    case SCHED_OP_RESCHED:        return "RESCHED";
-    case SCHED_OP_TICK_STOP:      return "TICK_STOP";
-    default:                      return "?";
-  }
-}
-
-const char* ntsync_op_name(uint8_t op) {
-  switch (op) {
-    case 0:  return "create_sem";
-    case 1:  return "sem_release";
-    case 2:  return "wait_any";
-    case 3:  return "wait_all";
-    case 4:  return "create_mutex";
-    case 5:  return "mutex_unlock";
-    case 6:  return "mutex_kill";
-    case 7:  return "create_event";
-    case 8:  return "event_set";
-    case 9:  return "event_reset";
-    case 10: return "event_pulse";
-    case 11: return "sem_read";
-    case 12: return "mutex_read";
-    case 13: return "event_read";
-    default: return "unknown";
-  }
-}
-
-const char* io_syscall_name(int32_t nr) {
-  switch (nr) {
-    case 0:   return "read";
-    case 1:   return "write";
-    case 5:   return "fstat";
-    case 8:   return "lseek";
-    case 17:  return "pread64";
-    case 257: return "openat";
-    default:  return "?";
-  }
-}
+using montauk::model::sched_op_name;
+using montauk::model::ntsync_op_name;
+using montauk::model::io_syscall_name;
+using montauk::model::signal_name;
 
 // Format an absolute wall-clock ns-since-epoch into HH:MM:SS.mmm.
 std::string wall_str(uint64_t wall_ns) {
@@ -274,19 +229,8 @@ int main(int argc, char** argv) {
       case TRACE_EVT_SIGNAL: {
         if (len < sizeof(montauk_signal_event)) break;
         auto* s = reinterpret_cast<const montauk_signal_event*>(data);
-        const char* signame;
-        switch (s->signal_nr) {
-          case 4:  signame = "SIGILL";  break;
-          case 5:  signame = "SIGTRAP"; break;
-          case 6:  signame = "SIGABRT"; break;
-          case 7:  signame = "SIGBUS";  break;
-          case 8:  signame = "SIGFPE";  break;
-          case 9:  signame = "SIGKILL"; break;
-          case 11: signame = "SIGSEGV"; break;
-          case 15: signame = "SIGTERM"; break;
-          case 0:  signame = "(none)";  break;
-          default: signame = "?";       break;
-        }
+        const char* signame = s->signal_nr == 0 ? "(none)" : signal_name(s->signal_nr);
+        if (!signame) signame = "?";
         const char* kind = (s->kind == SIGEVT_DELIVER) ? "DELIVER" : "EXIT_ABNL";
         montauk_sink_appendf(&g_out, "[%10.3f] SIGNAL %s pid=%u tid=%u sig=%s(%d) sender=%d "
                     "exit_code=0x%x comm='%.16s' stack_depth=%u\n",

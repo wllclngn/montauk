@@ -1,4 +1,6 @@
+// NetCollector: /proc/net/dev parsing and bps rate deltas.
 #include "minitest.hpp"
+#include "env_guard.hpp"
 #include "collectors/NetCollector.hpp"
 #include <filesystem>
 #include <fstream>
@@ -19,7 +21,7 @@ TEST(net_collector_parses_and_deltas) {
     "Inter-|   Receive                                                |  Transmit\n"
     " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n"
     "eth0: 1000 0 0 0 0 0 0 0  2000 0 0 0 0 0 0 0\n";
-  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
   montauk::collectors::NetCollector c; montauk::model::NetSnapshot s{};
   ASSERT_TRUE(c.sample(s));
   ASSERT_TRUE(!s.interfaces.empty());

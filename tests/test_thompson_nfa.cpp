@@ -21,9 +21,7 @@ struct ThompsonNFA {
 };
 }  // namespace
 
-// ============================================================================
 // BASIC LITERALS
-// ============================================================================
 
 TEST(nfa_literal_full_match) {
     ThompsonNFA nfa("hello");
@@ -56,9 +54,7 @@ TEST(nfa_single_char) {
     ASSERT_TRUE(!nfa.full_match("aa"));
 }
 
-// ============================================================================
 // DOT (ANY CHARACTER)
-// ============================================================================
 
 TEST(nfa_dot) {
     ThompsonNFA nfa("a.c");
@@ -83,9 +79,7 @@ TEST(nfa_dot_plus) {
     ASSERT_TRUE(nfa.full_match("aXYZc"));
 }
 
-// ============================================================================
 // QUANTIFIERS: * + ?
-// ============================================================================
 
 TEST(nfa_star) {
     ThompsonNFA nfa("ab*c");
@@ -109,9 +103,7 @@ TEST(nfa_question) {
     ASSERT_TRUE(!nfa.full_match("abbc"));
 }
 
-// ============================================================================
 // ALTERNATION: |
-// ============================================================================
 
 TEST(nfa_alternation) {
     ThompsonNFA nfa("cat|dog");
@@ -131,9 +123,7 @@ TEST(nfa_alternation_in_find) {
     ASSERT_EQ(e2, 6);
 }
 
-// ============================================================================
 // GROUPING: ()
-// ============================================================================
 
 TEST(nfa_group_alternation) {
     ThompsonNFA nfa("(foo|bar)baz");
@@ -159,9 +149,7 @@ TEST(nfa_nested_groups) {
     ASSERT_TRUE(!nfa.full_match("ab"));
 }
 
-// ============================================================================
 // CHARACTER CLASSES: [] [^]
-// ============================================================================
 
 TEST(nfa_char_class) {
     ThompsonNFA nfa("[abc]");
@@ -197,9 +185,7 @@ TEST(nfa_char_class_with_quantifier) {
     ASSERT_TRUE(!nfa.full_match("12a"));
 }
 
-// ============================================================================
 // ANCHORS: ^ $
-// ============================================================================
 
 TEST(nfa_anchor_start) {
     ThompsonNFA nfa("^hello");
@@ -239,9 +225,7 @@ TEST(nfa_anchor_empty) {
     ASSERT_EQ(s2, -1);
 }
 
-// ============================================================================
 // ESCAPES
-// ============================================================================
 
 TEST(nfa_escape_bracket) {
     ThompsonNFA nfa("\\[test\\]");
@@ -267,9 +251,7 @@ TEST(nfa_escape_star) {
     ASSERT_TRUE(!nfa.full_match("aab"));
 }
 
-// ============================================================================
 // EDGE CASES
-// ============================================================================
 
 TEST(nfa_empty_pattern) {
     ThompsonNFA nfa("");
@@ -295,9 +277,7 @@ TEST(nfa_mismatched_parens) {
     ASSERT_TRUE(!nfa2.valid());
 }
 
-// ============================================================================
 // KERNEL THREAD PATTERN (montauk integration)
-// ============================================================================
 
 TEST(nfa_kernel_thread_pattern) {
     ThompsonNFA nfa("^\\[.+\\]$");
@@ -323,9 +303,7 @@ TEST(nfa_kernel_thread_find) {
     ASSERT_EQ(s2, -1);
 }
 
-// ============================================================================
 // UTF-8: LITERAL MULTI-BYTE
-// ============================================================================
 
 TEST(nfa_utf8_literal) {
     ThompsonNFA nfa("café");
@@ -350,9 +328,7 @@ TEST(nfa_utf8_find) {
     ASSERT_EQ(e, 12);  // "café" is 5 bytes (c=1, a=1, f=1, é=2)
 }
 
-// ============================================================================
 // UTF-8: DOT MATCHES CODEPOINT
-// ============================================================================
 
 TEST(nfa_utf8_dot_codepoint) {
     // "é" is 2 bytes but 1 codepoint. Dot should match it as 1 codepoint.
@@ -379,9 +355,7 @@ TEST(nfa_utf8_dot_3byte) {
     ASSERT_TRUE(nfa.full_match("\xE4\xB8\x96"));    // 3-byte codepoint (世)
 }
 
-// ============================================================================
 // UTF-8: CHARACTER CLASSES WITH CODEPOINT RANGES
-// ============================================================================
 
 TEST(nfa_utf8_class_ascii_only) {
     // Pure ASCII class -- should work like byte-level

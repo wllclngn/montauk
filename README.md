@@ -16,13 +16,14 @@ montauk is a Linux **observability platform** — an event-driven monitor, an eB
 sublimation is a **sub-system montauk builds**, vendored in `montauk/sublimation/`, and it is montauk's search and sort *everywhere*: the process table, every ordering the analyzer emits, the latency-structure classification the reports read and the kernel-thread, `/`-search and `--trace` text matching. Two systems, one tree. No system packages, no fetch step — NVML and liburing are auto-detected and optional; everything else lives in the repo.
 
 ```
-montauk — one C++23 binary, three tools, one in-tree sort
+montauk — one C++23 binary, three tools and an in-tree sort, plus an agent-facing MCP server
   ├─ monitor  (plain `montauk`)
   │    ├─ collectors — CPU, memory, GPU (NVML / AMD sysfs / Intel fdinfo), disk, net, thermal, process
   │    ├─ UI — OUROBOROS-derived Canvas / Component / FlexLayout, cell-clipped, no rubberbanding
   │    ├─ charts — pixel-rendered area charts (Kitty t=t /dev/shm transport, Sixel fallback)
   │    ├─ /metrics — Prometheus endpoint over io_uring (optional)
-  │    └─ --json — one-shot structured snapshot of live system state
+  │    └─ --json — one-shot structured snapshot of live system state, plus a live
+  │       trace_to_json record when paired with --trace
   ├─ tracer  (`--trace PATTERN`)
   │    ├─ eBPF on kernel tracepoints + libc/ntdll uprobes — no ptrace
   │    ├─ capture — ntsync / keyed-event / futex sync, heap, signal, abort, mmap
@@ -33,16 +34,20 @@ montauk — one C++23 binary, three tools, one in-tree sort
   │    │  heapstk, doublefree, futex, keyedevt, sched (wake-to-run latency + structure),
   │    │  slice (per-CPU dispatched-slice length)
   │    └─ --json — the reports as one structured envelope (text / Prometheus / JSON, one result)
-  └─ sublimation  (in-tree search / sort / match core)
-       ├─ disorder classifier — builds a level graph, routes the sort; the analyzer reads its verdict
-       ├─ index sorts (32-bit pack / 64-bit LSD radix) + hybrid prefix-pack / MSD-radix string sort
-       ├─ randomness battery — six orthogonal entropy lenses → a single max-entropy confidence
-       └─ text engines — Boyer-Moore-Horspool substring + Thompson NFA (RE2-lineage) regex; value search (select, searchsorted)
+  ├─ sublimation  (in-tree search / sort / match core)
+  │    ├─ disorder classifier — builds a level graph, routes the sort; the analyzer reads its verdict
+  │    ├─ index sorts (32-bit pack / 64-bit LSD radix) + hybrid prefix-pack / MSD-radix string sort
+  │    ├─ randomness battery — six orthogonal entropy lenses → a single max-entropy confidence
+  │    └─ text engines — Boyer-Moore-Horspool substring + Thompson NFA (RE2-lineage) regex; value search (select, searchsorted)
+  └─ montauk-mcp  (separate Rust binary, agent-facing)
+       ├─ stdio JSON-RPC 2.0 server, zero third-party crates
+       └─ four read-only tools — montauk_snapshot, montauk_analyze_report, montauk_digest
+          (subprocess) and sublimation (direct FFI, no subprocess spawn)
 ```
 
 ## Components
 
-montauk is one binary that wears three faces, plus the sort beneath them. Each face is reached by how you invoke it; sublimation is compiled in under all three.
+montauk is one binary that wears three faces, plus the sort beneath them and an agent-facing MCP server alongside it. Each face is reached by how you invoke it; sublimation is compiled in under all three.
 
 | Tool | Invocation | Role |
 |---|---|---|
@@ -50,8 +55,9 @@ montauk is one binary that wears three faces, plus the sort beneath them. Each f
 | **tracer** | `montauk --trace PATTERN` | eBPF flight recorder over a whole process tree — event-driven discovery, no ptrace, no `/proc`. Per-thread state and syscalls, ntsync / futex / keyed-event sync, heap traffic, signals and aborts, file I/O, file-backed mmap, scheduler decisions with wake-to-run latency, CCX-bucketed migrations and hardware PMU counters via `perf_event_open`. Composes with `--metrics`, `--log` and a near-zero-overhead binary log (`--trace-out`). |
 | **analyzer** | `montauk_analyze`, `montauk_trace_decode` | Folds a capture once into single-pass diagnostic reports — `waits`, `spins`, `pairing`, `abortpm`, `endstate`, `heapstk`, `doublefree`, `futex`, `keyedevt`, `sched`, `slice` — over logs reaching 450 MB+, plus recording-directory digests and cross-run population statistics. Renders each report as text, Prometheus or `--json` from one typed result. No live target, no privileges. |
 | **sublimation** | in-tree sub-system + `sublimation` CLI | montauk's search, sort and match core, used everywhere: the process table, every ordering the analyzer emits, the disorder classification its reports read and all of montauk's text matching. It sorts, classifies, locates structure and greps text (Boyer-Moore-Horspool substring + Thompson NFA / RE2-lineage regex); the `sublimation` CLI exposes all of them and a modern stream toolkit -- stats (sort / quantile / select / searchsorted / sum / mean / stdev / min / max / count / distinct / describe / histogram / outliers), structure (classify / characterize / locate `--values` / rand), text (grep / contains / replace / field / where / cut / column / uniq / tac / paste / tally) and the relational lane (group / intersect / subtract / union / join), with grep exit codes and `-i`/`-o`/`-v`/`-c`/`-n`. See the dedicated section below. |
+| **montauk-mcp** | `montauk-mcp/target/release/montauk-mcp` | Agent-facing MCP server -- stdio JSON-RPC 2.0, a separate static Rust binary, zero third-party crates, same no-dependency stance as sublimation. Four read-only tools: `montauk_snapshot`, `montauk_analyze_report` and `montauk_digest` (subprocess wraps around the other three faces) plus `sublimation` (direct FFI into `libsublimation.a`, no subprocess spawn per call). See the dedicated section below. |
 
-An optional kernel module (`montauk-kernel`) and the external-metrics provider sockets are the only seams to the outside; everything else is one statically-linked C++23 binary. sublimation is vendored under `montauk/sublimation/` with its own tests — one license, one tree, one README for both. NVML and liburing are auto-detected and optional; no system packages, no fetch step.
+An optional kernel module (`montauk-kernel`), the external-metrics provider sockets and the agent-facing `montauk-mcp` server (a separate, zero-dependency Rust binary) are the only seams to the outside; everything else is one statically-linked C++23 binary. sublimation is vendored under `montauk/sublimation/` with its own tests — one license, one tree, one README for both. NVML and liburing are auto-detected and optional; no system packages, no fetch step.
 
 ## sublimation — a flow-model sort that routes by disorder
 
@@ -94,7 +100,7 @@ The text engines are 1:1 C23 ports of montauk's C++ `BoyerMooreSearch` and `Thom
 
 e.g. `cat dump | sublimation quantile 0.99 --field 2` for a column's 99th percentile, `ps aux | sublimation where '6 > 100000'` to keep the heavy processes, `seq 1 1000 | shuf | sublimation characterize` to name a stream's shape. Order, percentile, selection, value lookup, the awk-style column / filter / reduce idioms, regex/substring matching and the structural verdict from one tool — the same engines montauk runs internally, on the command line. The division is by **target**: sublimation owns the **stream** — the column, filter, reduce, order and structure idioms — while `grep`, `find` and `awk` keep their own ground, filesystem traversal and the awk language itself.
 
-**On the shell.** Nothing requires the pipe to name `sublimation` outright — a few `~/.bashrc` wrapper functions can route the stream forms of `grep`, `sort`, `wc` and `awk` to it, so `awk '{print $1,$3}'`, `awk '$2 > 100'` or `awk '/re/'` resolve to `field`, `where` or `grep`. The awk language proper (`BEGIN`/`END`, `NF`/`NR`, variables, `printf`, control flow) stays awk's. Route only the byte-for-byte idioms; leave the rest where it belongs.
+**On the shell.** Nothing requires the pipe to name `sublimation` outright — a few `~/.bashrc` wrapper functions can route the stream forms of `grep`, `sort`, `wc`, `awk`, `cut`, `tac`, `paste`, `sed` and `datamash` to it, so `awk '{print $1,$3}'`, `awk '$2 > 100'`, `awk '/re/'`, `cut -f2 -d,` or `sed 's/foo/X/g'` resolve to `field`, `where`, `grep` or `replace`. The awk language proper (`BEGIN`/`END`, `NF`/`NR`, variables, `printf`, control flow) stays awk's. Route only the byte-for-byte idioms; leave the rest where it belongs. The routing decision itself lives in one shared table so it can't drift between contexts — the same file also gates what an agent's own tool calls are allowed to run.
 
 **How it works.** Classification is one O(n) pass (run count, monotone runs, max descent gap); only ambiguous inputs pay for sampled inversions, distinct-value estimation and the full Young-tableau shape via patience sorting. The hook-length formula (Frame-Robinson-Thrall) gives the information-theoretic comparison bound, and the tableau shape routes: counting sort for few-unique (k ≤ 64), an R_eff merge tree (effective resistance on the run-boundary Laplacian) for structured runs, an O(n) rotation fix for rotated-sorted, binary insertion for low-displacement nearly-sorted and for random data a four-layer pipeline — PCF bucketing → AVX2/BMI2 block quicksort → pdqsort fat-pivot → AVX2 sorting networks at the leaves. A Jacobi-eigendecomposition spectral fallback (Fiedler seriation) catches partition degradation, gated by a CUSUM whose threshold rides a critically-damped oscillator. Type-generic across i32/i64/u32/u64/f32/f64; IPS4o-style parallel sort at n ≥ 250K.
 
@@ -128,6 +134,29 @@ From 1M to 100M sublimation holds ~16–18 ns/element while Rust ipnsort rises 1
 **Build.** Compiled as a static library with montauk — no system package, no fetch step. Requires a Haswell-or-newer CPU (BMI2 + AVX2) and gcc 13+ (C23). The prior C++23 TimSort/Powersort sort is retired (archived under `[0] ARCHIVE/montauk-timsort-cpp/`).
 
 **Where montauk uses it:** the process-table sort and **the analyzer's orderings** (latency quantiles, report rows, struct-by-key sorts via `sublimation_order_*`, value lookups via `searchsorted`); the `sched` report's structure classification (`STRUCTURE`) and locator (`LOCATED`); and **all of montauk's text matching** — kernel-thread classification, the live `/`-search, the `--regex` filter and `--trace` token matching, on the in-house substring and regex engines. A handful of multi-key and hot-path partial-selection sorts stay on `std::` by design, where no single-key sublimation primitive fits.
+
+## montauk-mcp — the agent-facing tool surface
+
+montauk-mcp is a stdio JSON-RPC 2.0 server exposing montauk and sublimation to any MCP-speaking agent — a single static Rust binary, zero third-party crates, the same no-dependency stance as sublimation and `json.h`. Registers with an MCP client with no venv, no interpreter resolution and no PATH entry to go stale:
+
+```
+claude mcp add --scope project montauk -- montauk-mcp/target/release/montauk-mcp
+```
+
+Four tools, read-only / observational only — no killing processes, no scheduler-policy changes, nothing mutating, stated explicitly in every tool description:
+
+| tool | wraps | does |
+|---|---|---|
+| `montauk_snapshot` | `montauk --json` | one-shot structured snapshot of live system state |
+| `montauk_analyze_report` | `montauk_analyze FILE --report ... --json` | diagnostic reports over a trace file as the structured JSON envelope |
+| `montauk_digest` | `montauk_analyze DIR --digest --json` | compact specs + stability + thermal + offenders digest over a recording directory |
+| `sublimation` | direct FFI into `libsublimation.a` | sort / classify / grep / contains, no subprocess spawn per call |
+
+Three of the four are subprocess wrappers — `montauk` and `montauk_analyze` are standalone processes regardless of what orchestrates them, so there's nothing to link into for those. `sublimation` is different: called directly through `extern "C"` bindings into the same static library `montauk_core` and `montauk_analyze` already link, so an agent hammering it in a debugging loop pays zero process-spawn cost per call, rather than a fresh subprocess spawn every time.
+
+Three source files: a hand-rolled JSON-RPC 2.0 loop over stdio (`rpc.rs` — stdout carries protocol messages only, all logging goes to stderr), a from-scratch JSON parser and serializer (`json.rs` — `include/util/json.h` is write-only by design, this is the first thing in montauk that reads JSON), and the FFI bindings (`ffi.rs`, linked via `build.rs` against `libsublimation.a`, the same static lib `montauk_core`/`montauk_analyze` already use).
+
+**Build.** `cd montauk-mcp && cargo build --release`. No CMake target; a separate build tree beside the C++ binary, same pattern the optional `montauk-kernel` module already uses.
 
 ## Kernel Module (Optional)
 
@@ -305,7 +334,7 @@ No additional dependencies required. Works independently of or alongside `--metr
 
 Both the monitor and the analyzer emit their state as JSON, so an agent or a script consumes montauk's observability without scraping the TUI or parsing prose.
 
-- `montauk --json` prints one structured snapshot of live system state to stdout and exits. It warms two producer cycles so the rate deltas (CPU context switches, network and disk throughput) are real, then serializes system specs, CPU (with per-core), PMU, memory, GPU, thermal, network, disk, filesystems and the ranked top processes as one JSON object. No TUI, no server, no daemon.
+- `montauk --json` prints one structured snapshot of live system state to stdout and exits. It warms two producer cycles so the rate deltas (CPU context switches, network and disk throughput) are real, then serializes system specs, CPU (with per-core), PMU, memory, GPU, thermal, network, disk, filesystems and the ranked top processes as one JSON object. No TUI, no server, no daemon. Paired with `--trace PATTERN`, a second JSON-lines record follows with the live trace snapshot (threads, migrations, ntsync, fds, sched-op counts) — the same `trace_to_json` renderer the analyzer side already had for a static capture, now live, and one shared walk with the Prometheus renderer so the two surfaces can't drift apart on a field.
 - `montauk_analyze FILE --json` emits the diagnostic reports as one JSON envelope: a `schema_version`, the trace context (path, pattern, event count, format version, start time) and a `reports` array. Each report carries its verdict, its typed findings, its gauges (each with the same help text the Prometheus export uses) and its offenders.
 
 The JSON is a renderer, not a second computation. Every report computes a typed result once; the text (`emit`), Prometheus (`prom`) and JSON (`json`) surfaces all render from that one result, so they cannot disagree on a number. A byte-identical corpus gate holds a `json` surface over a synthetic capture, and a per-report parity pass verifies each report emits identical gauges in text (`.prom`) and JSON. The writer is a single in-tree serializer (`include/util/json.h`, ~120 lines, no third-party dependency) shared by both surfaces; montauk only ever writes JSON, never parses it. This is the interface an AI agent reads to reason over the machine: the exact data, one schema, provably consistent with what Prometheus and the human report show.

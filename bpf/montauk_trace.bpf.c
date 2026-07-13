@@ -369,6 +369,30 @@ static __always_inline void emit_io_event(u32 pid, u32 tid, s32 syscall_nr,
   evt->result = result;
   evt->count = count;
   evt->whence = whence;
+  evt->duration_ns = 0;  // not tracked for this call site; see emit_io_event_dur
+  bpf_get_current_comm(evt->comm, sizeof(evt->comm));
+  evt->timestamp_ns = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(evt, 0);
+}
+
+// Same as emit_io_event, plus a real enter->exit duration -- used by the
+// pwrite64 exit handler, the synchronous O_DIRECT completion-latency probe.
+static __always_inline void emit_io_event_dur(u32 pid, u32 tid, s32 syscall_nr,
+                                              s32 fd, s64 result, u64 count,
+                                              u32 whence, u64 duration_ns) {
+  struct montauk_io_event *evt;
+  evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
+  if (!evt)
+    return;
+  evt->type = TRACE_EVT_IO;
+  evt->pid = pid;
+  evt->tid = tid;
+  evt->syscall_nr = syscall_nr;
+  evt->fd = fd;
+  evt->result = result;
+  evt->count = count;
+  evt->whence = whence;
+  evt->duration_ns = duration_ns;
   bpf_get_current_comm(evt->comm, sizeof(evt->comm));
   evt->timestamp_ns = bpf_ktime_get_ns();
   bpf_ringbuf_submit(evt, 0);
@@ -810,8 +834,12 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
       default:
         is_iowait = 0; break;
     }
-    if (is_iowait)
+    if (is_iowait) {
       emit_io_event(pid, tid, syscall_id, io_fd, -999, 0, 0);
+      struct thread_bpf_state *iw_ts = bpf_map_lookup_elem(&thread_map, &tid);
+      if (iw_ts)
+        iw_ts->io_enter_ns = bpf_ktime_get_ns();
+    }
   }
 
   struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
@@ -953,12 +981,22 @@ int handle_sys_exit(struct trace_event_raw_sys_exit *ctx) {
   struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
   if (ts) {
     // I/O-wait completion: pair the pending enter (above) so a poll/epoll/recv
-    // that DID return is not mistaken for a thread still parked in it.
+    // that DID return is not mistaken for a thread still parked in it. Also
+    // carries a real enter->exit duration now (iowait_enter above stashes
+    // io_enter_ns) -- a generic blocking-wait completion-latency probe, the
+    // same shape as pwrite64's, for any consumer parked in poll/epoll_wait/
+    // select/recvmsg/a non-ntsync ioctl. Was duration_ns=0 (marker-only)
+    // before; iolat's fold() already ignores duration_ns==0 entries, so this
+    // is additive and does not change anything that read these events prior.
     s32 snr = ts->syscall_nr;
     if (snr == 7 || snr == 271 || snr == 232 || snr == 281 ||
         snr == 47 || snr == 45 || snr == 23 || snr == 270 ||
-        (snr == 16 && !is_ntsync_ioctl((u32)ts->syscall_arg1)))
-      emit_io_event(pid, tid, snr, -1, ctx->ret, 0, 0);
+        (snr == 16 && !is_ntsync_ioctl((u32)ts->syscall_arg1))) {
+      u64 now = bpf_ktime_get_ns();
+      u64 dur = (ts->io_enter_ns && now > ts->io_enter_ns) ? (now - ts->io_enter_ns) : 0;
+      emit_io_event_dur(pid, tid, snr, -1, ctx->ret, 0, 0, dur);
+      ts->io_enter_ns = 0;
+    }
     ts->syscall_nr = -1; // back to running
   }
 
@@ -1767,6 +1805,101 @@ int handle_pread64_exit(struct trace_event_raw_sys_exit *ctx) {
   ts->io_result = ctx->ret;
   ts->io_timestamp_ns = bpf_ktime_get_ns();
   emit_io_event(pid, tid, 17, ts->io_fd, ctx->ret, ts->io_count, ts->io_whence);
+  return 0;
+}
+
+// pwrite64 (syscall 18) -- the synchronous O_DIRECT completion-latency probe.
+// A blocking pwrite() on an O_DIRECT fd does not return until the write has
+// genuinely completed at the device, so enter->exit wall time on this syscall
+// IS the true I/O completion latency; no separate block-layer bio hook needed.
+
+SEC("tp/syscalls/sys_enter_pwrite64")
+int handle_pwrite64_enter(struct trace_event_raw_sys_enter *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_fd = (s32)ctx->args[0];
+  ts->io_count = ctx->args[2];
+  ts->io_whence = (u32)ctx->args[3]; // offset for pwrite64
+  ts->io_enter_ns = bpf_ktime_get_ns();
+  return 0;
+}
+
+SEC("tp/syscalls/sys_exit_pwrite64")
+int handle_pwrite64_exit(struct trace_event_raw_sys_exit *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_result = ctx->ret;
+  u64 now = bpf_ktime_get_ns();
+  u64 dur = (ts->io_enter_ns && now > ts->io_enter_ns) ? (now - ts->io_enter_ns) : 0;
+  ts->io_timestamp_ns = now;
+  emit_io_event_dur(pid, tid, 18, ts->io_fd, ctx->ret, ts->io_count, ts->io_whence, dur);
+  return 0;
+}
+
+// io_getevents (syscall 208) -- the Linux AIO completion-reap probe. A thread
+// blocked in io_getevents() does not return until at least min_nr completions
+// are ready (or the timeout expires), so enter->exit wall time on this
+// syscall is the completion-wait latency for whatever was queued via
+// io_submit -- the async-AIO analog of pwrite64's synchronous completion-
+// latency probe above. Generic to any Linux AIO consumer (e.g. qemu's
+// aio=native drive backend), not specific to any one workload.
+
+SEC("tp/syscalls/sys_enter_io_getevents")
+int handle_io_getevents_enter(struct trace_event_raw_sys_enter *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_fd = (s32)ctx->args[0];    // aio_context_t, not a real fd -- kept only for offender attribution
+  ts->io_count = ctx->args[1];      // min_nr requested
+  ts->io_enter_ns = bpf_ktime_get_ns();
+  return 0;
+}
+
+SEC("tp/syscalls/sys_exit_io_getevents")
+int handle_io_getevents_exit(struct trace_event_raw_sys_exit *ctx) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid = pid_tgid >> 32;
+  u32 tid = (u32)pid_tgid;
+
+  if (!is_tracked(pid))
+    return 0;
+
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (!ts)
+    return 0;
+
+  ts->io_result = ctx->ret;
+  u64 now = bpf_ktime_get_ns();
+  u64 dur = (ts->io_enter_ns && now > ts->io_enter_ns) ? (now - ts->io_enter_ns) : 0;
+  ts->io_timestamp_ns = now;
+  emit_io_event_dur(pid, tid, 208, ts->io_fd, ctx->ret, ts->io_count, 0, dur);
+  ts->io_enter_ns = 0;
   return 0;
 }
 

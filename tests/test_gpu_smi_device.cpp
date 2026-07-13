@@ -1,4 +1,6 @@
+// GpuCollector: nvidia-smi device-level fallback (injected mock binary).
 #include "minitest.hpp"
+#include "env_guard.hpp"
 #include "collectors/GpuCollector.hpp"
 #include <filesystem>
 #include <fstream>
@@ -21,17 +23,16 @@ TEST(gpu_collector_nvidia_smi_device_fallback) {
     out << "esac\n";
   }
   ::chmod(script.c_str(), 0755);
-  ::setenv("MONTAUK_NVIDIA_SMI_PATH", script.c_str(), 1);
+  TempRootGuard smi_path("MONTAUK_NVIDIA_SMI_PATH", script.string());
   // Ensure device-level fallback is enabled and cache interval is small
-  ::setenv("MONTAUK_NVIDIA_SMI_DEV", "1", 1);
-  ::setenv("MONTAUK_SMI_MIN_INTERVAL_MS", "0", 1);
+  TempRootGuard smi_dev("MONTAUK_NVIDIA_SMI_DEV", "1");
+  TempRootGuard smi_interval("MONTAUK_SMI_MIN_INTERVAL_MS", "0");
   // Skip native NVML so the injected nvidia-smi is what answers, not a live GPU.
-  ::setenv("MONTAUK_GPU_DISABLE_NATIVE", "1", 1);
+  TempRootGuard gpu_disable("MONTAUK_GPU_DISABLE_NATIVE", "1");
 
   montauk::collectors::GpuCollector c; montauk::model::GpuVram v{};
   ASSERT_TRUE(c.sample(v));
   ASSERT_EQ(v.total_mb, 4096u);
   ASSERT_EQ(v.used_mb, 1024u);
   ASSERT_TRUE(v.has_util);
-  ::unsetenv("MONTAUK_GPU_DISABLE_NATIVE");
 }

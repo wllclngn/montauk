@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 7.13.0 LANGUAGES C CXX)
+project(montauk VERSION 7.14.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -73,7 +73,6 @@ add_library(montauk_core
     src/ui/Renderer.cpp
     src/ui/HelpOverlay.cpp
     src/app/ChartHistories.cpp
-    src/app/SnapshotBuffers.cpp
     src/app/GpuAttributor.cpp
     src/app/Producer.cpp
     src/app/Security.cpp
@@ -81,6 +80,10 @@ add_library(montauk_core
     src/app/Filter.cpp
     src/app/PrometheusSerializer.cpp
     src/app/JsonSerializer.cpp
+    src/app/PrometheusSink.cpp
+    src/app/JsonSink.cpp
+    src/app/MetricsRender.cpp
+    src/app/TraceRender.cpp
     src/app/ProviderEmitter.cpp
     src/app/LogWriter.cpp
     src/collectors/MemoryCollector.cpp
@@ -95,7 +98,6 @@ add_library(montauk_core
     src/collectors/ProcessCollector.cpp
     src/collectors/NetlinkProcessCollector.cpp
     src/collectors/ThermalCollector.cpp
-    src/app/TraceBuffers.cpp
     src/ui/widget/Canvas.cpp
     src/ui/widget/Chart.cpp
     src/ui/widget/Component.cpp
@@ -273,6 +275,7 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_gpu_cache.cpp
     tests/test_fdinfo_collector.cpp
     tests/test_snapshot_buffers.cpp
+    tests/test_trace_buffers.cpp
     tests/test_producer_basic.cpp
     tests/test_stress.cpp
     tests/test_filters.cpp
@@ -280,6 +283,7 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_thermal.cpp
     tests/test_netlink_smoke.cpp
     tests/test_prometheus.cpp
+    tests/test_json_snapshot.cpp
     tests/test_logwriter.cpp
     tests/test_security.cpp
     tests/test_gpu_smi_device.cpp

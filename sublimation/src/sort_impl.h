@@ -96,7 +96,7 @@ static bool SUB_TYPED(counting_sort_few_unique)(SUB_TYPE *arr, size_t n,
     #define COUNTING_SORT_PROBE 64
     #endif
 
-    // ── Phase 1: Discovery ──────────────────────────────────────────────
+    // Phase 1: Discovery
     // Scan all elements to discover distinct values into sorted uniq[].
     // Binary search is fine here: O(n log k) but k <= 64 so log k <= 6,
     // and new insertions are rare (at most 64 across the entire array).
@@ -135,7 +135,7 @@ static bool SUB_TYPED(counting_sort_few_unique)(SUB_TYPE *arr, size_t n,
 
     if (k <= 1) return true;
 
-    // ── Phase 2: Histogram (O(1) per element) ──────────────────────────
+    // Phase 2: Histogram (O(1) per element)
     memset(histogram, 0, k * sizeof(size_t));
 
     if (k <= 8) {
@@ -156,7 +156,7 @@ static bool SUB_TYPED(counting_sort_few_unique)(SUB_TYPE *arr, size_t n,
         }
     }
 
-    // ── Phase 3: Scatter ────────────────────────────────────────────────
+    // Phase 3: Scatter
     size_t write = 0;
     for (size_t j = 0; j < k; j++) {
         size_t count = histogram[j];

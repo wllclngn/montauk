@@ -8598,7 +8598,7 @@
 [   101.061] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
 [   101.062] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
 [   101.062] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.100] IO     ?             pid=1000    tid=1002    fd=9    count=0 result=-999 comm='worker'
+[   101.100] IO     ppoll         pid=1000    tid=1002    fd=9    count=0 result=-999 comm='worker'
 [   101.200] HEAP   malloc    pid=1000    tid=1001    addr=0x0000000000aaaa00 size=128 comm='worker'
 [   101.201] HEAP   free      pid=1000    tid=1001    addr=0x0000000000aaaa00 size=0 comm='worker'
 [   101.202] HEAP   malloc    pid=1000    tid=1001    addr=0x0000000000bbbb00 size=256 comm='worker'

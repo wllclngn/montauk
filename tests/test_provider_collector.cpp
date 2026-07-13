@@ -1,3 +1,4 @@
+// ProviderCollector: scraping third-party Prometheus-text provider sockets.
 #include "minitest.hpp"
 #include "collectors/ProviderCollector.hpp"
 

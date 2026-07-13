@@ -1,4 +1,5 @@
 #include "collectors/KernelProcessCollector.hpp"
+#include "collectors/ProcessParsing.hpp"
 #include "util/Procfs.hpp"
 
 #include <cstring>
@@ -387,25 +388,6 @@ int KernelProcessCollector::read_cpu_count() {
         }
     }
     return count > 0 ? count : 1;
-}
-
-std::string KernelProcessCollector::read_cmdline(int32_t pid) {
-    auto path = std::string("/proc/") + std::to_string(pid) + "/cmdline";
-    auto bytes = montauk::util::read_file_bytes(path);
-    if (!bytes || bytes->empty()) return {};
-    std::string out;
-    out.reserve(bytes->size());
-    bool sep = true;
-    for (auto b : *bytes) {
-        if (b == 0) {
-            if (!sep) { out.push_back(' '); sep = true; }
-        } else {
-            out.push_back(static_cast<char>(b));
-            sep = false;
-        }
-    }
-    if (!out.empty() && out.back() == ' ') out.pop_back();
-    return out;
 }
 
 } // namespace montauk::collectors

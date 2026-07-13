@@ -40,6 +40,9 @@ struct MetricsSnapshot {
 // Serialize a TraceSnapshot into Prometheus text exposition format.
 [[nodiscard]] std::string trace_to_prometheus(const montauk::model::TraceSnapshot& snap);
 
+// Serialize a TraceSnapshot into one structured JSON object (see TraceRender.cpp).
+[[nodiscard]] std::string trace_to_json(const montauk::model::TraceSnapshot& snap);
+
 // Read a TraceSnapshot from TraceBuffers via seqlock.
 [[nodiscard]] inline montauk::model::TraceSnapshot read_trace_snapshot(const TraceBuffers& buffers) {
   montauk::model::TraceSnapshot ts{};

@@ -579,7 +579,7 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
   return 0;
 }
 
-std::string system_info_block(const std::string& dir) {
+SystemInfo system_info_data(const std::string& dir) {
   std::string labels;  // last montauk_system_info{...} wins
   for (const auto& path : glob_proms(dir)) {
     FILE* fp = std::fopen(path.c_str(), "r");
@@ -596,34 +596,58 @@ std::string system_info_block(const std::string& dir) {
     std::free(line);
     std::fclose(fp);
   }
-  if (labels.empty()) return "";
+  SystemInfo info;
+  if (labels.empty()) return info;
   LabelVec L = parse_labels(labels);
   auto g = [&](const char* k) { return label_get(L, k); };
+  info.found = true;
+  info.cpu_model = g("cpu_model");
+  info.physical_cores = g("physical_cores");
+  info.logical_cpus = g("logical_cpus");
+  info.cache_domains = g("cache_domains");
+  info.mem_total_gib = g("mem_total_gib");
+  info.gpu = g("gpu");
+  info.kernel = g("kernel");
+  info.sched = g("sched");
+  return info;
+}
+
+std::string system_info_block(const std::string& dir) {
+  SystemInfo info = system_info_data(dir);
+  if (!info.found) return "";
   std::string out = "SYSTEM\n";
-  out += "  cpu        " + g("cpu_model") + " (" + g("physical_cores") + "c/" +
-         g("logical_cpus") + "t";
-  std::string domain = g("cache_domains");
-  if (!domain.empty()) out += ", " + domain + " cache domains";
+  out += "  cpu        " + info.cpu_model + " (" + info.physical_cores + "c/" +
+         info.logical_cpus + "t";
+  if (!info.cache_domains.empty()) out += ", " + info.cache_domains + " cache domains";
   out += ")\n";
-  out += "  memory     " + g("mem_total_gib") + " GiB\n";
-  std::string gpu = g("gpu");
-  if (!gpu.empty()) out += "  gpu        " + gpu + "\n";
-  out += "  kernel     " + g("kernel") + "\n";
-  out += "  scheduler  " + g("sched") + "\n";
+  out += "  memory     " + info.mem_total_gib + " GiB\n";
+  if (!info.gpu.empty()) out += "  gpu        " + info.gpu + "\n";
+  out += "  kernel     " + info.kernel + "\n";
+  out += "  scheduler  " + info.sched + "\n";
   return out;
 }
 
-std::string scx_stability_block(const std::string& dir) {
+namespace {
+std::string format_ejection(const ScxEjection& e) {
+  std::string out = e.scheduler + " -- \"" + e.reason + "\"";
+  if (!e.phase.empty() || !e.cores.empty()) {
+    out += "  (during " + e.phase;
+    if (!e.cores.empty()) out += (e.phase.empty() ? "" : ", ") + e.cores + "c";
+    out += ")";
+  }
+  return out;
+}
+}  // namespace
+
+ScxStability scx_stability_data(const std::string& dir) {
   // CRASH / EJECTION first, because a scheduler that got ejected makes every
   // latency number below it meaningless -- the reader needs to see it before
   // anything else. bench-enduser writes these markers into the recording .prom:
   //   montauk_scx_ejected{scheduler,reason,phase,cores} 1   (one per ejection)
   //   montauk_cleanroom{verdict,detail} 1                   (CLEAN | NOISY)
   //   montauk_watchdog_proximity_pct{phase,cores} <pct>     (worst sojourn / 30s)
-  std::vector<std::string> ejections;
-  std::string cr_verdict, cr_detail;
-  double wd_worst = -1;
-  std::string wd_where;
+  ScxStability s;
+  std::vector<std::string> seen;  // dedup key: the formatted line, as before
   for (const auto& path : glob_proms(dir)) {
     FILE* fp = std::fopen(path.c_str(), "r");
     if (!fp) continue;
@@ -636,22 +660,19 @@ std::string scx_stability_block(const std::string& dir) {
         size_t br = ln.find('{'), cb = ln.find('}', br);
         if (cb == std::string::npos) continue;
         LabelVec L = parse_labels(ln.substr(br + 1, cb - br - 1));
-        std::string e = label_get(L, "scheduler") + " -- \"" +
-                        label_get(L, "reason") + "\"";
-        std::string ph = label_get(L, "phase"), co = label_get(L, "cores");
-        if (!ph.empty() || !co.empty()) {
-          e += "  (during " + ph;
-          if (!co.empty()) e += (ph.empty() ? "" : ", ") + co + "c";
-          e += ")";
+        ScxEjection e{label_get(L, "scheduler"), label_get(L, "reason"),
+                      label_get(L, "phase"), label_get(L, "cores")};
+        std::string key = format_ejection(e);
+        if (std::find(seen.begin(), seen.end(), key) == seen.end()) {
+          seen.push_back(key);
+          s.ejections.push_back(std::move(e));
         }
-        if (std::find(ejections.begin(), ejections.end(), e) == ejections.end())
-          ejections.push_back(e);
       } else if (ln.rfind("montauk_cleanroom{", 0) == 0) {
         size_t br = ln.find('{'), cb = ln.find('}', br);
         if (cb == std::string::npos) continue;
         LabelVec L = parse_labels(ln.substr(br + 1, cb - br - 1));
-        cr_verdict = label_get(L, "verdict");
-        cr_detail = label_get(L, "detail");
+        s.cleanroom_verdict = label_get(L, "verdict");
+        s.cleanroom_detail = label_get(L, "detail");
       } else if (ln.rfind("montauk_watchdog_proximity_pct", 0) == 0) {
         size_t sp = ln.rfind(' ');
         double v = sp != std::string::npos ? std::atof(ln.c_str() + sp + 1) : 0;
@@ -662,37 +683,42 @@ std::string scx_stability_block(const std::string& dir) {
           std::string ph = label_get(L, "phase"), co = label_get(L, "cores");
           where = ph + (co.empty() ? "" : (ph.empty() ? "" : " ") + co + "c");
         }
-        if (v > wd_worst) { wd_worst = v; wd_where = where; }
+        if (v > s.watchdog_worst_pct) { s.watchdog_worst_pct = v; s.watchdog_where = where; }
       }
     }
     std::free(line);
     std::fclose(fp);
   }
-  if (ejections.empty() && cr_verdict.empty() && wd_worst < 0) return "";
+  return s;
+}
+
+std::string scx_stability_block(const std::string& dir) {
+  ScxStability s = scx_stability_data(dir);
+  if (s.ejections.empty() && s.cleanroom_verdict.empty() && s.watchdog_worst_pct < 0) return "";
   std::string out = "SCHEDULER STABILITY\n";
-  if (!ejections.empty())
-    for (const auto& e : ejections) out += "  EJECTED      " + e + "\n";
+  if (!s.ejections.empty())
+    for (const auto& e : s.ejections) out += "  EJECTED      " + format_ejection(e) + "\n";
   else
     out += "  no ejection -- scheduler ran clean\n";
-  if (wd_worst >= 0) {
+  if (s.watchdog_worst_pct >= 0) {
     char num[64];
-    std::snprintf(num, sizeof num, "%.0f%%", wd_worst);
+    std::snprintf(num, sizeof num, "%.0f%%", s.watchdog_worst_pct);
     out += std::string("  watchdog     worst sojourn ") + num +
            " of the 30s sched_ext limit";
-    if (!wd_where.empty()) out += "  (" + wd_where + ")";
-    if (wd_worst >= 50) out += "  [NEAR-EJECTION]";
+    if (!s.watchdog_where.empty()) out += "  (" + s.watchdog_where + ")";
+    if (s.watchdog_worst_pct >= 50) out += "  [NEAR-EJECTION]";
     out += "\n";
   }
-  if (!cr_verdict.empty()) {
-    out += "\nCLEAN-ROOM\n  state        " + cr_verdict;
-    if (!cr_detail.empty()) out += " -- " + cr_detail;
+  if (!s.cleanroom_verdict.empty()) {
+    out += "\nCLEAN-ROOM\n  state        " + s.cleanroom_verdict;
+    if (!s.cleanroom_detail.empty()) out += " -- " + s.cleanroom_detail;
     out += "\n";
   }
   return out;
 }
 
 
-std::string thermal_power_block(const std::string& dir) {
+ThermalPower thermal_power_data(const std::string& dir) {
   double temp_peak = 0, temp_sum = 0;
   int temp_n = 0;
   double fan_peak = 0;
@@ -764,52 +790,16 @@ std::string thermal_power_block(const std::string& dir) {
     std::free(line);
     std::fclose(fp);
   }
-  if (temp_n == 0 && pw_n == 0 && fan_peak == 0.0 && fq_n == 0 &&
-      ctx_n == 0 && mig_n == 0 && cstate.empty())
-    return "";
-  char buf[160];
-  std::string out = "THERMAL/POWER\n";
-  if (temp_n > 0) {
-    std::snprintf(buf, sizeof(buf), "  cpu temp   peak %.1f C  avg %.1f C\n",
-                  temp_peak, temp_sum / temp_n);
-    out += buf;
-  }
-  if (fan_peak > 0.0) {
-    std::snprintf(buf, sizeof(buf), "  fan        peak %.0f rpm\n", fan_peak);
-    out += buf;
-  }
-  if (pw_n > 0) {
-    std::snprintf(buf, sizeof(buf), "  power      avg %.1f W  peak %.1f W\n",
-                  pw_sum / pw_n, pw_peak);
-    out += buf;
-  }
-  if (e_n > 0 && e_max > e_min) {
-    std::snprintf(buf, sizeof(buf), "  energy-tot %.1f J integral over recording\n",
-                  e_max - e_min);
-    out += buf;
-  }
-  if (fq_n > 0) {
-    std::snprintf(buf, sizeof(buf), "  cpu clock  avg %.0f MHz  peak %.0f MHz\n",
-                  fq_sum / fq_n, fq_peak);
-    out += buf;
-  }
-  if (epi_n > 0) {
-    std::snprintf(buf, sizeof(buf), "  energy     avg %.1f pJ/instr\n",
-                  epi_sum / epi_n);
-    out += buf;
-  }
-  if (ctx_n > 0) {
-    std::snprintf(buf, sizeof(buf), "  ctx-sw     avg %.0f /s\n", ctx_sum / ctx_n);
-    out += buf;
-  }
-  if (mig_n > 0) {
-    std::snprintf(buf, sizeof(buf), "  migrations avg %.0f /s\n", mig_sum / mig_n);
-    out += buf;
-  }
-  if (br_n > 0) {
-    std::snprintf(buf, sizeof(buf), "  branch-mis avg %.0f /s\n", br_sum / br_n);
-    out += buf;
-  }
+  ThermalPower t;
+  t.temp_peak_c = temp_peak; t.temp_avg_c = temp_n > 0 ? temp_sum / temp_n : 0.0; t.temp_n = temp_n;
+  t.fan_peak_rpm = fan_peak;
+  t.power_avg_w = pw_n > 0 ? pw_sum / pw_n : 0.0; t.power_peak_w = pw_peak; t.power_n = pw_n;
+  t.energy_joules_total = (e_n > 0 && e_max > e_min) ? (e_max - e_min) : -1.0;
+  t.freq_avg_mhz = fq_n > 0 ? fq_sum / fq_n : 0.0; t.freq_peak_mhz = fq_peak; t.freq_n = fq_n;
+  t.energy_per_instr_pj = epi_n > 0 ? epi_sum / epi_n : 0.0; t.epi_n = epi_n;
+  t.ctx_switches_per_sec = ctx_n > 0 ? ctx_sum / ctx_n : 0.0; t.ctx_n = ctx_n;
+  t.migrations_per_sec = mig_n > 0 ? mig_sum / mig_n : 0.0; t.mig_n = mig_n;
+  t.branch_misses_per_sec = br_n > 0 ? br_sum / br_n : 0.0; t.br_n = br_n;
   if (!cstate.empty()) {
     // Report the idle state the CPUs spent the most time in (deepest dominant).
     std::string top; double top_pct = -1.0;
@@ -817,11 +807,63 @@ std::string thermal_power_block(const std::string& dir) {
       double avg = e.second > 0 ? e.first / e.second : 0.0;
       if (avg > top_pct) { top_pct = avg; top = name; }
     }
-    if (top_pct >= 0.0) {
-      std::snprintf(buf, sizeof(buf), "  idle       %s avg %.1f%% (dominant)\n",
-                    top.c_str(), top_pct);
-      out += buf;
-    }
+    if (top_pct >= 0.0) { t.dominant_cstate = top; t.dominant_cstate_pct = top_pct; }
+  }
+  return t;
+}
+
+std::string thermal_power_block(const std::string& dir) {
+  ThermalPower t = thermal_power_data(dir);
+  if (t.temp_n == 0 && t.power_n == 0 && t.fan_peak_rpm == 0.0 && t.freq_n == 0 &&
+      t.ctx_n == 0 && t.mig_n == 0 && t.dominant_cstate.empty())
+    return "";
+  char buf[160];
+  std::string out = "THERMAL/POWER\n";
+  if (t.temp_n > 0) {
+    std::snprintf(buf, sizeof(buf), "  cpu temp   peak %.1f C  avg %.1f C\n",
+                  t.temp_peak_c, t.temp_avg_c);
+    out += buf;
+  }
+  if (t.fan_peak_rpm > 0.0) {
+    std::snprintf(buf, sizeof(buf), "  fan        peak %.0f rpm\n", t.fan_peak_rpm);
+    out += buf;
+  }
+  if (t.power_n > 0) {
+    std::snprintf(buf, sizeof(buf), "  power      avg %.1f W  peak %.1f W\n",
+                  t.power_avg_w, t.power_peak_w);
+    out += buf;
+  }
+  if (t.energy_joules_total >= 0.0) {
+    std::snprintf(buf, sizeof(buf), "  energy-tot %.1f J integral over recording\n",
+                  t.energy_joules_total);
+    out += buf;
+  }
+  if (t.freq_n > 0) {
+    std::snprintf(buf, sizeof(buf), "  cpu clock  avg %.0f MHz  peak %.0f MHz\n",
+                  t.freq_avg_mhz, t.freq_peak_mhz);
+    out += buf;
+  }
+  if (t.epi_n > 0) {
+    std::snprintf(buf, sizeof(buf), "  energy     avg %.1f pJ/instr\n",
+                  t.energy_per_instr_pj);
+    out += buf;
+  }
+  if (t.ctx_n > 0) {
+    std::snprintf(buf, sizeof(buf), "  ctx-sw     avg %.0f /s\n", t.ctx_switches_per_sec);
+    out += buf;
+  }
+  if (t.mig_n > 0) {
+    std::snprintf(buf, sizeof(buf), "  migrations avg %.0f /s\n", t.migrations_per_sec);
+    out += buf;
+  }
+  if (t.br_n > 0) {
+    std::snprintf(buf, sizeof(buf), "  branch-mis avg %.0f /s\n", t.branch_misses_per_sec);
+    out += buf;
+  }
+  if (!t.dominant_cstate.empty()) {
+    std::snprintf(buf, sizeof(buf), "  idle       %s avg %.1f%% (dominant)\n",
+                  t.dominant_cstate.c_str(), t.dominant_cstate_pct);
+    out += buf;
   }
   return out;
 }

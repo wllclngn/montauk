@@ -1,4 +1,6 @@
+// Producer: stress test under continuous concurrent fixture mutation.
 #include "minitest.hpp"
+#include "env_guard.hpp"
 #include "app/Producer.hpp"
 #include <filesystem>
 #include <fstream>
@@ -19,7 +21,10 @@ TEST(stress_producer_with_mutations) {
     " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n"
     "eth0: 1000 0 0 0 0 0 0 0  2000 0 0 0 0 0 0 0\n";
   std::ofstream(root / "proc/diskstats") << "   8       0 sda 100 0 1000 0  200 0 2000 0  0  100 0\n";
-  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
+  // Producer constructs a real GpuCollector; without this it reaches live
+  // NVML/nvidia-smi on any box with a GPU, making the test non-deterministic.
+  TempRootGuard gpu_disable("MONTAUK_GPU_DISABLE_NATIVE", "1");
 
   montauk::app::SnapshotBuffers buffers; montauk::app::Producer producer(buffers);
   producer.start();

@@ -472,13 +472,13 @@ struct montauk_ring_event {
   char  filename[64];  // exec'd filename from tracepoint (not /proc)
 };
 
-// I/O ring event: emitted on every read/write/lseek/pread64/fstat exit
+// I/O ring event: emitted on every read/write/lseek/pread64/pwrite64/fstat exit
 // for tracked processes. Carries full syscall details for event-level tracing.
 struct montauk_io_event {
   __u32 type;       // TRACE_EVT_IO
   __u32 pid;
   __u32 tid;
-  __s32 syscall_nr; // syscall number (0=read, 1=write, 8=lseek, 5=fstat, 17=pread64)
+  __s32 syscall_nr; // syscall number (0=read, 1=write, 8=lseek, 5=fstat, 17=pread64, 18=pwrite64)
   __s32 fd;
   __s64 result;     // return value (bytes read/written, new offset, or -errno)
   __u64 count;      // read/write: byte count; lseek: offset arg
@@ -486,6 +486,13 @@ struct montauk_io_event {
   char  comm[16];
   __u64 timestamp_ns;  // CLOCK_MONOTONIC (bpf_ktime_get_ns); lets the decoder
                        // reconstruct elapsed/wall like montauk_sched_event
+  __u64 duration_ns;   // enter->exit wall time for this syscall (0 if not tracked
+                       // for this syscall_nr, e.g. reused pre-existing read/write
+                       // events that predate enter-timestamp capture); the true
+                       // block-I/O completion latency for a synchronous O_DIRECT
+                       // pwrite64 -- the syscall itself doesn't return until the
+                       // write completes, so there is no separate bio-layer hook
+                       // to add.
 };
 
 // Per-thread state (BPF map value, read by userspace)
@@ -509,6 +516,13 @@ struct thread_bpf_state {
   __u32 io_whence;        // lseek whence (0=SET, 1=CUR, 2=END)
   __s64 io_result;        // return value (bytes read/written, new offset, or -errno)
   __u64 io_timestamp_ns;  // ktime_get_ns() when I/O completed
+  __u64 io_enter_ns;      // ktime_get_ns() at syscall entry, for duration_ns at exit.
+                          // Set/used by pwrite64 (synchronous O_DIRECT completion),
+                          // io_getevents (Linux AIO completion-reap), and the generic
+                          // iowait syscalls (poll/ppoll/epoll_wait/epoll_pwait/
+                          // recvmsg/recvfrom/select/pselect6/non-ntsync ioctl). Only
+                          // one syscall is ever in flight per thread, so sharing this
+                          // field across call sites is safe.
 
   // On-CPU placement / migration (fork-storm shape: ping-pong vs stable)
   __s32 cur_cpu;          // CPU last seen on-CPU (-1 = never scheduled yet)

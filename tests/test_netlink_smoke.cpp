@@ -1,3 +1,5 @@
+// NetlinkProcessCollector: smoke test over the real Process Events Connector
+// (needs CAP_NET_ADMIN/root; self-skips otherwise).
 #include "minitest.hpp"
 #include "collectors/NetlinkProcessCollector.hpp"
 #include "model/Snapshot.hpp"

@@ -1,4 +1,6 @@
+// Producer: end-to-end snapshot pipeline (collectors -> SnapshotBuffers).
 #include "minitest.hpp"
+#include "env_guard.hpp"
 #include "app/Producer.hpp"
 #include <filesystem>
 #include <fstream>
@@ -29,7 +31,10 @@ static fs::path make_root_prod() {
 
 TEST(producer_publishes_snapshots) {
   auto root = make_root_prod();
-  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
+  // Producer constructs a real GpuCollector; without this it reaches live
+  // NVML/nvidia-smi on any box with a GPU, making the test non-deterministic.
+  TempRootGuard gpu_disable("MONTAUK_GPU_DISABLE_NATIVE", "1");
   montauk::app::SnapshotBuffers buffers; montauk::app::Producer producer(buffers);
   producer.start();
   std::this_thread::sleep_for(std::chrono::milliseconds(600));

@@ -1,4 +1,7 @@
+// FdinfoProcessCollector: per-PID GPU utilization from Intel XE fdinfo cycle
+// counters.
 #include "minitest.hpp"
+#include "env_guard.hpp"
 #include "collectors/FdinfoProcessCollector.hpp"
 #include "util/Procfs.hpp"
 #include <filesystem>
@@ -23,7 +26,7 @@ TEST(fdinfo_intel_cycles_basic) {
       "drm-cycles-rcs:\t1000\n"
       "drm-total-cycles-rcs:\t10000\n";
   }
-  setenv("MONTAUK_PROC_ROOT", root.c_str(), 1);
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
   montauk::collectors::FdinfoProcessCollector fdi;
   std::unordered_map<int,int> pid_to_gpu; std::unordered_map<int,uint64_t> pid_to_mem; std::unordered_set<int> running;
   // First call establishes baseline; no utilization yet

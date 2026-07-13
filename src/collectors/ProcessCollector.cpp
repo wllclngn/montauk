@@ -1,4 +1,5 @@
 #include "collectors/ProcessCollector.hpp"
+#include "collectors/ProcessParsing.hpp"
 #include "util/Procfs.hpp"
 #include <filesystem>
 #include <algorithm>
@@ -46,39 +47,6 @@ static unsigned read_cpu_count() {
   }
   if (count == 0) count = 1;
   return count;
-}
-
-bool ProcessCollector::parse_stat_line(const std::string& content, char& state, int32_t& ppid, uint64_t& utime, uint64_t& stime, int64_t& rss_pages, std::string& comm) {
-  // find parentheses
-  auto lp = content.find('('); auto rp = content.rfind(')'); if (lp==std::string::npos||rp==std::string::npos||rp<lp) return false;
-  comm = content.substr(lp+1, rp-lp-1);
-  std::string rest = content.substr(rp+2);
-  std::istringstream ss(rest);
-  ss >> state; // state
-  ss >> ppid; // ppid
-  // skip fields up to utime (9 fields)
-  for (int i=0;i<9;i++){ std::string tmp; ss >> tmp; }
-  ss >> utime; ss >> stime; // utime, stime
-  // Skip: cutime, cstime, priority, nice, num_threads, itrealvalue, starttime (7 fields)
-  for (int i=0;i<7;i++){ std::string tmp; ss >> tmp; }
-  // Next two fields are vsize (bytes) then rss (pages). Consume vsize, then read rss.
-  {
-    unsigned long long vsize_bytes = 0;
-    ss >> vsize_bytes; // discard vsize
-  }
-  ss >> rss_pages; // rss (pages)
-  return true;
-}
-
-std::string ProcessCollector::read_cmdline(int32_t pid) {
-  auto path = std::string("/proc/")+std::to_string(pid)+"/cmdline";
-  std::optional<std::vector<unsigned char>> bytes;
-  try { bytes = montauk::util::read_file_bytes(path); } catch(...) { bytes = std::nullopt; montauk::util::note_churn(montauk::util::ChurnKind::Proc); }
-  if (!bytes) return {};
-  std::string out; out.reserve(bytes->size()); bool sep=true;
-  for (auto b : *bytes) { if (b==0) { if(!sep){ out.push_back(' '); sep=true; } } else { out.push_back(static_cast<char>(b)); sep=false; } }
-  if (!out.empty() && out.back()==' ') out.pop_back();
-  return out;
 }
 
 static std::string read_exe_path(int32_t pid) {
@@ -224,13 +192,7 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   }
   out.total_processes = out.processes.size();
   out.running_processes = out.state_running;
-  // Efficient top-K selection (K = max_procs_): partition then sort top K
-  if (out.processes.size() > max_procs_) {
-    auto nth = out.processes.begin() + static_cast<std::ptrdiff_t>(max_procs_);
-    std::nth_element(out.processes.begin(), nth, out.processes.end(), [](const auto& a, const auto& b){ return a.cpu_pct > b.cpu_pct; });
-    out.processes.resize(max_procs_);
-  }
-  std::sort(out.processes.begin(), out.processes.end(), [](const auto& a, const auto& b){ return a.cpu_pct > b.cpu_pct; });
+  top_k_by_cpu_pct(out.processes, max_procs_);
   // enrich top N (cmdline and user) and accumulate thread counts
   out.tracked_count = out.processes.size();
   size_t enrich_n = std::min<size_t>(out.processes.size(), enrich_top_n_);
