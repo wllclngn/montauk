@@ -63,7 +63,9 @@ static void usage(FILE *out) {
         "  describe              count/mean/stdev/min/quartiles/max in one shot (pandas .describe)\n"
         "  outliers              values outside the Tukey IQR fences (robust outlier flag)\n"
         "  histogram             text histogram of the distribution, 10 bins (the shape)\n"
-        "  count                 number of input lines (wc -l)\n"
+        "  count [--words|--bytes] number of input lines/words/bytes (wc -l/-w/-c)\n"
+        "  head N                first N lines (head -N)\n"
+        "  tail N                last N lines (tail -N)\n"
         "  distinct              count of distinct tokens (sort | uniq | wc -l)\n"
         "  tally                 per-token frequency, high to low (sort | uniq -c | sort -rn)\n"
         "  classify              disorder class + profile of the stream\n"
@@ -72,11 +74,12 @@ static void usage(FILE *out) {
         "  characterize          structural verdict: class, rand confidence, sort efficiency\n"
         "  grep PATTERN [FILE..] lines matching the regex (Thompson NFA); stdin or FILE(s)\n"
         "  contains STR [FILE..] lines containing STR (Boyer-Moore-Horspool); stdin or FILE(s)\n"
+        "                        grep/contains: -A N/-B N/-C N trailing/leading/both context lines\n"
         "  replace PAT REPL      regex substitution, global per line (sed s/pat/repl/g; REPL literal)\n"
         "  field N[,M..] [FILE..] the N-th column, or a comma-list, of each line (awk '{print $N}')\n"
         "  where 'N OP V' [FILE] lines where field N OP V (awk '$N OP V'; OP: < <= > >= == !=)\n"
         "  group KEY OP [VAL]    group by field KEY, aggregate field VAL (datamash -g; OP: sum|mean|count|min|max)\n"
-        "  uniq [-d|-u]          collapse adjacent duplicate lines (-d dups only, -u uniques only)\n"
+        "  uniq [-d|-u] [-i]     collapse adjacent duplicate lines (-d dups only, -u uniques only, -i case-insensitive)\n"
         "  cut LO-HI             character columns, 1-based inclusive (cut -c): N, lo-hi, lo-, -hi\n"
         "  column                align delimited input into columns (column -t)\n"
         "  tac                   reverse line order\n"
@@ -101,6 +104,9 @@ static void usage(FILE *out) {
         "  -i / -o               grep/contains: case-insensitive (-i) / grep: print only the match (-o)\n"
         "  -q / -m N             grep: quiet (exit status only) / stop after N matches\n"
         "  -E                    grep: extended regex (already the default; accepted for compat)\n"
+        "  -A N / -B N / -C N    grep/contains: N lines of trailing/leading/both context (-C = both);\n"
+        "                        standalone tokens only, not bundleable with other short flags\n"
+        "  --words / --bytes     count: word count / byte count instead of line count (wc -w/-c)\n"
         "  short flags bundle    -iE == -i -E, -vn == -v -n, ...\n"
         "  --nearest             quantile: nearest-rank order statistic (not the estimator)\n"
         "\n"
@@ -199,6 +205,44 @@ static int smap_load_file(StrMap *m, const char *path, int store_line) {
     return 0;
 }
 
+// ASCII case-fold byte comparison for uniq -i -- ASCII only, same scope as
+// grep/contains' own -i (icase folds ASCII, not full UTF-8 case folding).
+static int lines_equal_ci(const char *a, const char *b, size_t l, int icase) {
+    if (!icase) return memcmp(a, b, l) == 0;
+    for (size_t i = 0; i < l; i++) {
+        unsigned char ca = (unsigned char)a[i], cb = (unsigned char)b[i];
+        if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca + ('a' - 'A'));
+        if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb + ('a' - 'A'));
+        if (ca != cb) return 0;
+    }
+    return 1;
+}
+
+// Rebuild `line` with its `field`-th (1-based) token removed, remaining
+// tokens rejoined with `sep` -- used by `join` so the join-key field appears
+// exactly once in the output instead of once per side. `sep` matches real
+// join -t: a plain space by default, but the same single character as
+// --delim when one was explicitly given (join -tCHAR uses CHAR for both
+// parsing and output; a bare space regardless of --delim would silently
+// diverge from real join's byte output on any non-default delimiter). Caller
+// frees the result.
+static char *fields_excluding(const char *line, size_t len, int field, const char *delim, char sep) {
+    char *copy = (char *)malloc(len + 1);
+    memcpy(copy, line, len); copy[len] = '\0';
+    char *out = (char *)malloc(len + 1); out[0] = '\0';
+    char *save = NULL; int col = 0; int first = 1;
+    char sepbuf[2] = {sep, '\0'};
+    for (char *tok = strtok_r(copy, delim, &save); tok; tok = strtok_r(NULL, delim, &save)) {
+        col++;
+        if (col == field) continue;
+        if (!first) strcat(out, sepbuf);
+        strcat(out, tok);
+        first = 0;
+    }
+    free(copy);
+    return out;
+}
+
 // Pull the field-th (1-based) token of `line` split on any char in `delim`;
 // field<=0 means the whole line. Returns NULL if the field is absent.
 static char *field_token(char *line, int field, const char *delim) {
@@ -279,6 +323,7 @@ int main(int argc, char **argv) {
 
     int field = 0;
     const char *delim = " \t";
+    int delim_set = 0;  // true once --delim is explicitly given (join's output separator cares)
     int desc = 0;
     int keyed = 0;                                // sort --keyed: preserve full lines, order by key
     size_t window = 512, stride = 0;
@@ -291,6 +336,8 @@ int main(int argc, char **argv) {
     int serial = 0;                               // paste -s: serialize lines into one
     int endopts = 0;                              // after `--`, everything is positional
     int values = 0;                               // locate --values: select-by-structure (emit the data)
+    int count_words = 0, count_bytes = 0;         // count --words / --bytes (default: lines, wc -l)
+    long ctx_after = 0, ctx_before = 0;            // grep/contains -A N / -B N (0 = no context)
     const char *pos = NULL;  // positional arg (Q / K / V / CLASS / N)
     const char *files[256];  // grep/contains/field: input files after the pattern
     int nfiles = 0;          // 0 -> read stdin (the pipe case)
@@ -305,14 +352,19 @@ int main(int argc, char **argv) {
         }
         if (!strcmp(a, "--")) { endopts = 1; continue; }
         if (!strcmp(a, "--field") && i + 1 < argc) field = atoi(argv[++i]);
-        else if (!strcmp(a, "--delim") && i + 1 < argc) delim = argv[++i];
+        else if (!strcmp(a, "--delim") && i + 1 < argc) { delim = argv[++i]; delim_set = 1; }
         else if (!strcmp(a, "--desc")) desc = 1;
         else if (!strcmp(a, "--keyed")) keyed = 1;  // sort: keep the whole line, order by the key
         else if (!strcmp(a, "--window") && i + 1 < argc) window = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(a, "--stride") && i + 1 < argc) stride = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(a, "--nearest")) nearest = 1;  // quantile: nearest-rank order statistic
         else if (!strcmp(a, "--values")) values = 1;    // locate: emit data, not window ranges
+        else if (!strcmp(a, "--words")) count_words = 1;  // count: word count -- wc -w
+        else if (!strcmp(a, "--bytes")) count_bytes = 1;  // count: byte count -- wc -c
         else if (!strcmp(a, "-m") && i + 1 < argc) max_count = strtol(argv[++i], NULL, 10);  // grep -m N
+        else if (!strcmp(a, "-A") && i + 1 < argc) ctx_after = strtol(argv[++i], NULL, 10);   // grep -A N
+        else if (!strcmp(a, "-B") && i + 1 < argc) ctx_before = strtol(argv[++i], NULL, 10);  // grep -B N
+        else if (!strcmp(a, "-C") && i + 1 < argc) ctx_after = ctx_before = strtol(argv[++i], NULL, 10);  // grep -C N
         else if (a[0] == '-' && a[1] && a[1] != '-') {
             // Bundled short flags, getopt-style: -iE == -i -E, -vn == -v -n. Each
             // char is one boolean grep flag. -E (extended regex) is a no-op:
@@ -371,6 +423,37 @@ int main(int argc, char **argv) {
         long matches = 0;
         int done = 0;                     // -q / -m N: stop early once satisfied
         int multi = nfiles > 1;           // prefix "file:" when grepping several files
+        // -A/-B/-C context lines. Confirmed directly against real grep before
+        // writing this: -o disables context entirely (real grep does too);
+        // -n marks a matched/shown line with ':' but a context line with '-'
+        // (both the line number and, for multi-file, the filename prefix);
+        // non-adjacent context blocks get a bare "--" separator, but never
+        // before the very first printed block. want_ctx guards all of it so
+        // the zero-context case (the overwhelming common one) runs the exact
+        // same code path as before this feature existed.
+        // Active whenever -A/-B/-C was given at all. -o still uses this --
+        // real GNU grep keeps the "--" block separator between distant
+        // matches even in -o mode, it just never prints actual context
+        // *text* there (there is no non-matching line content to show
+        // alongside a bare match span). Confirmed directly against
+        // /usr/bin/grep, not this shell's own grep function (which shells
+        // out to ugrep for anything not matching a narrow passthrough list
+        // -- ugrep disables the separator entirely with -o, a real,
+        // confirmed difference from GNU grep, not a mistake in this check).
+        int want_ctx = (ctx_after > 0 || ctx_before > 0);
+        typedef struct { char *data; size_t len; long lineno; } CtxLine;
+        size_t ring_cap = (size_t)(ctx_before > 0 ? ctx_before : 0);
+        CtxLine *ring = ring_cap ? (CtxLine *)calloc(ring_cap, sizeof(CtxLine)) : NULL;
+        size_t ring_n = 0, ring_next = 0;
+        long last_printed_line = 0;   // 0 == nothing printed yet THIS FILE
+        long after_remaining = 0;
+        // Persists ACROSS files, unlike last_printed_line above: real grep
+        // still opens a "--" separator between file1's last shown content
+        // and file2's first, even though line numbers restart at 1 for the
+        // new file (so last_printed_line's own per-file contiguity check
+        // can never fire there on its own -- confirmed directly against
+        // /usr/bin/grep with two files).
+        int printed_any = 0;
         // Read each named file, or stdin when none were given. A single named file
         // is the common `grep PATTERN file` idiom -- sublimation serves it directly
         // now instead of treating the path as an unexpected argument. Traversal
@@ -384,6 +467,10 @@ int main(int argc, char **argv) {
                 if (!in) { fprintf(stderr, "sublimation: cannot open '%s'\n", fname); continue; }
             }
             long lineno = 0;
+            // Context state resets per file, same as real grep -- except
+            // printed_any (declared outside the file loop, see above).
+            ring_n = 0; ring_next = 0; last_printed_line = 0; after_remaining = 0;
+            for (size_t z = 0; z < ring_cap; z++) { free(ring[z].data); ring[z].data = NULL; }
             while (!done && (len = getline(&line, &cap, in)) != -1) {
                 lineno++;
                 size_t mlen = (size_t)len;
@@ -392,6 +479,7 @@ int main(int argc, char **argv) {
                 if (only_match) {
                     // grep -o: emit each non-overlapping match span, one per line.
                     size_t off = 0;
+                    int line_has_match = 0;
                     while (off <= mlen) {
                         long end = -1;
                         long s = is_grep ? sublimation_nfa_find(&nfa, line + off, mlen - off, &end)
@@ -402,6 +490,24 @@ int main(int argc, char **argv) {
                         if (mend > mstart) {
                             matches++;
                             if (!quiet && !count_only) {
+                                if (want_ctx && !line_has_match) {
+                                    // No context text to print here (see want_ctx's
+                                    // comment above) -- just whether this match's
+                                    // line is farther from the last one than the
+                                    // combined -A/-B reach, real grep's own rule.
+                                    // printed_any (not last_printed_line, which is
+                                    // per-file) gates whether a separator can appear
+                                    // at all -- a fresh file's first match must not
+                                    // get one, but it does need one if a PRIOR file
+                                    // already printed something (real grep still
+                                    // separates across a file boundary).
+                                    if (printed_any && (last_printed_line == 0 ||
+                                        lineno - ctx_before > last_printed_line + ctx_after + 1))
+                                        montauk_sink_append(&g_out, "--\n", 3);
+                                    last_printed_line = lineno;
+                                }
+                                line_has_match = 1;
+                                printed_any = 1;
                                 if (multi) montauk_sink_appendf(&g_out, "%s:", fname);
                                 if (number) montauk_sink_appendf(&g_out, "%ld:", lineno);
                                 montauk_sink_append(&g_out, line + mstart, mend - mstart);
@@ -424,17 +530,56 @@ int main(int argc, char **argv) {
                 if (show) {
                     matches++;
                     if (!quiet && !count_only) {
+                        if (want_ctx) {
+                            long first_ctx_line = (ring_n > 0)
+                                ? ring[(ring_next + ring_cap - ring_n) % ring_cap].lineno
+                                : lineno;
+                            if (printed_any && (last_printed_line == 0 || first_ctx_line != last_printed_line + 1))
+                                montauk_sink_append(&g_out, "--\n", 3);
+                            for (size_t k = 0; k < ring_n; k++) {
+                                size_t idx = (ring_next + ring_cap - ring_n + k) % ring_cap;
+                                if (multi) montauk_sink_appendf(&g_out, "%s-", fname);
+                                if (number) montauk_sink_appendf(&g_out, "%ld-", ring[idx].lineno);
+                                montauk_sink_append(&g_out, ring[idx].data, ring[idx].len);
+                                if (ring[idx].len == 0 || ring[idx].data[ring[idx].len - 1] != '\n')
+                                    montauk_sink_appendc(&g_out, '\n');
+                            }
+                            ring_n = 0;
+                            last_printed_line = lineno;
+                        }
+                        printed_any = 1;
                         if (multi) montauk_sink_appendf(&g_out, "%s:", fname);
                         if (number) montauk_sink_appendf(&g_out, "%ld:", lineno);   // grep -n
                         montauk_sink_append(&g_out, line, (size_t)len);
                         if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);  // bound memory
+                        if (want_ctx) after_remaining = ctx_after;
                     }
                     if (quiet || (max_count && matches >= max_count)) done = 1;  // grep -q / -m
+                } else if (want_ctx && !quiet && !count_only) {
+                    if (after_remaining > 0) {
+                        printed_any = 1;
+                        if (multi) montauk_sink_appendf(&g_out, "%s-", fname);
+                        if (number) montauk_sink_appendf(&g_out, "%ld-", lineno);
+                        montauk_sink_append(&g_out, line, (size_t)len);
+                        if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
+                        after_remaining--;
+                        last_printed_line = lineno;
+                    } else if (ring_cap > 0) {
+                        size_t idx = ring_next;
+                        free(ring[idx].data);
+                        ring[idx].data = (char *)malloc((size_t)len);
+                        memcpy(ring[idx].data, line, (size_t)len);
+                        ring[idx].len = (size_t)len;
+                        ring[idx].lineno = lineno;
+                        ring_next = (ring_next + 1) % ring_cap;
+                        if (ring_n < ring_cap) ring_n++;
+                    }
                 }
             }
             if (in != stdin) fclose(in);
         }
         free(line);
+        if (ring) { for (size_t z = 0; z < ring_cap; z++) free(ring[z].data); free(ring); }
         if (count_only) montauk_sink_appendf(&g_out, "%ld\n", matches);
         // grep exit semantics: 0 if anything matched, 1 if nothing did -- so
         // `if ... | sublimation grep` and `&&` chains are correct without a
@@ -704,7 +849,10 @@ int main(int argc, char **argv) {
         int have_prev = 0; long run = 0;
         while ((len = getline(&line, &lcap, stdin)) != -1) {
             size_t l = (len > 0 && line[len - 1] == '\n') ? (size_t)len - 1 : (size_t)len;
-            if (have_prev && l == plen && memcmp(line, prev, l) == 0) { run++; continue; }
+            // -i (shared with grep/contains' icase flag): fold ASCII case for the
+            // adjacent-duplicate comparison only -- the emitted line keeps its
+            // original case, matching real uniq -i (first-of-run wins verbatim).
+            if (have_prev && l == plen && lines_equal_ci(line, prev, l, icase)) { run++; continue; }
             if (have_prev) {
                 int show = uniq_d ? (run > 1) : uniq_u ? (run == 1) : 1;
                 if (show) { montauk_sink_append(&g_out, prev, plen); montauk_sink_appendc(&g_out, '\n'); }
@@ -738,6 +886,47 @@ int main(int argc, char **argv) {
             if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
         }
         free(buf);
+        return 0;
+    }
+
+    // head/tail: first-N / last-N lines, exact byte passthrough (no added or
+    // stripped newlines) -- the aged pipeline's most commonly reached-for
+    // primitive, absent from sublimation until now. head stops after N lines,
+    // bounded work; tail keeps only the last N in a fixed-size ring buffer,
+    // bounded memory regardless of input size.
+    if (!strcmp(cmd, "head") || !strcmp(cmd, "tail")) {
+        if (!pos) { fprintf(stderr, "sublimation: %s needs a count -- e.g. '%s 10'\n", cmd, cmd); return 2; }
+        long n = strtol(pos, NULL, 10);
+        if (n <= 0) { fputs("sublimation: count must be a positive integer\n", stderr); return 2; }
+        char *line = NULL; size_t lcap = 0; ssize_t len;
+        if (!strcmp(cmd, "head")) {
+            long shown = 0;
+            while (shown < n && (len = getline(&line, &lcap, stdin)) != -1) {
+                montauk_sink_append(&g_out, line, (size_t)len);
+                shown++;
+                if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
+            }
+        } else {
+            typedef struct { char *data; size_t len; } RingLine;
+            RingLine *ring = (RingLine *)calloc((size_t)n, sizeof(RingLine));
+            size_t count = 0, next = 0;  // next = slot to write, wraps once full (oldest overwritten)
+            while ((len = getline(&line, &lcap, stdin)) != -1) {
+                free(ring[next].data);
+                ring[next].data = (char *)malloc((size_t)len);
+                memcpy(ring[next].data, line, (size_t)len);
+                ring[next].len = (size_t)len;
+                next = (next + 1) % (size_t)n;
+                if (count < (size_t)n) count++;
+            }
+            size_t start = (count < (size_t)n) ? 0 : next;
+            for (size_t i = 0; i < count; i++) {
+                size_t idx = (start + i) % (size_t)n;
+                montauk_sink_append(&g_out, ring[idx].data, ring[idx].len);
+                free(ring[idx].data);
+            }
+            free(ring);
+        }
+        free(line);
         return 0;
     }
 
@@ -872,6 +1061,11 @@ int main(int argc, char **argv) {
     if (!strcmp(cmd, "join")) {
         if (!pos || nfiles < 1) { fputs("sublimation: join needs FIELD FILE -- e.g. 'join 1 other.txt'\n", stderr); return 2; }
         int jf = atoi(pos); if (jf < 1) { fputs("sublimation: join FIELD is 1-based\n", stderr); return 2; }
+        // Real join -tCHAR uses CHAR for both input parsing and output joining;
+        // with no -t, parsing is any blank run but output is always a plain
+        // space. Mirrored here: sep is delim's first char only when --delim was
+        // explicitly given, else a space regardless of the default " \t".
+        char sep = delim_set ? delim[0] : ' ';
         StrMap fm; smap_init(&fm);
         FILE *ff = fopen(files[0], "r");
         if (!ff) { fprintf(stderr, "sublimation: cannot open '%s'\n", files[0]); smap_free(&fm); return 1; }
@@ -880,7 +1074,12 @@ int main(int argc, char **argv) {
             size_t l = (fll > 0 && fl[fll - 1] == '\n') ? (size_t)fll - 1 : (size_t)fll;
             fl[l] = '\0';
             size_t klen; const char *ks = field_span(fl, l, jf, delim, &klen);
-            if (ks) { char *kc = strndup(ks, klen); if (kc) { smap_put(&fm, kc, fl); free(kc); } }
+            if (ks) {
+                char *kc = strndup(ks, klen);
+                char *rest = fields_excluding(fl, l, jf, delim, sep);
+                if (kc) smap_put(&fm, kc, rest);
+                free(kc); free(rest);
+            }
         }
         free(fl); fclose(ff);
         char *line = NULL; size_t lcap = 0; ssize_t len;
@@ -890,13 +1089,21 @@ int main(int argc, char **argv) {
             size_t klen; const char *ks = field_span(line, l, jf, delim, &klen);
             char *kc = ks ? strndup(ks, klen) : NULL;
             const char *match = kc ? smap_get(&fm, kc) : NULL;
-            free(kc);
+            // Join key printed once, then each side's remaining fields (key
+            // field excluded) -- real join dedupes the key; the prior
+            // implementation printed the whole matched line, key included a
+            // second time (confirmed via byte-diff against real join, and
+            // tracked in ROADMAP.md as the reason join wasn't hook/bashrc-
+            // routable this session; this is that fix).
             if (match) {
-                montauk_sink_append(&g_out, line, l);
-                montauk_sink_appendc(&g_out, ' ');
-                montauk_sink_append(&g_out, match, strlen(match));
+                char *rest = fields_excluding(line, l, jf, delim, sep);
+                montauk_sink_append(&g_out, kc, klen);
+                if (rest[0]) { montauk_sink_appendc(&g_out, sep); montauk_sink_append(&g_out, rest, strlen(rest)); }
+                if (match[0]) { montauk_sink_appendc(&g_out, sep); montauk_sink_append(&g_out, match, strlen(match)); }
                 montauk_sink_appendc(&g_out, '\n');
+                free(rest);
             }
+            free(kc);
             if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
         }
         free(line); smap_free(&fm);
@@ -1054,18 +1261,30 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    Vec data = {0};
-    size_t skipped = read_values(&data, field, delim);
-
-    // count -- lines (records): wc -l / awk NR. No numeric parse, so it works on
-    // all-text input; handled before the numeric-required guard below. Every
-    // getline iteration either parsed a value or was skipped, so data.n + skipped
-    // is the total line count.
+    // count: line/word/byte count -- wc -l (default), wc -w (--words), wc -c
+    // (--bytes). A real single-pass read of its own text, not derived from
+    // the numeric parse below (which discards line content once parsed),
+    // so it works on all-text input and --words/--bytes see real bytes.
     if (!strcmp(cmd, "count")) {
-        montauk_sink_appendf(&g_out, "%zu\n", data.n + skipped);
-        free(data.v);
+        char *line = NULL; size_t lcap = 0; ssize_t len;
+        size_t lines = 0, words = 0, bytes = 0;
+        while ((len = getline(&line, &lcap, stdin)) != -1) {
+            lines++;
+            bytes += (size_t)len;
+            int in_word = 0;
+            for (ssize_t i = 0; i < len; i++) {
+                if (isspace((unsigned char)line[i])) { in_word = 0; }
+                else { if (!in_word) words++; in_word = 1; }
+            }
+        }
+        free(line);
+        size_t result = count_bytes ? bytes : (count_words ? words : lines);
+        montauk_sink_appendf(&g_out, "%zu\n", result);
         return 0;
     }
+
+    Vec data = {0};
+    size_t skipped = read_values(&data, field, delim);
 
     if (data.n == 0) {
         fputs("sublimation: no numeric values on stdin\n", stderr);

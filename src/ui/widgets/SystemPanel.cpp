@@ -8,9 +8,11 @@
 #include "util/AsciiLower.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <climits>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 #include <vector>
 
 namespace montauk::ui::widgets {
@@ -27,6 +29,45 @@ namespace {
 // Section builders. Each appends rows to `out`. Pure functions of the
 // snapshot (and ui_config()/config() singletons). Order in render() defines
 // the visible order in the SYSTEM panel.
+
+// Snapshot::alerts is populated every frame by AlertEngine::evaluate
+// (src/app/Alerts.cpp) but had no UI consumer before this -- generated and
+// never rendered. Rather than a separate alert list, its severity colors
+// the existing CPU/memory rows it already describes, the same
+// normal/caution/warning (0/1/2) convention compute_severity() and every
+// thermal/security row already use. Matched by message substring since
+// Alerts.cpp's exact wording is this file's only handle on "which alert" --
+// both files are montauk's own source, so the coupling stays in-tree.
+int alert_severity_for(const Snapshot& s, std::string_view needle) {
+  int sev = 0;
+  for (const auto& a : s.alerts) {
+    if (a.message.find(needle) == std::string::npos) continue;
+    int this_sev = a.severity == "crit" ? 2 : (a.severity == "warn" ? 1 : 0);
+    sev = std::max(sev, this_sev);
+  }
+  return sev;
+}
+
+// /proc/diskstats lists whole disks and their partitions as separate
+// entries (sda, sda1, sda2, ...; nvme0n1, nvme0n1p1, ...), so an unfiltered
+// busiest-N ranking shows a disk and its own partition as two rows --
+// confirmed live via a PTY capture, not theoretical: an idle box's top-2
+// came back as "sda" and "sda1", the same physical device twice. Strip a
+// trailing digit run (and one 'p' before it, the nvme/mmc convention); if
+// what's left names another device already in the same snapshot, this
+// entry is a partition of it and gets skipped in the ranking.
+bool is_partition_of_listed_device(const std::string& name,
+                                   const std::vector<montauk::model::DiskDev>& all) {
+  size_t end = name.size();
+  while (end > 0 && std::isdigit(static_cast<unsigned char>(name[end - 1]))) --end;
+  if (end == name.size()) return false; // no trailing digit run -> not partition-shaped
+  size_t base_end = end;
+  if (base_end > 0 && name[base_end - 1] == 'p') --base_end; // nvme0n1p1 -> nvme0n1
+  std::string base = name.substr(0, base_end);
+  if (base.empty() || base == name) return false;
+  for (const auto& d : all) if (d.name == base) return true;
+  return false;
+}
 
 void section_identity(std::vector<Row>& out, const Snapshot&) {
   out.push_back(Row::kv("HOSTNAME",  read_hostname()));
@@ -101,7 +142,8 @@ void section_cpu(std::vector<Row>& out, const Snapshot& s) {
        << "IOWAIT:" << pcti(s.cpu.pct_iowait) << "%  "
        << "IRQ:" << pcti(s.cpu.pct_irq) << "%  "
        << "STEAL:" << pcti(s.cpu.pct_steal) << "%";
-    out.push_back(Row::kv("UTIL", rr.str()));
+    int sev = alert_severity_for(s, "CPU total sustained high");
+    out.push_back(Row::kv("UTIL", rr.str(), sev));
   }
   {
     double a1 = 0, a5 = 0, a15 = 0;
@@ -124,6 +166,42 @@ void section_cpu(std::vector<Row>& out, const Snapshot& s) {
     std::ostringstream rr;
     rr << fmt_rate(s.cpu.ctxt_per_sec) << "/s  " << fmt_rate(s.cpu.intr_per_sec) << "/s";
     out.push_back(Row::kv("CTXT/INTR", rr.str()));
+  }
+  out.push_back(Row::empty());
+}
+
+// PMU: IPC, L2/L3 cache-miss rates and the hottest core's L2 misses -- all
+// already computed by PmuCollector (montauk::model::PmuSnapshot), just never
+// rendered anywhere in the TUI before this (only reachable via --json /
+// --metrics). Absent entirely when the collector never opened (permission
+// denied without CAP_PERFMON / perf_event_paranoid > 0).
+void section_pmu(std::vector<Row>& out, const Snapshot& s) {
+  if (!s.pmu.available) return;
+  out.push_back(Row::header("PMU"));
+  {
+    std::ostringstream rr; rr << std::fixed << std::setprecision(2) << s.pmu.ipc;
+    out.push_back(Row::kv("IPC", rr.str()));
+  }
+  {
+    std::ostringstream rr; rr << std::fixed << std::setprecision(1) << s.pmu.l2_miss_pct << "%";
+    out.push_back(Row::kv("L2 MISS", rr.str()));
+  }
+  if (s.pmu.l3_available && !s.pmu.l3_per_cache_domain.empty()) {
+    bool multi = s.pmu.l3_per_cache_domain.size() > 1;
+    for (const auto& dom : s.pmu.l3_per_cache_domain) {
+      std::string label = multi ? (std::string("L3 MISS D") + std::to_string(dom.domain_cpu))
+                                 : std::string("L3 MISS");
+      std::ostringstream rr; rr << std::fixed << std::setprecision(1) << dom.miss_pct << "%";
+      out.push_back(Row::kv(std::move(label), rr.str()));
+    }
+  }
+  if (!s.pmu.per_cpu_ids.empty() && s.pmu.per_cpu_ids.size() == s.pmu.per_cpu_l2_misses.size()) {
+    size_t hot = 0;
+    for (size_t i = 1; i < s.pmu.per_cpu_l2_misses.size(); ++i)
+      if (s.pmu.per_cpu_l2_misses[i] > s.pmu.per_cpu_l2_misses[hot]) hot = i;
+    std::ostringstream rr;
+    rr << "cpu" << s.pmu.per_cpu_ids[hot] << ": " << s.pmu.per_cpu_l2_misses[hot] << " misses";
+    out.push_back(Row::kv("HOT CORE", rr.str()));
   }
   out.push_back(Row::empty());
 }
@@ -196,13 +274,24 @@ void section_memory(std::vector<Row>& out, const Snapshot& s) {
       rr << "AVAILABLE:" << std::fixed << std::setprecision(0) << mem_avail_gb << "GB  ";
     rr << std::fixed << std::setprecision(1) << s.mem.used_pct << "% " << grey_bullet() << " "
        << uic.normal << std::setprecision(2) << mem_used_gb << "GB/" << mem_tot_gb << "GB" << sgr_reset();
-    out.push_back(Row::kv("MEM", rr.str()));
+    int sev = alert_severity_for(s, "Memory usage sustained high");
+    out.push_back(Row::kv("MEM", rr.str(), sev));
   }
   {
     std::ostringstream rr;
     rr << std::fixed << std::setprecision(1) << (s.mem.cached_kb / 1048576.0) << "GB / "
        << std::setprecision(1) << (s.mem.buffers_kb / 1048576.0) << "GB";
     out.push_back(Row::kv("CACHE/BUF", rr.str()));
+  }
+  if (s.mem.swap_total_kb > 0) {
+    const double swap_used_gb = s.mem.swap_used_kb / 1048576.0;
+    const double swap_tot_gb  = s.mem.swap_total_kb / 1048576.0;
+    const double swap_pct = 100.0 * static_cast<double>(s.mem.swap_used_kb)
+                                   / static_cast<double>(s.mem.swap_total_kb);
+    std::ostringstream rr;
+    rr << std::fixed << std::setprecision(1) << swap_pct << "% " << grey_bullet() << " "
+       << uic.normal << std::setprecision(2) << swap_used_gb << "GB/" << swap_tot_gb << "GB" << sgr_reset();
+    out.push_back(Row::kv("SWAP", rr.str()));
   }
   out.push_back(Row::empty());
 }
@@ -216,6 +305,27 @@ void section_disk(std::vector<Row>& out, const Snapshot& s) {
     os << static_cast<int>(s.disk.total_read_bps / 1000000) << "MB/s/"
        << static_cast<int>(s.disk.total_write_bps / 1000000) << "MB/s";
     out.push_back(Row::kv("READ/WRITE", os.str()));
+  }
+  // Busiest devices by util_pct -- already computed per-device by
+  // DiskCollector, never rendered before this (only the aggregate
+  // throughput above was shown; per-device IOPS/busy% had no UI consumer).
+  {
+    std::vector<const montauk::model::DiskDev*> devs;
+    for (const auto& d : s.disk.devices) {
+      if (is_partition_of_listed_device(d.name, s.disk.devices)) continue;
+      devs.push_back(&d);
+    }
+    std::sort(devs.begin(), devs.end(),
+              [](const auto* a, const auto* b) { return a->util_pct > b->util_pct; });
+    size_t dlim = std::min<size_t>(devs.size(), 2);
+    for (size_t i = 0; i < dlim; ++i) {
+      const auto& d = *devs[i];
+      std::ostringstream rr;
+      rr << static_cast<int>(d.util_pct + 0.5) << "% " << grey_bullet() << " "
+         << uic.normal << static_cast<int>(d.read_bps / 1000000) << "MB/s/"
+         << static_cast<int>(d.write_bps / 1000000) << "MB/s" << sgr_reset();
+      out.push_back(Row::kv(d.name, rr.str()));
+    }
   }
   size_t lim = std::min<size_t>(s.fs.mounts.size(), 3);
   for (size_t i = 0; i < lim; ++i) {
@@ -269,6 +379,26 @@ void section_thermal(std::vector<Row>& out, const Snapshot& s, bool show_thermal
     int val = static_cast<int>(s.thermal.cpu_max_c + 0.5);
     std::ostringstream rr; rr << val << "°C";
     out.push_back(Row::kv("CPU TEMP", rr.str(), compute_severity(val, caution, warn)));
+  }
+  if (s.thermal.has_power) {
+    std::ostringstream rr; rr << static_cast<int>(s.thermal.power_watts + 0.5) << "W";
+    out.push_back(Row::kv("CPU POWER", rr.str()));
+  }
+  if (s.thermal.has_energy) {
+    // Cumulative since the collector started (monotonic, wrap-safe) -- a
+    // session energy total, not a per-interval rate, so no delta math needed.
+    std::ostringstream rr;
+    rr << std::fixed << std::setprecision(1) << (s.thermal.energy_joules_total / 1000.0) << "kJ";
+    out.push_back(Row::kv("CPU ENERGY", rr.str()));
+  }
+  if (!s.thermal.cstates.empty()) {
+    std::ostringstream rr;
+    for (size_t i = 0; i < s.thermal.cstates.size(); ++i) {
+      if (i) rr << "  ";
+      rr << s.thermal.cstates[i].name << ":"
+         << static_cast<int>(s.thermal.cstates[i].residency_pct + 0.5) << "%";
+    }
+    out.push_back(Row::kv("C-STATES", rr.str()));
   }
   for (size_t i = 0; i < s.vram.devices.size(); ++i) {
     const auto& d = s.vram.devices[i];
@@ -369,6 +499,7 @@ void SystemPanel::render(widget::Canvas& canvas,
   section_identity(rows, s);
   section_runtime (rows, s);
   section_cpu     (rows, s);
+  section_pmu     (rows, s);
   section_gpu     (rows, s);
   section_memory  (rows, s);
   section_disk    (rows, s);

@@ -13,6 +13,7 @@ wrappers themselves live in the dotfiles, not montauk.
 
 Run:  python3 tests/parity_check.py   (or via tests/run.py)
 """
+import shlex
 import shutil
 import sys
 
@@ -24,6 +25,10 @@ NUMS = "5\n3\n8\n1\n9\n2\n7\n4\n6\n0\n"
 WORDS = "foo\nbar\nfoobar\nbaz\nFOO\nFoo\n"
 ADJ = "a\na\nb\nc\nc\nc\nd\n"
 KV = "a 10\nb 20\na 30\nc 5\nb 15\n"
+CTX = "one\ntwo\nMATCH1\nfour\nfive\nsix\nseven\nMATCH2\nnine\nten\n"
+
+JOINB = str(harness.ROOT / "tests" / "fixtures" / "joinb.txt")
+JOINB_COMMA = str(harness.ROOT / "tests" / "fixtures" / "joinb_comma.txt")
 
 # column's per-column width array and per-line token array used to cap at 256
 # entries and truncate a scratch buffer at 4096 bytes; both are now
@@ -52,6 +57,19 @@ CASES = [
     ("column -t >256 cols",["column"],                      "column -t",               COLUMN_WIDE),
     ("column -t >4096B line",["column"],                    "column -t",               COLUMN_LONG_LINE),
     ("group sum",          ["group", "1", "sum", "2"],      "datamash -g 1 sum 2",     KV),
+    ("head",               ["head", "3"],                   "head -3",                 NUMS),
+    ("tail",               ["tail", "3"],                   "tail -3",                 NUMS),
+    ("count --words",      ["count", "--words"],            "wc -w",                   WORDS),
+    ("count --bytes",      ["count", "--bytes"],            "wc -c",                   WORDS),
+    ("uniq -i",            ["uniq", "-i"],                  "uniq -i",                 WORDS),
+    ("join",               ["join", "1", JOINB],            f"join - {shlex.quote(JOINB)}",         "a 1\nb 2\nc 3\n"),
+    ("join --delim ,",     ["join", "2", JOINB_COMMA, "--delim", ","],
+                                                              f"join -t, -j 2 - {shlex.quote(JOINB_COMMA)}",
+                                                                                        "x,a,1\ny,b,2\n"),
+    ("grep -A1 -B1",       ["grep", "MATCH", "-A", "1", "-B", "1"],
+                                                              "grep -E MATCH -A 1 -B 1", CTX),
+    ("contains -A1 -B1",   ["contains", "MATCH", "-A", "1", "-B", "1"],
+                                                              "grep -F MATCH -A 1 -B 1", CTX),
 ]
 
 note = harness.logger("parity")

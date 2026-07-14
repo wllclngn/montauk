@@ -27,8 +27,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
-TARGETS = ["montauk_tests", "montauk_sink_c_test", "montauk_analyze",
-           "montauk_trace_decode", "sublimation_cli"]
+TARGETS = ["montauk_tests", "montauk_sink_c_test", "montauk_json_test",
+           "montauk_analyze", "montauk_trace_decode", "sublimation_cli"]
 
 
 def run(cmd):

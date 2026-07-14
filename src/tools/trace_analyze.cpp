@@ -5192,7 +5192,17 @@ int main(int argc, char** argv) {
     bool has_group = false;
     for (int i = 1; i < argc; ++i)
       if (std::string(argv[i]) == "--group") has_group = true;
-    if (is_dir || is_prom || has_group) {
+    // --report is an unambiguous request for single-trace mode. Without this
+    // check, is_dir/is_prom always wins for any real montauk capture (every
+    // recording is a directory or a .prom file), making --report -- and
+    // --sig/--comm/--pid/--tid/--window with it -- permanently unreachable:
+    // the flag loop below has no case for it and errors "unknown population
+    // flag '--report'" before single-trace mode's own (correct, complete)
+    // --report parsing further down is ever reached.
+    bool has_report = false;
+    for (int i = 1; i < argc; ++i)
+      if (std::string(argv[i]) == "--report") has_report = true;
+    if (!has_report && (is_dir || is_prom || has_group)) {
       // Recording-dir modes (vs cross-run population stats):
       //   --digest    compact specs+offenders+aggregates report
       //   --l2-by-cpu per-CPU cache-miss localization

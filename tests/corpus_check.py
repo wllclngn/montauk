@@ -132,6 +132,13 @@ def check_surface(label: str, update: bool) -> bool:
         except json.JSONDecodeError as e:
             note(f"FAIL: {label} is not valid JSON ({e})")
             return False
+        # The envelope's trace.path field echoes FIXTURE's absolute path
+        # verbatim -- correct application behavior (it names the file that was
+        # analyzed), but ROOT differs by checkout location, so a golden that
+        # freezes it verbatim can never match from a different clone/home dir.
+        # Normalize it to a placeholder on both sides of the compare so the
+        # golden stays portable; every other field still gates byte-exact.
+        got = got.replace(str(FIXTURE), "<FIXTURE_PATH>")
 
     if update:
         golden.write_text(got)

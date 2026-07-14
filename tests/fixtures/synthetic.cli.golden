@@ -165,8 +165,8 @@ b
 c
 d
 $ sublimation join 1 tests/fixtures/joinb.txt
-a 1 a x
-b 2 b y
+a 1 x
+b 2 y
 $ sublimation replace foo X
 X bar X
 $ sublimation replace [0-9] -

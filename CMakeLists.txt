@@ -1,11 +1,17 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 7.14.0 LANGUAGES C CXX)
+project(montauk VERSION 7.15.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Emit build/compile_commands.json (the exact per-file compiler invocation,
+# include paths included) so clangd/IDE tooling can actually resolve
+# montauk's own headers instead of guessing. Tooling-only: zero effect on
+# what gets built.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
  
 # Forbid vendoring: prevent any attempt to fetch external projects during configure/build.

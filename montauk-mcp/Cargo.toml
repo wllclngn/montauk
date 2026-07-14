@@ -23,5 +23,9 @@ path = "../tests/test_mcp_json.rs"
 name = "mcp_rpc"
 path = "../tests/test_mcp_rpc.rs"
 
+[[test]]
+name = "mcp_tools"
+path = "../tests/test_mcp_tools.rs"
+
 [profile.release]
 opt-level = 2
