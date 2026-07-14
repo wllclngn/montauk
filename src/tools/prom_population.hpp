@@ -36,6 +36,33 @@ struct PopOptions {
   // on their per-run distributions -- the bimodal cliff A/B that `capture`
   // (per-filename stamp) cannot express for same-named per-run `.prom` files.
   std::map<std::string, std::string> file_group;
+  // Pair selector: "adjacent" | "all" | "vs-best". Empty = auto (adjacent for
+  // the ordered axes version/capture, all for categorical axes). All-pairs is
+  // O(V^2) in axis values; adjacent is the archive default.
+  std::string pairs;
+  // Version-ordered change-point view (the rank-scan trajectory engine)
+  // instead of the pairwise comparison engine.
+  bool trajectory = false;
+  // Trajectory knobs, operator-supplied: permutation count for the joint
+  // null (ignored when the split space is small enough to enumerate), the
+  // familywise alpha for the dense/sparse pair, and the Cliff's-delta
+  // magnitude floor below which a boundary is not reported.
+  int traj_perms = 999;
+  double traj_alpha = 0.05;
+  double traj_min_effect = 0.147;
+  // Population pool size; 0 = MONTAUK_POP_THREADS env, else all cores.
+  int threads = 0;
+  // Metric-family aliasing across producer renames (--alias OLD=NEW,
+  // repeatable, exact match, no chaining). montauk holds the mechanism only;
+  // the mapping is operator input.
+  std::map<std::string, std::string> family_alias;
+  // Axis-value display aliasing (--alias-axis OLD=NEW), replacing any
+  // hardcoded display compression.
+  std::map<std::string, std::string> axis_alias;
+  // Labels dropped from cell identity (--drop-label L, repeatable): the
+  // generic answer to high-cardinality foreign archives and to co-moving
+  // label pairs beyond the built-in version/commit rule.
+  std::vector<std::string> drop_labels;
 };
 
 // Analyze the given `.prom` files as a population. Prints the report and

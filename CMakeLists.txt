@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 7.15.0 LANGUAGES C CXX)
+project(montauk VERSION 7.16.0 LANGUAGES C CXX)
+# (7.16.0: the archive-instrument push -- population output/parse defects,
+#  the archive features, the semantic slice, the silent-degradation sweep,
+#  drop accounting, the exact-enumeration stats fast path and the new gates.)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,6 +29,11 @@ endmacro()
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
+
+# Debug info in every build: zero runtime cost, and a field crash in the TUI
+# or analyzer is symbolizable instead of a bare address list. Packagers strip
+# at package() time.
+add_compile_options(-g)
 
 # Build options
 option(MONTAUK_BUILD_TESTS "Build unit tests" OFF)
@@ -61,8 +69,14 @@ set_target_properties(sublimation PROPERTIES
 target_include_directories(sublimation
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src/include
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src)
+# No optimization level here: Release's own -O3 stands. The previous -O2 in
+# this list came AFTER -O3 on the command line and silently won, leaving the
+# hottest code in the tree at the lowest optimization level by flag-ordering
+# accident. First-party code also gets a warning wall now (non-fatal for the
+# lib, so a new toolchain's fresh warnings degrade loudly rather than break
+# every consumer at once).
 target_compile_options(sublimation PRIVATE
-    -O2 -march=native -fvisibility=hidden
+    -march=native -fvisibility=hidden -Wall -Wextra
     -fstack-protector-strong -fstack-clash-protection -fcf-protection)
 target_link_libraries(sublimation PUBLIC pthread m)
 
@@ -264,6 +278,9 @@ add_executable(sublimation_cli sublimation/cli.c)
 set_target_properties(sublimation_cli PROPERTIES
     OUTPUT_NAME sublimation
     C_STANDARD 23 C_STANDARD_REQUIRED ON)
+# First-party, hot-edited C: the same wall every C++ target carries. The old
+# "third-party warnings" exemption never described this file.
+target_compile_options(sublimation_cli PRIVATE -Wall -Wextra -Werror -Wshadow)
 # montauk's include/ for the shared output sink (util/sink.h); the CLI's data
 # output drains through it like the rest of montauk.
 target_include_directories(sublimation_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -317,11 +334,23 @@ if(MONTAUK_BUILD_TESTS)
   target_include_directories(montauk_json_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_compile_options(montauk_json_test PRIVATE -Wall -Wextra -Werror -Wshadow)
 
+  # Stats-kernel characterization tests: prom_stats.cpp only compiles into
+  # montauk_analyze, so it gets its own small test executable (the
+  # montauk_sink_c_test pattern) rather than a montauk_core dependency.
+  add_executable(montauk_stats_test tests/test_main.cpp tests/test_prom_stats.cpp
+      src/tools/prom_stats.cpp)
+  target_include_directories(montauk_stats_test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/tools
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+  target_compile_options(montauk_stats_test PRIVATE -Wall -Wextra -Werror -Wshadow)
+  target_link_libraries(montauk_stats_test PRIVATE sublimation)
+
   # One entry point for the whole suite -- tests/run.py orchestrates the unit
   # (C++ montauk_tests + C23 sink test), gate (Python byte-identical) and trace
   # (root-gated, skipped without root) layers. --no-build because the DEPENDS
   # below already builds the binaries run.py invokes.
   add_custom_target(check
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/run.py --no-build
-    DEPENDS montauk_tests montauk_sink_c_test montauk_json_test montauk_analyze montauk_trace_decode sublimation_cli)
+    DEPENDS montauk montauk_tests montauk_sink_c_test montauk_json_test montauk_stats_test montauk_analyze montauk_trace_decode sublimation_cli)
 endif()

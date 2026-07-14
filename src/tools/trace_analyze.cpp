@@ -180,6 +180,54 @@ static int64_t g_qual_pid = -1;
 static int64_t g_qual_tid = -1;
 static double g_qual_window_s = 2.0;
 
+// Capture-loss accounting: the last TRACE_EVT_DROPS snapshot seen in the
+// fold. Snapshots carry free-running cumulative totals, so the last one IS
+// the whole recording's loss. Every surface (text block, gauges, JSON
+// envelope) renders from this one value; a capture with no snapshot records
+// predates drop accounting and reports nothing (absence of the counter is
+// not evidence of zero loss, and the text says so).
+static montauk_drop_event g_drop_final{};
+static bool g_drop_seen = false;
+
+static void fold_drop_snapshot(uint32_t type, const uint8_t* data, uint32_t len) {
+  if (type == TRACE_EVT_DROPS && len >= sizeof(montauk_drop_event)) {
+    std::memcpy(&g_drop_final, data, sizeof(g_drop_final));
+    g_drop_seen = true;
+  }
+}
+
+static uint64_t drops_total() {
+  uint64_t t = 0;
+  for (uint32_t i = 0; i < MONTAUK_DROP_SLOTS; ++i) t += g_drop_final.dropped[i];
+  return t;
+}
+
+static const char* evt_type_name(uint32_t t) {
+  switch (t) {
+    case TRACE_EVT_FORK: return "fork";
+    case TRACE_EVT_EXEC: return "exec";
+    case TRACE_EVT_EXIT: return "exit";
+    case TRACE_EVT_COMM_CHANGE: return "comm";
+    case TRACE_EVT_IO: return "io";
+    case TRACE_EVT_NTSYNC: return "ntsync";
+    case TRACE_EVT_SCHED: return "sched";
+    case TRACE_EVT_HEAP: return "heap";
+    case TRACE_EVT_SIGNAL: return "signal";
+    case TRACE_EVT_MMAP: return "mmap";
+    case TRACE_EVT_PROVIDER: return "provider";
+    case TRACE_EVT_ABORT: return "abort";
+    case TRACE_EVT_HEAPSTACK: return "heapstk";
+    case TRACE_EVT_KEYEDEVT: return "keyedevt";
+    case TRACE_EVT_KSTRAND: return "kstrand";
+    case TRACE_EVT_WAITSTACK: return "waitstack";
+    case TRACE_EVT_SCX_STORM: return "scx_storm";
+    case TRACE_EVT_THREAD_NAME: return "thread_name";
+    case TRACE_EVT_RAWSTACK: return "rawstack";
+    case TRACE_EVT_DROPS: return "drops";
+    default: return "unknown";
+  }
+}
+
 static bool qual_match(int32_t sig, uint32_t pid, uint32_t tid, const char* comm) {
   if (g_qual_sig >= 0 && sig != g_qual_sig) return false;
   if (g_qual_pid >= 0 && pid != static_cast<uint32_t>(g_qual_pid)) return false;
@@ -5172,10 +5220,19 @@ int main(int argc, char** argv) {
         "                        and --comm remain signals-only (sched events carry\n"
         "                        no signal number or comm). --window bounds the\n"
         "                        trailing capture-teardown split, def 2s)\n"
-        "       montauk_analyze DIR|FILE.prom [more.prom...] [--by axis]\n"
+        "       montauk_analyze DIR|FILE.prom [more.prom...] [--by LABEL]\n"
+        "                       [--pairs adjacent|all|vs-best] [--trajectory]\n"
         "                       [--metric substr] [--full] [--higher-better]\n"
-        "                       [--seed n] [--quantile q] [--no-emit]\n"
-        "                       (axis: scheduler | version | commit | capture)\n"
+        "                       [--alias OLD=NEW] [--alias-axis OLD=NEW]\n"
+        "                       [--drop-label L] [--threads n] [--seed n]\n"
+        "                       [--perms n] [--alpha a] [--min-effect d]\n"
+        "                       [--quantile q] [--no-emit]\n"
+        "                       (LABEL: any prom label, plus the synthetic\n"
+        "                        version | commit | capture; default scheduler.\n"
+        "                        --pairs defaults to adjacent on the ordered\n"
+        "                        axes version/capture, all otherwise.\n"
+        "                        --trajectory: version-ordered change-point\n"
+        "                        scan instead of pairwise comparison)\n"
         "       montauk_analyze RECORDING_DIR --digest [--redact] [--json]\n"
         "       montauk_analyze RECORDING_DIR --l2-by-cpu\n");
     return want_help ? 0 : 2;
@@ -5226,11 +5283,72 @@ int main(int argc, char** argv) {
       else argstart = 1;
       for (int i = argstart; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--by" && i + 1 < argc) opt.compare_axis = argv[++i];
+        if (a == "--by" && i + 1 < argc) {
+          opt.compare_axis = argv[++i];
+          // Any label is a valid axis (the engine is label-generic); `le` is
+          // the one structural exception, it is a histogram bucket bound and
+          // is always dropped from identity.
+          if (opt.compare_axis == "le") {
+            log_error("--by le is not comparable (le is a histogram bucket "
+                      "bound, not a group identity)");
+            return 2;
+          }
+        }
         else if (a == "--metric" && i + 1 < argc) opt.metric_filter = argv[++i];
         else if (a == "--full") opt.full = true;
         else if (a == "--higher-better") opt.lower_is_better = false;
         else if (a == "--no-emit") opt.emit_prom = false;
+        else if (a == "--trajectory") opt.trajectory = true;
+        else if (a == "--pairs" && i + 1 < argc) {
+          opt.pairs = argv[++i];
+          if (opt.pairs != "adjacent" && opt.pairs != "all" &&
+              opt.pairs != "vs-best") {
+            log_error("--pairs takes adjacent | all | vs-best");
+            return 2;
+          }
+        }
+        else if (a == "--threads" && i + 1 < argc)
+          opt.threads = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
+        else if (a == "--perms" && i + 1 < argc)
+          opt.traj_perms = static_cast<int>(std::strtol(argv[++i], nullptr, 10));
+        else if (a == "--alpha" && i + 1 < argc)
+          opt.traj_alpha = std::strtod(argv[++i], nullptr);
+        else if (a == "--min-effect" && i + 1 < argc)
+          opt.traj_min_effect = std::strtod(argv[++i], nullptr);
+        else if (a == "--alias" && i + 1 < argc) {
+          std::string spec = argv[++i];
+          size_t eq = spec.find('=');
+          if (eq == std::string::npos || eq == 0 || eq + 1 >= spec.size()) {
+            log_error("--alias needs OLD=NEW (metric family rename)");
+            return 2;
+          }
+          std::string oldn = spec.substr(0, eq), newn = spec.substr(eq + 1);
+          auto it = opt.family_alias.find(oldn);
+          if (it != opt.family_alias.end() && it->second != newn) {
+            log_error("--alias %s given twice with conflicting targets",
+                      oldn.c_str());
+            return 2;
+          }
+          opt.family_alias[oldn] = newn;
+        }
+        else if (a == "--alias-axis" && i + 1 < argc) {
+          std::string spec = argv[++i];
+          size_t eq = spec.find('=');
+          if (eq == std::string::npos || eq == 0 || eq + 1 >= spec.size()) {
+            log_error("--alias-axis needs OLD=NEW (axis display rename)");
+            return 2;
+          }
+          opt.axis_alias[spec.substr(0, eq)] = spec.substr(eq + 1);
+        }
+        else if (a == "--drop-label" && i + 1 < argc) {
+          std::string lbl = argv[++i];
+          if (lbl == opt.compare_axis) {
+            log_error("--drop-label %s conflicts with the compare axis",
+                      lbl.c_str());
+            return 2;
+          }
+          opt.drop_labels.push_back(lbl);
+        }
         else if (a == "--seed" && i + 1 < argc)
           opt.seed = std::strtoull(argv[++i], nullptr, 10);
         else if (a == "--quantile" && i + 1 < argc)
@@ -5357,6 +5475,7 @@ int main(int argc, char** argv) {
 
   const auto t0 = std::chrono::steady_clock::now();
   auto status = reader.for_each([&](uint32_t type, const uint8_t* data, uint32_t len) {
+    fold_drop_snapshot(type, data, len);
     for (Report* r : active) r->fold(type, data, len);
   });
   if (status == montauk::model::TraceReadStatus::CorruptLength) {
@@ -5389,6 +5508,41 @@ int main(int argc, char** argv) {
         montauk_json_ku64(&j, "format_version", mh.version);
         montauk_json_ku64(&j, "events", reader.events_read());
         montauk_json_ku64(&j, "start_unix_ns", mh.real_anchor_ns);
+        // Data-loss provenance: one field answers "is this capture whole."
+        // Emitted only when a drop snapshot exists in the trace; absent on
+        // captures predating drop accounting (absence of the counter is not
+        // evidence of zero loss).
+        if (g_drop_seen) {
+          const uint64_t dropped = drops_total();
+          montauk_json_ku64(&j, "dropped_events", dropped);
+          const uint64_t observed = reader.events_read();
+          montauk_json_knum(
+              &j, "capture_completeness",
+              (observed + dropped) > 0
+                  ? static_cast<double>(observed) /
+                        static_cast<double>(observed + dropped)
+                  : 1.0);
+        }
+        // Qualifier provenance: a gauge computed under --pid/--tid/--comm/
+        // --sig is a different population than the whole trace, and without
+        // this record the two are indistinguishable downstream (a filtered
+        // .prom could silently enter a population comparison against
+        // unfiltered runs). Emitted only when a qualifier is active, so
+        // unqualified envelopes are byte-stable.
+        if (g_qual_pid >= 0 || g_qual_tid >= 0 || !g_qual_comm.empty() ||
+            g_qual_sig >= 0) {
+          montauk_json_key(&j, "qualifiers");
+          montauk_json_obj_begin(&j);
+            if (g_qual_pid >= 0)
+              montauk_json_ku64(&j, "pid", static_cast<uint64_t>(g_qual_pid));
+            if (g_qual_tid >= 0)
+              montauk_json_ku64(&j, "tid", static_cast<uint64_t>(g_qual_tid));
+            if (!g_qual_comm.empty())
+              montauk_json_kstr(&j, "comm", g_qual_comm.c_str());
+            if (g_qual_sig >= 0)
+              montauk_json_ku64(&j, "sig", static_cast<uint64_t>(g_qual_sig));
+          montauk_json_obj_end(&j);
+        }
       montauk_json_obj_end(&j);
       montauk_json_key(&j, "reports");
       montauk_json_arr_begin(&j);
@@ -5418,6 +5572,57 @@ int main(int argc, char** argv) {
 
   std::vector<PromMetric> prom;
   for (Report* r : active) r->prom(prom);
+
+  // CAPTURE LOSS: the loss-aware verdict layer. Overload drop is
+  // load-correlated (the tracer sheds exactly when the interesting events
+  // are produced), so observed counts are LOWER BOUNDS, tail quantiles are
+  // biased downward and an absence-of-anomaly verdict over a lossy window is
+  // not the same claim as one over a lossless capture. The block prints only
+  // when a snapshot exists; its absence means the capture predates drop
+  // accounting, which is stated rather than read as zero.
+  {
+    const uint64_t dropped = g_drop_seen ? drops_total() : 0;
+    const uint64_t observed = reader.events_read();
+    if (g_drop_seen) {
+      double completeness =
+          (observed + dropped) > 0
+              ? static_cast<double>(observed) /
+                    static_cast<double>(observed + dropped)
+              : 1.0;
+      prom.push_back({"montauk_analysis_events_dropped_total",
+                      "", static_cast<double>(dropped)});
+      prom.push_back({"montauk_analysis_capture_completeness", "",
+                      completeness});
+      for (uint32_t t = 0; t < MONTAUK_DROP_SLOTS; ++t)
+        if (g_drop_final.dropped[t] > 0)
+          prom.push_back({"montauk_analysis_events_dropped_total",
+                          std::string("type=\"") + evt_type_name(t) + "\"",
+                          static_cast<double>(g_drop_final.dropped[t])});
+      if (dropped > 0) {
+        montauk_sink_appendf(&g_out,
+            "\nCAPTURE LOSS: %" PRIu64 " event(s) dropped at the ring "
+            "(completeness %.4f%%)\n",
+            dropped, completeness * 100.0);
+        for (uint32_t t = 0; t < MONTAUK_DROP_SLOTS; ++t)
+          if (g_drop_final.dropped[t] > 0)
+            montauk_sink_appendf(
+                &g_out, "  %s: %" PRIu64 "\n", evt_type_name(t),
+                static_cast<uint64_t>(g_drop_final.dropped[t]));
+        montauk_sink_appendf(&g_out,
+            "  counts above are lower bounds; tail quantiles are biased "
+            "downward\n"
+            "  (loss lands in the busy windows); absence-of-anomaly verdicts "
+            "for the\n"
+            "  types listed are qualified, not clean\n");
+      }
+      if (g_drop_final.writer_errors > 0)
+        montauk_sink_appendf(&g_out,
+            "CAPTURE LOSS: %" PRIu64 " trace write error(s), %" PRIu64
+            " byte(s) short at the disk path\n",
+            static_cast<uint64_t>(g_drop_final.writer_errors),
+            static_cast<uint64_t>(g_drop_final.writer_lost_bytes));
+    }
+  }
 
   // POORLY-BEHAVING ITEMS: consolidate every active report's offenders into one
   // severity-ranked view -- the "what specifically misbehaved" the report leads
@@ -5457,6 +5662,12 @@ int main(int argc, char** argv) {
     std::string info = "montauk_version=\"" MONTAUK_VERSION "\",trace_pattern=\"";
     info += mpat;
     info += "\",format_version=\"" + std::to_string(mh.version) + "\"";
+    // Qualifier provenance, mirroring the JSON envelope: a filtered .prom
+    // must be distinguishable from a whole-trace one.
+    if (g_qual_pid >= 0) info += ",qual_pid=\"" + std::to_string(g_qual_pid) + "\"";
+    if (g_qual_tid >= 0) info += ",qual_tid=\"" + std::to_string(g_qual_tid) + "\"";
+    if (!g_qual_comm.empty()) info += ",qual_comm=\"" + g_qual_comm + "\"";
+    if (g_qual_sig >= 0) info += ",qual_sig=\"" + std::to_string(g_qual_sig) + "\"";
     std::vector<PromMetric> meta = {
       {"montauk_analysis_info", info, 1.0},
       {"montauk_analysis_timestamp_seconds", "",

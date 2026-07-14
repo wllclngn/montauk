@@ -51,6 +51,32 @@ struct {
                                     // flush stall can't overflow before the next drain)
 } events SEC(".maps");
 
+// Reserve-failure drop counters, per CPU per event type. A failed reserve
+// used to return silently at every emit site, making a capture with holes
+// indistinguishable from a quiet capture; the analyzer then printed a
+// CLEANER verdict on lossy data. Free-running totals; userspace samples them
+// each drain tick and stamps cumulative snapshots into the trace, so any two
+// surviving snapshots bound the loss between them. Per-type matters:
+// "dropped 40k sched" and "dropped 12 execs" are different diagnostic facts.
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, MONTAUK_DROP_SLOTS);
+  __type(key, u32);
+  __type(value, u64);
+} drop_counts SEC(".maps");
+
+// Counting reserve wrapper: every emit site goes through this so no failure
+// path can forget to account. Slot 0 catches any out-of-range type.
+static __always_inline void *rb_reserve(u32 type, u64 size) {
+  void *p = bpf_ringbuf_reserve(&events, size, 0);
+  if (!p) {
+    u32 k = type < MONTAUK_DROP_SLOTS ? type : 0;
+    u64 *c = bpf_map_lookup_elem(&drop_counts, &k);
+    if (c) __sync_fetch_and_add(c, 1);
+  }
+  return p;
+}
+
 // Per-CPU scratch for ntsync ioctl enter → exit state passing
 struct {
   __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -343,7 +369,7 @@ static __always_inline void auto_track_pid(u32 pid) {
 static __always_inline void emit_event(u32 type, u32 pid, u32 ppid,
                                        u32 child_pid) {
   struct montauk_ring_event *evt;
-  evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
+  evt = rb_reserve(type, sizeof(*evt));
   if (!evt)
     return;
   evt->type = type;
@@ -358,7 +384,7 @@ static __always_inline void emit_event(u32 type, u32 pid, u32 ppid,
 static __always_inline void emit_io_event(u32 pid, u32 tid, s32 syscall_nr,
                                           s32 fd, s64 result, u64 count, u32 whence) {
   struct montauk_io_event *evt;
-  evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
+  evt = rb_reserve(TRACE_EVT_IO, sizeof(*evt));
   if (!evt)
     return;
   evt->type = TRACE_EVT_IO;
@@ -381,7 +407,7 @@ static __always_inline void emit_io_event_dur(u32 pid, u32 tid, s32 syscall_nr,
                                               s32 fd, s64 result, u64 count,
                                               u32 whence, u64 duration_ns) {
   struct montauk_io_event *evt;
-  evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
+  evt = rb_reserve(TRACE_EVT_IO, sizeof(*evt));
   if (!evt)
     return;
   evt->type = TRACE_EVT_IO;
@@ -401,7 +427,7 @@ static __always_inline void emit_io_event_dur(u32 pid, u32 tid, s32 syscall_nr,
 static __always_inline void emit_mmap_event(u32 pid, u32 tid, s32 fd, u64 addr,
                                             u64 length, u64 offset, u32 prot, u32 flags) {
   struct montauk_mmap_event *evt;
-  evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
+  evt = rb_reserve(TRACE_EVT_MMAP, sizeof(*evt));
   if (!evt)
     return;
   evt->type = TRACE_EVT_MMAP;
@@ -421,7 +447,7 @@ static __always_inline void emit_mmap_event(u32 pid, u32 tid, s32 fd, u64 addr,
 // Emit a keyed-event record (critical-section wait/release by lock identity).
 static __always_inline void emit_keyedevt(u32 op, u64 key) {
   u64 pid_tgid = bpf_get_current_pid_tgid();
-  struct montauk_keyedevt_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_keyedevt_event *e = rb_reserve(TRACE_EVT_KEYEDEVT, sizeof(*e));
   if (!e)
     return;
   e->type = TRACE_EVT_KEYEDEVT;
@@ -448,7 +474,7 @@ static __always_inline void emit_signal_event(void *ctx, u32 kind, u32 pid,
                                               u32 tid, s32 sig, s32 sender_pid,
                                               s32 exit_code) {
   struct montauk_signal_event *evt;
-  evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
+  evt = rb_reserve(TRACE_EVT_SIGNAL, sizeof(*evt));
   if (!evt)
     return;
   evt->type        = TRACE_EVT_SIGNAL;
@@ -564,7 +590,7 @@ int handle_exec(struct trace_event_raw_sched_process_exec *ctx) {
   // (the common case: a fork+exec child whose new name matches the trace
   // pattern) is included, not only processes tracked before it ran.
   if (is_tracked(pid)) {
-    struct montauk_ring_event *ee = bpf_ringbuf_reserve(&events, sizeof(*ee), 0);
+    struct montauk_ring_event *ee = rb_reserve(TRACE_EVT_EXEC, sizeof(*ee));
     if (ee) {
       ee->type      = TRACE_EVT_EXEC;
       ee->pid       = pid;
@@ -902,7 +928,7 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
             // Emit ENTRY event for waits so blocked calls are visible
             {
               struct montauk_ntsync_event *we;
-              we = bpf_ringbuf_reserve(&events, sizeof(*we), 0);
+              we = rb_reserve(TRACE_EVT_NTSYNC, sizeof(*we));
               if (we) {
                 we->type = TRACE_EVT_NTSYNC;
                 we->pid = pid;
@@ -942,7 +968,7 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
             // WHERE it blocked (resolved offline against the maps sidecar).
             if (s->timeout_ns == ~0ULL) {
               struct montauk_waitstack_event *ws =
-                  bpf_ringbuf_reserve(&events, sizeof(*ws), 0);
+                  rb_reserve(TRACE_EVT_WAITSTACK, sizeof(*ws));
               if (ws) {
                 ws->type = TRACE_EVT_WAITSTACK;
                 ws->pid = pid;
@@ -1006,7 +1032,7 @@ int handle_sys_exit(struct trace_event_raw_sys_exit *ctx) {
     struct ntsync_scratch *s = bpf_map_lookup_elem(&ntsync_scratch, &zero);
     if (s && s->pid == pid && (s->op != 0 || s->fd != 0)) {
       struct montauk_ntsync_event *evt;
-      evt = bpf_ringbuf_reserve(&events, sizeof(*evt), 0);
+      evt = rb_reserve(TRACE_EVT_NTSYNC, sizeof(*evt));
       if (evt) {
         evt->type = TRACE_EVT_NTSYNC;
         evt->pid = pid;
@@ -1183,7 +1209,7 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
     if (sched_stream && next->wake_ns) {
       u64 d = (now > next->wake_ns) ? (now - next->wake_ns) : 0;
       struct montauk_sched_event *we =
-          bpf_ringbuf_reserve(&events, sizeof(*we), 0);
+          rb_reserve(TRACE_EVT_SCHED, sizeof(*we));
       if (we) {
         we->type          = TRACE_EVT_SCHED;
         we->op            = SCHED_OP_WAKE2RUN;
@@ -1219,7 +1245,7 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
       u64 lat = (now > wake_ns) ? (now - wake_ns) : 0;
       if (lat >= kstrand_thresh_ns) {
         struct montauk_kstrand_event *ke =
-            bpf_ringbuf_reserve(&events, sizeof(*ke), 0);
+            rb_reserve(TRACE_EVT_KSTRAND, sizeof(*ke));
         if (ke) {
           ke->type            = TRACE_EVT_KSTRAND;
           ke->tid             = next_tid;
@@ -1252,7 +1278,7 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
   if (sched_stream && sched_detail && (next_tid == 0 || prev_tid == 0)) {
     u32 idle_cpu = (u32)bpf_get_smp_processor_id();
     struct montauk_sched_event *ie =
-        bpf_ringbuf_reserve(&events, sizeof(*ie), 0);
+        rb_reserve(TRACE_EVT_SCHED, sizeof(*ie));
     if (ie) {
       ie->type          = TRACE_EVT_SCHED;
       ie->op            = SCHED_OP_CPU_IDLE;
@@ -1277,7 +1303,7 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
     __u8 one = 1;
     if (bpf_map_update_elem(&named_tids, &next_tid, &one, BPF_NOEXIST) == 0) {
       struct montauk_ring_event *ne =
-          bpf_ringbuf_reserve(&events, sizeof(*ne), 0);
+          rb_reserve(TRACE_EVT_THREAD_NAME, sizeof(*ne));
       if (ne) {
         ne->type        = TRACE_EVT_THREAD_NAME;
         ne->pid         = next_tid;
@@ -1306,7 +1332,7 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
   // default); the slice/service reports that need it ask for the same flag.
   if (sched_stream && sched_detail && switch_in_fallback && next_tid != 0) {
     struct montauk_sched_event *pe =
-        bpf_ringbuf_reserve(&events, sizeof(*pe), 0);
+        rb_reserve(TRACE_EVT_SCHED, sizeof(*pe));
     if (pe) {
       pe->type          = TRACE_EVT_SCHED;
       pe->op            = SCHED_OP_SWITCH_IN;
@@ -1357,7 +1383,7 @@ int handle_sched_wakeup(struct trace_event_raw_sched_wakeup_compat *ctx) {
   if (wt)
     wt->wake_ns = bpf_ktime_get_ns();
 
-  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
   if (!e) return 0;
   e->type          = TRACE_EVT_SCHED;
   e->op            = SCHED_OP_WAKEUP;
@@ -1434,7 +1460,7 @@ int BPF_PROG(handle_scx_kick, s32 cpu, u64 flags)
   // flags (score) -- generic to any sched_ext scheduler. Pair against
   // SCHED_OP_RESCHED on the same target cpu to see whether the kick actually
   // resulted in a resched, or was swallowed.
-  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
   if (!e) return 0;
   e->type          = TRACE_EVT_SCHED;
   e->op            = SCHED_OP_KICK_ISSUE;
@@ -1463,7 +1489,7 @@ int BPF_PROG(handle_resched_curr, struct rq *rq)
   // or anything else). Universal to any scheduling class, not sched_ext-
   // specific. Absence of a RESCHED shortly after a KICK_ISSUE for the same
   // target cpu is the generic signature of a swallowed/lost kick.
-  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
   if (!e) return 0;
   e->type          = TRACE_EVT_SCHED;
   e->op            = SCHED_OP_RESCHED;
@@ -1493,7 +1519,7 @@ int handle_tick_stop(struct trace_event_raw_tick_stop *ctx)
   // bitmask (TICK_DEP_MASK_*, meaningful only when sub_idx=0). Correlate
   // against KICK_ISSUE/RESCHED on the same cpu to see whether a CPU went
   // tickless right as a kick targeting it was in flight.
-  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
   if (!e) return 0;
   e->type          = TRACE_EVT_SCHED;
   e->op            = SCHED_OP_TICK_STOP;
@@ -2074,7 +2100,7 @@ int handle_sched_enqueue(struct trace_event_raw_sched_enqueue *ctx) {
   sched_op_bump(SCHED_OP_ENQUEUE);
   if (!sched_stream)
     return 0;
-  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
   if (!e) return 0;
   e->type          = TRACE_EVT_SCHED;
   e->op            = SCHED_OP_ENQUEUE;
@@ -2096,7 +2122,7 @@ int handle_sched_pick(struct trace_event_raw_sched_pick *ctx) {
   sched_op_bump(SCHED_OP_PICK);
   if (!sched_stream)
     return 0;
-  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
   if (!e) return 0;
   e->type          = TRACE_EVT_SCHED;
   e->op            = SCHED_OP_PICK;
@@ -2118,7 +2144,7 @@ int handle_sched_pick_empty(struct trace_event_raw_sched_pick_empty *ctx) {
   sched_op_bump(SCHED_OP_PICK_EMPTY);
   if (!sched_stream)
     return 0;
-  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
   if (!e) return 0;
   e->type          = TRACE_EVT_SCHED;
   e->op            = SCHED_OP_PICK_EMPTY;
@@ -2140,7 +2166,7 @@ int handle_sched_preempt_tick(struct trace_event_raw_sched_preempt_tick *ctx) {
   sched_op_bump(SCHED_OP_PREEMPT_TICK);
   if (!sched_stream)
     return 0;
-  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
   if (!e) return 0;
   e->type          = TRACE_EVT_SCHED;
   e->op            = SCHED_OP_PREEMPT_TICK;
@@ -2162,7 +2188,7 @@ int handle_sched_preempt_wakeup(struct trace_event_raw_sched_preempt_wakeup *ctx
   sched_op_bump(SCHED_OP_PREEMPT_WAKEUP);
   if (!sched_stream)
     return 0;
-  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
   if (!e) return 0;
   e->type          = TRACE_EVT_SCHED;
   e->op            = SCHED_OP_PREEMPT_WAKEUP;
@@ -2190,7 +2216,7 @@ int handle_sched_field_gate(struct trace_event_raw_sched_field_gate *ctx) {
   sched_op_bump(SCHED_OP_FIELD_GATE);
   if (!sched_stream)
     return 0;
-  struct montauk_sched_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
   if (!e) return 0;
   e->type          = TRACE_EVT_SCHED;
   e->op            = SCHED_OP_FIELD_GATE;
@@ -2260,7 +2286,7 @@ static __always_inline void emit_heap(u32 op, u64 addr, u64 size, u64 new_addr) 
   u32 tid = (u32)pid_tgid;
   if (!is_tracked(pid)) return;
   struct montauk_heap_event *e =
-      bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+      rb_reserve(TRACE_EVT_HEAP, sizeof(*e));
   if (!e) return;
   e->type         = TRACE_EVT_HEAP;
   e->pid          = pid;
@@ -2281,7 +2307,7 @@ static __always_inline void emit_heapstack(void *ctx, u32 op, u64 addr, u64 size
   u32 pid = pid_tgid >> 32;
   if (!is_tracked(pid)) return;
   struct montauk_heapstack_event *e =
-      bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+      rb_reserve(TRACE_EVT_HEAPSTACK, sizeof(*e));
   if (!e) return;
   e->type         = TRACE_EVT_HEAPSTACK;
   e->pid          = pid;
@@ -2405,7 +2431,7 @@ static __always_inline void emit_abort(void *ctx, u32 func, u32 line,
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid = pid_tgid >> 32;
   if (!is_tracked(pid)) return;
-  struct montauk_abort_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_abort_event *e = rb_reserve(TRACE_EVT_ABORT, sizeof(*e));
   if (!e) return;
   e->type         = TRACE_EVT_ABORT;
   e->pid          = pid;
@@ -2485,7 +2511,7 @@ static __always_inline void emit_wait_rawstack(void *ctx, u64 obj) {
   u32 pid = pt >> 32;
   if (!is_tracked(pid)) return;
   struct pt_regs *regs = (struct pt_regs *)ctx;
-  struct montauk_rawstack_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+  struct montauk_rawstack_event *e = rb_reserve(TRACE_EVT_RAWSTACK, sizeof(*e));
   if (!e) return;
   e->type = TRACE_EVT_RAWSTACK;
   e->pid = pid;

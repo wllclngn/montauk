@@ -325,6 +325,19 @@ int main(int argc, char** argv) {
                     elapsed_ms(p->timestamp_ns), p->name, p->payload_len);
         break;
       }
+      case TRACE_EVT_DROPS: {
+        if (len < sizeof(montauk_drop_event)) break;
+        auto* d = reinterpret_cast<const montauk_drop_event*>(data);
+        uint64_t total = 0;
+        for (uint32_t i = 0; i < MONTAUK_DROP_SLOTS; ++i) total += d->dropped[i];
+        montauk_sink_appendf(&g_out,
+            "[%10.3f] DROPS total=%" PRIu64 " (cumulative) writer_err=%" PRIu64
+            " lost_bytes=%" PRIu64 "\n",
+            elapsed_ms(d->ts_ns), total,
+            static_cast<uint64_t>(d->writer_errors),
+            static_cast<uint64_t>(d->writer_lost_bytes));
+        break;
+      }
       default:
         // Unknown type — skip silently; the length prefix already advanced us.
         break;

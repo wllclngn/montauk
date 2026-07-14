@@ -16,6 +16,9 @@
 #define TRACE_MAX_DISCOVERY 4096  // discovery map: all processes seen by sys_enter
 #define TRACE_PATTERN_MAX   32   // max pattern length for BPF-side matching
 #define TRACE_MAX_CPUS      256   // cpu_cache_domain map size; logical-CPU index space
+#define MONTAUK_DROP_SLOTS  24    // drop-counter slots, indexed by event type
+                                  // (slot 0 = out-of-range catchall); sized past
+                                  // the enum's top value with headroom
 
 // BPF-side pattern for immediate exec matching (no userspace roundtrip).
 // Userspace writes this once at startup. BPF reads it on every exec.
@@ -51,6 +54,26 @@ enum montauk_event_type {
   TRACE_EVT_SCX_STORM   = 17, // per-interval sched_ext kick/reenqueue counters (cpu_release storm)
   TRACE_EVT_THREAD_NAME = 18, // tid->comm binding, deduped (one per tid), so the holder ledger can name a CPU-bound task that predates the trace and emits no syscall (montauk_ring_event payload)
   TRACE_EVT_RAWSTACK    = 19, // raw user stack slice + RIP/RSP/RBP at an INFINITE wait-enter, for offline DWARF .eh_frame unwinding (FP-less Wine code)
+  TRACE_EVT_DROPS       = 20, // cumulative ring-drop counter snapshot (userspace-appended at drain cadence; BPF never emits this type)
+};
+
+// Drop-counter snapshot record. Userspace samples the BPF drop_counts map
+// each drain tick and appends one of these when any counter moved (plus a
+// final one at capture end). Values are FREE-RUNNING CUMULATIVE totals per
+// event type, summed across CPUs: snapshots are idempotent, survive losing a
+// snapshot record themselves, and let the analyzer bound the loss inside any
+// window by differencing the nearest bracketing snapshots. The writer_*
+// fields carry the disk path's own accounting (records handed to the disk
+// path, records that reached the file buffer, write errors), so a capture
+// whose tail was lost to a full disk says so in the bytes that landed.
+struct montauk_drop_event {
+  __u32 type;                        // TRACE_EVT_DROPS
+  __u32 _pad;
+  __u64 ts_ns;                       // monotonic, same clock as every record
+  __u64 dropped[MONTAUK_DROP_SLOTS]; // cumulative reserve failures per type
+  __u64 writer_attempted;            // records handed to the disk path
+  __u64 writer_errors;               // failed write() calls on the trace fd
+  __u64 writer_lost_bytes;           // bytes dropped when a flush aborted
 };
 
 // Provider snapshot record (userspace-appended to the binary trace log;

@@ -91,6 +91,14 @@ SUB_API int sublimation_nfa_full_match(const sublimation_nfa *nfa, const char *i
 // -1 with no write on no match.
 SUB_API long sublimation_nfa_find(const sublimation_nfa *nfa, const char *input, size_t n, long *end_out);
 
+// As sublimation_nfa_find, but only considers matches starting at or after
+// `from`, with anchors staying absolute: ^ matches only at offset 0 of input
+// and $ only at n. This is the continuation-safe form. Searching `input + off`
+// instead makes every restart a fresh buffer whose position 0 satisfies ^, so
+// an anchored pattern re-matches at every offset. Returns absolute offsets.
+SUB_API long sublimation_nfa_find_from(const sublimation_nfa *nfa, const char *input, size_t n,
+                                       size_t from, long *end_out);
+
 #ifdef __cplusplus
 }
 #endif

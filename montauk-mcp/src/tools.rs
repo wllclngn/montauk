@@ -204,7 +204,10 @@ pub fn call_sublimation(args: &Value) -> Result<Value, (i64, String)> {
         "grep" => {
             let pattern = arg_str(args, "pattern").ok_or((-32602, "missing 'pattern' argument".to_string()))?;
             let text = arg_str(args, "text").ok_or((-32602, "missing 'text' argument".to_string()))?;
-            match ffi::grep_find(pattern, text, icase) {
+            // A compile failure is a JSON-RPC error, never matched:false --
+            // a default that aliases a real result is the failure mode this
+            // boundary exists to prevent.
+            match ffi::grep_find(pattern, text, icase).map_err(|e| (-32602, e))? {
                 Some((start, len)) => Value::obj(vec![
                     ("matched", Value::Bool(true)),
                     ("start", Value::Number(start as f64)),
@@ -216,7 +219,7 @@ pub fn call_sublimation(args: &Value) -> Result<Value, (i64, String)> {
         "contains" => {
             let pattern = arg_str(args, "pattern").ok_or((-32602, "missing 'pattern' argument".to_string()))?;
             let text = arg_str(args, "text").ok_or((-32602, "missing 'text' argument".to_string()))?;
-            match ffi::contains_find(pattern, text, icase) {
+            match ffi::contains_find(pattern, text, icase).map_err(|e| (-32602, e))? {
                 Some(pos) => Value::obj(vec![
                     ("matched", Value::Bool(true)),
                     ("start", Value::Number(pos as f64)),

@@ -142,6 +142,39 @@ fn sublimation_grep_no_match_reports_false() {
 }
 
 #[test]
+fn sublimation_grep_invalid_regex_is_an_error_not_false() {
+    // A pattern that cannot compile (state explosion past the engine's 256
+    // NFA states) must surface as a JSON-RPC error. Mapping it to
+    // matched:false hands the caller a silent wrong answer, indistinguishable
+    // from a genuine no-match.
+    let big = "a".repeat(400);
+    let args = Value::obj(vec![
+        ("op", Value::String("grep".to_string())),
+        ("pattern", Value::String(big)),
+        ("text", Value::String("hello".to_string())),
+    ]);
+    let err = tool_call("sublimation", args).unwrap_err();
+    assert_eq!(err.0, -32602);
+    assert!(err.1.contains("invalid regex"), "got: {}", err.1);
+}
+
+#[test]
+fn sublimation_contains_oversize_needle_is_an_error_not_a_match() {
+    // A needle past the BMH 256-byte cap compiles to the "empty pattern"
+    // that matches at offset 0 -- a silent FALSE POSITIVE if it were allowed
+    // through. It must be an argument error instead.
+    let big = "b".repeat(300);
+    let args = Value::obj(vec![
+        ("op", Value::String("contains".to_string())),
+        ("pattern", Value::String(big)),
+        ("text", Value::String("anything".to_string())),
+    ]);
+    let err = tool_call("sublimation", args).unwrap_err();
+    assert_eq!(err.0, -32602);
+    assert!(err.1.contains("needle length"), "got: {}", err.1);
+}
+
+#[test]
 fn sublimation_contains_case_insensitive() {
     let args = Value::obj(vec![
         ("op", Value::String("contains".to_string())),

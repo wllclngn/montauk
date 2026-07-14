@@ -196,6 +196,58 @@ double slice_stat(const std::vector<double>& pool, size_t begin, size_t end,
 double perm_test(const std::vector<double>& a, const std::vector<double>& b,
                  Stat stat, double q, Rng& rng, int n_perm) {
   if (a.empty() || b.empty()) return 1.0;
+  // Singleton vs singleton (the one-run-per-group archive case): the pooled
+  // pair has exactly two arrangements and |stat(a) - stat(b)| is identical in
+  // both, for any statistic. Every permutation ties the observed value, so
+  // p == (n_perm + 1) / (n_perm + 1) == 1 by construction. Skip the shuffles.
+  if (a.size() == 1 && b.size() == 1) return 1.0;
+  // Exact enumeration fast path (mean statistic): when the label-assignment
+  // space C(na+nb, na) is small, walk EVERY split instead of shuffling.
+  // Cheaper than the Monte Carlo loop for most small cells, zero MC error,
+  // and it removes the 1/(n_perm+1) floor entirely, which is what lets a
+  // small cell's p-value reach a multiplicity line no amount of shuffling
+  // could reach. The observed split is one of the enumerated arrangements,
+  // so the p-value is exactly valid with floor 1/C.
+  if (stat == Stat::Mean) {
+    const size_t nA = a.size(), nB = b.size(), nn = nA + nB;
+    double comb = 1.0;
+    for (size_t i = 0; i < nA && comb <= 2.0e4; ++i)
+      comb = comb * static_cast<double>(nn - i) / static_cast<double>(i + 1);
+    if (comb <= 2.0e4) {
+      std::vector<double> pool2;
+      pool2.reserve(nn);
+      pool2.insert(pool2.end(), a.begin(), a.end());
+      pool2.insert(pool2.end(), b.begin(), b.end());
+      double total = 0.0;
+      for (double x : pool2) total += x;
+      double obs = std::fabs(mean(a) - mean(b));
+      // Iterate all nA-subsets via standard combination stepping.
+      std::vector<size_t> idx(nA);
+      for (size_t i = 0; i < nA; ++i) idx[i] = i;
+      uint64_t ge = 0, seen = 0;
+      bool more = true;
+      while (more) {
+        double sa = 0.0;
+        for (size_t i : idx) sa += pool2[i];
+        double d = std::fabs(sa / static_cast<double>(nA) -
+                             (total - sa) / static_cast<double>(nB));
+        if (d >= obs - 1e-12) ++ge;
+        ++seen;
+        long k = static_cast<long>(nA) - 1;
+        while (k >= 0 &&
+               idx[static_cast<size_t>(k)] == static_cast<size_t>(k) + nB)
+          --k;
+        if (k < 0) {
+          more = false;
+        } else {
+          ++idx[static_cast<size_t>(k)];
+          for (size_t j = static_cast<size_t>(k) + 1; j < nA; ++j)
+            idx[j] = idx[j - 1] + 1;
+        }
+      }
+      return static_cast<double>(ge) / static_cast<double>(seen);
+    }
+  }
   const size_t na = a.size();
   std::vector<double> pool;
   pool.reserve(na + b.size());
@@ -222,13 +274,26 @@ int mc_power(const std::vector<double>& pa, const std::vector<double>& pb,
              std::vector<double>* curve) {
   if (curve) curve->assign(nmax + 1, 0.0);
   if (pa.empty() || pb.empty()) return 0;
+  // Two zero-variance pools (singleton runs are the common archive case) make
+  // every resampled experiment identical: se == 0, pval == 1, power == 0 at
+  // every n. The sweep's answer is 0 by construction, so return it without
+  // simulating nmax*B foregone experiments per pair.
+  if (variance(pa) == 0.0 && variance(pb) == 0.0) return 0;
   int chosen = 0;
   std::vector<double> xa, xb;
   for (int n = 2; n <= nmax; ++n) {
     xa.resize(n);
     xb.resize(n);
     int hits = 0;
-    for (int b = 0; b < B; ++b) {
+    // Exact stopping bounds, only when no curve is requested (a curve needs
+    // the true power at every n): the n passes or fails on hits vs
+    // ceil(target * B) alone, so once hits already clears it, or the sims
+    // left cannot possibly reach it, this n's verdict is decided and the
+    // remaining draws change nothing the caller can observe.
+    const int need = static_cast<int>(std::ceil(target * B));
+    int b = 0;
+    for (; b < B; ++b) {
+      if (!curve && (hits >= need || hits + (B - b) < need)) break;
       for (int i = 0; i < n; ++i) {
         xa[i] = pa[rng.below(pa.size())];
         xb[i] = pb[rng.below(pb.size())];
@@ -247,6 +312,9 @@ int mc_power(const std::vector<double>& pa, const std::vector<double>& pb,
     double power = static_cast<double>(hits) / B;
     if (curve) (*curve)[n] = power;
     if (chosen == 0 && power >= target) chosen = n;
+    // Without a curve to fill, nothing past the first passing n can change the
+    // return value; the rest of the sweep is pure waste.
+    if (chosen != 0 && !curve) break;
   }
   return chosen;
 }
@@ -257,6 +325,37 @@ std::vector<McbResult> bootstrap_mcb(
   const size_t g = groups.size();
   std::vector<McbResult> out(g, {0.0, 0.0, 0});
   if (g < 2) return out;
+  // All-constant groups (every group a singleton run, or identical values)
+  // resample to the same s[] on all B rounds: each boot[k] is one repeated
+  // value, both CI ends equal it and the verdict is the sign of that single
+  // deterministic difference. Compute it directly; B identical rounds of
+  // resampling would produce byte-for-byte this result.
+  bool all_const = true;
+  for (const auto& grp : groups)
+    if (variance(grp) != 0.0) { all_const = false; break; }
+  if (all_const) {
+    std::vector<double> m(g, 0.0);
+    for (size_t k = 0; k < g; ++k) m[k] = mean(groups[k]);
+    for (size_t k = 0; k < g; ++k) {
+      double ref = 0.0;
+      bool seen = false;
+      for (size_t o = 0; o < g; ++o) {
+        if (o == k) continue;
+        ref = !seen ? m[o]
+                    : (lower_is_better ? std::min(ref, m[o])
+                                       : std::max(ref, m[o]));
+        seen = true;
+      }
+      double d = m[k] - ref;
+      int verdict;
+      if (lower_is_better)
+        verdict = d < 0.0 ? 1 : (d > 0.0 ? -1 : 0);
+      else
+        verdict = d > 0.0 ? 1 : (d < 0.0 ? -1 : 0);
+      out[k] = {d, d, verdict};
+    }
+    return out;
+  }
   std::vector<std::vector<double>> boot(g, std::vector<double>(B, 0.0));
   std::vector<double> s(g, 0.0);
   for (int b = 0; b < B; ++b) {

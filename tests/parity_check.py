@@ -70,6 +70,15 @@ CASES = [
                                                               "grep -E MATCH -A 1 -B 1", CTX),
     ("contains -A1 -B1",   ["contains", "MATCH", "-A", "1", "-B", "1"],
                                                               "grep -F MATCH -A 1 -B 1", CTX),
+    # Anchors must stay absolute across the per-line continuation scan: ^ fires
+    # once per line start, $ once per line end, never again after a restart.
+    ("replace ^ prefix",   ["replace", "^", "P "],           "sed 's/^/P /g'",          WORDS),
+    ("replace $ suffix",   ["replace", "$", " S"],           "sed 's/$/ S/g'",          WORDS),
+    ("replace ^tok",       ["replace", "^foo", "X"],         "sed -E 's/^foo/X/g'",     WORDS),
+    ("replace tok$",       ["replace", "o$", "O"],           "sed -E 's/o$/O/g'",       WORDS),
+    ("replace unanchored", ["replace", "o", "0"],            "sed 's/o/0/g'",           WORDS),
+    ("grep -o ^anchor",    ["grep", "-o", "^[a-z]+"],        "grep -E -o '^[a-z]+'",    WORDS),
+    ("grep -o anchor$",    ["grep", "-o", "[a-z]+$"],        "grep -E -o '[a-z]+$'",    WORDS),
 ]
 
 note = harness.logger("parity")

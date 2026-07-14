@@ -141,6 +141,12 @@ def check_surface(label: str, update: bool) -> bool:
         got = got.replace(str(FIXTURE), "<FIXTURE_PATH>")
 
     if update:
+        # A refreeze canonizes whatever the binary printed. Show the diff it
+        # is about to stamp as truth, so a regression cannot be frozen in
+        # silently by one command.
+        if golden.exists() and golden.read_text() != got:
+            note(f"refreezing {label} -- diff being canonized:")
+            harness.print_diff(label, golden.read_text(), got)
         golden.write_text(got)
         note(f"updated {label} golden ({len(got)} bytes)")
         return True
@@ -175,6 +181,9 @@ def check_cli(update: bool) -> bool:
         return False
     got = cli_blob()
     if update:
+        if CLI_GOLDEN.exists() and CLI_GOLDEN.read_text() != got:
+            note("refreezing cli -- diff being canonized:")
+            harness.print_diff("cli", CLI_GOLDEN.read_text(), got)
         CLI_GOLDEN.write_text(got)
         note(f"updated cli golden ({len(got)} bytes)")
         return True

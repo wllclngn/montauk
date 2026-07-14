@@ -1,13 +1,16 @@
 // prom_population — implementation. See prom_population.hpp.
 #include "prom_population.hpp"
+#include "sublimation.h"
 #include "sublimation_order.hpp"
 
 #include "prom_stats.hpp"
 #include "util/Log.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -15,6 +18,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <dirent.h>
@@ -65,7 +69,10 @@ std::string strip(const std::string& s) {
   return s.substr(a, b - a);
 }
 
-// Parse `key="value",key="value"` (values may contain spaces/parens).
+// Parse `key="value",key="value"` (values may contain spaces/parens, and
+// per the Prometheus text format may contain escaped quotes and backslashes;
+// the closing-quote scan honors the escapes). Values keep their raw escaped
+// bytes: identity only needs consistency, not unescaping.
 LabelVec parse_labels(const std::string& in) {
   LabelVec out;
   size_t i = 0;
@@ -75,7 +82,17 @@ LabelVec parse_labels(const std::string& in) {
     std::string key = strip(in.substr(i, eq - i));
     size_t q1 = in.find('"', eq);
     if (q1 == std::string::npos) break;
-    size_t q2 = in.find('"', q1 + 1);
+    size_t q2 = std::string::npos;
+    for (size_t j = q1 + 1; j < in.size(); ++j) {
+      if (in[j] == '\\') {
+        ++j;
+        continue;
+      }
+      if (in[j] == '"') {
+        q2 = j;
+        break;
+      }
+    }
     if (q2 == std::string::npos) break;
     std::string val = in.substr(q1 + 1, q2 - q1 - 1);
     if (!key.empty()) out.emplace_back(key, val);
@@ -119,6 +136,92 @@ LabelVec cell_display(const LabelVec& labels,
 double le_value(const std::string& le) {
   if (le == "+Inf") return INFINITY;
   return std::strtod(le.c_str(), nullptr);
+}
+
+// Natural-version ordering for --pairs adjacent and the trajectory view.
+// Tokenize into numeric and non-numeric runs (one leading v/V stripped);
+// numeric runs compare as integers, non-numeric lexicographically, numeric
+// before non-numeric at a mixed position. When one string is a prefix of the
+// other, the longer sorts FIRST only if it continues into a pre-release run
+// (a dash, tilde or letter: 7.13.0-rc1 before 7.13.0), otherwise the shorter
+// sorts first (1.2 before 1.2.1). Heuristic by design; callers break full
+// ties by first-seen order via stable sort.
+bool natural_version_less(const std::string& a, const std::string& b) {
+  auto is_d = [](char c) { return c >= '0' && c <= '9'; };
+  auto prerelease_start = [](char c) {
+    return c == '-' || c == '~' || (c >= 'a' && c <= 'z') ||
+           (c >= 'A' && c <= 'Z');
+  };
+  size_t i = 0, j = 0;
+  if (i < a.size() && (a[i] == 'v' || a[i] == 'V') && a.size() > 1) ++i;
+  if (j < b.size() && (b[j] == 'v' || b[j] == 'V') && b.size() > 1) ++j;
+  while (i < a.size() && j < b.size()) {
+    if (is_d(a[i]) && is_d(b[j])) {
+      size_t ie = i, je = j;
+      while (ie < a.size() && is_d(a[ie])) ++ie;
+      while (je < b.size() && is_d(b[je])) ++je;
+      size_t ia = i, jb = j;
+      while (ia + 1 < ie && a[ia] == '0') ++ia;
+      while (jb + 1 < je && b[jb] == '0') ++jb;
+      size_t la = ie - ia, lb = je - jb;
+      if (la != lb) return la < lb;
+      int c = a.compare(ia, la, b, jb, lb);
+      if (c != 0) return c < 0;
+      i = ie;
+      j = je;
+    } else if (is_d(a[i]) != is_d(b[j])) {
+      return is_d(a[i]);
+    } else {
+      if (a[i] != b[j]) return a[i] < b[j];
+      ++i;
+      ++j;
+    }
+  }
+  if (i >= a.size() && j >= b.size()) return false;
+  if (i >= a.size()) return !prerelease_start(b[j]);
+  return prerelease_start(a[i]);
+}
+
+// Metric-family aliasing (--alias OLD=NEW): exact match, no chaining.
+const std::string& alias_family(const std::string& n, const PopOptions& opt) {
+  auto it = opt.family_alias.find(n);
+  return it == opt.family_alias.end() ? n : it->second;
+}
+
+// Per-file parse accounting, so --by LABEL failures diagnose themselves
+// instead of reporting "no usable gauges."
+struct ParseStats {
+  size_t samples = 0;             // gauge/bucket samples that reached routing
+  size_t no_axis = 0;             // skipped: series carries no compare-axis label
+  size_t files_with_version = 0;  // files whose *_info yielded a version
+};
+
+// printf-append into a std::string; the per-cell workers build their report
+// text privately, so the shared sink is only touched by the ordered emit.
+void sappendf(std::string& out, const char* fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  va_list ap2;
+  va_copy(ap2, ap);
+  int need = std::vsnprintf(nullptr, 0, fmt, ap);
+  va_end(ap);
+  if (need > 0) {
+    size_t at = out.size();
+    out.resize(at + static_cast<size_t>(need) + 1);
+    std::vsnprintf(out.data() + at, static_cast<size_t>(need) + 1, fmt, ap2);
+    out.resize(at + static_cast<size_t>(need));
+  }
+  va_end(ap2);
+}
+
+// FNV-1a over a string, chained; feeds the per-cell Rng seed so results are
+// deterministic for a given --seed regardless of thread count or schedule.
+uint64_t fnv1a(uint64_t h, const std::string& s) {
+  for (unsigned char c : s) {
+    h ^= c;
+    h *= 1099511628211ull;
+  }
+  return h;
 }
 
 // Per-(family,labels) histogram accumulator (for the within-run reconstruction).
@@ -192,7 +295,7 @@ std::string capture_key_from_path(const std::string& path) {
 // Parse one file: inject `version` into every sample's labels; route gauges to
 // the run vectors and histogram parts to the per-cell pools.
 void parse_file(const std::string& path, const PopOptions& opt,
-                std::map<std::string, Family>& data) {
+                std::map<std::string, Family>& data, ParseStats& ps) {
   FILE* f = std::fopen(path.c_str(), "r");
   if (!f) {
     util::log_error("cannot open %s", path.c_str());
@@ -217,7 +320,29 @@ void parse_file(const std::string& path, const PopOptions& opt,
   // exists only to BE a compare axis. Left in the key it would fragment every
   // cell by run even under --by commit/version/scheduler. When compare_axis ==
   // "capture" it is the axis (label_get still finds it) and splits the cell.
-  const std::set<std::string> drop_for_cell = {opt.compare_axis, "le", "capture"};
+  std::set<std::string> drop_for_cell = {opt.compare_axis, "le", "capture"};
+  // version and commit are one identity axis at two granularities, injected
+  // per file rather than emitted per series. Comparing by either must drop the
+  // other from the cell key: in a real archive they move 1:1, so a retained
+  // commit fragments every --by version cell (and vice versa) and versions
+  // that never shared a commit label silently never get compared at all.
+  if (opt.compare_axis == "version") drop_for_cell.insert("commit");
+  if (opt.compare_axis == "commit") drop_for_cell.insert("version");
+  // Histogram processing drops `le` (all buckets of one series form one
+  // cell). Plain gauges must NOT: a `_bucket` series whose TYPE line is
+  // missing in this file falls through to the gauge path, and dropping `le`
+  // there collapses every bucket of the series into one cell as fake runs.
+  // An `le` label is histogram evidence on its own; keeping it in the gauge
+  // identity turns that misparse into inert per-bucket singleton cells.
+  std::set<std::string> drop_for_gauge = drop_for_cell;
+  drop_for_gauge.erase("le");
+  // Operator-supplied identity reduction (--drop-label), the generic answer
+  // to high-cardinality foreign labels and co-moving pairs beyond the
+  // built-in version/commit rule. Applies to both identity sets.
+  for (const auto& l : opt.drop_labels) {
+    drop_for_cell.insert(l);
+    drop_for_gauge.insert(l);
+  }
 
   char* line = nullptr;
   size_t cap = 0;
@@ -237,21 +362,45 @@ void parse_file(const std::string& path, const PopOptions& opt,
           if (j > i) tok.push_back(s.substr(i, j - i));
           i = j;
         }
-        if (tok.size() >= 4 && tok[3] == "histogram") hist_families.insert(tok[2]);
+        if (tok.size() >= 4 && tok[3] == "histogram")
+          hist_families.insert(alias_family(tok[2], opt));
       }
       continue;
     }
-    // name[{labels}] value
+    // name[{labels}] value [timestamp]. The value is the FIRST token after
+    // the name or label set; a trailing Prometheus timestamp is tolerated
+    // and ignored on both paths (the braceless path used to take the LAST
+    // whitespace field, so `up 1 1720000000000` parsed as value 1.72e12).
+    // strtod stops at the space, so first-token semantics fall out of the
+    // parse itself once the split points are right.
     size_t brace = s.find('{');
     std::string name, labelstr, valstr;
     if (brace != std::string::npos) {
       name = s.substr(0, brace);
-      size_t close = s.find('}', brace);
+      // Quote-aware close scan: a '}' inside a quoted label value is legal
+      // Prometheus text and must not terminate the label set.
+      size_t close = std::string::npos;
+      bool in_quote = false;
+      for (size_t j = brace + 1; j < s.size(); ++j) {
+        char c = s[j];
+        if (in_quote) {
+          if (c == '\\') {
+            ++j;
+            continue;
+          }
+          if (c == '"') in_quote = false;
+        } else if (c == '"') {
+          in_quote = true;
+        } else if (c == '}') {
+          close = j;
+          break;
+        }
+      }
       if (close == std::string::npos) continue;
       labelstr = s.substr(brace + 1, close - brace - 1);
       valstr = strip(s.substr(close + 1));
     } else {
-      size_t sp = s.find_last_of(" \t");
+      size_t sp = s.find_first_of(" \t");
       if (sp == std::string::npos) continue;
       name = strip(s.substr(0, sp));
       valstr = strip(s.substr(sp + 1));
@@ -271,12 +420,15 @@ void parse_file(const std::string& path, const PopOptions& opt,
       continue;
     }
 
-    // Histogram component?
+    // Histogram component? The base is aliased before the lookup, so a
+    // renamed histogram family's buckets land under the new name alongside
+    // the TYPE line's own aliased insert.
     auto is_hist_part = [&](const std::string& suffix) {
       if (name.size() <= suffix.size()) return std::string();
       if (name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
         return std::string();
-      std::string base = name.substr(0, name.size() - suffix.size());
+      std::string base =
+          alias_family(name.substr(0, name.size() - suffix.size()), opt);
       return hist_families.count(base) ? base : std::string();
     };
     std::string hb = is_hist_part("_bucket");
@@ -287,8 +439,12 @@ void parse_file(const std::string& path, const PopOptions& opt,
       labels.emplace_back("commit", commit);
       labels.emplace_back("capture", capture);
       if (!group.empty()) labels.emplace_back("group", group);
+      ++ps.samples;
       std::string axv = label_get(labels, opt.compare_axis);
-      if (axv.empty()) continue;
+      if (axv.empty()) {
+        ++ps.no_axis;
+        continue;
+      }
       std::string ck = cell_key(labels, drop_for_cell);  // drops le + axis
       file_hist[hb][ck][axv].buckets[le_value(label_get(labels, "le"))] =
           static_cast<long long>(val);
@@ -303,16 +459,21 @@ void parse_file(const std::string& path, const PopOptions& opt,
     labels.emplace_back("commit", commit);
     labels.emplace_back("capture", capture);
     if (!group.empty()) labels.emplace_back("group", group);
+    ++ps.samples;
     std::string axis = label_get(labels, opt.compare_axis);
-    if (axis.empty()) continue;  // cannot place without the compare axis
-    std::string ck = cell_key(labels, drop_for_cell);
-    Family& fam = data[name];
+    if (axis.empty()) {
+      ++ps.no_axis;
+      continue;  // cannot place without the compare axis
+    }
+    std::string ck = cell_key(labels, drop_for_gauge);
+    Family& fam = data[alias_family(name, opt)];
     Cell& cell = fam.cells[ck];
-    if (cell.display.empty()) cell.display = cell_display(labels, drop_for_cell);
+    if (cell.display.empty()) cell.display = cell_display(labels, drop_for_gauge);
     cell.runs[axis].push_back(val);
   }
   std::free(line);
   std::fclose(f);
+  if (version != "unknown") ++ps.files_with_version;
 
   // Fold this file's reconstructed histograms into the population pools,
   // pooled per (cell, axis value) across the run's buckets.
@@ -334,15 +495,16 @@ void parse_file(const std::string& path, const PopOptions& opt,
 
 // report + prom
 
-std::string short_axis(const std::string& v) {
+// Axis-value display: operator-supplied --alias-axis mapping first, else the
+// lowercased value verbatim. The previous hardcoded scheduler-name
+// compression table was project-specific text inside a general instrument
+// and is retired in favor of the generic mechanism.
+std::string display_axis(const std::string& v, const PopOptions& opt) {
+  auto it = opt.axis_alias.find(v);
+  if (it != opt.axis_alias.end()) return it->second;
   std::string n;
   for (char c : v) n += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  if (n.find("pandemonium") != std::string::npos && n.find("bpf") != std::string::npos)
-    return "bpf";
-  if (n.find("pandemonium") != std::string::npos && n.find("adaptive") != std::string::npos)
-    return "adaptive";
-  if (n.find("eevdf") != std::string::npos) return "eevdf";
-  return v;
+  return n;
 }
 
 std::string cell_label_str(const LabelVec& d) {
@@ -358,6 +520,60 @@ struct PromLine {
   std::string name, labels;
   double value;
 };
+
+// Real HELP text per emitted family, replacing the former placeholder. Each
+// line states the aggregation, the scope and the range or unit, so neither a
+// human nor an agent has to guess what a value means. tests/semantic_check.py
+// fails any emitted family that falls through to the placeholder.
+const char* pop_help(const std::string& name) {
+  if (name == "montauk_pop_info")
+    return "Analysis metadata: montauk version, compare axis, file count";
+  if (name == "montauk_pop_cliff")
+    return "Cliff's delta effect size for the labeled pair, P(a>b)-P(a<b) "
+           "over per-run value pairs, dimensionless in [-1, 1]";
+  if (name == "montauk_pop_perm_p")
+    return "Permutation p-value for the labeled pair's mean difference, in "
+           "(0, 1]; Monte Carlo floor is 1/(n_perm+1)";
+  if (name == "montauk_pop_power_n")
+    return "Smallest per-group run count reaching 80% Welch power for the "
+           "labeled pair, RIGHT-CENSORED at the sweep cap; when the paired "
+           "montauk_pop_power_censored is 1 the true value exceeds this bound";
+  if (name == "montauk_pop_power_censored")
+    return "1 when the paired montauk_pop_power_n hit its sweep cap (true "
+           "requirement exceeds the reported bound), else 0";
+  if (name == "montauk_pop_mcb_is_best")
+    return "Hsu MCB verdict for the labeled group: 1 best, 0 tied-for-best, "
+           "-1 not best (direction per lower/higher-is-better)";
+  if (name == "montauk_pop_mean")
+    return "Mean of the labeled group's per-run values, in the labeled "
+           "metric's own unit";
+  if (name == "montauk_pop_n")
+    return "Run count (files contributing a value) in the labeled group";
+  if (name == "montauk_pop_gameshowell_p")
+    return "Games-Howell pairwise p-value on within-run distributions "
+           "(--full path), in (0, 1]";
+  if (name == "montauk_pop_traj_p_dense")
+    return "Trajectory joint permutation p for the labeled boundary, dense "
+           "aggregate (sum of squared per-cell rank statistics; many cells "
+           "moving a little)";
+  if (name == "montauk_pop_traj_p_sparse")
+    return "Trajectory joint permutation p for the labeled boundary, sparse "
+           "aggregate (max absolute per-cell rank statistic; few cells "
+           "moving a lot)";
+  if (name == "montauk_pop_traj_cells_moved")
+    return "Cells whose standardized rank statistic exceeds 1.96 at the "
+           "labeled boundary (normal-approximation flag), count";
+  if (name == "montauk_pop_traj_cells_total")
+    return "Cells of the labeled family carrying runs on both sides of the "
+           "boundary, count";
+  if (name == "montauk_pop_traj_effect")
+    return "Median absolute per-cell Cliff's delta across the labeled "
+           "boundary, dimensionless in [0, 1]";
+  if (name == "montauk_pop_traj_class")
+    return "Structure classification of a single-cell family's run sequence "
+           "in axis order (value 1; the class label names the shape)";
+  return "population analysis";
+}
 
 void emit_prom(const std::vector<PromLine>& lines, const PopOptions& opt) {
   ensure_pop_out();
@@ -380,8 +596,8 @@ void emit_prom(const std::vector<PromLine>& lines, const PopOptions& opt) {
   std::set<std::string> emitted;
   for (const PromLine& m : lines) {
     if (emitted.insert(m.name).second)
-      std::fprintf(f, "# HELP %s population analysis\n# TYPE %s gauge\n",
-                   m.name.c_str(), m.name.c_str());
+      std::fprintf(f, "# HELP %s %s\n# TYPE %s gauge\n",
+                   m.name.c_str(), pop_help(m.name), m.name.c_str());
     char num[32];
     if (m.value == std::floor(m.value) && std::fabs(m.value) < 1e15)
       std::snprintf(num, sizeof(num), "%.0f", m.value);
@@ -396,19 +612,376 @@ void emit_prom(const std::vector<PromLine>& lines, const PopOptions& opt) {
   util::log_info("population analysis written to %s", path.c_str());
 }
 
+// The trajectory engine (--trajectory): version-ordered change-point scan
+// over the archive, per metric family. Inference is a run-aware rank scan:
+// midrank every run in the window, at each version boundary form the
+// standardized Mann-Whitney statistic of runs-before vs runs-after
+// (segments, never adjacent pairs, so N=1 per version still tests), take
+// the max over boundaries and calibrate it by permuting whole version
+// blocks with the max recomputed each time, so the selection lives inside
+// the null (Pettitt's construction, finite-sample valid at any n). Cells of
+// one family are scanned JOINTLY: a single permutation applied to every
+// cell preserves cross-cell dependence exactly in the null. Two aggregates
+// share the alpha budget: dense (sum of squared per-cell statistics, many
+// cells moving a little) and sparse (max absolute, few cells moving a lot).
+// Deterministic under --seed; below 8 versions the permutation space is
+// enumerated fully and the p-value is exact and seed-free. Multiple jumps
+// via binary-segmentation recursion, gated by the joint p AND an
+// operator-supplied Cliff's-delta magnitude floor.
+
+double rank_T(double R, uint32_t m, uint32_t n, double tie3) {
+  if (m == 0 || m >= n || n < 2) return 0.0;
+  double mu = static_cast<double>(m) * (n + 1) / 2.0;
+  double var = static_cast<double>(m) * (n - m) * (n + 1) / 12.0 -
+               static_cast<double>(m) * (n - m) * tie3 /
+                   (12.0 * static_cast<double>(n) * (n - 1.0));
+  if (var <= 0.0) return 0.0;
+  return (R - mu) / std::sqrt(var);
+}
+
+struct TrajPrep {
+  std::vector<std::vector<uint32_t>> cnt;    // [cell][rel version] run count
+  std::vector<std::vector<double>> ranksum;  // [cell][rel version] midrank sum
+  std::vector<double> tie3;                  // [cell] sum(t^3 - t) over ties
+  std::vector<uint32_t> total;               // [cell] runs in window
+};
+
+// Midrank preparation for one cell over vers[lo..hi).
+void traj_prep_cell(const Cell& cell, const std::vector<std::string>& vers,
+                    size_t lo, size_t hi, std::vector<uint32_t>& cnt,
+                    std::vector<double>& ranksum, double& tie3,
+                    uint32_t& total) {
+  size_t W = hi - lo;
+  cnt.assign(W, 0);
+  ranksum.assign(W, 0.0);
+  tie3 = 0.0;
+  total = 0;
+  std::vector<std::pair<double, uint32_t>> vals;
+  for (size_t v = lo; v < hi; ++v) {
+    auto it = cell.runs.find(vers[v]);
+    if (it == cell.runs.end()) continue;
+    for (double x : it->second)
+      vals.push_back({x, static_cast<uint32_t>(v - lo)});
+  }
+  total = static_cast<uint32_t>(vals.size());
+  if (total == 0) return;
+  std::sort(vals.begin(), vals.end(),
+            [](const std::pair<double, uint32_t>& a,
+               const std::pair<double, uint32_t>& b) {
+              return a.first < b.first;
+            });
+  size_t i = 0;
+  while (i < vals.size()) {
+    size_t j = i;
+    while (j < vals.size() && vals[j].first == vals[i].first) ++j;
+    double mid = (static_cast<double>(i + 1) + static_cast<double>(j)) / 2.0;
+    double t = static_cast<double>(j - i);
+    if (t > 1.0) tie3 += t * t * t - t;
+    for (size_t k = i; k < j; ++k) {
+      cnt[vals[k].second] += 1;
+      ranksum[vals[k].second] += mid;
+    }
+    i = j;
+  }
+}
+
+// One scan under version-order permutation p (relative indices): fills the
+// per-boundary dense and sparse aggregates. Boundary k means "the first k
+// versions of the permuted order vs the rest," k in 1..W-1.
+void traj_scan(const TrajPrep& tp, const std::vector<uint32_t>& p,
+               std::vector<double>& dense, std::vector<double>& sparse) {
+  const size_t J = tp.cnt.size();
+  const size_t W = p.size();
+  dense.assign(W, 0.0);
+  sparse.assign(W, 0.0);
+  for (size_t j = 0; j < J; ++j) {
+    if (tp.total[j] < 2) continue;
+    double R = 0.0;
+    uint32_t m = 0;
+    for (size_t k = 1; k < W; ++k) {
+      R += tp.ranksum[j][p[k - 1]];
+      m += tp.cnt[j][p[k - 1]];
+      double T = rank_T(R, m, tp.total[j], tp.tie3[j]);
+      dense[k] += T * T;
+      double a = std::fabs(T);
+      if (a > sparse[k]) sparse[k] = a;
+    }
+  }
+}
+
+const char* traj_class_name(sub_disorder_t d) {
+  switch (d) {
+    case SUB_SORTED: return "sorted";
+    case SUB_REVERSED: return "reversed";
+    case SUB_NEARLY_SORTED: return "nearly-sorted";
+    case SUB_FEW_UNIQUE: return "few-unique";
+    case SUB_PHASED: return "phased";
+    case SUB_SPECTRAL: return "spectral";
+    case SUB_RANDOM: default: return "random";
+  }
+}
+
+int run_trajectory(std::map<std::string, Family>& data, size_t files_n,
+                   const PopOptions& opt) {
+  std::vector<PromLine> prom;
+  util::log_info(
+      "trajectory: %zu file(s), axis '%s', alpha %.3g, min effect %.3g",
+      files_n, opt.compare_axis.c_str(), opt.traj_alpha, opt.traj_min_effect);
+  for (auto& fam_kv : data) {
+    const std::string& metric = fam_kv.first;
+    if (!opt.metric_filter.empty() &&
+        metric.find(opt.metric_filter) == std::string::npos)
+      continue;
+    Family& fam = fam_kv.second;
+    std::set<std::string> vset;
+    for (auto& c : fam.cells)
+      for (auto& r : c.second.runs)
+        if (!r.second.empty()) vset.insert(r.first);
+    std::vector<std::string> vers(vset.begin(), vset.end());
+    if (opt.compare_axis == "version")
+      std::stable_sort(vers.begin(), vers.end(), natural_version_less);
+    if (vers.size() < 2) continue;
+    std::vector<std::pair<const std::string*, const Cell*>> cells;
+    for (auto& c : fam.cells) cells.push_back({&c.first, &c.second});
+    montauk_sink_appendf(&g_pop_out, "\nTRAJECTORY %s (%zu %s values, %zu cells)\n",
+                         metric.c_str(), vers.size(), opt.compare_axis.c_str(),
+                         cells.size());
+
+    // Descriptive shape layer for single-cell families: the classifier names
+    // the run sequence's structure in axis order; inference stays with the
+    // rank scan below.
+    if (cells.size() == 1) {
+      std::vector<double> seq;
+      for (const auto& v : vers) {
+        auto it = cells[0].second->runs.find(v);
+        if (it == cells[0].second->runs.end()) continue;
+        seq.insert(seq.end(), it->second.begin(), it->second.end());
+      }
+      if (seq.size() >= 4) {
+        sub_profile_t prof = sublimation_classify_f64(seq.data(), seq.size());
+        montauk_sink_appendf(&g_pop_out, "  shape: %s\n",
+                             traj_class_name(prof.disorder));
+        prom.push_back({"montauk_pop_traj_class",
+                        "metric=\"" + metric + "\",class=\"" +
+                            traj_class_name(prof.disorder) + "\"",
+                        1.0});
+      }
+    }
+
+    size_t findings = 0;
+    std::vector<std::pair<size_t, size_t>> stack;
+    stack.push_back({0, vers.size()});
+    while (!stack.empty()) {
+      size_t lo = stack.back().first, hi = stack.back().second;
+      stack.pop_back();
+      size_t W = hi - lo;
+      if (W < 2) continue;
+
+      TrajPrep tp;
+      tp.cnt.resize(cells.size());
+      tp.ranksum.resize(cells.size());
+      tp.tie3.resize(cells.size());
+      tp.total.resize(cells.size());
+      for (size_t j = 0; j < cells.size(); ++j)
+        traj_prep_cell(*cells[j].second, vers, lo, hi, tp.cnt[j],
+                       tp.ranksum[j], tp.tie3[j], tp.total[j]);
+
+      std::vector<uint32_t> ident(W);
+      for (size_t k = 0; k < W; ++k) ident[k] = static_cast<uint32_t>(k);
+      std::vector<double> dob, sob;
+      traj_scan(tp, ident, dob, sob);
+      double Md = 0.0, Ms = 0.0;
+      size_t Kd = 0, Ks = 0;
+      for (size_t k = 1; k < W; ++k) {
+        if (dob[k] > Md) { Md = dob[k]; Kd = k; }
+        if (sob[k] > Ms) { Ms = sob[k]; Ks = k; }
+      }
+      if (Kd == 0 && Ks == 0) continue;  // no cell spans any boundary
+
+      size_t cnt_d = 0, cnt_s = 0, ntot = 0;
+      double sum_md = 0.0, sum_md2 = 0.0, sum_ms = 0.0, sum_ms2 = 0.0;
+      std::vector<double> dtmp, stmp;
+      auto tally = [&](const std::vector<uint32_t>& p) {
+        traj_scan(tp, p, dtmp, stmp);
+        double md = 0.0, ms = 0.0;
+        for (size_t k = 1; k < W; ++k) {
+          if (dtmp[k] > md) md = dtmp[k];
+          if (stmp[k] > ms) ms = stmp[k];
+        }
+        if (md >= Md - 1e-12) ++cnt_d;
+        if (ms >= Ms - 1e-12) ++cnt_s;
+        sum_md += md;
+        sum_md2 += md * md;
+        sum_ms += ms;
+        sum_ms2 += ms * ms;
+        ++ntot;
+      };
+      double pd = 1.0, psp = 1.0;
+      if (W <= 7) {
+        // Full enumeration of version orders: exact p, seed-free, and the
+        // identity order is one of the enumerated arrangements.
+        std::vector<uint32_t> p = ident;
+        do {
+          tally(p);
+        } while (std::next_permutation(p.begin(), p.end()));
+        pd = static_cast<double>(cnt_d) / static_cast<double>(ntot);
+        psp = static_cast<double>(cnt_s) / static_cast<double>(ntot);
+      } else {
+        stats::Rng rng(fnv1a(
+            fnv1a(opt.seed ^ 1469598103934665603ull, metric) ^
+                (0x9e3779b97f4a7c15ull + lo * 131 + hi),
+            std::string("trajectory")));
+        int B = opt.traj_perms > 0 ? opt.traj_perms : 999;
+        std::vector<uint32_t> p = ident;
+        for (int b = 0; b < B; ++b) {
+          for (size_t k = W; k > 1; --k)
+            std::swap(p[k - 1], p[rng.below(k)]);
+          tally(p);
+        }
+        pd = static_cast<double>(cnt_d + 1) / (B + 1.0);
+        psp = static_cast<double>(cnt_s + 1) / (B + 1.0);
+      }
+      if (std::min(pd, psp) * 2.0 > opt.traj_alpha) continue;
+
+      const bool use_dense = pd <= psp;
+      const size_t K = use_dense ? Kd : Ks;
+      const std::vector<double>& S = use_dense ? dob : sob;
+      const double M = use_dense ? Md : Ms;
+      double mean_max = (use_dense ? sum_md : sum_ms) / ntot;
+      double var_max =
+          (use_dense ? sum_md2 : sum_ms2) / ntot - mean_max * mean_max;
+      double sd = var_max > 0.0 ? std::sqrt(var_max) : 0.0;
+      size_t rlo = K, rhi = K;
+      for (size_t k = 1; k < W; ++k)
+        if (S[k] >= M - sd) {
+          if (k < rlo) rlo = k;
+          if (k > rhi) rhi = k;
+        }
+
+      // Effect and attribution at K: per-cell Cliff's delta on the two
+      // segments plus the normal-approximation moved flag on |T|.
+      struct CellHit {
+        size_t j;
+        double delta;
+        double absT;
+      };
+      std::vector<CellHit> hits;
+      std::vector<double> abs_deltas;
+      size_t eligible = 0, moved = 0;
+      for (size_t j = 0; j < cells.size(); ++j) {
+        if (tp.total[j] < 2) continue;
+        double R = 0.0;
+        uint32_t m = 0;
+        for (size_t k = 0; k < K; ++k) {
+          R += tp.ranksum[j][k];
+          m += tp.cnt[j][k];
+        }
+        if (m == 0 || m >= tp.total[j]) continue;
+        ++eligible;
+        double T = rank_T(R, m, tp.total[j], tp.tie3[j]);
+        std::vector<double> before, after;
+        for (size_t v = lo; v < hi; ++v) {
+          auto it = cells[j].second->runs.find(vers[v]);
+          if (it == cells[j].second->runs.end()) continue;
+          auto& dst = (v < lo + K) ? before : after;
+          dst.insert(dst.end(), it->second.begin(), it->second.end());
+        }
+        double cd = stats::cliffs_delta(before, after);
+        abs_deltas.push_back(std::fabs(cd));
+        if (std::fabs(T) >= 1.96) ++moved;
+        hits.push_back({j, cd, std::fabs(T)});
+      }
+      if (abs_deltas.empty()) continue;
+      double fam_eff = stats::percentile(abs_deltas, 50.0);
+      if (fam_eff < opt.traj_min_effect) continue;
+
+      const std::string& va = vers[lo + K - 1];
+      const std::string& vb = vers[lo + K];
+      std::string at = display_axis(va, opt) + "__" + display_axis(vb, opt);
+      if (rlo != rhi)
+        montauk_sink_appendf(
+            &g_pop_out,
+            "  jump %s -> %s [range %s..%s]: p_dense=%.4g p_sparse=%.4g, "
+            "cells moved %zu/%zu, median |delta| %.2f\n",
+            display_axis(va, opt).c_str(), display_axis(vb, opt).c_str(),
+            display_axis(vers[lo + rlo - 1], opt).c_str(),
+            display_axis(vers[lo + rhi], opt).c_str(), pd, psp, moved,
+            eligible, fam_eff);
+      else
+        montauk_sink_appendf(
+            &g_pop_out,
+            "  jump %s -> %s: p_dense=%.4g p_sparse=%.4g, cells moved "
+            "%zu/%zu, median |delta| %.2f\n",
+            display_axis(va, opt).c_str(), display_axis(vb, opt).c_str(), pd,
+            psp, moved, eligible, fam_eff);
+      std::sort(hits.begin(), hits.end(),
+                [](const CellHit& a, const CellHit& b) {
+                  return a.absT > b.absT;
+                });
+      for (size_t t = 0; t < hits.size() && t < 3; ++t)
+        montauk_sink_appendf(
+            &g_pop_out, "    top: [%s] delta %+.2f\n",
+            cell_label_str(cells[hits[t].j].second->display).c_str(),
+            hits[t].delta);
+      std::string lab = "metric=\"" + metric + "\",at=\"" + at + "\"";
+      prom.push_back({"montauk_pop_traj_p_dense", lab, pd});
+      prom.push_back({"montauk_pop_traj_p_sparse", lab, psp});
+      prom.push_back({"montauk_pop_traj_cells_moved", lab,
+                      static_cast<double>(moved)});
+      prom.push_back({"montauk_pop_traj_cells_total", lab,
+                      static_cast<double>(eligible)});
+      prom.push_back({"montauk_pop_traj_effect", lab, fam_eff});
+      ++findings;
+      stack.push_back({lo, lo + K});
+      stack.push_back({lo + K, hi});
+    }
+    if (findings == 0)
+      montauk_sink_appendf(&g_pop_out, "  no change point at alpha %.3g\n",
+                           opt.traj_alpha);
+  }
+  if (opt.emit_prom && !prom.empty()) {
+    std::vector<PromLine> header;
+    std::string info = std::string("montauk_version=\"") + MONTAUK_VERSION +
+                       "\",compare_axis=\"" + opt.compare_axis +
+                       "\",files=\"" + std::to_string(files_n) + "\"";
+    header.push_back({"montauk_pop_info", info, 1.0});
+    prom.insert(prom.begin(), header.begin(), header.end());
+    emit_prom(prom, opt);
+  }
+  montauk_sink_drain(&g_pop_out);
+  return 0;
+}
+
 }  // namespace
 
 int run_population(const std::vector<std::string>& files, const PopOptions& opt) {
+  // Initialize the report sink FIRST. Every append below lands in g_pop_out;
+  // without this call the zero-initialized sink accumulated via realloc(NULL)
+  // and emit_prom's own ensure_pop_out() then RESET the buffer, destroying
+  // the entire report before the atexit drain was even registered. That is
+  // why the population text report never reached stdout.
+  ensure_pop_out();
   if (files.empty()) {
     util::log_error("no .prom files to analyze");
     return 1;
   }
   std::map<std::string, Family> data;
-  for (const auto& f : files) parse_file(f, opt, data);
+  ParseStats ps;
+  for (const auto& f : files) parse_file(f, opt, data, ps);
+  if (ps.no_axis > 0)
+    util::log_info("series skipped: %zu (no label '%s')", ps.no_axis,
+                   opt.compare_axis.c_str());
   if (data.empty()) {
-    util::log_error("no usable gauges in %zu file(s)", files.size());
+    if (ps.no_axis > 0 && ps.samples == ps.no_axis)
+      util::log_error("no series carried label '%s' in %zu file(s)",
+                      opt.compare_axis.c_str(), files.size());
+    else
+      util::log_error("no usable gauges in %zu file(s)", files.size());
     return 1;
   }
+  if (opt.compare_axis == "version" && ps.files_with_version == 0)
+    util::log_warn("no file carried a version (montauk *_info label); every "
+                   "sample lands in one 'unknown' group");
 
   // Associate each histogram family with the summary-gauge families it backs
   // (PANDEMONIUM bench: histogram `<wl>` + gauge `<wl>_p99_us` are separate
@@ -438,7 +1011,10 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
     }
   }
 
-  stats::Rng rng(opt.seed);
+  // Trajectory mode replaces the pairwise engine outright: same parse and
+  // histogram association, different inference.
+  if (opt.trajectory) return run_trajectory(data, files.size(), opt);
+
   std::vector<PromLine> prom;
   const char* better = opt.lower_is_better ? "lower=better" : "higher=better";
 
@@ -457,113 +1033,214 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
     util::log_warn("N=1 per group -- inference underpowered; collect >=3 runs "
                    "per '%s' value for a verdict", opt.compare_axis.c_str());
 
+  // Every (family, cell) is statistically independent of every other, so the
+  // resampling work fans out across a thread pool. Each item derives its Rng
+  // seed from (--seed, metric, cell key), never from a shared stream, so a
+  // given seed reproduces the same numbers at any thread count and schedule.
+  // Text and prom lines are built privately per item and emitted serially in
+  // the original map order below, keeping output ordering byte-stable.
+  struct WorkItem {
+    const std::string* metric;
+    const std::string* ckey;
+    Cell* cell;
+    std::string text;
+    std::vector<PromLine> out;
+  };
+  std::vector<WorkItem> work;
   for (auto& fam_kv : data) {
-    const std::string& metric = fam_kv.first;
     if (!opt.metric_filter.empty() &&
-        metric.find(opt.metric_filter) == std::string::npos)
+        fam_kv.first.find(opt.metric_filter) == std::string::npos)
       continue;
-    montauk_sink_appendf(&g_pop_out, "\nMETRIC %s\n", metric.c_str());
-    for (auto& cell_kv : fam_kv.second.cells) {
-      Cell& cell = cell_kv.second;
-      std::vector<std::string> groups;
-      for (auto& g : cell.runs)
-        if (!g.second.empty()) groups.push_back(g.first);
-      montauk_sink_appendf(&g_pop_out, "  [%s]\n", cell_label_str(cell.display).c_str());
-      if (groups.size() < 2) {
-        montauk_sink_appendf(&g_pop_out, "    only %s -- no comparison\n",
-                    groups.empty() ? "(none)" : short_axis(groups[0]).c_str());
-        continue;
-      }
-      std::string clabel = cell_label_str(cell.display);
+    for (auto& cell_kv : fam_kv.second.cells)
+      work.push_back({&fam_kv.first, &cell_kv.first, &cell_kv.second, {}, {}});
+  }
 
-      // Pairwise run-level inference.
-      for (size_t i = 0; i < groups.size(); ++i) {
-        for (size_t j = i + 1; j < groups.size(); ++j) {
-          auto& va = cell.runs[groups[i]];
-          auto& vb = cell.runs[groups[j]];
-          double ma = stats::mean(va), mb = stats::mean(vb);
-          double mnA = *std::min_element(va.begin(), va.end());
-          double mxA = *std::max_element(va.begin(), va.end());
-          double mnB = *std::min_element(vb.begin(), vb.end());
-          double mxB = *std::max_element(vb.begin(), vb.end());
-          double cd = stats::cliffs_delta(va, vb);
-          double pp = stats::perm_test(va, vb, stats::Stat::Mean, 0.0, rng);
-          int npow = stats::mc_power(va, vb, rng);
-          std::string sa = short_axis(groups[i]), sb = short_axis(groups[j]);
-          montauk_sink_appendf(&g_pop_out, 
-              "    %s vs %s [N=%zu/%zu]: mean %.6g (%.4g..%.4g) vs %.6g (%.4g..%.4g) | "
-              "cliff %+.2f (%s) | perm p=%.3f | power %s\n",
-              sa.c_str(), sb.c_str(), va.size(), vb.size(), ma, mnA, mxA, mb,
-              mnB, mxB, cd, stats::cliff_magnitude(cd), pp,
-              npow ? std::to_string(npow).c_str() : ">20");
-          std::string lab = "metric=\"" + metric + "\",cell=\"" + clabel +
-                            "\",pair=\"" + sa + "__" + sb + "\"";
-          prom.push_back({"montauk_pop_cliff", lab, cd});
-          prom.push_back({"montauk_pop_perm_p", lab, pp});
-          prom.push_back({"montauk_pop_power_n", lab,
-                          static_cast<double>(npow)});
-        }
-      }
+  auto process_cell = [&](WorkItem& w) {
+    const std::string& metric = *w.metric;
+    Cell& cell = *w.cell;
+    stats::Rng rng(fnv1a(fnv1a(opt.seed ^ 1469598103934665603ull, metric) ^
+                             0x9e3779b97f4a7c15ull,
+                         *w.ckey));
+    std::vector<std::string> groups;
+    for (auto& g : cell.runs)
+      if (!g.second.empty()) groups.push_back(g.first);
+    // Ordered axes get natural-version order (stable, so full ties keep the
+    // deterministic map order); categorical axes keep map order as before.
+    const bool ordered_axis =
+        opt.compare_axis == "version" || opt.compare_axis == "capture";
+    if (opt.compare_axis == "version")
+      std::stable_sort(groups.begin(), groups.end(), natural_version_less);
+    sappendf(w.text, "  [%s]\n", cell_label_str(cell.display).c_str());
+    if (groups.size() < 2) {
+      sappendf(w.text, "    only %s -- no comparison\n",
+               groups.empty() ? "(none)" : display_axis(groups[0], opt).c_str());
+      return;
+    }
+    std::string clabel = cell_label_str(cell.display);
 
-      // Bootstrap Hsu-MCB across all groups in the cell.
-      std::vector<std::vector<double>> g;
-      std::vector<std::string> gn;
+    // Bootstrap Hsu-MCB across ALL groups, regardless of the pair selector
+    // (best-overall must survive pair pruning), and first, so vs-best can key
+    // its pairs off the winner.
+    std::vector<std::vector<double>> g;
+    std::vector<std::string> gn;
+    for (const auto& s : groups) {
+      g.push_back(cell.runs[s]);
+      gn.push_back(display_axis(s, opt));
+    }
+    auto mcb = stats::bootstrap_mcb(g, opt.lower_is_better, rng);
+
+    // Pair selection: operator choice, else adjacent on ordered axes (linear
+    // in axis values, the archive default) and all-pairs on categorical ones.
+    std::string mode = !opt.pairs.empty() ? opt.pairs
+                       : (ordered_axis ? "adjacent" : "all");
+    std::vector<std::pair<size_t, size_t>> prs;
+    if (mode == "adjacent") {
+      for (size_t k = 0; k + 1 < groups.size(); ++k) prs.push_back({k, k + 1});
+    } else if (mode == "vs-best") {
+      size_t best = 0;
+      bool found = false;
+      for (size_t k = 0; k < groups.size() && !found; ++k)
+        if (mcb[k].verdict == 1) { best = k; found = true; }
+      for (size_t k = 0; k < groups.size() && !found; ++k)
+        if (mcb[k].verdict == 0) { best = k; found = true; }
+      for (size_t k = 0; k < groups.size(); ++k)
+        if (k != best) prs.push_back({best, k});
+    } else {
+      for (size_t i = 0; i < groups.size(); ++i)
+        for (size_t j = i + 1; j < groups.size(); ++j) prs.push_back({i, j});
+    }
+
+    // Pairwise run-level inference over the selected pairs.
+    for (const auto& pr : prs) {
+      const size_t i = pr.first, j = pr.second;
+      auto& va = cell.runs[groups[i]];
+      auto& vb = cell.runs[groups[j]];
+      double ma = stats::mean(va), mb = stats::mean(vb);
+      double mnA = *std::min_element(va.begin(), va.end());
+      double mxA = *std::max_element(va.begin(), va.end());
+      double mnB = *std::min_element(vb.begin(), vb.end());
+      double mxB = *std::max_element(vb.begin(), vb.end());
+      double cd = stats::cliffs_delta(va, vb);
+      double pp = stats::perm_test(va, vb, stats::Stat::Mean, 0.0, rng);
+      int npow = stats::mc_power(va, vb, rng);
+      const std::string& sa = gn[i];
+      const std::string& sb = gn[j];
+      sappendf(w.text,
+          "    %s vs %s [N=%zu/%zu]: mean %.6g (%.4g..%.4g) vs %.6g (%.4g..%.4g) | "
+          "cliff %+.2f (%s) | perm p=%.3f | power %s\n",
+          sa.c_str(), sb.c_str(), va.size(), vb.size(), ma, mnA, mxA, mb,
+          mnB, mxB, cd, stats::cliff_magnitude(cd), pp,
+          npow ? std::to_string(npow).c_str() : ">20");
+      std::string lab = "metric=\"" + metric + "\",cell=\"" + clabel +
+                        "\",pair=\"" + sa + "__" + sb + "\"";
+      w.out.push_back({"montauk_pop_cliff", lab, cd});
+      w.out.push_back({"montauk_pop_perm_p", lab, pp});
+      // power_n is right-censored at the sweep cap: 0 from mc_power means
+      // "did not reach the target within nmax," never "zero runs needed."
+      // Encode the censoring explicitly (bound as the value, companion flag)
+      // instead of a 0 that aliases a real answer.
+      w.out.push_back({"montauk_pop_power_n", lab,
+                       npow ? static_cast<double>(npow) : 20.0});
+      w.out.push_back({"montauk_pop_power_censored", lab,
+                       npow ? 0.0 : 1.0});
+    }
+
+    sappendf(w.text, "    MCB (%s):", better);
+    for (size_t k = 0; k < gn.size(); ++k) {
+      const char* v = mcb[k].verdict == 1 ? "best"
+                      : mcb[k].verdict == -1 ? "not-best"
+                                             : "tied";
+      sappendf(w.text, " %s=%s", gn[k].c_str(), v);
+      std::string lab = "metric=\"" + metric + "\",cell=\"" + clabel +
+                        "\",group=\"" + gn[k] + "\"";
+      w.out.push_back({"montauk_pop_mcb_is_best", lab,
+                       static_cast<double>(mcb[k].verdict)});
+      w.out.push_back({"montauk_pop_mean", lab, stats::mean(g[k])});
+      w.out.push_back({"montauk_pop_n", lab,
+                       static_cast<double>(g[k].size())});
+    }
+    sappendf(w.text, "\n");
+
+    // Path A: Games-Howell + within-run quantile permutation on the
+    // reconstructed histogram distributions, when present and --full was set.
+    // Falls back to the run-level vectors when a cell carries no histograms,
+    // so --full always emits a parametric p (at lower n).
+    if (opt.full) {
+      bool have_hist = true;
+      for (const auto& s : groups)
+        if (cell.samp.find(s) == cell.samp.end() || cell.samp[s].size() < 2)
+          have_hist = false;
+      std::vector<std::vector<double>> hs;
+      std::vector<std::string> hn;
       for (const auto& s : groups) {
-        g.push_back(cell.runs[s]);
-        gn.push_back(short_axis(s));
+        hs.push_back(have_hist ? cell.samp[s] : cell.runs[s]);
+        hn.push_back(display_axis(s, opt));
       }
-      auto mcb = stats::bootstrap_mcb(g, opt.lower_is_better, rng);
-      montauk_sink_appendf(&g_pop_out, "    MCB (%s):", better);
-      for (size_t k = 0; k < gn.size(); ++k) {
-        const char* v = mcb[k].verdict == 1 ? "best"
-                        : mcb[k].verdict == -1 ? "not-best"
-                                               : "tied";
-        montauk_sink_appendf(&g_pop_out, " %s=%s", gn[k].c_str(), v);
+      if (have_hist) {
+        for (size_t i = 0; i < groups.size(); ++i)
+          for (size_t j = i + 1; j < groups.size(); ++j) {
+            double qp = stats::perm_test(hs[i], hs[j], stats::Stat::Percentile,
+                                         opt.quantile, rng);
+            sappendf(w.text, "      within-run q%.0f perm p=%.3f (%s vs %s)\n",
+                     opt.quantile, qp, hn[i].c_str(), hn[j].c_str());
+          }
+      }
+      auto gh = stats::games_howell(hs);
+      for (const auto& pr : gh) {
+        sappendf(w.text, "      games-howell %s vs %s: p=%.3f%s\n",
+                 hn[pr.i].c_str(), hn[pr.j].c_str(), pr.p,
+                 have_hist ? "" : " [run-level]");
         std::string lab = "metric=\"" + metric + "\",cell=\"" + clabel +
-                          "\",group=\"" + gn[k] + "\"";
-        prom.push_back({"montauk_pop_mcb_is_best", lab,
-                        static_cast<double>(mcb[k].verdict)});
-        prom.push_back({"montauk_pop_mean", lab, stats::mean(g[k])});
-        prom.push_back({"montauk_pop_n", lab,
-                        static_cast<double>(g[k].size())});
-      }
-      montauk_sink_appendf(&g_pop_out, "\n");
-
-      // Path A: Games-Howell + within-run quantile permutation on the
-      // reconstructed histogram distributions, when present and --full was set.
-      // Falls back to the run-level vectors when a cell carries no histograms,
-      // so --full always emits a parametric p (at lower n).
-      if (opt.full) {
-        bool have_hist = true;
-        for (const auto& s : groups)
-          if (cell.samp.find(s) == cell.samp.end() || cell.samp[s].size() < 2)
-            have_hist = false;
-        std::vector<std::vector<double>> hs;
-        std::vector<std::string> hn;
-        for (const auto& s : groups) {
-          hs.push_back(have_hist ? cell.samp[s] : cell.runs[s]);
-          hn.push_back(short_axis(s));
-        }
-        if (have_hist) {
-          for (size_t i = 0; i < groups.size(); ++i)
-            for (size_t j = i + 1; j < groups.size(); ++j) {
-              double qp = stats::perm_test(hs[i], hs[j], stats::Stat::Percentile,
-                                           opt.quantile, rng);
-              montauk_sink_appendf(&g_pop_out, "      within-run q%.0f perm p=%.3f (%s vs %s)\n",
-                          opt.quantile, qp, hn[i].c_str(), hn[j].c_str());
-            }
-        }
-        auto gh = stats::games_howell(hs);
-        for (const auto& pr : gh) {
-          montauk_sink_appendf(&g_pop_out, "      games-howell %s vs %s: p=%.3f%s\n",
-                      hn[pr.i].c_str(), hn[pr.j].c_str(), pr.p,
-                      have_hist ? "" : " [run-level]");
-          std::string lab = "metric=\"" + metric + "\",cell=\"" + clabel +
-                            "\",pair=\"" + hn[pr.i] + "__" + hn[pr.j] + "\"";
-          prom.push_back({"montauk_pop_gameshowell_p", lab, pr.p});
-        }
+                          "\",pair=\"" + hn[pr.i] + "__" + hn[pr.j] + "\"";
+        w.out.push_back({"montauk_pop_gameshowell_p", lab, pr.p});
       }
     }
+  };
+
+  std::atomic<size_t> next_item{0};
+  auto pump = [&]() {
+    for (;;) {
+      size_t i = next_item.fetch_add(1);
+      if (i >= work.size()) return;
+      process_cell(work[i]);
+    }
+  };
+  // Pool size: --threads, else MONTAUK_POP_THREADS, else all cores. Results
+  // are identical at any thread count by the per-cell seeding contract; the
+  // control exists so the determinism gate can PIN that invariance and so an
+  // operator can bound the analyzer's own footprint.
+  size_t want = opt.threads > 0 ? static_cast<size_t>(opt.threads) : 0;
+  if (want == 0) {
+    const char* e = std::getenv("MONTAUK_POP_THREADS");
+    if (e && *e) {
+      long v = std::strtol(e, nullptr, 10);
+      if (v > 0) want = static_cast<size_t>(v);
+    }
+  }
+  if (want == 0) {
+    unsigned hw = std::thread::hardware_concurrency();
+    want = hw ? hw : 1;
+  }
+  size_t nthreads = std::min<size_t>(want, work.size());
+  if (nthreads > 1) {
+    std::vector<std::thread> pool;
+    pool.reserve(nthreads);
+    for (size_t t = 0; t < nthreads; ++t) pool.emplace_back(pump);
+    for (auto& t : pool) t.join();
+  } else {
+    pump();
+  }
+
+  // Ordered emit: family headers and cell blocks in the same map order the
+  // serial loop produced, with each item's prom lines appended in place.
+  const std::string* cur_metric = nullptr;
+  for (auto& w : work) {
+    if (!cur_metric || *cur_metric != *w.metric) {
+      montauk_sink_appendf(&g_pop_out, "\nMETRIC %s\n", w.metric->c_str());
+      cur_metric = w.metric;
+    }
+    montauk_sink_append(&g_pop_out, w.text.data(), w.text.size());
+    prom.insert(prom.end(), w.out.begin(), w.out.end());
   }
 
   if (opt.emit_prom && !prom.empty()) {
@@ -576,6 +1253,9 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
     prom.insert(prom.begin(), header.begin(), header.end());
     emit_prom(prom, opt);
   }
+  // Drain the report explicitly rather than relying on atexit alone, so the
+  // full text is on stdout before the caller sees this function return.
+  montauk_sink_drain(&g_pop_out);
   return 0;
 }
 

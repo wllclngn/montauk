@@ -243,16 +243,6 @@ static char *fields_excluding(const char *line, size_t len, int field, const cha
     return out;
 }
 
-// Pull the field-th (1-based) token of `line` split on any char in `delim`;
-// field<=0 means the whole line. Returns NULL if the field is absent.
-static char *field_token(char *line, int field, const char *delim) {
-    if (field <= 0) return line;
-    char *save = NULL;
-    char *tok = strtok_r(line, delim, &save);
-    for (int i = 1; tok && i < field; i++) tok = strtok_r(NULL, delim, &save);
-    return tok;
-}
-
 // Non-mutating field extractor: returns a pointer to the 1-based `field` column
 // within [line, line+len) and writes its length to *flen; NULL if the column is
 // absent. Matches field_token/strtok semantics (runs of delimiters collapse, no
@@ -482,11 +472,14 @@ int main(int argc, char **argv) {
                     int line_has_match = 0;
                     while (off <= mlen) {
                         long end = -1;
-                        long s = is_grep ? sublimation_nfa_find(&nfa, line + off, mlen - off, &end)
+                        // find_from keeps ^/$ anchored to the real line ends across
+                        // restarts; a shifted `line + off` buffer would let ^ match
+                        // again at every continuation offset.
+                        long s = is_grep ? sublimation_nfa_find_from(&nfa, line, mlen, off, &end)
                                          : sublimation_bmh_search(&bmh, line + off, mlen - off);
                         if (s < 0) break;
-                        size_t mstart = off + (size_t)s;
-                        size_t mend = is_grep ? off + (size_t)end : mstart + plen;
+                        size_t mstart = is_grep ? (size_t)s : off + (size_t)s;
+                        size_t mend = is_grep ? (size_t)end : mstart + plen;
                         if (mend > mstart) {
                             matches++;
                             if (!quiet && !count_only) {
@@ -1125,9 +1118,11 @@ int main(int argc, char **argv) {
             size_t off = 0;
             while (off <= l) {
                 long end = 0;
-                long s = sublimation_nfa_find(&nfa, line + off, l - off, &end);
+                // Continuation-safe: ^ fires once at the true line start, $ once at
+                // the true end, however many replacements precede them.
+                long s = sublimation_nfa_find_from(&nfa, line, l, off, &end);
                 if (s < 0) break;
-                size_t ms = off + (size_t)s, me = off + (size_t)end;
+                size_t ms = (size_t)s, me = (size_t)end;
                 montauk_sink_append(&g_out, line + off, ms - off);  // text before the match
                 montauk_sink_append(&g_out, repl, rlen);            // the replacement
                 if (me > ms) { off = me; }
@@ -1290,6 +1285,15 @@ int main(int argc, char **argv) {
         fputs("sublimation: no numeric values on stdin\n", stderr);
         return 1;
     }
+    // A statistic over a silently reduced stream is the worst kind of wrong
+    // answer: a confident number over an unstated subset. Warn on stderr
+    // (stdout byte-parity with the real tools is untouched), the same
+    // precedent sort --keyed already sets for its skipped lines.
+    if (skipped > 0)
+        fprintf(stderr,
+                "sublimation: %s: skipped %zu non-numeric line(s); result "
+                "covers %zu value(s)\n",
+                cmd, skipped, data.n);
 
     if (!strcmp(cmd, "sort")) {
         sublimation_f64(data.v, data.n);

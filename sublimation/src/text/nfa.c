@@ -421,20 +421,26 @@ static int nfa_compile(sublimation_nfa *n, const char *pattern, size_t plen) {
                 first = 0;
                 uint32_t lo;
                 if (*p == '\\' && p + 1 < end) {
-                    ++p; int nn = decode_utf8(p, (size_t)(end - p), &lo);
-                    if (nn == 0) goto done; p += nn;
+                    ++p;
+                    int nn = decode_utf8(p, (size_t)(end - p), &lo);
+                    if (nn == 0) goto done;
+                    p += nn;
                 } else {
                     int nn = decode_utf8(p, (size_t)(end - p), &lo);
-                    if (nn == 0) goto done; p += nn;
+                    if (nn == 0) goto done;
+                    p += nn;
                 }
                 if (p + 1 < end && *p == '-' && *(p+1) != ']') {
                     ++p; uint32_t hi;
                     if (*p == '\\' && p + 1 < end) {
-                        ++p; int nn = decode_utf8(p, (size_t)(end - p), &hi);
-                        if (nn == 0) goto done; p += nn;
+                        ++p;
+                        int nn = decode_utf8(p, (size_t)(end - p), &hi);
+                        if (nn == 0) goto done;
+                        p += nn;
                     } else {
                         int nn = decode_utf8(p, (size_t)(end - p), &hi);
-                        if (nn == 0) goto done; p += nn;
+                        if (nn == 0) goto done;
+                        p += nn;
                     }
                     if (hi < lo) { uint32_t t = lo; lo = hi; hi = t; }
                     cx.range_pool[cx.range_pool_n++] = (cprange){ lo, hi }; ++rcnt;
@@ -687,11 +693,20 @@ int sublimation_nfa_full_match(const sublimation_nfa *nfa, const char *input, si
 }
 
 long sublimation_nfa_find(const sublimation_nfa *nfa, const char *input, size_t n, long *end_out) {
-    if (!nfa->valid) return -1;
+    return sublimation_nfa_find_from(nfa, input, n, 0, end_out);
+}
+
+long sublimation_nfa_find_from(const sublimation_nfa *nfa, const char *input, size_t n,
+                               size_t from, long *end_out) {
+    if (!nfa->valid || from > n) return -1;
     int best_start = -1, best_end = -1;
+    // Anchors are absolute: ^ can only ever match at offset 0 of the full line,
+    // $ only at n. A continuation caller passes the real line with an advanced
+    // `from` instead of a shifted buffer, so restarting a scan after a match
+    // cannot re-create a fresh line start the pattern then anchors to.
     int start_limit = nfa->anchored_start ? 1 : (int)n + 1;
 
-    for (int start = 0; start < start_limit; ++start) {
+    for (int start = (int)from; start < start_limit; ++start) {
         uint64_t cur[SETWORDS], next[SETWORDS];
         clear_set(cur);
         eps_closure(nfa, cur, nfa->start);

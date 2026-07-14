@@ -168,6 +168,19 @@ def run_capture(args):
         flood = [l for l in stderr.splitlines()
                  if "EXIT_ABNL" in l and "sig=(none)" in l]
         check(not flood, f"no clean-exit EXIT_ABNL flood on stderr ({len(flood)} lines)")
+
+        # Drop accounting: a final DROPS snapshot is stamped unconditionally
+        # at teardown, and a nominal load must lose nothing. A capture with
+        # neither the record nor zero drops is either pre-drop-accounting
+        # montauk (a build problem here) or genuinely lossy.
+        if out.exists() and out.stat().st_size > 0:
+            dec = harness.run_text([str(DECODE), str(out)])
+            drops = [l for l in dec.stdout.splitlines() if "] DROPS " in l]
+            check(bool(drops), f"final DROPS snapshot present ({len(drops)})")
+            if drops:
+                last = drops[-1]
+                check("total=0 " in last,
+                      f"zero ring drops under nominal load ({last.strip()})")
         if "requires eBPF" in stderr or "requires root" in stderr:
             note("note: montauk reported a capability/eBPF problem -- see its stderr above")
 

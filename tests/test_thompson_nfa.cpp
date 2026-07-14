@@ -225,6 +225,122 @@ TEST(nfa_anchor_empty) {
     ASSERT_EQ(s2, -1);
 }
 
+// FIND_FROM: continuation-safe offset search, anchors stay absolute
+
+TEST(nfa_find_from_unanchored) {
+    ThompsonNFA nfa("ab");
+    std::string_view in = "ab ab ab";
+    long end = -1;
+    ASSERT_EQ(sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 0, &end), 0);
+    ASSERT_EQ(end, 2);
+    ASSERT_EQ(sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 2, &end), 3);
+    ASSERT_EQ(end, 5);
+    ASSERT_EQ(sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 6, &end), 6);
+    ASSERT_EQ(end, 8);
+    ASSERT_EQ(sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 7, &end), -1);
+}
+
+TEST(nfa_find_from_caret_absolute) {
+    // ^ matches only at offset 0 of the full input; a continuation restart at
+    // from > 0 must never re-match it. This is the replace/grep -o defect the
+    // API exists to close.
+    ThompsonNFA nfa("^");
+    std::string_view in = "abc";
+    long end = -1;
+    ASSERT_EQ(sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 0, &end), 0);
+    ASSERT_EQ(end, 0);
+    ASSERT_EQ(sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 1, &end), -1);
+    ASSERT_EQ(sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 3, &end), -1);
+}
+
+TEST(nfa_find_from_anchored_prefix) {
+    ThompsonNFA nfa("^ab");
+    std::string_view in = "abab";
+    long end = -1;
+    ASSERT_EQ(sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 0, &end), 0);
+    ASSERT_EQ(end, 2);
+    ASSERT_EQ(sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 2, &end), -1);
+}
+
+TEST(nfa_find_from_dollar_absolute) {
+    ThompsonNFA nfa("b$");
+    std::string_view in = "b b";
+    long end = -1;
+    ASSERT_EQ(sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 0, &end), 2);
+    ASSERT_EQ(end, 3);
+    ASSERT_EQ(sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 3, &end), -1);
+}
+
+TEST(nfa_find_from_past_end) {
+    ThompsonNFA nfa("a");
+    std::string_view in = "a";
+    long end = -1;
+    ASSERT_EQ(sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 2, &end), -1);
+}
+
+TEST(nfa_find_wrapper_equivalence) {
+    // sublimation_nfa_find is now the from == 0 case of find_from.
+    ThompsonNFA nfa("l+o");
+    std::string_view in = "hello hello";
+    long e1 = -1, e2 = -1;
+    long s1 = sublimation_nfa_find(&nfa.nfa_, in.data(), in.size(), &e1);
+    long s2 = sublimation_nfa_find_from(&nfa.nfa_, in.data(), in.size(), 0, &e2);
+    ASSERT_EQ(s1, s2);
+    ASSERT_EQ(e1, e2);
+}
+
+// Differential gate for find_from: every (pattern, input, from) triple is
+// checked against a brute-force oracle built on full_match over substrings
+// (leftmost start at or after `from`, longest end at that start; ^ only at
+// absolute 0, $ only at absolute n). Any engine change, whatever its origin,
+// must pass this before landing.
+TEST(nfa_find_from_differential) {
+    const char* patterns[] = {"a", "ab", "a+b", "a*", "(ab|ba)", "[0-9]+",
+                              "^ab", "ab$", "^a*b$", "a.c"};
+    const char* inputs[] = {"", "a", "ab", "ba", "abab", "xxabyy", "123ab9",
+                            "aaab", "abc a1c", "bbbb"};
+    for (const char* pat : patterns) {
+        ThompsonNFA nfa(pat);
+        ASSERT_TRUE(nfa.valid());
+        const bool anch_start = nfa.nfa_.anchored_start != 0;
+        const bool anch_end = nfa.nfa_.anchored_end != 0;
+        // The core pattern with anchors stripped, for the substring oracle
+        // (full_match is implicitly ^...$, so anchors are positional
+        // constraints handled here, not in the machine).
+        std::string core = pat;
+        if (anch_start) core.erase(0, 1);
+        if (anch_end) core.pop_back();
+        ThompsonNFA oracle_nfa(core);
+        for (const char* inp : inputs) {
+            std::string_view in = inp;
+            const long n = static_cast<long>(in.size());
+            for (long from = 0; from <= n; ++from) {
+                // Oracle: scan starts, then ends, via full_match.
+                long os = -1, oe = -1;
+                for (long st = from; st <= n && os < 0; ++st) {
+                    if (anch_start && st != 0) break;
+                    for (long en = n; en >= st; --en) {
+                        if (anch_end && en != n) break;
+                        if (sublimation_nfa_full_match(&oracle_nfa.nfa_,
+                                                       in.data() + st,
+                                                       static_cast<size_t>(en - st))) {
+                            os = st;
+                            oe = en;
+                            break;
+                        }
+                    }
+                }
+                long ge = -1;
+                long gs = sublimation_nfa_find_from(
+                    &nfa.nfa_, in.data(), in.size(),
+                    static_cast<size_t>(from), &ge);
+                ASSERT_EQ(gs, os);
+                if (os >= 0) ASSERT_EQ(ge, oe);
+            }
+        }
+    }
+}
+
 // ESCAPES
 
 TEST(nfa_escape_bracket) {

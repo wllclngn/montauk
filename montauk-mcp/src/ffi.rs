@@ -83,6 +83,13 @@ extern "C" {
     fn sublimation_nfa_compile_ex(out: *mut Nfa, pattern: *const u8, len: usize, icase: c_int);
     fn sublimation_nfa_valid(nfa: *const Nfa) -> c_int;
     fn sublimation_nfa_find(nfa: *const Nfa, input: *const u8, n: usize, end_out: *mut c_long) -> c_long;
+    // The continuation-safe entry point (anchors stay absolute past `from`).
+    // Bound now so any future offset-iterating tool goes through it instead
+    // of re-entering find on a shifted slice, the exact anchor trap the CLI
+    // already paid for once.
+    #[allow(dead_code)]
+    fn sublimation_nfa_find_from(nfa: *const Nfa, input: *const u8, n: usize,
+                                 from: usize, end_out: *mut c_long) -> c_long;
 
     fn sublimation_bmh_compile_ex(out: *mut Bmh, pattern: *const u8, len: usize, icase: c_int);
     fn sublimation_bmh_search(bmh: *const Bmh, text: *const u8, n: usize) -> c_long;
@@ -111,8 +118,11 @@ pub fn api_version() -> i32 {
     unsafe { sublimation_api_version() }
 }
 
-/// Returns the byte offset of the first regex match, and its length, or None.
-pub fn grep_find(pattern: &str, text: &str, icase: bool) -> Option<(usize, usize)> {
+/// Returns the byte offset of the first regex match, and its length; Ok(None)
+/// on a genuine no-match. A pattern that fails to compile is an ERROR, never a
+/// no-match: mapping it to false would hand the caller a silent wrong answer.
+pub fn grep_find(pattern: &str, text: &str, icase: bool)
+    -> Result<Option<(usize, usize)>, String> {
     let mut nfa = std::mem::MaybeUninit::<Nfa>::uninit();
     unsafe {
         sublimation_nfa_compile_ex(
@@ -123,20 +133,34 @@ pub fn grep_find(pattern: &str, text: &str, icase: bool) -> Option<(usize, usize
         );
         let nfa = nfa.assume_init();
         if sublimation_nfa_valid(&nfa) == 0 {
-            return None;
+            return Err(format!(
+                "invalid regex '{pattern}' (compile failed; the engine caps \
+                 at 256 NFA states)"
+            ));
         }
         let mut end: c_long = -1;
         let start = sublimation_nfa_find(&nfa, text.as_ptr(), text.len(), &mut end);
         if start < 0 {
-            None
+            Ok(None)
         } else {
-            Some((start as usize, (end - start as c_long) as usize))
+            Ok(Some((start as usize, (end - start as c_long) as usize)))
         }
     }
 }
 
-/// Returns the byte offset of the first substring match, or None.
-pub fn contains_find(needle: &str, haystack: &str, icase: bool) -> Option<usize> {
+/// Returns the byte offset of the first substring match; Ok(None) on a
+/// genuine no-match. An empty or over-limit needle is an ERROR: the BMH
+/// engine compiles those to the "empty pattern" that matches at offset 0,
+/// which would silently report a false positive.
+pub fn contains_find(needle: &str, haystack: &str, icase: bool)
+    -> Result<Option<usize>, String> {
+    const BMH_MAX: usize = 256;
+    if needle.is_empty() || needle.len() > BMH_MAX {
+        return Err(format!(
+            "needle length {} out of range (1..={BMH_MAX} bytes)",
+            needle.len()
+        ));
+    }
     let mut bmh = std::mem::MaybeUninit::<Bmh>::uninit();
     unsafe {
         sublimation_bmh_compile_ex(
@@ -148,9 +172,9 @@ pub fn contains_find(needle: &str, haystack: &str, icase: bool) -> Option<usize>
         let bmh = bmh.assume_init();
         let pos = sublimation_bmh_search(&bmh, haystack.as_ptr(), haystack.len());
         if pos < 0 {
-            None
+            Ok(None)
         } else {
-            Some(pos as usize)
+            Ok(Some(pos as usize))
         }
     }
 }

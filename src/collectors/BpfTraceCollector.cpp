@@ -281,6 +281,7 @@ void BpfTraceCollector::trace_append(const void* data, size_t len) {
   const auto* lp = reinterpret_cast<const uint8_t*>(&l);
   const auto* dp = reinterpret_cast<const uint8_t*>(data);
   if (trace_fd_ >= 0) {
+    ++writer_attempted_;
     trace_buf_.insert(trace_buf_.end(), lp, lp + sizeof(l));
     trace_buf_.insert(trace_buf_.end(), dp, dp + len);
     if (trace_buf_.size() >= kTraceFlushThreshold) trace_flush();
@@ -299,7 +300,13 @@ void BpfTraceCollector::trace_flush() {
     size_t off = 0;
     while (off < trace_buf_.size()) {
       ssize_t n = ::write(trace_fd_, trace_buf_.data() + off, trace_buf_.size() - off);
-      if (n <= 0) break;  // best-effort: drop on error rather than spin
+      if (n <= 0) {
+        // best-effort: drop on error rather than spin -- but COUNT the drop,
+        // so the trace's final snapshot can say its own tail is short.
+        ++writer_errors_;
+        writer_lost_bytes_ += trace_buf_.size() - off;
+        break;
+      }
       off += static_cast<size_t>(n);
     }
     trace_buf_.clear();
@@ -387,6 +394,45 @@ void BpfTraceCollector::append_scx_storm_sample() {
   scx_preempt_last_ = preempt;
   scx_reenq_last_ = reenq;
   scx_sample_last_ns_ = now_ns;
+}
+
+// Sample the BPF drop_counts map (per-CPU per-event-type reserve failures),
+// fold per-CPU values into cumulative per-type totals and append one
+// TRACE_EVT_DROPS snapshot when anything moved since the last stamp (plus an
+// unconditional final one at teardown, force=true). Totals are FREE-RUNNING,
+// never deltas: idempotent across lost snapshots, and the analyzer bounds
+// any window's loss by differencing the nearest bracketing pair. Before this
+// record existed, every one of the BPF side's reserve failures vanished
+// silently and a capture with holes was indistinguishable from a quiet one.
+void BpfTraceCollector::append_drop_snapshot(bool force) {
+  if ((trace_fd_ < 0 && stream_fd_ < 0) || !skel_) return;
+  int fd = bpf_map__fd(skel_->maps.drop_counts);
+  if (fd < 0) return;
+  int ncpu = libbpf_num_possible_cpus();
+  if (ncpu <= 0) ncpu = 1;
+  std::vector<uint64_t> per(static_cast<size_t>(ncpu));
+  montauk_drop_event ev{};
+  ev.type = TRACE_EVT_DROPS;
+  uint64_t total = 0;
+  for (uint32_t slot = 0; slot < MONTAUK_DROP_SLOTS; ++slot) {
+    if (bpf_map_lookup_elem(fd, &slot, per.data()) != 0) continue;
+    uint64_t s = 0;
+    for (int c = 0; c < ncpu; ++c) s += per[static_cast<size_t>(c)];
+    ev.dropped[slot] = s;
+    total += s;
+  }
+  ev.writer_attempted = writer_attempted_;
+  ev.writer_errors = writer_errors_;
+  ev.writer_lost_bytes = writer_lost_bytes_;
+  if (!force && total == drops_last_total_ && writer_errors_ == drops_last_werr_)
+    return;  // quiet capture: no snapshot churn
+  drops_last_total_ = total;
+  drops_last_werr_ = writer_errors_;
+  timespec mono{};
+  clock_gettime(CLOCK_MONOTONIC, &mono);
+  ev.ts_ns = static_cast<uint64_t>(mono.tv_sec) * 1000000000ull +
+             static_cast<uint64_t>(mono.tv_nsec);
+  trace_append(reinterpret_cast<const uint8_t*>(&ev), sizeof(ev));
 }
 
 // Generic cpu -> cache-hierarchy snapshot embedded once in the binary trace.
@@ -1614,6 +1660,7 @@ void BpfTraceCollector::run(std::stop_token st) {
     // trace carries the providers' view of the same time window.
     append_provider_snapshots();
     append_scx_storm_sample();
+    append_drop_snapshot();
 
     // Publish montauk's own state to the provider mesh (montauk.sock).
     emitter_.update(montauk::app::trace_to_prometheus(snap));
@@ -1631,6 +1678,12 @@ void BpfTraceCollector::run(std::stop_token st) {
       trace_flush();
     }
   }
+
+  // Final drop snapshot at teardown, unconditional: the capture's last bytes
+  // state the whole recording's loss totals even if no snapshot fired during
+  // the run, then flush so they land before the fd closes.
+  append_drop_snapshot(/*force=*/true);
+  trace_flush();
 }
 
 } // namespace montauk::collectors

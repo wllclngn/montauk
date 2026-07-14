@@ -77,6 +77,14 @@ private:
   uint64_t scx_kicks_last_ = 0, scx_preempt_last_ = 0, scx_reenq_last_ = 0;
   uint64_t scx_sample_last_ns_ = 0;
 
+  // Ring-drop accounting: sample the BPF drop_counts map (per-CPU per-type
+  // reserve failures) and stamp a cumulative TRACE_EVT_DROPS snapshot into
+  // the trace when anything moved; force=true (teardown) always stamps the
+  // final totals. The writer_* members are the disk path's own accounting.
+  void append_drop_snapshot(bool force = false);
+  uint64_t drops_last_total_ = 0, drops_last_werr_ = 0;
+  uint64_t writer_attempted_ = 0, writer_errors_ = 0, writer_lost_bytes_ = 0;
+
   // Add a PID to the BPF proc_map (tracked set)
   void track_pid(int32_t pid, int32_t ppid, bool is_root, const char* comm);
   // Snapshot /proc/<pid>/maps to the per-incident sidecar while the process
