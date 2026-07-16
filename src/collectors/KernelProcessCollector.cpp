@@ -12,6 +12,8 @@
 #include <linux/genetlink.h>
 #include <pwd.h>
 
+#include "sublimation_order.hpp"  // after std headers (c23_compat unreachable macro)
+
 namespace montauk::collectors {
 
 // Mirror definitions from kernel module's montauk.h
@@ -324,9 +326,9 @@ bool KernelProcessCollector::recv_snapshot(montauk::model::ProcessSnapshot& out)
     last_cpu_total_ = cpu_total;
     have_last_ = true;
 
-    // Sort by CPU%
-    std::sort(out.processes.begin(), out.processes.end(),
-              [](const auto& a, const auto& b) { return a.cpu_pct > b.cpu_pct; });
+    // Sort by CPU% (descending, stable on ties)
+    sublimation_order_f64(out.processes, true,
+                          [](const auto& p) { return p.cpu_pct; });
 
     // Resolve cmdline from /proc in userspace (cached, one-shot per PID)
     for (auto& ps : out.processes) {

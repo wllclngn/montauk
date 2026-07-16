@@ -4,7 +4,7 @@
 // This is the third primitive alongside the sort (ordering) and the classifier
 // (what an input *is*). Where grep finds the positions of a TEXT pattern,
 // sublimation_locate finds the positions of a STRUCTURAL pattern: it slides the
-// flow-model classifier across a stream and returns the windows whose disorder
+// disorder classifier across a stream and returns the windows whose disorder
 // class matches a target -- "find every stretch that looks sorted", "where did
 // the stream go few-unique", "which windows are random". The classifier is the
 // query engine; the window is the line; the disorder class is the pattern.

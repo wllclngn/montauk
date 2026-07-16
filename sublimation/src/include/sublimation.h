@@ -35,9 +35,12 @@ extern "C" {
 // against SUBLIMATION_API_VERSION to catch header/shared-object mismatches.
 // Advanced to 2 for the 2.0.0 release: the public sublimation_nfa struct gained
 // an `icase` field (layout change) -- an ABI break for by-value users.
-#define SUBLIMATION_API_VERSION 2
+// Advanced to 3: the generic qsort-compatible `sublimation()` entry point was
+// removed. It was a passthrough to glibc qsort, never the engine; libc sorting
+// is no longer linked anywhere in the library. Use the typed entry points.
+#define SUBLIMATION_API_VERSION 3
 
-// Disorder classification (result of the initial BFS)
+// Disorder classification (the classifier's verdict)
 typedef enum {
     SUB_SORTED       = 0,   // already sorted, O(n) verified
     SUB_REVERSED     = 1,   // fully reversed, O(n) reverse
@@ -83,15 +86,10 @@ typedef struct {
     double   wall_ns;            // wall-clock nanoseconds
 } sub_stats_t;
 
-// Generic sort (qsort-compatible interface).
-// WARNING: this entry point is a thin passthrough to glibc `qsort` -- it does
-// NOT run the flow-model sort. Use it only when you must work through a
-// comparator function pointer. For real performance, call the type-specific
-// `sublimation_<T>` below or the `sublimation_typed` _Generic macro.
-SUB_API void sublimation(void *base, size_t nmemb, size_t size,
-                         int (*compar)(const void *, const void *));
-
-// Type-specific fast paths (no function pointer overhead, no indirection)
+// Type-specific fast paths (no function pointer overhead, no indirection).
+// There is deliberately NO generic qsort-compatible entry point: an opaque
+// comparator defeats classification and vectorization by construction, so a
+// void*/compar shim could only ever delegate to libc -- removed at ABI v3.
 SUB_API void sublimation_i32(int32_t *SUB_RESTRICT arr, size_t n);
 SUB_API void sublimation_i64(int64_t *SUB_RESTRICT arr, size_t n);
 SUB_API void sublimation_u32(uint32_t *SUB_RESTRICT arr, size_t n);

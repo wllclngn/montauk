@@ -58,7 +58,10 @@ int main(int argc, char** argv) {
   std::string stream_out;    // --stream-out DEVICE: second binary stream, meant for a character
                               //   device (e.g. a qemu-backed serial port) so it survives a hang
                               //   that takes --trace-out's own filesystem down with it
-  bool sched_detail = false;   // --sched-detail: stream per-CPU idle boundaries (off by default)
+  // --sched-detail: stream per-CPU idle boundaries (off by default). maybe_unused:
+  // consumed only inside the MONTAUK_HAVE_BPF block below; a libbpf-less build
+  // otherwise dies on -Werror=unused-but-set-variable.
+  [[maybe_unused]] bool sched_detail = false;
   bool json_once = false;      // --json: one-shot structured snapshot to stdout, then exit
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];

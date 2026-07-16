@@ -686,13 +686,6 @@ DEFINE_PUBLIC_STATS(double,   f64)
 
 #undef DEFINE_PUBLIC_STATS
 
-// PUBLIC API: generic qsort-compatible
-
-void sublimation(void *base, size_t nmemb, size_t size,
-               int (*compar)(const void *, const void *)) {
-    qsort(base, nmemb, size, compar);
-}
-
 // PUBLIC API: version
 
 int sublimation_api_version(void) {

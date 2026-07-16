@@ -134,20 +134,26 @@ BpfTraceCollector::BpfTraceCollector(montauk::app::TraceBuffers& buffers,
       tok = tok.substr(b, e - b + 1);
       if (!tok.empty()) {
         if (primary_pattern_.empty()) primary_pattern_ = tok;
-        matchers_.emplace_back(tok);
+        sublimation_search m;
+        sublimation_search_compile(&m, tok.data(), tok.size(),
+                                   SUBLIMATION_SEARCH_FIXED | SUBLIMATION_SEARCH_ICASE, 0);
+        matchers_.push_back(m);
       }
     }
     start = comma + 1;
   }
   if (matchers_.empty()) {  // no usable token — fall back to the whole string
     primary_pattern_ = pattern_;
-    matchers_.emplace_back(pattern_);
+    sublimation_search m;
+    sublimation_search_compile(&m, pattern_.data(), pattern_.size(),
+                               SUBLIMATION_SEARCH_FIXED | SUBLIMATION_SEARCH_ICASE, 0);
+    matchers_.push_back(m);
   }
 }
 
 bool BpfTraceCollector::matches_any(const std::string& s) const {
   for (const auto& m : matchers_)
-    if (m.search(s) >= 0) return true;
+    if (sublimation_search_find(&m, s.data(), s.size(), nullptr) >= 0) return true;
   return false;
 }
 
@@ -365,6 +371,10 @@ void BpfTraceCollector::append_provider_snapshots() {
 // preempt-kick / reenqueue rates -- the cpu_release storm, straight from the trace.
 void BpfTraceCollector::append_scx_storm_sample() {
   if ((trace_fd_ < 0 && stream_fd_ < 0) || !skel_) return;
+  // Probes not attached => the scx_storm map is all-zero and any delta is a
+  // fiction. Emit nothing so the analyzer sees "not captured" (empty storm
+  // report), never a manufactured kick/s=0 that reads as a real measurement.
+  if (!scx_storm_active_) return;
   int fd = bpf_map__fd(skel_->maps.scx_storm);
   if (fd < 0) return;
   int ncpu = libbpf_num_possible_cpus();
@@ -1309,8 +1319,8 @@ void BpfTraceCollector::run(std::stop_token st) {
   // (scx_bpf_kick_cpu / scx_bpf_reenqueue_local). fentry resolves its BTF
   // target at LOAD time, so on a kernel without sched_ext the missing kfunc
   // fails the ENTIRE skeleton load -- every universal handler dies with it
-  // (the silica bench guest: libbpf "failed to find kernel BTF type ID of
-  // 'scx_bpf_kick_cpu': -ESRCH" killed the whole capture). Autoload them
+  // (observed on a kernel without sched_ext: libbpf "failed to find kernel BTF
+  // type ID of 'scx_bpf_kick_cpu': -ESRCH" killed the whole capture). Autoload them
   // only when the running kernel's BTF actually carries the kfunc; the
   // attach side already gates them behind MONTAUK_SCX_STORM.
   {
@@ -1415,9 +1425,10 @@ void BpfTraceCollector::run(std::stop_token st) {
     skel_->links.handle_scx_reenq   = bpf_program__attach(skel_->progs.handle_scx_reenq);
     skel_->links.handle_resched_curr = bpf_program__attach(skel_->progs.handle_resched_curr);
     if (skel_->links.handle_scx_kick && skel_->links.handle_scx_reenq &&
-        skel_->links.handle_resched_curr)
+        skel_->links.handle_resched_curr) {
+      scx_storm_active_ = true;
       montauk::util::log_info("scx storm probes attached (MONTAUK_SCX_STORM)");
-    else
+    } else
       montauk::util::log_warn("scx storm probes requested but attach failed -- "
                               "StormReport will be empty");
   }

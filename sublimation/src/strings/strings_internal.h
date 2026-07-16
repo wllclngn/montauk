@@ -32,6 +32,13 @@ void sub_msd_radix(
     size_t hi,
     size_t depth);
 
+// Allocation-free introsort+strcmp over a pointer array -- the fallback the
+// public entry points take when the packed pipeline cannot run (scratch OOM,
+// or n past the 2^32 index cap). Internal-linkage-exposed (not public API)
+// so the test suite can differential-test it against the main pipeline; the
+// fallback is otherwise only reachable under memory pressure.
+void sub_strcmp_introsort(const char **arr, size_t n);
+
 // Big-endian load of the first 4 bytes of a string into a uint32. Strings
 // shorter than 4 bytes are zero-padded so they sort before any string
 // sharing the same prefix bytes. Result preserves lex order:

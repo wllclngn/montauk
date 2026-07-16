@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "sublimation_pack.h"  // after std headers (c23_compat unreachable macro)
+
 namespace montauk::collectors {
 
 // Parse the (comm)-delimited fields of a /proc/PID/stat line. comm may
@@ -73,19 +75,31 @@ inline std::string read_cmdline(int32_t pid) {
   return out;
 }
 
-// Truncate v to its top-k entries by cpu_pct (descending), then sort those k
-// entries the same way. nth_element partitions in O(n), avoiding a full
-// O(n log n) sort of every process when only the top-K are kept.
+// Truncate v to its top-k entries by cpu_pct (descending) in sorted order.
+// One stable pack index sort (sublimation_pack_sort_f64) covers both the old
+// select-then-sort steps: the index sort orders every row by key without
+// moving the structs, then only the kept top-k rows are gathered. Stable on
+// equal cpu_pct (original order kept), where the old nth_element/std::sort
+// pair left tie order arbitrary.
 template <typename T>
 void top_k_by_cpu_pct(std::vector<T>& v, size_t k) {
-  if (v.size() > k) {
-    auto nth = v.begin() + static_cast<std::ptrdiff_t>(k);
-    std::nth_element(v.begin(), nth, v.end(),
-                      [](const T& a, const T& b) { return a.cpu_pct > b.cpu_pct; });
-    v.resize(k);
+  const size_t n = v.size();
+  if (n < 2) {
+    if (n > k) v.resize(k);
+    return;
   }
-  std::sort(v.begin(), v.end(),
-            [](const T& a, const T& b) { return a.cpu_pct > b.cpu_pct; });
+  std::vector<double> keys(n);
+  std::vector<uint32_t> idx(n);
+  for (size_t i = 0; i < n; ++i) {
+    keys[i] = static_cast<double>(v[i].cpu_pct);
+    idx[i] = static_cast<uint32_t>(i);
+  }
+  sublimation_pack_sort_f64(keys.data(), idx.data(), n, true);
+  const size_t keep = n < k ? n : k;
+  std::vector<T> out;
+  out.reserve(keep);
+  for (size_t i = 0; i < keep; ++i) out.push_back(std::move(v[idx[i]]));
+  v = std::move(out);
 }
 
 }  // namespace montauk::collectors

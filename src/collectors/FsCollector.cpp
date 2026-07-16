@@ -4,7 +4,9 @@
 #include <fstream>
 #include <sstream>
 #include <unordered_set>
-#include <algorithm>
+#include <utility>
+
+#include "sublimation_order.hpp"  // after std headers (c23_compat unreachable macro)
 
 namespace montauk::collectors {
 
@@ -50,11 +52,12 @@ bool FsCollector::sample(montauk::model::FsSnapshot& out) {
     m.used_pct = used_pct;
     out.mounts.push_back(std::move(m));
   }
-  // Sort by used% desc, then used bytes desc
-  std::sort(out.mounts.begin(), out.mounts.end(), [](const auto& a, const auto& b){
-    if (a.used_pct != b.used_pct) return a.used_pct > b.used_pct;
-    return a.used_bytes > b.used_bytes;
-  });
+  // Sort by used% desc, then used bytes desc: LSD-composed stable index
+  // sorts, minor key (used bytes) first, major key (used%) second.
+  sublimation_order_u64(out.mounts, true,
+                        [](const montauk::model::FsMount& m) { return m.used_bytes; });
+  sublimation_order_f64(out.mounts, true,
+                        [](const montauk::model::FsMount& m) { return m.used_pct; });
   return true;
 }
 

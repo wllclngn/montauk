@@ -2,7 +2,7 @@
 #include "app/TraceBuffers.hpp"
 #include "app/ProviderEmitter.hpp"
 #include "collectors/ProviderCollector.hpp"
-#include "sublimation_text.hpp"
+#include "sublimation_text.h"
 #include <thread>
 #include <string>
 #include <vector>
@@ -76,6 +76,13 @@ private:
   void append_scx_storm_sample();
   uint64_t scx_kicks_last_ = 0, scx_preempt_last_ = 0, scx_reenq_last_ = 0;
   uint64_t scx_sample_last_ns_ = 0;
+  // True only once the scx storm probes (fentry/scx_bpf_kick_cpu et al.)
+  // actually attach under MONTAUK_SCX_STORM. Off by default (the probes are
+  // gated for the 7.1+ trampoline-patch freeze), and while off the scx_storm
+  // map stays all-zero -- so a sample taken then is not a measured zero, it is
+  // no measurement at all. Gate the emit on this so the trace never carries a
+  // fictional zero-count interval the analyzer would render as kick/s=0.
+  bool scx_storm_active_ = false;
 
   // Ring-drop accounting: sample the BPF drop_counts map (per-CPU per-type
   // reserve failures) and stamp a cumulative TRACE_EVT_DROPS snapshot into
@@ -112,7 +119,7 @@ private:
   montauk::app::TraceBuffers& buffers_;
   std::string pattern_;            // full --trace value (comma-separated list)
   std::string primary_pattern_;    // first token: the BPF .rodata fast-path
-  std::vector<sublimation::BMH> matchers_;  // one per token; OR
+  std::vector<sublimation_search> matchers_;  // one per token (fixed, icase); OR
   // montauk's own producer endpoint in the provider mesh: serves the trace
   // snapshot as Prometheus text so montauk is a peer, not a stderr dumper.
   montauk::app::ProviderEmitter emitter_{montauk::app::ProviderEmitter::kSelfName};

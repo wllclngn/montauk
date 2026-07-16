@@ -8,6 +8,8 @@
 //     drives the mean degree to 4; periodic series stay near 2.
 //   - Bandt-Pompe d=3 permutation entropy: normalized Shannon entropy of the
 //     ordinal-pattern distribution; uniform (all 6 patterns equiprobable) -> 1.
+// Two samplers also live here: they read the raw values and hand the RQA and
+// spectral lenses (randomness.c) a type-erased double sample.
 
 #include <stdlib.h>
 #include <math.h>
@@ -64,4 +66,31 @@ static double SUB_TYPED(sub_bandt_pompe_h)(const SUB_TYPE *arr, size_t n) {
         }
     }
     return h / log2(6.0);
+}
+
+// Contiguous leading window as doubles, for the RQA lens. RQA measures
+// TEMPORAL determinism (diagonal recurrence lines need consecutive sample
+// points to be consecutive in time); an evenly-strided subsample composes any
+// underlying map stride-fold, whose derivative grows geometrically, and erases
+// the diagonal structure it exists to detect (verified: logistic-map DET falls
+// from 0.69 contiguous to the IID baseline at stride 7). Returns the sample
+// size min(n, cap).
+static size_t SUB_TYPED(sub_rand_window_f64)(const SUB_TYPE *arr, size_t n,
+                                             double *out, size_t cap) {
+    size_t m = n < cap ? n : cap;
+    for (size_t i = 0; i < m; i++) out[i] = (double)arr[i];
+    return m;
+}
+
+// Evenly-strided sample as doubles, for the spectral lens. Spectral flatness
+// reads the VALUE distribution, so the sample follows classify's
+// estimate_distinct stride convention (stride = n / m, take arr[i * stride])
+// and covers the whole array. Returns the sample size min(n, cap).
+static size_t SUB_TYPED(sub_rand_stride_f64)(const SUB_TYPE *arr, size_t n,
+                                             double *out, size_t cap) {
+    size_t m = n < cap ? n : cap;
+    size_t stride = n / m;
+    if (stride < 1) stride = 1;
+    for (size_t i = 0; i < m; i++) out[i] = (double)arr[i * stride];
+    return m;
 }

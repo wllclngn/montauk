@@ -246,112 +246,14 @@ static void fill_organ_of_organs(int64_t *arr, size_t n) {
     }
 }
 
-// McILROY DYNAMIC ADVERSARY (1999)
-//
-// Constructs worst-case input DURING sorting by observing which
-// comparisons the sort makes. When two "gas" (undecided) elements
-// are compared, the one that looks like a pivot candidate gets
-// frozen to a low value, maximizing partition imbalance.
-
-static int mcilroy_n;
-static int *mcilroy_gas;       // 1 = undecided, 0 = frozen
-static int64_t *mcilroy_val;   // assigned values
-static int mcilroy_nsolid;     // number of frozen elements
-static int mcilroy_candidate;  // current pivot candidate
-static size_t mcilroy_ncmp;    // comparison counter
-
-static int mcilroy_cmp(const void *ap, const void *bp) {
-    size_t a = ((const int64_t *)ap - mcilroy_val);
-    size_t b = ((const int64_t *)bp - mcilroy_val);
-    mcilroy_ncmp++;
-
-    if (mcilroy_gas[a] && mcilroy_gas[b]) {
-        // Both gas: freeze the candidate (last gas seen)
-        if (mcilroy_candidate >= 0 && mcilroy_gas[mcilroy_candidate]) {
-            mcilroy_gas[mcilroy_candidate] = 0;
-            mcilroy_val[mcilroy_candidate] = mcilroy_nsolid++;
-        }
-        mcilroy_candidate = (int)a;
-    }
-    if (mcilroy_gas[a] && !mcilroy_gas[b]) mcilroy_candidate = (int)a;
-    if (!mcilroy_gas[a] && mcilroy_gas[b]) mcilroy_candidate = (int)b;
-
-    // Compare: frozen elements by assigned value, gas elements are "equal"
-    int64_t va = mcilroy_gas[a] ? mcilroy_n : mcilroy_val[a];
-    int64_t vb = mcilroy_gas[b] ? mcilroy_n : mcilroy_val[b];
-    return (va > vb) - (va < vb);
-}
-
-static void test_mcilroy_adversary(void) {
-    static const size_t mcilroy_sizes[] = {1000, 10000, 100000};
-    int num_sizes = 3;
-
-    printf("\n  --- McIlroy dynamic adversary ---\n");
-
-    for (int si = 0; si < num_sizes; si++) {
-        size_t n = mcilroy_sizes[si];
-        char name[128];
-        snprintf(name, sizeof(name), "mcilroy_adversary (n=%zu)", n);
-
-        // Allocate state
-        mcilroy_n = (int)n;
-        mcilroy_gas = (int *)malloc(n * sizeof(int));
-        mcilroy_val = (int64_t *)malloc(n * sizeof(int64_t));
-        assert(mcilroy_gas && mcilroy_val);
-
-        // Initialize: all elements are gas, values are placeholders
-        for (size_t i = 0; i < n; i++) {
-            mcilroy_gas[i] = 1;
-            mcilroy_val[i] = 0;
-        }
-        mcilroy_nsolid = 0;
-        mcilroy_candidate = -1;
-        mcilroy_ncmp = 0;
-
-        // Sort using the generic comparator interface -- the adversary
-        // observes comparisons and freezes pivot candidates to low values
-        sublimation(mcilroy_val, n, sizeof(int64_t), mcilroy_cmp);
-
-        // Freeze any remaining gas elements
-        for (size_t i = 0; i < n; i++) {
-            if (mcilroy_gas[i]) {
-                mcilroy_gas[i] = 0;
-                mcilroy_val[i] = mcilroy_nsolid++;
-            }
-        }
-
-        // Verify output is sorted
-        int sorted_ok = 1;
-        for (size_t i = 1; i < n; i++) {
-            if (mcilroy_val[i] < mcilroy_val[i - 1]) {
-                sorted_ok = 0;
-                break;
-            }
-        }
-
-        // O(n^2) detector: comparisons must be < n * log2(n) * 4
-        double log2n = log2((double)n);
-        size_t bound = (size_t)((double)n * log2n * 4.0);
-        int cmp_ok = mcilroy_ncmp <= bound;
-
-        if (sorted_ok && cmp_ok) {
-            printf("  %-50s PASS  (cmps=%zu, bound=%zu)\n", name, mcilroy_ncmp, bound);
-            _verify_pass++;
-        } else {
-            if (!sorted_ok) {
-                fprintf(stderr, "  [FAIL] %s: output not sorted\n", name);
-            }
-            if (!cmp_ok) {
-                fprintf(stderr, "  [FAIL] %s: too many comparisons: %zu > %zu (possible O(n^2))\n",
-                        name, mcilroy_ncmp, bound);
-            }
-            _verify_fail++;
-        }
-
-        free(mcilroy_gas);
-        free(mcilroy_val);
-    }
-}
+// The McIlroy dynamic-adversary test that lived here was removed with the
+// generic qsort-compatible shim (ABI v3): it drove its comparator through
+// `sublimation(...)`, which was a passthrough to glibc qsort, so the
+// adversary only ever attacked libc, never this engine. The anti-quicksort
+// adversary that actually targets the typed engine lives in
+// test_antiqsort.c: the killer permutation is generated via a
+// comparator-driven libc qsort (the oracle role libc keeps in tests), then
+// materialized and fed to sublimation_i64.
 
 // COMPARISON BOUND ENFORCEMENT
 //
@@ -461,9 +363,6 @@ int main(void) {
     // Adversarial stability
     run_pattern("all_equal_except_endpoints", fill_all_equal_except_endpoints);
     run_pattern("organ_of_organs", fill_organ_of_organs);
-
-    // McIlroy dynamic adversary
-    test_mcilroy_adversary();
 
     // Comparison bound enforcement
     test_comparison_bounds();

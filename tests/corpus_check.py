@@ -57,11 +57,11 @@ CLI_CASES = [
     (["classify"], _NUMS),
     (["characterize"], _NUMS),
     (["rand"], _NUMS),
-    (["grep", "a"], _ROWS),
-    (["grep", "-n", "a"], _ROWS),
-    (["grep", "-c", "a"], _ROWS),
-    (["grep", "-v", "a"], _ROWS),
-    (["contains", "beta"], _ROWS),
+    (["search", "a"], _ROWS),
+    (["search", "-n", "a"], _ROWS),
+    (["search", "-c", "a"], _ROWS),
+    (["search", "-v", "a"], _ROWS),
+    (["search", "-F", "beta"], _ROWS),
     (["field", "2"], _ROWS),
     (["field", "1,3"], _ROWS),
     (["where", "2 > 15"], _ROWS),
@@ -88,8 +88,26 @@ CLI_CASES = [
     (["replace", "[0-9]", "-"], "a1b2c3\n"),
     (["replace", "X+", "_"], "aXXbXXc\n"),
     (["locate", "sorted", "--window", "4", "--values"], "1\n2\n3\n4\n5\n6\n7\n8\n2\n9\n0\n5\n"),
-    (["contains", "foo"], "foo\nFOO\nFoo\nbar\n"),        # case-SENSITIVE default (grep -F)
-    (["contains", "-i", "foo"], "foo\nFOO\nFoo\nbar\n"),  # -i folds ASCII case
+    (["search", "-F", "foo"], "foo\nFOO\nFoo\nbar\n"),        # case-SENSITIVE default (search -F)
+    (["search", "-F", "-i", "foo"], "foo\nFOO\nFoo\nbar\n"),  # -i folds ASCII case
+    # v8.0.0 search coverage, the self-consistency half: not grep-comparable
+    # byte-for-byte (--color's reset is \x1b[0m where grep also emits \x1b[K,
+    # -S is a ripgrep-ism, --files-from and --line-buffered are sublimation's
+    # own), so their stdout is frozen here instead. All deterministic in a
+    # pipe: --color=always forces color off-TTY, --line-buffered only changes
+    # drain timing, never bytes.
+    (["search", "--color=always", "-n", "fo+"], "xfooy\nbar\nfoo\n"),
+    (["search", "--color=always", "-o", "-e", "oba", "-e", "foo"], "foobar\n"),
+    (["search", "--color=always", "-H", "-c", "alpha"], _ROWS),
+    (["search", "--color=always", "-A", "1", "MATCH"], "one\nMATCH\ntwo\nthree\nMATCH\nfour\n"),
+    (["search", "--color=never", "-n", "fo+"], "xfooy\nbar\n"),
+    (["search", "--line-buffered", "alpha"], _ROWS),
+    (["search", "-S", "alpha"], "ALPHA 1\nalpha 2\nbeta 3\n"),   # no uppercase in pattern -> folds
+    (["search", "-S", "Alpha"], "ALPHA 1\nAlpha 2\nalpha 3\n"),  # uppercase -> stays exact
+    (["search", "-w", "foo"], "foo bar\nfoobar\nx foo\n"),
+    (["search", "-x", "-F", "beta"], "beta\nbetax\nbeta\n"),
+    (["search", "-e", "alpha", "-e", "gamma"], _ROWS),
+    (["search", "a", "--files-from", "-"], "tests/fixtures/joinb.txt\ntests/fixtures/setb.txt\n"),
 ]
 
 note = harness.logger("corpus")

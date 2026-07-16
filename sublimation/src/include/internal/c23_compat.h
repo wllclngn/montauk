@@ -59,8 +59,11 @@
 #endif
 #endif
 
-// unreachable()
-#if !SUB_HAVE_C23
+// unreachable() -- guarded: gcc 13's glibc stddef.h defines unreachable() in
+// C23 mode even when SUB_HAVE_C23's own detection says otherwise, so an
+// unconditional redefine here dies on -Werror (confirmed on gcc 13.3 /
+// Ubuntu 24.04). Respect an existing definition wherever it came from.
+#if !SUB_HAVE_C23 && !defined(unreachable)
 #if defined(__GNUC__)
 #define unreachable() __builtin_unreachable()
 #else

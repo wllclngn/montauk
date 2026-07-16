@@ -1,9 +1,9 @@
-// sublimation_text.h -- text matching: substring (Boyer-Moore-Horspool) and
-// regex (Thompson NFA). This is the order-free, membership side of search --
-// the counterpart to the flow model's order/structure side. Both are ported
-// 1:1 from montauk's C++ originals; ASCII case-insensitive throughout. Housing
-// them here makes sublimation montauk's single search/match/order core: text
-// and structure under one roof.
+// sublimation_text.h -- text search: the tri-face matcher (sublimation_search).
+// One engine, three faces (exact/anchor, regex, fuzzy k-mismatch) under a
+// classify-dispatch front end with a data-relative rare-byte prefilter. This is
+// sublimation's text search/match side, the counterpart to the sort core's
+// order/structure side; the two under one roof make sublimation montauk's single
+// search/match/order core.
 #ifndef SUBLIMATION_TEXT_H
 #define SUBLIMATION_TEXT_H
 
@@ -16,88 +16,69 @@
 extern "C" {
 #endif
 
-// ── Boyer-Moore-Horspool literal substring search (ASCII case-insensitive) ──
-// Compile a pattern once, search many times. O(1) extra space (a fixed 256-byte
-// bad-character table). Average O(n/m) sublinear; worst O(n*m). A pattern longer
-// than 256 bytes, or empty, compiles to the "empty pattern" that matches at 0 --
-// 1:1 with the C++ original.
-#define SUBLIMATION_BMH_MAX_PATTERN 256
+// Flow-dual text matcher (sublimation_search). One compiled program covers three
+// faces, selected at compile time: exact/anchor (FIXED), regex (Glushkov
+// bit-parallel field, the default) and fuzzy k-mismatch (k > 0). The program is a
+// value object -- stack- or static-allocate one, compile once, match/count many.
+// Per-call scratch (the field's reach cache, the fuzzy dedup array) is allocated
+// and freed inside find/count; the program itself never heap-allocates.
+#define SUBLIMATION_SEARCH_MAX_PATTERN 1023
+#define SUBLIMATION_SEARCH_MAX_POS     64    // Glushkov positions (bits in the field)
+
+enum {
+    SUBLIMATION_SEARCH_FIXED = 1u,   // literal/anchor face (default is regex)
+    SUBLIMATION_SEARCH_ICASE = 2u    // ASCII case-fold at match time (A-Z == a-z)
+};
+
+// The compiled Glushkov position-NFA, simulated as a bit-vector field. Internal
+// to the search program; exposed only so sublimation_search is a complete value
+// type the caller can stack/static-allocate.
+typedef struct {
+    uint8_t  setb[SUBLIMATION_SEARCH_MAX_POS][32];  // byte-set per position
+    uint64_t follow[SUBLIMATION_SEARCH_MAX_POS];    // positions that may follow i
+    uint64_t first, last;                           // start / accept position sets
+    int npos, nullable_all, ok;
+    int anchored_start, anchored_end;               // leading ^ / trailing $
+} sublimation_search_gnfa;
 
 typedef struct {
-    int           bad_char[256];
-    unsigned char pattern[SUBLIMATION_BMH_MAX_PATTERN];
-    int           pattern_len;
-    int           icase;   // ASCII case-fold at match time (off by default)
-} sublimation_bmh;
+    sublimation_search_gnfa g;                          // regex program (REGEX mode)
+    char    pattern[SUBLIMATION_SEARCH_MAX_PATTERN + 1];// NUL-terminated source
+    size_t  pattern_len;
+    int     k;      // fuzzy Hamming threshold (0 = exact/regex)
+    int     mode;   // 0 = exact, 1 = regex, 2 = fuzzy (internal)
+    int     icase;
+    int     valid;
+} sublimation_search;
 
-// Compile `pattern` (len bytes) into `out`. len == 0 or len > 256 leaves an
-// empty pattern (search returns 0). No allocation; `out` is caller-owned.
-// Case-SENSITIVE -- mirrors sublimation_nfa_compile and grep -F. Use _ex for
-// case-insensitive folding.
-SUB_API void sublimation_bmh_compile(sublimation_bmh *out, const char *pattern, size_t len);
-
-// As sublimation_bmh_compile, but folds ASCII case at match time when icase != 0
-// (A-Z and a-z compare equal). UTF-8 case folding is not done.
-SUB_API void sublimation_bmh_compile_ex(sublimation_bmh *out, const char *pattern, size_t len, int icase);
-
-// Offset of the first match of the compiled pattern in text[0..n), or -1.
-SUB_API long sublimation_bmh_search(const sublimation_bmh *bmh, const char *text, size_t n);
-
-// ── Thompson NFA regex engine (byte-level simulator, UTF-8-aware compiler) ──
-// 1:1 C23 port of montauk's ThompsonNFA. Supports  . [] [^] [a-z] * + ? | () ^ $
-// and \ (escape). Zero heap during simulation (a uint64_t[4] bitset). O(n*m)
-// guaranteed -- no backtracking. The compiled machine is a value object; stack-
-// or static-allocate one, compile once, match many.
-#define SUBLIMATION_NFA_MAX_STATES 256
-
-typedef struct {
-    uint8_t op;         // 0 = CHAR, 1 = CLASS, 2 = SPLIT, 3 = MATCH
-    uint8_t ch;         // CHAR: the byte to match
-    uint8_t class_idx;  // CLASS: index into classes[]
-    uint8_t negated;    // CLASS: negated?
-    int16_t out;        // next state (-1 = none)
-    int16_t out1;       // SPLIT: second epsilon target (-1 = none)
-} sublimation_nfa_state;
-
-typedef struct { uint8_t bits[32]; } sublimation_nfa_class;  // 256-bit set
-
-typedef struct {
-    sublimation_nfa_state states[SUBLIMATION_NFA_MAX_STATES];
-    int  num_states;
-    sublimation_nfa_class classes[SUBLIMATION_NFA_MAX_STATES];
-    int  num_classes;
-    int  start;
-    int  anchored_start;
-    int  anchored_end;
-    int  icase;         // ASCII case-fold at match time (grep -i); UTF-8 not folded
-    int  valid;
-} sublimation_nfa;
-
-// Compile `pattern` (len bytes) into `out`. Check sublimation_nfa_valid() after.
-SUB_API void sublimation_nfa_compile(sublimation_nfa *out, const char *pattern, size_t len);
-
-// As sublimation_nfa_compile, but matches ASCII case-insensitively when icase != 0
-// (grep -i): A-Z and a-z compare equal at match time. UTF-8 case folding is not done.
-SUB_API void sublimation_nfa_compile_ex(sublimation_nfa *out, const char *pattern, size_t len, int icase);
+// Compile `pattern` (len bytes) into `out`. `flags` selects the face
+// (SUBLIMATION_SEARCH_FIXED / _ICASE); default (0) is regex. k > 0 selects the
+// fuzzy face (k == 0 is exact/regex). No allocation; `out` is caller-owned. Check
+// sublimation_search_valid() afterward.
+SUB_API void sublimation_search_compile(sublimation_search *out, const char *pattern,
+                                        size_t len, unsigned flags, int k);
 
 // Did the pattern compile?
-SUB_API int sublimation_nfa_valid(const sublimation_nfa *nfa);
+SUB_API int sublimation_search_valid(const sublimation_search *s);
 
 // Whole-input match (implicitly anchored ^...$). 1 = match, 0 = not.
-SUB_API int sublimation_nfa_full_match(const sublimation_nfa *nfa, const char *input, size_t n);
+SUB_API int sublimation_search_full_match(const sublimation_search *s, const char *input, size_t n);
 
-// First (leftmost-longest) match in input[0..n). Returns the start offset, and
-// writes the end offset (exclusive) to *end_out when end_out != NULL. Returns
-// -1 with no write on no match.
-SUB_API long sublimation_nfa_find(const sublimation_nfa *nfa, const char *input, size_t n, long *end_out);
+// Leftmost match in input[0..n). Returns the start offset (or -1), and writes the
+// end offset (exclusive) to *end_out when end_out != NULL.
+SUB_API long sublimation_search_find(const sublimation_search *s, const char *input, size_t n,
+                                     long *end_out);
 
-// As sublimation_nfa_find, but only considers matches starting at or after
-// `from`, with anchors staying absolute: ^ matches only at offset 0 of input
-// and $ only at n. This is the continuation-safe form. Searching `input + off`
-// instead makes every restart a fresh buffer whose position 0 satisfies ^, so
-// an anchored pattern re-matches at every offset. Returns absolute offsets.
-SUB_API long sublimation_nfa_find_from(const sublimation_nfa *nfa, const char *input, size_t n,
-                                       size_t from, long *end_out);
+// As sublimation_search_find, but only considers matches starting at or after
+// `from`; anchors stay absolute (^ matches only at offset 0 of input, $ only at
+// n). Continuation-safe. Returns absolute offsets.
+SUB_API long sublimation_search_find_from(const sublimation_search *s, const char *input, size_t n,
+                                          size_t from, long *end_out);
+
+// Count all matches in input[0..n). Exact: overlapping occurrences. Regex: match-
+// end positions. Fuzzy: windows within k mismatches. Optimizations (regex literal
+// prefilter, fuzzy pigeonhole prefilter) are internal and never change the count.
+SUB_API size_t sublimation_search_count(const sublimation_search *s, const char *input, size_t n);
 
 #ifdef __cplusplus
 }

@@ -435,17 +435,16 @@ static size_t SUB_TYPED(partition_one_level)(SUB_TYPE *arr, size_t lo, size_t hi
     float quality = (float)(pivot_pos - lo) / (float)n;
     if (quality > 0.5f) quality = 1.0f - quality;
     quality *= 2.0f;
-    sub_ewma_update(&state->partition_quality_ewma, quality);
-
-    bool degraded = sub_cusum_update(&state->cusum_s, quality,
-                                     state->partition_quality_ewma,
-                                     state->osc_position);
-
-    sub_oscillator_update(&state->osc_position, &state->osc_velocity, degraded);
+    // The oscillator tracks partition BADNESS (1 - quality): a sustained run
+    // of pathological pivots holds the displacement above the dead band and
+    // pumps the energy reservoir past release. The EWMA+CUSUM pair this
+    // replaced accumulated quality rising above a depressed baseline, i.e.
+    // it fired on the recovery AFTER a bad stretch; the oscillator fires
+    // DURING it, while the spectral fallback can still help.
+    bool degraded = sub_osc_detect(&state->partition_osc, 1.0f - quality);
 
     if (sub_unlikely(degraded)) {
         state->rescans++;
-        state->cusum_s = 0.0f;
 
         // spectral fallback (only for i64 currently)
 #ifdef SUB_TYPE_IS_I64

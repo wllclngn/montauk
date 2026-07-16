@@ -82,9 +82,7 @@ class Results:
         self.start_time = time.time()
 
     def section(self, name):
-        print(f"\n  {'=' * 64}")
-        print(f"  {name}")
-        print(f"  {'=' * 64}")
+        print(f"\n  {name}")
         self.sections.append(name)
 
     def ok(self, msg):
@@ -106,10 +104,8 @@ class Results:
     def summary(self):
         elapsed = time.time() - self.start_time
         total = self.passed + self.failed + self.skipped
-        print(f"\n  {'=' * 64}")
-        print(f"  RESULTS: {self.passed} passed, {self.failed} failed, "
-              f"{self.skipped} skipped (of {total}) in {elapsed:.1f}s")
-        print(f"  {'=' * 64}\n")
+        print(f"\n  RESULTS: {self.passed} passed, {self.failed} failed, "
+              f"{self.skipped} skipped (of {total}) in {elapsed:.1f}s\n")
         return self.failed == 0
 
 
@@ -132,21 +128,44 @@ def run_cmd(cmd, timeout=300, cwd=None, env=None):
 # BUILD
 
 def build_library(R):
+    """Self-contained in-tree build: compile src/**/*.c into the static and
+    shared libraries directly. This suite previously shelled out to a
+    sublimation-local install.py that was never committed, so the BUILD
+    phase failed on any clean checkout and every test binary silently
+    linked whatever stale libsublimation.a was lying in build/ -- the
+    stale-oracle failure mode this suite exists to prevent. Same recipe
+    test_search_match.py already self-builds with."""
     R.section("BUILD")
-    ret, _, stderr = run_cmd(
-        [sys.executable, str(PROJECT_DIR / "install.py"), "build"],
-        cwd=str(PROJECT_DIR),
-    )
-    if ret == 0:
-        static = BUILD_DIR / "libsublimation.a"
-        shared = BUILD_DIR / "libsublimation.so"
-        if static.exists() and shared.exists():
-            R.ok(f"libsublimation.a ({static.stat().st_size} bytes)")
-            R.ok(f"libsublimation.so ({shared.stat().st_size} bytes)")
-        else:
-            R.fail("library files not found after build")
-    else:
-        R.fail("build failed", stderr[-300:])
+    import shutil as _shutil
+    cc = _shutil.which("gcc") or _shutil.which("cc") or _shutil.which("clang")
+    if not cc:
+        R.fail("no C compiler on PATH")
+        return
+    BUILD_DIR.mkdir(exist_ok=True)
+    srcs = sorted(str(p) for p in SRC_DIR.rglob("*.c"))
+    base = [cc, "-std=c2x", "-O2", "-march=native", "-fPIC",
+            "-I", str(SRC_DIR / "include"), "-I", str(SRC_DIR)]
+    objs = []
+    for s in srcs:
+        obj = BUILD_DIR / (Path(s).stem + ".o")
+        ret, _, stderr = run_cmd(base + ["-c", s, "-o", str(obj)])
+        if ret != 0:
+            R.fail(f"compile {Path(s).name}", stderr[-300:])
+            return
+        objs.append(str(obj))
+    static = BUILD_DIR / "libsublimation.a"
+    shared = BUILD_DIR / "libsublimation.so"
+    static.unlink(missing_ok=True)  # ar rcs appends; stale members must go
+    ret, _, stderr = run_cmd(["ar", "rcs", str(static)] + objs)
+    if ret != 0:
+        R.fail("ar failed", stderr[-300:])
+        return
+    ret, _, stderr = run_cmd([cc, "-shared", "-o", str(shared)] + objs + ["-lpthread", "-lm"])
+    if ret != 0:
+        R.fail("shared link failed", stderr[-300:])
+        return
+    R.ok(f"libsublimation.a ({static.stat().st_size} bytes)")
+    R.ok(f"libsublimation.so ({shared.stat().st_size} bytes)")
 
 
 def compile_c(name, src, extra_flags=None, lib_name="libsublimation.a"):
@@ -205,6 +224,7 @@ def test_c_suites(R):
         ("saw_mixed",         TEST_DIR / "test_saw_mixed.c",         120),
         ("antiqsort",         TEST_DIR / "test_antiqsort.c",         300),
         ("strings",           TEST_DIR / "test_strings.c",           120),
+        ("randomness",        TEST_DIR / "test_randomness.c",        120),
     ]:
         if not src.exists():
             R.skip(name, "source not found")
@@ -410,28 +430,31 @@ def build_bench_binaries():
     if ret == 0:
         bins["go"] = go_bin
 
-    # Rust direct (sublimation linked)
-    rust_direct = BUILD_DIR / "bench_rust_direct"
-    ret, _, _ = run_cmd([
-        "rustc", "-O", "--edition", "2021",
-        "-L", str(BUILD_DIR), "-l", "dylib=sublimation",
-        "-l", "dylib=pthread", "-l", "dylib=m",
-        str(PROJECT_DIR / "bindings" / "rust" / "bench_direct.rs"),
-        "-o", str(rust_direct),
-    ], timeout=60)
-    if ret == 0:
-        bins["rust_direct"] = rust_direct
+    # Rust/Go direct (sublimation linked via bindings/). The bindings/
+    # directory was never committed to this tree -- skip cleanly when
+    # absent instead of erroring on every clean checkout; the standalone
+    # bench_rust/bench_go comparators above still run.
+    if (PROJECT_DIR / "bindings").is_dir():
+        rust_direct = BUILD_DIR / "bench_rust_direct"
+        ret, _, _ = run_cmd([
+            "rustc", "-O", "--edition", "2021",
+            "-L", str(BUILD_DIR), "-l", "dylib=sublimation",
+            "-l", "dylib=pthread", "-l", "dylib=m",
+            str(PROJECT_DIR / "bindings" / "rust" / "bench_direct.rs"),
+            "-o", str(rust_direct),
+        ], timeout=60)
+        if ret == 0:
+            bins["rust_direct"] = rust_direct
 
-    # Go direct (sublimation via cgo)
-    go_direct = BUILD_DIR / "bench_go_direct"
-    env_cgo = {**os.environ, "GOWORK": "off", "CGO_ENABLED": "1"}
-    ret, _, _ = run_cmd(
-        ["go", "build", "-o", str(go_direct),
-         str(PROJECT_DIR / "bindings" / "go" / "bench_direct.go")],
-        timeout=60, env=env_cgo,
-    )
-    if ret == 0:
-        bins["go_direct"] = go_direct
+        go_direct = BUILD_DIR / "bench_go_direct"
+        env_cgo = {**os.environ, "GOWORK": "off", "CGO_ENABLED": "1"}
+        ret, _, _ = run_cmd(
+            ["go", "build", "-o", str(go_direct),
+             str(PROJECT_DIR / "bindings" / "go" / "bench_direct.go")],
+            timeout=60, env=env_cgo,
+        )
+        if ret == 0:
+            bins["go_direct"] = go_direct
 
     return bins
 

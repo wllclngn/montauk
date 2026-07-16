@@ -4,6 +4,7 @@
 // sublimation_strings output element-by-element (pointer equality is fine
 // since we permute pointers). Any mismatch is a fail.
 #include "../src/include/sublimation_strings.h"
+#include "../src/strings/strings_internal.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -377,6 +378,45 @@ int main(void) {
         else    { _fail++; }
 
         free(arr); free(lens); free(indices); free(buf);
+    }
+
+    // Fallback introsort differential: sub_strcmp_introsort is the path the
+    // public entry points take under scratch OOM or past the 2^32 cap --
+    // conditions a test cannot force -- so it is differential-tested here
+    // directly against the same qsort oracle the main pipeline is checked
+    // with. Random, adjacent-duplicate and adversarial (sorted, reversed,
+    // all-equal) shapes.
+    {
+        enum { FN = 3000 };
+        static char fbuf[FN][12];
+        static const char *forig[FN];
+        lcg_seed(0xF411BACC);
+        for (size_t i = 0; i < FN; i++) {
+            size_t L = 1 + (lcg_next() % 10);
+            for (size_t j = 0; j < L; j++) fbuf[i][j] = (char)('a' + (lcg_next() % 26));
+            fbuf[i][L] = '\0';
+            forig[i] = fbuf[i];
+        }
+        const char *shapes[4][FN];
+        const char *names[4] = {"fallback_random", "fallback_sorted",
+                                "fallback_reversed", "fallback_all_equal"};
+        memcpy(shapes[0], forig, sizeof(forig));
+        memcpy(shapes[1], forig, sizeof(forig));
+        qsort(shapes[1], FN, sizeof(const char *), qsort_cmp);
+        for (size_t i = 0; i < FN; i++) shapes[2][i] = shapes[1][FN - 1 - i];
+        for (size_t i = 0; i < FN; i++) shapes[3][i] = forig[0];
+        for (int s = 0; s < 4; s++) {
+            const char *ref[FN], *got[FN];
+            memcpy(ref, shapes[s], sizeof(ref));
+            memcpy(got, shapes[s], sizeof(got));
+            qsort(ref, FN, sizeof(const char *), qsort_cmp);
+            sub_strcmp_introsort(got, FN);
+            int ok = 1;
+            for (size_t i = 0; i < FN; i++)
+                if (strcmp(got[i], ref[i]) != 0) { ok = 0; break; }
+            if (ok) { printf("  %-50s PASS\n", names[s]); _pass++; }
+            else    { fprintf(stderr, "  [FAIL] %s\n", names[s]); _fail++; }
+        }
     }
 
     // Degenerate indices cases

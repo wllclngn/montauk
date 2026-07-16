@@ -315,11 +315,16 @@ void section_disk(std::vector<Row>& out, const Snapshot& s) {
       if (is_partition_of_listed_device(d.name, s.disk.devices)) continue;
       devs.push_back(&d);
     }
-    std::sort(devs.begin(), devs.end(),
-              [](const auto* a, const auto* b) { return a->util_pct > b->util_pct; });
+    // Only the top two by util_pct are rendered: a two-slot selection scan
+    // (strict >, first-encountered wins ties) instead of sorting the vector.
+    const montauk::model::DiskDev* top[2] = {nullptr, nullptr};
+    for (const auto* d : devs) {
+      if (!top[0] || d->util_pct > top[0]->util_pct) { top[1] = top[0]; top[0] = d; }
+      else if (!top[1] || d->util_pct > top[1]->util_pct) { top[1] = d; }
+    }
     size_t dlim = std::min<size_t>(devs.size(), 2);
     for (size_t i = 0; i < dlim; ++i) {
-      const auto& d = *devs[i];
+      const auto& d = *top[i];
       std::ostringstream rr;
       rr << static_cast<int>(d.util_pct + 0.5) << "% " << grey_bullet() << " "
          << uic.normal << static_cast<int>(d.read_bps / 1000000) << "MB/s/"

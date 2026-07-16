@@ -391,14 +391,20 @@ static size_t SUB_TYPED(estimate_distinct)(const SUB_TYPE *arr, size_t n) {
     return estimate;
 }
 
-// CUSUM PHASE BOUNDARY DETECTION
+// PHASE BOUNDARY DETECTION (damped oscillator, energy hysteresis)
+// The oscillator's position tracks the running per-window inversion rate
+// (the spring follows it; no separate EWMA baseline), and a regime change
+// holds the displacement above the dead band, pumping the energy reservoir
+// past release: that window's index is the boundary. A single-window spike
+// impulses once, the spring and damping pull the position back and the
+// energy leaks away, so the noise floor cannot fire it -- the chatter
+// failure the raw CUSUM this replaces was condemned for in the entropy
+// research, and the reason PANDEMONIUM abandoned CUSUM for this primitive.
 static size_t SUB_TYPED(detect_phase_boundary)(const SUB_TYPE *arr, size_t n) {
     if (n < 64) return 0;
 
     SUB_CONSTEXPR size_t WINDOW = 32;
-    float cusum = 0.0f;
-    float baseline = 0.0f;
-    bool have_baseline = false;
+    sub_osc_t osc = {0};   // primes from the first window's rate
 
     for (size_t i = WINDOW; i < n; i += WINDOW / 2) {
         size_t inv = 0;
@@ -407,25 +413,7 @@ static size_t SUB_TYPED(detect_phase_boundary)(const SUB_TYPE *arr, size_t n) {
             if (arr[j] > arr[j + 1]) inv++;
         }
         float rate = (float)inv / (float)(end - i);
-
-        if (!have_baseline) {
-            baseline = rate;
-            have_baseline = true;
-            continue;
-        }
-
-        float deviation = rate - baseline - SUB_CUSUM_K;
-        if (deviation > 0.0f) {
-            cusum += deviation;
-        } else {
-            cusum *= 0.5f;
-        }
-
-        if (cusum > SUB_CUSUM_H) {
-            return i;
-        }
-
-        baseline = 0.9f * baseline + 0.1f * rate;
+        if (sub_osc_detect(&osc, rate)) return i;
     }
 
     return 0;
@@ -531,6 +519,7 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
             p.run_count = 1;
             p.mono_count = 1;
             p.max_run_len = n;
+            p.distinct_estimate = 1;   // all equal: one value, known exactly
             return p;
         }
         // Sorted (non-decreasing)
@@ -541,6 +530,11 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
             p.run_count = 1;
             p.mono_count = 1;
             p.max_run_len = n;
+            // Sorted fast paths exit before estimate_distinct runs; fill it
+            // here so downstream readers (the randomness battery's DISTINCT
+            // lens) see a real value instead of a fake 0. Sampled, same
+            // contract as the estimator on the slow path.
+            p.distinct_estimate = SUB_TYPED(estimate_distinct)(arr, n);
             return p;
         }
         // Reversed (non-increasing)
@@ -551,6 +545,7 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
             p.run_count = 1;
             p.mono_count = 1;
             p.max_run_len = n;
+            p.distinct_estimate = SUB_TYPED(estimate_distinct)(arr, n);
             return p;
         }
     }
@@ -566,6 +561,7 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
         p.disorder = SUB_SORTED;
         p.lis_length = n;
         p.lds_length = 1;
+        p.distinct_estimate = SUB_TYPED(estimate_distinct)(arr, n);
         return p;
     }
 
@@ -573,6 +569,7 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
         p.disorder = SUB_REVERSED;
         p.lis_length = 1;
         p.lds_length = n;
+        p.distinct_estimate = SUB_TYPED(estimate_distinct)(arr, n);
         return p;
     }
 
@@ -584,6 +581,7 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
             p.lis_length = n - 1;  // all but the rotation break
             p.lds_length = 2;
             p.rotation_point = rot;
+            p.distinct_estimate = SUB_TYPED(estimate_distinct)(arr, n);
             return p;
         }
     }
@@ -594,6 +592,7 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
     } else if (runs.run_count < n / 8 && runs.max_run_len > n / 2) {
         p.disorder = SUB_NEARLY_SORTED;
         p.lis_length = runs.max_run_len;
+        p.distinct_estimate = SUB_TYPED(estimate_distinct)(arr, n);
         // Still do patience sort for tableau if within bounds
         if (n >= SUB_PATIENCE_THRESHOLD && n <= SUB_TABLEAU_MAX_N) {
             SUB_TYPED(patience_sort_with_tableau)(arr, n, &p);

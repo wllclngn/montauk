@@ -129,7 +129,28 @@ LabelVec cell_display(const LabelVec& labels,
   LabelVec out;
   for (const auto& kv : labels)
     if (!drop.count(kv.first)) out.push_back(kv);
-  std::sort(out.begin(), out.end());
+  // Whole-pair lexicographic order (key, then value) as one byte-key string
+  // sort: key + NUL + value compares exactly like std::pair<string,string>
+  // (label text never contains NUL), via the length-explicit index sort.
+  const size_t n = out.size();
+  if (n > 1) {
+    std::vector<std::string> keys(n);
+    std::vector<const char*> ptrs(n);
+    std::vector<size_t> lens(n);
+    std::vector<uint32_t> idx(n);
+    for (size_t i = 0; i < n; ++i) {
+      keys[i] = out[i].first;
+      keys[i].push_back('\0');
+      keys[i] += out[i].second;
+      ptrs[i] = keys[i].data();
+      lens[i] = keys[i].size();
+    }
+    sublimation_strings_indices_len(ptrs.data(), lens.data(), idx.data(), n);
+    LabelVec sorted;
+    sorted.reserve(n);
+    for (size_t i = 0; i < n; ++i) sorted.push_back(std::move(out[idx[i]]));
+    out = std::move(sorted);
+  }
   return out;
 }
 
@@ -180,6 +201,31 @@ bool natural_version_less(const std::string& a, const std::string& b) {
   if (i >= a.size() && j >= b.size()) return false;
   if (i >= a.size()) return !prerelease_start(b[j]);
   return prerelease_start(a[i]);
+}
+
+// Stable natural-version ordering through sublimation: derive each string's
+// rank under the comparator (how many others sort strictly before it), then a
+// stable pack index sort by rank. On any input set where natural_version_less
+// is a strict weak order this reproduces a stable sort exactly -- equal ranks
+// are exactly the comparator's ties and the pack sort's index tiebreak keeps
+// their first-seen order. The comparator's heuristic corner cases (its
+// prerelease/end/digit rules are cyclic on adversarial mixes) get a
+// deterministic total completion instead of unspecified merge behavior.
+// O(n^2) comparator calls; n is a version-axis value count (tens).
+void natural_version_sort(std::vector<std::string>& v) {
+  const size_t n = v.size();
+  if (n < 2) return;
+  std::vector<uint64_t> rank(n, 0);
+  for (size_t x = 0; x < n; ++x)
+    for (size_t y = 0; y < n; ++y)
+      if (y != x && natural_version_less(v[y], v[x])) ++rank[x];
+  std::vector<uint32_t> idx(n);
+  for (size_t i = 0; i < n; ++i) idx[i] = static_cast<uint32_t>(i);
+  sublimation_pack_sort_u64(rank.data(), idx.data(), n, false);
+  std::vector<std::string> out;
+  out.reserve(n);
+  for (size_t i = 0; i < n; ++i) out.push_back(std::move(v[idx[i]]));
+  v = std::move(out);
 }
 
 // Metric-family aliasing (--alias OLD=NEW): exact match, no chaining.
@@ -665,11 +711,8 @@ void traj_prep_cell(const Cell& cell, const std::vector<std::string>& vers,
   }
   total = static_cast<uint32_t>(vals.size());
   if (total == 0) return;
-  std::sort(vals.begin(), vals.end(),
-            [](const std::pair<double, uint32_t>& a,
-               const std::pair<double, uint32_t>& b) {
-              return a.first < b.first;
-            });
+  sublimation_order_f64(vals, false,
+                        [](const std::pair<double, uint32_t>& p) { return p.first; });
   size_t i = 0;
   while (i < vals.size()) {
     size_t j = i;
@@ -738,8 +781,7 @@ int run_trajectory(std::map<std::string, Family>& data, size_t files_n,
       for (auto& r : c.second.runs)
         if (!r.second.empty()) vset.insert(r.first);
     std::vector<std::string> vers(vset.begin(), vset.end());
-    if (opt.compare_axis == "version")
-      std::stable_sort(vers.begin(), vers.end(), natural_version_less);
+    if (opt.compare_axis == "version") natural_version_sort(vers);
     if (vers.size() < 2) continue;
     std::vector<std::pair<const std::string*, const Cell*>> cells;
     for (auto& c : fam.cells) cells.push_back({&c.first, &c.second});
@@ -914,10 +956,7 @@ int run_trajectory(std::map<std::string, Family>& data, size_t files_n,
             "%zu/%zu, median |delta| %.2f\n",
             display_axis(va, opt).c_str(), display_axis(vb, opt).c_str(), pd,
             psp, moved, eligible, fam_eff);
-      std::sort(hits.begin(), hits.end(),
-                [](const CellHit& a, const CellHit& b) {
-                  return a.absT > b.absT;
-                });
+      sublimation_order_f64(hits, true, [](const CellHit& h) { return h.absT; });
       for (size_t t = 0; t < hits.size() && t < 3; ++t)
         montauk_sink_appendf(
             &g_pop_out, "    top: [%s] delta %+.2f\n",
@@ -1068,8 +1107,7 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
     // deterministic map order); categorical axes keep map order as before.
     const bool ordered_axis =
         opt.compare_axis == "version" || opt.compare_axis == "capture";
-    if (opt.compare_axis == "version")
-      std::stable_sort(groups.begin(), groups.end(), natural_version_less);
+    if (opt.compare_axis == "version") natural_version_sort(groups);
     sappendf(w.text, "  [%s]\n", cell_label_str(cell.display).c_str());
     if (groups.size() < 2) {
       sappendf(w.text, "    only %s -- no comparison\n",

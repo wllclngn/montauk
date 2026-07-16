@@ -2,14 +2,15 @@
 //
 // Sorts arrays of byte-strings in lexicographic order using a hybrid
 // pipeline: 4-byte big-endian prefix-pack into uint64 -> sublimation_u64
-// (full flow-model pipeline runs on prefixes) -> MSD radix tiebreak on
+// (the full adaptive pipeline runs on prefixes) -> MSD radix tiebreak on
 // suffix bytes within prefix-collision clusters -> pointer permutation.
 //
 // Stability: NOT stable. Equal-content strings may swap relative order.
 //   Matches the convention of std::sort and Rust slice::sort_unstable.
 //
-// Capacity: n must be < 2^32. Larger inputs trigger a qsort+strcmp
-//   fallback with a stderr warning to avoid silent index truncation.
+// Capacity: n must be < 2^32. Larger inputs trigger an in-house
+//   introsort+strcmp fallback (no libc qsort anywhere in the library)
+//   with a stderr warning to avoid silent index truncation.
 //
 // UTF-8: byte-order = code-point order by UTF-8 design, so the sort
 //   produces correct lexicographic order on UTF-8 strings without any

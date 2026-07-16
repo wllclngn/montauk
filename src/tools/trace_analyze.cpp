@@ -26,6 +26,10 @@
 #include <unordered_map>
 #include <vector>
 
+// After the std headers: c23_compat.h's C23 unreachable() macro must not
+// precede the libstdc++ headers. Guarded; re-included with the rest below.
+#include "sublimation_order.hpp"  // struct-by-key ordering
+
 using montauk::util::log_info;
 using montauk::util::log_warn;
 using montauk::util::log_error;
@@ -64,8 +68,7 @@ struct MapsResolver {
     ::closedir(d);
     for (auto& [pid, segs] : by_pid_) {
       (void)pid;
-      std::sort(segs.begin(), segs.end(),
-                [](const Seg& a, const Seg& b) { return a.start < b.start; });
+      sublimation_order_u64(segs, false, [](const Seg& s) { return s.start; });
       if (!segs.empty()) empty_ = false;
     }
   }
@@ -2121,8 +2124,8 @@ struct IowaitReport final : Report {
       montauk_sink_appendf(&g_out, "VERDICT: no threads parked in a blocking I/O-wait syscall at trace end\n");
       return;
     }
-    std::sort(parked.begin(), parked.end(),
-              [](const auto& a, const auto& b){ return a.second->since < b.second->since; });
+    sublimation_order_u64(parked, false,
+                          [](const std::pair<uint32_t, const Parked*>& p) { return p.second->since; });
     const auto* lp = parked.front().second;
     montauk_sink_appendf(&g_out, "VERDICT: %zu thread(s) parked in a blocking I/O-wait at trace end "
                 "(asleep on its data source -- e.g. poll() on a socket or pipe fd); "
@@ -2728,8 +2731,7 @@ struct SchedLatencyReport final : Report {
     if (!cold_.empty()) {
       result_.has_cold = true;
       std::vector<ColdWake> c = cold_;
-      std::sort(c.begin(), c.end(),
-                [](const ColdWake& a, const ColdWake& b) { return a.lat_ns < b.lat_ns; });
+      sublimation_order_u64(c, false, [](const ColdWake& w) { return w.lat_ns; });
       auto cq = [&](double f) {
         size_t i = std::min(c.size() - 1, static_cast<size_t>(c.size() * f));
         return us(c[i].lat_ns);
@@ -2747,7 +2749,7 @@ struct SchedLatencyReport final : Report {
         std::vector<uint32_t> sf;
         for (size_t i = c.size() - c.size() / 4; i < c.size(); ++i)
           if (c[i].freq_mhz) sf.push_back(c[i].freq_mhz);
-        if (!sf.empty()) { std::sort(sf.begin(), sf.end()); slowq = sf[sf.size() / 2]; }
+        if (!sf.empty()) { sublimation_u32(sf.data(), sf.size()); slowq = sf[sf.size() / 2]; }
       }
       result_.cold_have_freq = have_freq;
       result_.cold_fmin = fmin;
@@ -3286,7 +3288,14 @@ struct CpuHolderLedger {
   void finalize() {
     if (sorted_) return;
     sorted_ = true;
-    for (auto& kv : own_) std::sort(kv.second.begin(), kv.second.end());
+    // Pair order (ts, then tid) via LSD-composed stable index sorts: minor key
+    // first, major key second -- equivalent to the old whole-pair operator<.
+    for (auto& kv : own_) {
+      sublimation_order_u64(kv.second,
+                            false, [](const std::pair<uint64_t, uint32_t>& p) { return p.second; });
+      sublimation_order_u64(kv.second,
+                            false, [](const std::pair<uint64_t, uint32_t>& p) { return p.first; });
+    }
   }
 
   std::string name_of(uint32_t tid) const {
@@ -3557,9 +3566,8 @@ struct DispatchStallReport final : Report {
                   "that streams CPU_IDLE\n");
     if (!held_by_.empty()) {
       std::vector<std::pair<uint32_t, uint64_t>> hv(held_by_.begin(), held_by_.end());
-      std::sort(hv.begin(), hv.end(),
-                [](const std::pair<uint32_t, uint64_t>& a,
-                   const std::pair<uint32_t, uint64_t>& b) { return a.second > b.second; });
+      sublimation_order_u64(hv, true,
+                            [](const std::pair<uint32_t, uint64_t>& p) { return p.second; });
       montauk_sink_appendf(&g_out, "  HELD by:");
       for (size_t i = 0; i < hv.size() && i < 3; ++i)
         montauk_sink_appendf(&g_out, " %s %.1fms", holder_.name_of(hv[i].first).c_str(),
@@ -3598,8 +3606,7 @@ struct DispatchStallReport final : Report {
     {
       static constexpr size_t kCSeg = 8;
       if (conc_tl_.size() >= 2 * kCSeg) {
-        std::sort(conc_tl_.begin(), conc_tl_.end(),
-                  [](const CTL& a, const CTL& b) { return a.ts < b.ts; });
+        sublimation_order_u64(conc_tl_, false, [](const CTL& c) { return c.ts; });
         uint64_t t0 = conc_tl_.front().ts, t1 = conc_tl_.back().ts;
         if (t1 > t0) {
           uint64_t span = t1 - t0;
@@ -3629,9 +3636,8 @@ struct DispatchStallReport final : Report {
     }
     if (!offender_.empty()) {
       std::vector<std::pair<uint32_t, uint64_t>> off(offender_.begin(), offender_.end());
-      std::sort(off.begin(), off.end(),
-                [](const std::pair<uint32_t, uint64_t>& a,
-                   const std::pair<uint32_t, uint64_t>& b) { return a.second > b.second; });
+      sublimation_order_u64(off, true,
+                            [](const std::pair<uint32_t, uint64_t>& p) { return p.second; });
       montauk_sink_appendf(&g_out,
           "  ORDER-STARVED OFFENDERS (who the CPU re-picked instead of the wakee):");
       for (size_t i = 0; i < off.size() && i < 3; ++i)
@@ -3699,6 +3705,13 @@ struct KickLatencyReport final : Report {
   std::unordered_map<uint32_t, std::vector<Ev>> tick_stop_;      // cpu -> tick-stop evals (aux=success)
   uint64_t last_ts_ = 0;
 
+  struct Miss { uint32_t cpu; uint64_t ts; bool tickless; };
+  // compute() fills these once; emit()/prom()/offenders() only read them.
+  uint64_t total_ = 0, unanswered_ = 0, tickless_race_ = 0;
+  std::vector<uint64_t> latencies_ns_;
+  std::vector<Miss> misses_;
+  std::unordered_map<uint32_t, uint64_t> unanswered_by_cpu_;
+
   const char* name() const override { return "kick-latency"; }
 
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
@@ -3713,36 +3726,30 @@ struct KickLatencyReport final : Report {
       tick_stop_[s->cpu].push_back({s->timestamp_ns, (uint32_t)s->sub_idx, s->score});
   }
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
-    if (kicks_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no kicks captured (scx_bpf_kick_cpu never fired, or "
-                  "--sched-detail off)\n\n");
-      return;
-    }
-    uint64_t total = 0, unanswered = 0, tickless_race = 0;
-    std::vector<uint64_t> latencies_ns;
-    struct Miss { uint32_t cpu; uint64_t ts; bool tickless; };
-    std::vector<Miss> misses;
-
+  // Pair each KICK_ISSUE against the next RESCHED on the same cpu before the
+  // next kick (answered) or classify it unanswered; flag an unanswered kick
+  // that raced a fresh successful tick-stop. Done once, before any renderer.
+  void compute() override {
     for (auto& [cpu, kv] : kicks_) {
       std::vector<uint64_t> rs = resched_[cpu];
-      std::sort(rs.begin(), rs.end());
+      if (!rs.empty()) sublimation_u64(rs.data(), rs.size());
       std::vector<Ev> ks = kv;
-      std::sort(ks.begin(), ks.end(), [](const Ev& a, const Ev& b) { return a.ts < b.ts; });
+      sublimation_order_u64(ks, false, [](const Ev& e) { return e.ts; });
       std::vector<Ev> tstop = tick_stop_[cpu];
-      std::sort(tstop.begin(), tstop.end(), [](const Ev& a, const Ev& b) { return a.ts < b.ts; });
+      sublimation_order_u64(tstop, false, [](const Ev& e) { return e.ts; });
 
+      uint64_t cpu_unanswered = 0;
       for (size_t i = 0; i < ks.size(); ++i) {
         uint64_t kick_ts = ks[i].ts;
         uint64_t bound = (i + 1 < ks.size()) ? ks[i + 1].ts : last_ts_;
-        ++total;
+        ++total_;
         auto it = std::lower_bound(rs.begin(), rs.end(), kick_ts);
         if (it != rs.end() && *it <= bound) {
-          latencies_ns.push_back(*it - kick_ts);
+          latencies_ns_.push_back(*it - kick_ts);
           continue;
         }
-        ++unanswered;
+        ++unanswered_;
+        ++cpu_unanswered;
         // Was this cpu's tick freshly (within 5ms) and successfully stopped
         // right before the kick that never got answered?
         bool tickless = false;
@@ -3752,25 +3759,34 @@ struct KickLatencyReport final : Report {
             tickless = true;
           break;
         }
-        if (tickless) ++tickless_race;
-        misses.push_back({cpu, kick_ts, tickless});
+        if (tickless) ++tickless_race_;
+        misses_.push_back({cpu, kick_ts, tickless});
       }
+      if (cpu_unanswered) unanswered_by_cpu_[cpu] = cpu_unanswered;
     }
+    if (!latencies_ns_.empty())
+      sublimation_u64(latencies_ns_.data(), latencies_ns_.size());
+    sublimation_order_u64(misses_, true, [](const Miss& m) { return m.tickless ? 1u : 0u; });
+  }
 
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (kicks_.empty()) {
+      montauk_sink_appendf(&g_out, "VERDICT: no kicks captured (scx_bpf_kick_cpu never fired, or "
+                  "MONTAUK_SCX_STORM off -- the storm probes are not attached)\n\n");
+      return;
+    }
     montauk_sink_appendf(&g_out, "%" PRIu64 " kicks, %" PRIu64 " unanswered (no resched observed "
                 "before the next kick or trace end), %" PRIu64 " of those raced a fresh tick-stop\n",
-                total, unanswered, tickless_race);
-    if (!latencies_ns.empty()) {
-      sublimation_u64(latencies_ns.data(), latencies_ns.size());
+                total_, unanswered_, tickless_race_);
+    if (!latencies_ns_.empty()) {
       montauk_sink_appendf(&g_out, "answered kick->resched latency: p50=%.1fus p99=%.1fus worst=%.1fus\n",
-                  q_us(latencies_ns, 0.50), q_us(latencies_ns, 0.99), q_us(latencies_ns, 1.0));
+                  q_us(latencies_ns_, 0.50), q_us(latencies_ns_, 0.99), q_us(latencies_ns_, 1.0));
     }
-    if (!misses.empty()) {
+    if (!misses_.empty()) {
       montauk_sink_appendf(&g_out, "\nunanswered kicks (ranked, tick-stop-raced first):\n");
-      std::sort(misses.begin(), misses.end(),
-                [](const Miss& a, const Miss& b) { return a.tickless > b.tickless; });
       size_t shown = 0;
-      for (auto& m : misses) {
+      for (auto& m : misses_) {
         if (shown++ >= 20) break;
         montauk_sink_appendf(&g_out, "  cpu=%-3u t=%.3fms%s\n", m.cpu, ms(m.ts),
                     m.tickless ? "  TICK-STOP-RACED" : "");
@@ -3779,22 +3795,30 @@ struct KickLatencyReport final : Report {
     montauk_sink_appendf(&g_out, "\n");
   }
 
-  void offenders(std::vector<Offender>& out) override {
-    for (auto& [cpu, kv] : kicks_) {
-      std::vector<uint64_t> rs = resched_[cpu];
-      std::sort(rs.begin(), rs.end());
-      std::vector<Ev> ks = kv;
-      std::sort(ks.begin(), ks.end(), [](const Ev& a, const Ev& b) { return a.ts < b.ts; });
-      uint64_t unanswered = 0;
-      for (size_t i = 0; i < ks.size(); ++i) {
-        uint64_t bound = (i + 1 < ks.size()) ? ks[i + 1].ts : last_ts_;
-        auto it = std::lower_bound(rs.begin(), rs.end(), ks[i].ts);
-        if (it == rs.end() || *it > bound) ++unanswered;
-      }
-      if (unanswered)
-        out.push_back({"kick-latency", "cpu" + std::to_string(cpu), "", "unanswered_kicks",
-                       (double)unanswered, unanswered >= 3 ? 2 : 1});
+  void prom(std::vector<PromMetric>& out) override {
+    // Availability bit: 0 => no kick capture in this trace (storm probes off,
+    // or the scheduler issued none), so a JSON consumer never reads absence as
+    // a measured zero. Distinct from storm's counter view: this is the
+    // per-kick issue->resched pairing R2 needs to tell "preempt kick issued
+    // and swallowed" from "no preempt kick issued".
+    out.push_back({"montauk_analysis_kick_captured", "", kicks_.empty() ? 0.0 : 1.0});
+    if (kicks_.empty()) return;
+    out.push_back({"montauk_analysis_kicks_total", "", (double)total_});
+    out.push_back({"montauk_analysis_kicks_unanswered", "", (double)unanswered_});
+    out.push_back({"montauk_analysis_kicks_tickless_raced", "", (double)tickless_race_});
+    out.push_back({"montauk_analysis_kick_unanswered_pct", "",
+                   total_ ? 100.0 * (double)unanswered_ / (double)total_ : 0.0});
+    if (!latencies_ns_.empty()) {
+      out.push_back({"montauk_analysis_kick_resched_us", "quantile=\"0.5\"", q_us(latencies_ns_, 0.50)});
+      out.push_back({"montauk_analysis_kick_resched_us", "quantile=\"0.99\"", q_us(latencies_ns_, 0.99)});
+      out.push_back({"montauk_analysis_kick_resched_us", "quantile=\"worst\"", q_us(latencies_ns_, 1.0)});
     }
+  }
+
+  void offenders(std::vector<Offender>& out) override {
+    for (auto& [cpu, n] : unanswered_by_cpu_)
+      out.push_back({"kick-latency", "cpu" + std::to_string(cpu), "", "unanswered_kicks",
+                     (double)n, n >= 3 ? 2 : 1});
   }
 };
 
@@ -3852,9 +3876,8 @@ struct SliceReport final : Report {
     // the same sched_switch-derived slices, no knowledge of what sets the quantum.
     static constexpr size_t kSegs = 8;
     if (tl_.size() >= 2 * kSegs) {
-      std::sort(tl_.begin(), tl_.end(),
-                [](const std::pair<uint64_t, uint64_t>& a,
-                   const std::pair<uint64_t, uint64_t>& b) { return a.first < b.first; });
+      sublimation_order_u64(tl_, false,
+                            [](const std::pair<uint64_t, uint64_t>& p) { return p.first; });
       uint64_t t0 = tl_.front().first, t1 = tl_.back().first;
       if (t1 > t0) {
         uint64_t span = t1 - t0;
@@ -4008,7 +4031,15 @@ struct StormReport final : Report {
   }
 
   void prom(std::vector<PromMetric>& out) override {
-    if (samples_.empty() || tot_ms_ == 0) return;
+    // Availability bit: 0 => the scx storm probes were not attached for this
+    // trace (MONTAUK_SCX_STORM off, the 7.1+-freeze-safe default), so there is
+    // NO kick measurement here -- distinct from a capture that genuinely saw
+    // zero kicks. Without this a JSON consumer reads the absent gauges as zero.
+    if (samples_.empty() || tot_ms_ == 0) {
+      out.push_back({"montauk_analysis_storm_captured", "", 0.0});
+      return;
+    }
+    out.push_back({"montauk_analysis_storm_captured", "", 1.0});
     double secs = (double)tot_ms_ / 1000.0;
     out.push_back({"montauk_analysis_storm_pct", "", storm_pct_});
     out.push_back({"montauk_analysis_storm_reenq_per_s", "stat=\"peak\"", peak_reenq_rate_});
@@ -4387,8 +4418,8 @@ struct KStrandReport final : Report {
     std::vector<std::pair<std::string, Agg*>> rows;
     rows.reserve(by_comm_.size());
     for (auto& kv : by_comm_) rows.push_back({kv.first, &kv.second});
-    std::sort(rows.begin(), rows.end(),
-              [](const auto& x, const auto& y) { return x.second->max_ns > y.second->max_ns; });
+    sublimation_order_u64(rows, true,
+                          [](const std::pair<std::string, Agg*>& r) { return r.second->max_ns; });
 
     montauk_sink_appendf(&g_out, "%zu strands across %zu per-CPU kthreads (threshold-crossing dispatch waits)\n",
                 static_cast<size_t>(total_), rows.size());
@@ -4585,7 +4616,7 @@ class LocalityReport : public Report {
       montauk_sink_appendf(&g_out, "rate: %.0f migrations/s over %.2fs\n",
                   static_cast<double>(migrations_) / span_s, span_s);
     if (!intervals_.empty()) {
-      std::sort(intervals_.begin(), intervals_.end());
+      sublimation_u64(intervals_.data(), intervals_.size());
       auto iq = [&](double p) {
         size_t i = static_cast<size_t>(p * static_cast<double>(intervals_.size() - 1));
         return static_cast<double>(intervals_[i]) / 1000.0;  // us
@@ -4598,7 +4629,7 @@ class LocalityReport : public Report {
       uint64_t a = steal_mig_ + place_mig_;
       auto cad = [](std::vector<uint64_t>& v) {
         if (v.empty()) return 0.0;
-        std::sort(v.begin(), v.end());
+        sublimation_u64(v.data(), v.size());
         return static_cast<double>(v[v.size() / 2]) / 1000.0;  // p50 us
       };
       montauk_sink_appendf(&g_out, "MIGRATION CAUSE (dispatch lane): STEAL (STEP-1) %.0f%% cadence p50 %.0fus  |  "
@@ -4645,7 +4676,7 @@ class LocalityReport : public Report {
     out.push_back({"montauk_analysis_locality_migration_rate_hz", "",
                    span_s > 0.0 ? static_cast<double>(migrations_) / span_s : 0.0});
     if (!intervals_.empty()) {
-      std::sort(intervals_.begin(), intervals_.end());
+      sublimation_u64(intervals_.data(), intervals_.size());
       auto iq = [&](double p) {
         size_t i = static_cast<size_t>(p * static_cast<double>(intervals_.size() - 1));
         return static_cast<double>(intervals_[i]) / 1000.0;
@@ -4734,8 +4765,7 @@ struct FieldPersistReport final : Report {
   // correct in the digest path (compute() runs, emit() does not). emit() renders.
   void compute() override {
     if (gates_.empty()) return;
-    std::sort(gates_.begin(), gates_.end(),
-              [](const G& a, const G& b) { return a.ts < b.ts; });
+    sublimation_order_u64(gates_, false, [](const G& g) { return g.ts; });
     // Dwell per signature = time to the next gate tick; distinct signatures and
     // re-derivations (changed flag) come from the same single pass.
     std::unordered_map<uint64_t, uint64_t> dwell, seen;
@@ -4872,8 +4902,7 @@ struct IolatReport final : Report {
       // Name the worst individual calls directly -- exactly the outliers this
       // report exists to find, not just a summary that hides them in a p999.
       std::vector<Call> worst = s.calls;
-      std::sort(worst.begin(), worst.end(),
-                [](const Call& a, const Call& b) { return a.dur_ns > b.dur_ns; });
+      sublimation_order_u64(worst, true, [](const Call& c) { return c.dur_ns; });
       size_t shown = std::min<size_t>(5, worst.size());
       if (shown) {
         montauk_sink_appendf(&g_out, "  WORST CALLS:\n");
@@ -4904,8 +4933,7 @@ struct IolatReport final : Report {
     for (const auto& [nr, s] : by_syscall_) {
       if (s.calls.empty()) continue;
       std::vector<Call> worst = s.calls;
-      std::sort(worst.begin(), worst.end(),
-                [](const Call& a, const Call& b) { return a.dur_ns > b.dur_ns; });
+      sublimation_order_u64(worst, true, [](const Call& c) { return c.dur_ns; });
       size_t shown = std::min<size_t>(5, worst.size());
       std::string label = std::string(io_syscall_name(nr)) + "-slow";
       for (size_t i = 0; i < shown; ++i) {
@@ -4960,11 +4988,10 @@ std::vector<std::unique_ptr<Report>> make_reports() {
 // g_out: rank_offenders sorts in place; emit_offenders_text (assumes already
 // ranked) writes the text table and folds each offender into `prom`.
 void rank_offenders(std::vector<Offender>& offs) {
-  std::sort(offs.begin(), offs.end(),
-            [](const Offender& a, const Offender& b) {
-              if (a.sev != b.sev) return a.sev > b.sev;
-              return a.value > b.value;
-            });
+  // Two-key order (sev desc, then value desc) as LSD-composed stable index
+  // sorts: minor key (value) first, major key (sev, always 0..2) second.
+  sublimation_order_f64(offs, true, [](const Offender& o) { return o.value; });
+  sublimation_order_u64(offs, true, [](const Offender& o) { return static_cast<uint32_t>(o.sev); });
 }
 
 void emit_offenders_text(const std::vector<Offender>& offs,
@@ -5632,11 +5659,7 @@ int main(int argc, char** argv) {
     std::vector<Offender> offs;
     for (Report* r : active) r->offenders(offs);
     if (!offs.empty()) {
-      std::sort(offs.begin(), offs.end(),
-                [](const Offender& a, const Offender& b) {
-                  if (a.sev != b.sev) return a.sev > b.sev;
-                  return a.value > b.value;
-                });
+      rank_offenders(offs);
       montauk_sink_appendf(&g_out, "\nPOORLY-BEHAVING ITEMS (ranked)\n");
       montauk_sink_appendf(&g_out, "%-14s %-18s %-16s %14s  sev\n", "kind", "id", "metric", "value");
       for (const Offender& o : offs) {

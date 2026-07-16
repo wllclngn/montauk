@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 7.16.0 LANGUAGES C CXX)
-# (7.16.0: the archive-instrument push -- population output/parse defects,
-#  the archive features, the semantic slice, the silent-degradation sweep,
-#  drop accounting, the exact-enumeration stats fast path and the new gates.)
+project(montauk VERSION 8.0.0 LANGUAGES C CXX)
+# (7.17.0: kick-capture honesty -- the storm report no longer manufactures a
+#  false kick/s=0 when the scx storm probes are unattached, and kick-latency
+#  surfaces the KICK_ISSUE->RESCHED pairing (availability, unanswered share,
+#  resched-latency quantiles) as JSON, not text alone.)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -54,8 +55,7 @@ add_library(sublimation STATIC
     sublimation/src/small.c
     sublimation/src/sort.c
     sublimation/src/spectral.c
-    sublimation/src/text/bmh.c
-    sublimation/src/text/nfa.c
+    sublimation/src/text/match.c
     sublimation/src/parallel/pool.c
     sublimation/src/strings/msd_radix.c
     sublimation/src/strings/sort_strings.c
@@ -310,7 +310,6 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_logwriter.cpp
     tests/test_security.cpp
     tests/test_gpu_smi_device.cpp
-    tests/test_thompson_nfa.cpp
     tests/test_toml_reader.cpp
     tests/test_canvas.cpp
     tests/test_provider_collector.cpp

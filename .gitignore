@@ -7,6 +7,7 @@ COMMIT_MESSAGE.txt
 */build/
 /src/build/
 cmake-build-*/
+_match_build/
 
 # CMake in-tree (avoid committing if someone configured in source)
 /CMakeCache.txt
@@ -62,3 +63,11 @@ tests/show_colors.py
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Kernel module build products -- kernel-version-specific, never committed
+*.ko
+montauk-kernel/*.mod*
+montauk-kernel/*.o
+montauk-kernel/.*.cmd
+montauk-kernel/Module.symvers
+montauk-kernel/modules.order

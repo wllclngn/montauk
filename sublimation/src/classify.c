@@ -1,4 +1,6 @@
-// classify.c -- Initial BFS: input classification and disorder profiling
+// classify.c -- input classification and disorder profiling: the linear-scan
+// battery (runs, rotation, sampled inversions, distinct estimate, phase
+// boundary) plus patience sorting for the Young-tableau shape.
 //
 // Type-generic via macro template instantiation.
 // Each inclusion of classify_impl.h generates a full set of typed functions.

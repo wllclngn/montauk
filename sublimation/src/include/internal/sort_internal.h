@@ -1,4 +1,4 @@
-// sort_internal.h -- Internal types and constants for the flow-model sort
+// sort_internal.h -- Internal types and constants for the adaptive sort
 #ifndef SUB_SORT_INTERNAL_H
 #define SUB_SORT_INTERNAL_H
 
@@ -22,9 +22,6 @@ SUB_CONSTEXPR size_t SUB_TABLEAU_MAX_N      = 10000;  // max n for full Young ta
 SUB_CONSTEXPR size_t SUB_TABLEAU_MAX_LIS    = 256;    // max LIS length for hook length computation
 
 // Adaptive control constants
-SUB_CONSTEXPR float  SUB_EWMA_ALPHA         = 0.25f;  // EWMA smoothing factor
-SUB_CONSTEXPR float  SUB_CUSUM_K            = 0.25f;  // CUSUM slack parameter
-SUB_CONSTEXPR float  SUB_CUSUM_H            = 2.0f;   // CUSUM trigger threshold
 SUB_CONSTEXPR float  SUB_RESCAN_GROWTH      = 1.5f;   // global rescan trigger growth rate
 
 // Depth-adaptive DFS
@@ -33,10 +30,23 @@ SUB_CONSTEXPR int    SUB_STACK_LIMIT        = 48;     // max recursion before it
 // Subarray reclassification interval (periodic global relabel)
 SUB_CONSTEXPR int    SUB_RECLASSIFY_INTERVAL = 8;     // reclassify every N recursion levels
 
-// Damped oscillator constants
-SUB_CONSTEXPR float  SUB_OSC_PULL           = 0.1f;   // impulse magnitude on degradation
-SUB_CONSTEXPR float  SUB_OSC_RELAX          = 0.02f;  // relax impulse when stable
-SUB_CONSTEXPR float  SUB_OSC_DAMPING        = 0.125f; // velocity decay (v -= v * damping)
+// Damped oscillator constants. Second-order critically-damped form, the
+// float analog of PANDEMONIUM's fixed-point reference (main.bpf.c, the
+// Idle Quiescence Envelope): damping 1/8 with spring 1/128 gives the
+// Butterworth-optimal damping ratio (zeta ~ 0.707, damping/(2*sqrt(spring))),
+// deliberate ~4 percent overshoot, fastest settle without ringing.
+SUB_CONSTEXPR float  SUB_OSC_DAMPING        = 0.125f;     // velocity decay (-2*gamma*v)
+SUB_CONSTEXPR float  SUB_OSC_SPRING         = 0.0078125f; // restore toward the signal (1/128)
+SUB_CONSTEXPR float  SUB_OSC_ENERGY_DECAY   = 0.125f;     // energy reservoir leak per step
+// Dead band: displacement inside the slack is measurement jitter and
+// contributes NO energy -- the noise floor is modeled before anything is
+// detected against it, the property the CUSUM this replaced lacked (a
+// literal change-point accumulator chatters on the floor). Park/release
+// form a Schmitt trigger: release needs 2x the park energy, so the
+// detector cannot flap at the threshold.
+SUB_CONSTEXPR float  SUB_OSC_SLACK          = 0.25f;
+SUB_CONSTEXPR float  SUB_OSC_ENERGY_PARK    = 0.125f;     // 2 * SLACK^2
+SUB_CONSTEXPR float  SUB_OSC_ENERGY_RELEASE = 0.25f;      // 2 * PARK
 
 // Type-generic swap
 #define SUB_SWAP(T, a, b) do { T _sub_tmp = (a); (a) = (b); (b) = _sub_tmp; } while (0)
@@ -46,10 +56,54 @@ SUB_CONSTEXPR float  SUB_OSC_DAMPING        = 0.125f; // velocity decay (v -= v 
 #define SUB_CONCAT(a, b) SUB_CONCAT2(a, b)
 #define SUB_TYPED(name) SUB_CONCAT(name, SUB_SUFFIX)
 
+// Damped-oscillator regime detector. One primitive serves both detection
+// sites (partition-quality degradation in the sort, phase boundaries in the
+// classifier), replacing the EWMA baseline + CUSUM accumulator pair that
+// lived here before: the position IS the tracked signal level (the spring
+// pulls it toward each sample, so no separate baseline), and detection is
+// energy-based with a dead band and a Schmitt trigger, so a single-sample
+// spike decays and never fires while a sustained regime shift pumps the
+// reservoir past release. This is PANDEMONIUM's Idle Quiescence Envelope
+// primitive in float form; EWMA/CUSUM survive only in tests, as oracles.
+typedef struct {
+    float position;   // tracked signal level (the oscillator's own baseline)
+    float velocity;
+    float energy;     // leaky displacement+velocity reservoir
+    bool  primed;     // position seeded from the first sample
+    bool  excited;    // Schmitt state: fired and not yet re-parked
+} sub_osc_t;
+
+// Feed one sample; returns true exactly once per detected regime shift
+// (on the parked -> released transition).
+SUB_INLINE bool sub_osc_detect(sub_osc_t *o, float sample) {
+    if (!o->primed) {
+        o->position = sample;
+        o->primed = true;
+        return false;
+    }
+    float disp = sample - o->position;
+    o->velocity += disp * SUB_OSC_SPRING;              // spring toward the signal
+    o->velocity -= o->velocity * SUB_OSC_DAMPING;      // damping
+    o->position += o->velocity;
+    // Dead-banded energy: displacement inside the slack is jitter and
+    // contributes nothing; only a genuine level shift pumps the reservoir.
+    float pump = (disp > SUB_OSC_SLACK || disp < -SUB_OSC_SLACK) ? disp * disp : 0.0f;
+    o->energy -= o->energy * SUB_OSC_ENERGY_DECAY;
+    o->energy += pump + o->velocity * o->velocity;
+    if (o->excited) {
+        if (o->energy < SUB_OSC_ENERGY_PARK) o->excited = false;  // re-park
+        return false;
+    }
+    if (o->energy > SUB_OSC_ENERGY_RELEASE) {
+        o->excited = true;
+        return true;
+    }
+    return false;
+}
+
 // Adaptive state tracked across recursion levels
 typedef struct sub_adaptive_tag {
-    float  partition_quality_ewma;  // EWMA of pivot rank / partition size
-    float  cusum_s;                // CUSUM accumulator
+    sub_osc_t partition_osc;       // partition-badness regime detector
     size_t levels_built;           // total level constructions
     size_t gap_prunes;             // empty-region prunes
     size_t rescans;                // full reclassification rescans
@@ -59,9 +113,6 @@ typedef struct sub_adaptive_tag {
     uint64_t swaps;
     bool     spectral_attempted;   // has spectral path been tried this sort?
     float    last_spectral_gap;    // last observed spectral gap ratio
-    // damped oscillator state
-    float    osc_velocity;         // current velocity
-    float    osc_position;         // current position (normalized threshold)
     // equal element tracking
     int64_t  last_pivot;           // pivot value from previous partition
     bool     has_last_pivot;       // whether last_pivot is valid
@@ -70,45 +121,13 @@ typedef struct sub_adaptive_tag {
 // Initialize adaptive state
 SUB_INLINE void sub_adaptive_init(sub_adaptive_t *a, size_t n) {
     memset(a, 0, sizeof(*a));
-    a->partition_quality_ewma = 0.5f;
-    a->osc_position = 0.5f; // midpoint: balanced sensitivity
+    // Seed the badness level at the balanced midpoint rather than priming
+    // from the first partition, so one early bad pivot reads as
+    // displacement, not as the baseline.
+    a->partition_osc.position = 0.5f;
+    a->partition_osc.primed = true;
     a->rescan_trigger = n / 8;
     if (a->rescan_trigger < 64) a->rescan_trigger = 64;
-}
-
-// EWMA update
-SUB_INLINE void sub_ewma_update(float *ewma, float sample) {
-    *ewma = SUB_EWMA_ALPHA * sample + (1.0f - SUB_EWMA_ALPHA) * (*ewma);
-}
-
-// CUSUM update with oscillator-controlled threshold
-// The oscillator position (0..1) scales the CUSUM trigger:
-//   position near 0 = tightened = trigger at low CUSUM (sensitive)
-//   position near 1 = relaxed = trigger at high CUSUM (permissive)
-// This replaces the hardcoded SUB_CUSUM_H constant.
-SUB_INLINE bool sub_cusum_update(float *cusum_s, float sample,
-                                  float baseline, float osc_position) {
-    float deviation = sample - baseline - SUB_CUSUM_K;
-    if (deviation > 0.0f) {
-        *cusum_s += deviation;
-    } else {
-        *cusum_s *= 0.5f; // decay
-    }
-    // threshold driven by oscillator: range [0.5, 3.0]
-    float threshold = 0.5f + osc_position * 2.5f;
-    return *cusum_s > threshold;
-}
-
-// Damped oscillator update.
-// Drives the CUSUM threshold: tightens on degradation, relaxes when stable.
-SUB_INLINE void sub_oscillator_update(float *position, float *velocity,
-                                       bool degraded) {
-    float impulse = degraded ? -SUB_OSC_PULL : SUB_OSC_RELAX;
-    *velocity += impulse;
-    *velocity -= *velocity * SUB_OSC_DAMPING; // decay
-    *position += *velocity;
-    if (*position < 0.0f) *position = 0.0f;
-    if (*position > 1.0f) *position = 1.0f;
 }
 
 // AVX2 random-data sort path (i64 only).

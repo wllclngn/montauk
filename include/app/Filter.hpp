@@ -1,6 +1,6 @@
 #pragma once
 #include "model/Snapshot.hpp"
-#include "sublimation_text.hpp"
+#include "sublimation_text.h"
 #include <optional>
 
 namespace montauk::app {
@@ -20,8 +20,8 @@ public:
   [[nodiscard]] std::vector<size_t> apply(const montauk::model::ProcessSnapshot& ps) const;
 private:
   ProcessFilterSpec spec_;
-  std::optional<sublimation::NFA> compiled_;
-  std::optional<sublimation::BMH> bmh_;
+  std::optional<sublimation_search> compiled_;  // regex face (field)
+  std::optional<sublimation_search> bmh_;        // fixed face (anchor), icase
 };
 
 } // namespace montauk::app

@@ -3,7 +3,7 @@
 #include "ui/Terminal.hpp"
 #include "ui/Formatting.hpp"
 #include "util/SortDispatch.hpp"
-#include "sublimation_text.hpp"
+#include "sublimation_text.h"
 #include "app/Filter.hpp"
 
 #include <algorithm>
@@ -45,7 +45,12 @@ void draw_command_classified(widget::Canvas& canvas, int x, int y,
                              int max_width, std::string_view cmd,
                              const UIConfig& ui, int row_severity) {
   if (max_width <= 0 || cmd.empty()) return;
-  static const sublimation::NFA kernel_re("^\\[.+\\]$");
+  static const sublimation_search kernel_re = [] {
+    sublimation_search s;
+    static const char pat[] = "^\\[.+\\]$";
+    sublimation_search_compile(&s, pat, sizeof(pat) - 1, 0, 0);
+    return s;
+  }();
   const widget::Style muted_style  = widget::parse_sgr_style(ui.muted);
   const widget::Style binary_style = widget::parse_sgr_style(ui.binary);
   const widget::Style row_style    = severity_to_style(row_severity);
@@ -55,7 +60,7 @@ void draw_command_classified(widget::Canvas& canvas, int x, int y,
     return;
   }
 
-  if (kernel_re.full_match(cmd)) {
+  if (sublimation_search_full_match(&kernel_re, cmd.data(), cmd.size())) {
     canvas.draw_text(x, y, cmd.substr(0, std::min<size_t>(cmd.size(), max_width)), muted_style);
     return;
   }

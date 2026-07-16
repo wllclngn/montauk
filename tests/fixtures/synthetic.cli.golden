@@ -53,27 +53,29 @@ RANDOM  n=12  inversion_ratio=0.515  lis=5  distinct~10  runs=6
 $ sublimation characterize
 RANDOM  rand_confidence=0.510  n=12
 $ sublimation rand
-confidence=0.510  (k=3/4 agree)
+confidence=0.510  verdict=consistent  (k=3/4 bases at max entropy)
   hook         --
   lis          --
   inv          0.97
   distinct     0.83
   hvg          0.58
   bandt-pompe  0.87
-$ sublimation grep a
+  rqa          --
+  spectral     --
+$ sublimation search a
 alpha 10 x
 beta 20 y
 gamma 30 z
 alpha 40 w
-$ sublimation grep -n a
+$ sublimation search -n a
 1:alpha 10 x
 2:beta 20 y
 3:gamma 30 z
 4:alpha 40 w
-$ sublimation grep -c a
+$ sublimation search -c a
 4
-$ sublimation grep -v a
-$ sublimation contains beta
+$ sublimation search -v a
+$ sublimation search -F beta
 beta 20 y
 $ sublimation field 2
 10
@@ -182,9 +184,44 @@ $ sublimation locate sorted --window 4 --values
 6
 7
 8
-$ sublimation contains foo
+$ sublimation search -F foo
 foo
-$ sublimation contains -i foo
+$ sublimation search -F -i foo
 foo
 FOO
 Foo
+$ sublimation search --color=always -n fo+
+[32m1[0m[36m:[0mx[01;31mfoo[0my
+[32m3[0m[36m:[0m[01;31mfoo[0m
+$ sublimation search --color=always -o -e oba -e foo
+[01;31mfoo[0m
+$ sublimation search --color=always -H -c alpha
+[35m(standard input)[0m[36m:[0m2
+$ sublimation search --color=always -A 1 MATCH
+[01;31mMATCH[0m
+two
+[36m--[0m
+[01;31mMATCH[0m
+four
+$ sublimation search --color=never -n fo+
+1:xfooy
+$ sublimation search --line-buffered alpha
+alpha 10 x
+alpha 40 w
+$ sublimation search -S alpha
+ALPHA 1
+alpha 2
+$ sublimation search -S Alpha
+Alpha 2
+$ sublimation search -w foo
+foo bar
+x foo
+$ sublimation search -x -F beta
+beta
+beta
+$ sublimation search -e alpha -e gamma
+alpha 10 x
+gamma 30 z
+alpha 40 w
+$ sublimation search a --files-from -
+tests/fixtures/joinb.txt:a x

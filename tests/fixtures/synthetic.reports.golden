@@ -83,7 +83,7 @@ VERDICT: 21 saturated floored wakes; PREEMPT-STARVED 100% (0 intervening picks) 
 
 
 REPORT kick-latency
-VERDICT: no kicks captured (scx_bpf_kick_cpu never fired, or --sched-detail off)
+VERDICT: no kicks captured (scx_bpf_kick_cpu never fired, or MONTAUK_SCX_STORM off -- the storm probes are not attached)
 
 
 REPORT kstrand
@@ -94,7 +94,7 @@ REPORT slice
 VERDICT: 2.0k dispatched slices; p50 201.2us p90 201.2us p99 201.2us worst 372.4us; mean 200.1us
   (long slices x pass-over depth = the saturation tail; a shorter effective slice drains a deep runqueue faster)
 TRAJECTORY: slice p50 over 8 segments (us): 201 201 201 201 201 201 201 201; shape=SORTED inv=0.00 -- coherent (quantum settles with load)
-PREEMPT-OVERRUN: >2ms 0 (0.00%)  >5ms 0 (0.00%)  >8ms 0 (0.00%)  -- ~0 distinct slice lengths
+PREEMPT-OVERRUN: >2ms 0 (0.00%)  >5ms 0 (0.00%)  >8ms 0 (0.00%)  -- ~124 distinct slice lengths
 
 
 REPORT storm

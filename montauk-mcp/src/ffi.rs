@@ -5,7 +5,7 @@
 // extern "C" on the C++ side too (montauk_core/montauk_analyze link the same
 // static lib), so the ABI is plain C -- no name mangling, no bindgen needed.
 
-use std::os::raw::{c_int, c_long};
+use std::os::raw::{c_int, c_long, c_uint};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -32,46 +32,16 @@ pub const DISORDER_NAMES: [&str; 7] = [
     "sorted", "reversed", "nearly_sorted", "few_unique", "random", "phased", "spectral",
 ];
 
-const NFA_MAX_STATES: usize = 256;
+// sublimation_search: the flow-dual matcher, one compiled value type (exact,
+// regex and fuzzy under a classify-dispatch front end). Opaque to Rust -- an
+// 8-byte-aligned buffer sized to sizeof(sublimation_search) = 3648 bytes.
+const SUB_SEARCH_MAX_PATTERN: usize = 1023;
+const SUB_SEARCH_FIXED: c_uint = 1;
+const SUB_SEARCH_ICASE: c_uint = 2;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct NfaState {
-    op: u8,
-    ch: u8,
-    class_idx: u8,
-    negated: u8,
-    out: i16,
-    out1: i16,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct NfaClass {
-    bits: [u8; 32],
-}
-
-#[repr(C)]
-struct Nfa {
-    states: [NfaState; NFA_MAX_STATES],
-    num_states: c_int,
-    classes: [NfaClass; NFA_MAX_STATES],
-    num_classes: c_int,
-    start: c_int,
-    anchored_start: c_int,
-    anchored_end: c_int,
-    icase: c_int,
-    valid: c_int,
-}
-
-const BMH_MAX_PATTERN: usize = 256;
-
-#[repr(C)]
-struct Bmh {
-    bad_char: [c_int; 256],
-    pattern: [u8; BMH_MAX_PATTERN],
-    pattern_len: c_int,
-    icase: c_int,
+#[repr(C, align(8))]
+struct SubSearch {
+    _data: [u64; 456], // 456 * 8 = 3648 bytes
 }
 
 extern "C" {
@@ -80,19 +50,18 @@ extern "C" {
     fn sublimation_api_version() -> c_int;
     fn sublimation_version() -> *const std::os::raw::c_char;
 
-    fn sublimation_nfa_compile_ex(out: *mut Nfa, pattern: *const u8, len: usize, icase: c_int);
-    fn sublimation_nfa_valid(nfa: *const Nfa) -> c_int;
-    fn sublimation_nfa_find(nfa: *const Nfa, input: *const u8, n: usize, end_out: *mut c_long) -> c_long;
+    fn sublimation_search_compile(out: *mut SubSearch, pattern: *const u8, len: usize,
+                                  flags: c_uint, k: c_int);
+    fn sublimation_search_valid(s: *const SubSearch) -> c_int;
+    fn sublimation_search_find(s: *const SubSearch, input: *const u8, n: usize,
+                               end_out: *mut c_long) -> c_long;
     // The continuation-safe entry point (anchors stay absolute past `from`).
     // Bound now so any future offset-iterating tool goes through it instead
     // of re-entering find on a shifted slice, the exact anchor trap the CLI
     // already paid for once.
     #[allow(dead_code)]
-    fn sublimation_nfa_find_from(nfa: *const Nfa, input: *const u8, n: usize,
-                                 from: usize, end_out: *mut c_long) -> c_long;
-
-    fn sublimation_bmh_compile_ex(out: *mut Bmh, pattern: *const u8, len: usize, icase: c_int);
-    fn sublimation_bmh_search(bmh: *const Bmh, text: *const u8, n: usize) -> c_long;
+    fn sublimation_search_find_from(s: *const SubSearch, input: *const u8, n: usize,
+                                    from: usize, end_out: *mut c_long) -> c_long;
 }
 
 pub fn sort_f64(mut values: Vec<f64>) -> Vec<f64> {
@@ -123,23 +92,16 @@ pub fn api_version() -> i32 {
 /// no-match: mapping it to false would hand the caller a silent wrong answer.
 pub fn grep_find(pattern: &str, text: &str, icase: bool)
     -> Result<Option<(usize, usize)>, String> {
-    let mut nfa = std::mem::MaybeUninit::<Nfa>::uninit();
+    let mut s = std::mem::MaybeUninit::<SubSearch>::uninit();
     unsafe {
-        sublimation_nfa_compile_ex(
-            nfa.as_mut_ptr(),
-            pattern.as_ptr(),
-            pattern.len(),
-            icase as c_int,
-        );
-        let nfa = nfa.assume_init();
-        if sublimation_nfa_valid(&nfa) == 0 {
-            return Err(format!(
-                "invalid regex '{pattern}' (compile failed; the engine caps \
-                 at 256 NFA states)"
-            ));
+        let flags = if icase { SUB_SEARCH_ICASE } else { 0 };
+        sublimation_search_compile(s.as_mut_ptr(), pattern.as_ptr(), pattern.len(), flags, 0);
+        let s = s.assume_init();
+        if sublimation_search_valid(&s) == 0 {
+            return Err(format!("invalid regex '{pattern}' (compile failed)"));
         }
         let mut end: c_long = -1;
-        let start = sublimation_nfa_find(&nfa, text.as_ptr(), text.len(), &mut end);
+        let start = sublimation_search_find(&s, text.as_ptr(), text.len(), &mut end);
         if start < 0 {
             Ok(None)
         } else {
@@ -154,23 +116,18 @@ pub fn grep_find(pattern: &str, text: &str, icase: bool)
 /// which would silently report a false positive.
 pub fn contains_find(needle: &str, haystack: &str, icase: bool)
     -> Result<Option<usize>, String> {
-    const BMH_MAX: usize = 256;
-    if needle.is_empty() || needle.len() > BMH_MAX {
+    if needle.is_empty() || needle.len() > SUB_SEARCH_MAX_PATTERN {
         return Err(format!(
-            "needle length {} out of range (1..={BMH_MAX} bytes)",
+            "needle length {} out of range (1..={SUB_SEARCH_MAX_PATTERN} bytes)",
             needle.len()
         ));
     }
-    let mut bmh = std::mem::MaybeUninit::<Bmh>::uninit();
+    let mut s = std::mem::MaybeUninit::<SubSearch>::uninit();
     unsafe {
-        sublimation_bmh_compile_ex(
-            bmh.as_mut_ptr(),
-            needle.as_ptr(),
-            needle.len(),
-            icase as c_int,
-        );
-        let bmh = bmh.assume_init();
-        let pos = sublimation_bmh_search(&bmh, haystack.as_ptr(), haystack.len());
+        let flags = SUB_SEARCH_FIXED | if icase { SUB_SEARCH_ICASE } else { 0 };
+        sublimation_search_compile(s.as_mut_ptr(), needle.as_ptr(), needle.len(), flags, 0);
+        let s = s.assume_init();
+        let pos = sublimation_search_find(&s, haystack.as_ptr(), haystack.len(), std::ptr::null_mut());
         if pos < 0 {
             Ok(None)
         } else {

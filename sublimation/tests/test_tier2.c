@@ -183,6 +183,46 @@ static void run_all_patterns(size_t n) {
     free(arr);
 }
 
+// PHASE-DETECTOR CHATTER GATE
+// The oscillator that replaced the raw CUSUM in detect_phase_boundary must
+// never fire on uniform noise: window-to-window inversion-rate jitter is
+// exactly the measurement floor the dead band models. Ten seeded uniform
+// streams at two sizes must all classify as something other than
+// SUB_PHASED (SUB_RANDOM or SUB_FEW_UNIQUE, matching the classify_random
+// convention in test_basic.c). The positive direction (a real boundary
+// still detected within a window stride) is held by the sorted_random_tail
+// and reverse_random_tail sort fixtures above plus classify's own PHASED
+// consumers.
+static void test_phase_chatter(void) {
+    size_t sizes[] = {1000, 100000};
+    for (size_t si = 0; si < 2; si++) {
+        size_t n = sizes[si];
+        int64_t *arr = (int64_t *)malloc(n * sizeof(int64_t));
+        assert(arr);
+        int fired = 0;
+        for (int rep = 0; rep < 10; rep++) {
+            uint64_t seed = 0xC4A77E12 + (uint64_t)rep * 0x9E3779B97F4A7C15ull;
+            for (size_t i = 0; i < n; i++) {
+                seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+                arr[i] = (int64_t)(seed >> 16);
+            }
+            sub_profile_t p = sublimation_classify_i64(arr, n);
+            if (p.disorder == SUB_PHASED) fired++;
+        }
+        char name[80];
+        snprintf(name, sizeof(name), "phase_chatter_uniform_%zu", n);
+        if (fired == 0) {
+            printf("  %-50s PASS\n", name);
+            _verify_pass++;
+        } else {
+            fprintf(stderr, "  [FAIL] %s: PHASED fired on %d/10 uniform streams\n",
+                    name, fired);
+            _verify_fail++;
+        }
+        free(arr);
+    }
+}
+
 int main(void) {
     printf("[sublimation] Tier 2: adversarial input patterns\n\n");
 
@@ -192,6 +232,8 @@ int main(void) {
         run_all_patterns(sizes[i]);
         printf("\n");
     }
+
+    test_phase_chatter();
 
     return verify_summary();
 }
