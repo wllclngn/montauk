@@ -13,7 +13,6 @@ SUB_CONSTEXPR size_t SUB_MIN_GALLOP = 7;
 typedef struct {
     size_t base;
     size_t length;
-    int    power;
 } SUB_TYPED(sub_run_t);
 
 static void SUB_TYPED(binary_insertion_sort)(SUB_TYPE *arr, size_t n, uint64_t *cmp) {
@@ -344,7 +343,9 @@ static void SUB_TYPED(merge_reff)(SUB_TYPE *arr, SUB_TYPED(sub_run_t) *runs, siz
     }
 }
 
-// SPECTRAL MERGE
+// NATURAL-RUN MERGE: detect natural runs, coalesce already-ordered
+// neighbors, then merge pairs in R_eff (boundary-resistance) order with
+// galloping merges.
 void SUB_TYPED(sub_spectral_merge)(SUB_TYPE *arr, size_t n, uint64_t *comparisons) {
     if (n < 2) return;
     if (n < SUB_MIN_MERGE) {
@@ -361,7 +362,6 @@ void SUB_TYPED(sub_spectral_merge)(SUB_TYPE *arr, size_t n, uint64_t *comparison
         size_t run_len = SUB_TYPED(count_run_asc)(cur, remaining, comparisons);
         detected[num_runs].base = (size_t)(cur - arr);
         detected[num_runs].length = run_len;
-        detected[num_runs].power = 0;
         num_runs++;
         cur += run_len;
         remaining -= run_len;
@@ -375,7 +375,6 @@ void SUB_TYPED(sub_spectral_merge)(SUB_TYPE *arr, size_t n, uint64_t *comparison
         }
         detected[num_runs].base = (size_t)(cur - arr);
         detected[num_runs].length = remaining;
-        detected[num_runs].power = 0;
         num_runs++;
     }
 

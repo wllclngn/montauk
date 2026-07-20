@@ -415,9 +415,10 @@ static inline uint64_t reach_of(uint64_t D, const gnfa_t *g, reach_ent *cache) {
 }
 
 // Full-field match-end count over hay[0..n). Byte-parity reference for the regex
-// face; the prefilter and class fast path must reproduce this exactly.
-static size_t scan_gnfa(const uint8_t *hay, size_t n, const gnfa_t *g, int icase) {
-    uint64_t I[256]; build_imap(g, icase, I);
+// face; the prefilter and class fast path must reproduce this exactly. `I` is
+// the compile-time per-byte position map (sublimation_search.imap).
+static size_t scan_gnfa(const uint8_t *hay, size_t n, const gnfa_t *g,
+                        const uint64_t I[256]) {
     if (g->nullable_all && !g->anchored_start && !g->anchored_end) return n + 1;
     // Anchor-only pattern (npos == 0): exactly one zero-width match, at the
     // start for ^ or the end for $; ^$ only matches the empty field.
@@ -437,7 +438,17 @@ static size_t scan_gnfa(const uint8_t *hay, size_t n, const gnfa_t *g, int icase
         return count;
     }
     reach_ent *cache = calloc(REACH_CAP, sizeof(reach_ent));
-    if (!cache) return (size_t)-1;
+    if (!cache) {
+        // Allocation failure: no-cache scan (same fallback convention as the
+        // fuzzy face). Recomputes reach per step; byte-identical count.
+        for (size_t j = 0; j < n; j++) {
+            uint64_t reach = g->first, t = D;
+            while (t) { int i = __builtin_ctzll(t); reach |= g->follow[i]; t &= t - 1; }
+            D = reach & I[(unsigned char)hay[j]];
+            if (D & g->last) count++;
+        }
+        return count;
+    }
     for (size_t j = 0; j < n; j++) {
         D = reach_of(D, g, cache) & I[(unsigned char)hay[j]];
         if (D & g->last) count++;
@@ -518,7 +529,7 @@ static size_t gnfa_range(const uint8_t *hay, size_t a, size_t b, const uint64_t 
 // the pattern is outside the sound subset, so the caller falls back. Provably byte-
 // identical to the full field on the subset.
 static size_t regex_prefiltered(const uint8_t *hay, size_t n, const char *pat,
-                                const gnfa_t *g, int *used) {
+                                const gnfa_t *g, const uint64_t I[256], int *used) {
     *used = 0;
     if (g->anchored_start || g->anchored_end || g->nullable_all) return 0;
     int ml = regex_maxlen(pat);
@@ -526,7 +537,6 @@ static size_t regex_prefiltered(const uint8_t *hay, size_t n, const char *pat,
     uint8_t lit[64];
     int litlen = extract_literal(pat, lit, 64);
     if (litlen < 2) return 0;
-    uint64_t I[256]; build_imap(g, 0, I);
     int probe_off = 0; uint32_t bestf = english_freq(lit[0]);
     for (int i = 1; i < litlen; i++) {
         uint32_t f = english_freq(lit[i]);
@@ -564,15 +574,15 @@ static size_t regex_prefiltered(const uint8_t *hay, size_t n, const char *pat,
 static size_t regex_count(const sublimation_search *s, const uint8_t *hay, size_t n) {
     // Anchor-only patterns have no positions for the prefilter or class field
     // to anchor on; the full field handles their zero-width semantics directly.
-    if (s->g.npos == 0) return scan_gnfa(hay, n, &s->g, s->icase);
-    if (s->icase) return scan_gnfa(hay, n, &s->g, 1);
+    if (s->g.npos == 0) return scan_gnfa(hay, n, &s->g, s->imap);
+    if (s->icase) return scan_gnfa(hay, n, &s->g, s->imap);
     int used = 0;
-    size_t r = regex_prefiltered(hay, n, s->pattern, &s->g, &used);
+    size_t r = regex_prefiltered(hay, n, s->pattern, &s->g, s->imap, &used);
     if (used) return r;
     uint8_t sets[64][32];
     int L = parse_classes(s->pattern, sets, 64);
     if (L > 0) { size_t c = scan_classfield(hay, n, sets, L); if (c != (size_t)-1) return c; }
-    return scan_gnfa(hay, n, &s->g, 0);
+    return scan_gnfa(hay, n, &s->g, s->imap);
 }
 
 // Fixed-start Glushkov walk: longest match-end for a match starting exactly at
@@ -629,10 +639,23 @@ void sublimation_search_compile(sublimation_search *out, const char *pattern,
     } else {
         out->mode = MODE_REGEX;
         out->valid = build_gnfa(out->pattern, &out->g);
+        // The per-byte position map depends only on (pattern, icase): build it
+        // once here so match/count calls never rebuild it.
+        if (out->valid) build_imap(&out->g, out->icase, out->imap);
     }
 }
 
 int sublimation_search_valid(const sublimation_search *s) { return s->valid; }
+
+// The opaque-buffer contract with foreign callers (montauk-mcp mirrors this
+// struct as a byte buffer in Rust). The static assert pins the size the
+// mirror was written against; growth breaks THIS build, never a caller's
+// stack. The sizeof export lets a binding assert the contract at runtime.
+static_assert(sizeof(sublimation_search) == 5696,
+              "sublimation_search grew: update every foreign mirror "
+              "(components/mcp/src/ffi.rs) and this assert together");
+
+size_t sublimation_search_sizeof(void) { return sizeof(sublimation_search); }
 
 int sublimation_search_full_match(const sublimation_search *s, const char *input, size_t n) {
     if (!s->valid) return 0;
@@ -640,8 +663,7 @@ int sublimation_search_full_match(const sublimation_search *s, const char *input
     size_t m = s->pattern_len;
     const uint8_t *pat = (const uint8_t *)s->pattern;
     if (s->mode == MODE_REGEX) {
-        uint64_t I[256]; build_imap(&s->g, s->icase, I);
-        return gnfa_full(&s->g, I, hay, n);
+        return gnfa_full(&s->g, s->imap, hay, n);
     }
     if (s->mode == MODE_FUZZY) {
         if (n != m) return 0;
@@ -664,10 +686,9 @@ long sublimation_search_find_from(const sublimation_search *s, const char *input
     const uint8_t *pat = (const uint8_t *)s->pattern;
 
     if (s->mode == MODE_REGEX) {
-        uint64_t I[256]; build_imap(&s->g, s->icase, I);
         int start_limit = s->g.anchored_start ? 1 : (int)n + 1;
         for (int start = (int)from; start < start_limit; ++start) {
-            long e = gnfa_start_longest(&s->g, I, hay, n, (size_t)start);
+            long e = gnfa_start_longest(&s->g, s->imap, hay, n, (size_t)start);
             if (e >= 0) { if (end_out) *end_out = e; return start; }
         }
         return -1;

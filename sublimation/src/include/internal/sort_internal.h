@@ -21,9 +21,6 @@ SUB_CONSTEXPR size_t SUB_PATIENCE_THRESHOLD  = 256;   // minimum n for patience 
 SUB_CONSTEXPR size_t SUB_TABLEAU_MAX_N      = 10000;  // max n for full Young tableau computation
 SUB_CONSTEXPR size_t SUB_TABLEAU_MAX_LIS    = 256;    // max LIS length for hook length computation
 
-// Adaptive control constants
-SUB_CONSTEXPR float  SUB_RESCAN_GROWTH      = 1.5f;   // global rescan trigger growth rate
-
 // Depth-adaptive DFS
 SUB_CONSTEXPR int    SUB_STACK_LIMIT        = 48;     // max recursion before iterative (log2-based)
 
@@ -107,7 +104,6 @@ typedef struct sub_adaptive_tag {
     size_t levels_built;           // total level constructions
     size_t gap_prunes;             // empty-region prunes
     size_t rescans;                // full reclassification rescans
-    size_t rescan_trigger;         // current rescan trigger threshold
     int    depth;                  // current recursion depth
     uint64_t comparisons;
     uint64_t swaps;
@@ -126,8 +122,7 @@ SUB_INLINE void sub_adaptive_init(sub_adaptive_t *a, size_t n) {
     // displacement, not as the baseline.
     a->partition_osc.position = 0.5f;
     a->partition_osc.primed = true;
-    a->rescan_trigger = n / 8;
-    if (a->rescan_trigger < 64) a->rescan_trigger = 64;
+    (void)n;
 }
 
 // AVX2 random-data sort path (i64 only).
@@ -145,17 +140,25 @@ void sub_avx2_random_quicksort_i64(int64_t *arr, size_t n);
 // Partitions arr[lo..hi) around `pivot`. Returns p such that
 // arr[lo..p) < pivot and arr[p..hi) >= pivot. Output is a permutation of input.
 // Exposed for standalone unit testing in tests/test_pext_partition.c.
-size_t block_partition_pext_i64(int64_t *arr, size_t lo, size_t hi, int64_t pivot);
+size_t sub_block_partition_pext_i64(int64_t *arr, size_t lo, size_t hi, int64_t pivot);
 #endif
 
 // Internal sort functions -- all types
 // Names follow template pattern: base_name + type suffix
-void sub_sort_internal_i32(int32_t *restrict arr, size_t n, sub_adaptive_t *state);
-void sub_sort_internal_i64(int64_t *restrict arr, size_t n, sub_adaptive_t *state);
-void sub_sort_internal_u32(uint32_t *restrict arr, size_t n, sub_adaptive_t *state);
-void sub_sort_internal_u64(uint64_t *restrict arr, size_t n, sub_adaptive_t *state);
-void sub_sort_internal_f32(float *restrict arr, size_t n, sub_adaptive_t *state);
-void sub_sort_internal_f64(double *restrict arr, size_t n, sub_adaptive_t *state);
+// `profile` is the caller's classification of arr (classify once per public
+// sort call); pass NULL to have the internal entry classify for itself.
+void sub_sort_internal_i32(int32_t *restrict arr, size_t n, sub_adaptive_t *state,
+                           const sub_profile_t *profile);
+void sub_sort_internal_i64(int64_t *restrict arr, size_t n, sub_adaptive_t *state,
+                           const sub_profile_t *profile);
+void sub_sort_internal_u32(uint32_t *restrict arr, size_t n, sub_adaptive_t *state,
+                           const sub_profile_t *profile);
+void sub_sort_internal_u64(uint64_t *restrict arr, size_t n, sub_adaptive_t *state,
+                           const sub_profile_t *profile);
+void sub_sort_internal_f32(float *restrict arr, size_t n, sub_adaptive_t *state,
+                           const sub_profile_t *profile);
+void sub_sort_internal_f64(double *restrict arr, size_t n, sub_adaptive_t *state,
+                           const sub_profile_t *profile);
 
 void sub_small_sort_i32(int32_t *arr, size_t n, uint64_t *comparisons, uint64_t *swaps);
 void sub_small_sort_i64(int64_t *arr, size_t n, uint64_t *comparisons, uint64_t *swaps);

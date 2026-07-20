@@ -45,3 +45,23 @@ TEST(disk_collector_util_percent) {
   for (auto& d : s.devices) { if (d.name == "sda") { any = true; ASSERT_TRUE(d.util_pct >= 0.0 && d.util_pct <= 100.0); ASSERT_TRUE(d.util_pct > 0.0); } }
   ASSERT_TRUE(any);
 }
+
+TEST(disk_collector_counter_reset_no_spike) {
+  auto root = fs::temp_directory_path() / fs::path("montauk_test_disk_reset_") / fs::path(std::to_string(::getpid()));
+  fs::create_directories(root / "proc");
+  std::ofstream(root / "proc/diskstats") << "   8       0 sda 100 0 900000 0  200 0 800000 0  0  5000 0\n";
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
+  montauk::collectors::DiskCollector c; montauk::model::DiskSnapshot s{};
+  ASSERT_TRUE(c.sample(s));
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  // Counters went BACKWARD (device re-plugged / stats reset): deltas must be
+  // dropped for the frame, not published as an astronomical spike.
+  std::ofstream(root / "proc/diskstats") << "   8       0 sda 10 0 1000 0  20 0 2000 0  0  100 0\n";
+  ASSERT_TRUE(c.sample(s));
+  bool any = false;
+  for (auto& d : s.devices) {
+    if (d.name == "sda") { any = true; ASSERT_TRUE(d.read_bps == 0.0); ASSERT_TRUE(d.write_bps == 0.0); ASSERT_TRUE(d.util_pct == 0.0); }
+  }
+  ASSERT_TRUE(any);
+  ASSERT_TRUE(s.total_read_bps == 0.0 && s.total_write_bps == 0.0);
+}

@@ -19,8 +19,6 @@ shipped with:
 
 Run:  python3 tests/pop_gate.py   (or via tests/run.py, gate layer)
 """
-import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -28,7 +26,7 @@ from pathlib import Path
 import gen_synthetic_prom as gen
 import harness
 
-ANALYZE = harness.ROOT / "build" / "montauk_analyze"
+ANALYZE = harness.MONTAUK_ANALYZE
 note = harness.logger("pop")
 
 VERSIONS = 10

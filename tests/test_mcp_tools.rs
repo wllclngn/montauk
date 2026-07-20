@@ -38,6 +38,14 @@ fn tool_text(result: &Value) -> &str {
 }
 
 #[test]
+fn ffi_search_size_contract_holds() {
+    // The Rust SubSearch mirror and the C sublimation_search must be the
+    // same size, or compile writes past the mirror's stack buffer. The C
+    // side pins its half with a static_assert; this is the runtime half.
+    montauk_mcp::ffi::assert_search_size_matches();
+}
+
+#[test]
 fn initialize_reports_protocol_version_and_server_info() {
     let result = call("initialize", None).unwrap();
     assert_eq!(

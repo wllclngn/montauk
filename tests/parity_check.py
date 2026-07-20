@@ -13,6 +13,7 @@ wrappers themselves live in the dotfiles, not montauk.
 
 Run:  python3 tests/parity_check.py   (or via tests/run.py)
 """
+import re
 import shlex
 import shutil
 import sys
@@ -21,6 +22,8 @@ from pathlib import Path
 
 import harness
 from harness import SUBLIMATION as SUB
+
+VERSION_HEADER = harness.ROOT / "sublimation" / "src" / "include" / "sublimation.h"
 
 ROWS = "alpha 10 x\nbeta 20 y\ngamma 30 z\nalpha 40 w\n"
 NUMS = "5\n3\n8\n1\n9\n2\n7\n4\n6\n0\n"
@@ -125,6 +128,8 @@ SEARCH_FILES = {
     "pn": "nothing here\n",
     "pbin": "foo\x00bar\nfoo again\n",   # NUL in the first chunk -> binary
     "ppats": "foo\nqux\n",
+    "adj": ADJ,                          # uniq FILE parity
+    "rows": ROWS,                        # column FILE parity
 }
 FILE_CASES = [
     ("search -l",           ["search", "-l", "foo", "{pa}", "{pb}", "{pn}"],
@@ -157,6 +162,17 @@ FILE_CASES = [
                             "/usr/bin/grep -A 1 -B 1 -n foo {pa} {pb}"),
     ("search -s stdout",    ["search", "-s", "foo", "{pa}", "{missing}"],
                             "/usr/bin/grep -s foo {pa} {missing}"),
+    # stdin-or-single-FILE support on the coreutils-shaped text verbs: each
+    # verb that gained a FILE argument must byte-match its real tool reading
+    # the same named file.
+    ("uniq FILE",           ["uniq", "{adj}"],           "uniq {adj}"),
+    ("uniq -d FILE",        ["uniq", "-d", "{adj}"],     "uniq -d {adj}"),
+    ("tac FILE",            ["tac", "{pa}"],             "tac {pa}"),
+    ("head N FILE",         ["head", "2", "{pa}"],       "head -2 {pa}"),
+    ("tail N FILE",         ["tail", "2", "{pa}"],       "tail -2 {pa}"),
+    ("cut RANGE FILE",      ["cut", "2-4", "{pa}"],      "cut -c 2-4 {pa}"),
+    ("column FILE",         ["column", "{rows}"],        "column -t {rows}"),
+    ("paste -s FILE",       ["paste", "-s", "{pa}"],     "paste -s {pa}"),
 ]
 
 # Exit-code parity: the stdout tables above never see return codes, and
@@ -176,6 +192,32 @@ EXIT_CASES = [
     ("exit 0: -l match",                  ["search", "-l", "foo", "{pa}"]),
     ("exit 0: binary match",              ["search", "foo", "{pbin}"]),
     ("exit 1: binary -I",                 ["search", "-I", "foo", "{pbin}"]),
+]
+
+# sublimation's OWN argument/exit-code contract (usage()'s exit paragraph is
+# the oracle here, not an external tool): 0 when output/matches were produced,
+# 1 when none were, 2 on a usage or IO error. Every case pins a return code;
+# a stderr needle pins the diagnostic where the message IS the regression
+# (a silently accepted-and-ignored flag or positional used to exit 0).
+CONTRACT_CASES = [
+    # (name, sublimation argv, stdin, expected rc, stderr must contain)
+    ("field rejects search flags",     ["field", "1", "-v"], "x\n", 2, "unknown option '-v' for field"),
+    ("field rejects bundled -vqF",     ["field", "1", "-vqF"], "x\n", 2, "unknown option"),
+    ("sum rejects a positional",       ["sum", "{pa}"], "1\n", 2, "unexpected argument"),
+    ("tally rejects a positional",     ["tally", "{pa}"], "a\n", 2, "unexpected argument"),
+    ("uniq rejects a second FILE",     ["uniq", "{pa}", "{pb}"], "", 2, "unexpected argument"),
+    ("group rejects extras",           ["group", "1", "sum", "2", "{pa}"], "a 1\n", 2, "unexpected argument"),
+    ("replace rejects extras",         ["replace", "x", "y", "{pa}"], "x\n", 2, "unexpected argument"),
+    ("field no output exits 1",        ["field", "9"], "a b\nc d\n", 1, ""),
+    ("field output exits 0",           ["field", "1"], "a b\n", 0, ""),
+    ("field unreadable FILE exits 2",  ["field", "1", "{missing}"], "", 2, "cannot open"),
+    ("where unreadable FILE exits 2",  ["where", "1 > 0", "{missing}"], "", 2, "cannot open"),
+    ("where no match exits 1",         ["where", "1 > 9"], "5\n", 1, ""),
+    ("where match exits 0",            ["where", "1 > 0"], "5\n", 0, ""),
+    ("intersect missing FILE exits 2", ["intersect", "{missing}"], "a\n", 2, "cannot open"),
+    ("union missing FILE exits 2",     ["union", "{missing}"], "a\n", 2, "cannot open"),
+    ("join missing FILE exits 2",      ["join", "1", "{missing}"], "a 1\n", 2, "cannot open"),
+    ("unknown verb exits 2 pre-stdin", ["frobnicate"], "", 2, "unknown command"),
 ]
 
 note = harness.logger("parity")
@@ -207,6 +249,42 @@ def check_exit_codes(paths, fails, oks):
             print(f"           grep       : rc={rp.returncode} {rp.stdout!r}")
 
 
+def check_contract(paths, fails, oks):
+    """sublimation-only cases: fixed expected code, optional stderr needle."""
+    for name, sub_argv, stdin, rc, needle in CONTRACT_CASES:
+        argv = [a.format(**paths) for a in sub_argv]
+        p = harness.run_text([str(SUB), *argv], input=stdin)
+        if p.returncode == rc and needle in p.stderr:
+            oks.append(name)
+        else:
+            fails.append(name)
+            note(f"FAIL {name}")
+            print(f"           want: rc={rc} stderr contains {needle!r}")
+            print(f"           got : rc={p.returncode} stderr={p.stderr!r}")
+
+
+def check_version(fails, oks):
+    """The version verb's output shape, compared against the header macros
+    parsed the same way sublimation/tests/test.py derives its VERSION -- the
+    one version story, and no frozen golden to churn every release bump."""
+    text = VERSION_HEADER.read_text()
+    ver = re.search(r'#define\s+SUBLIMATION_VERSION_STRING\s+"([^"]+)"', text)
+    abi = re.search(r'#define\s+SUBLIMATION_API_VERSION\s+(\d+)', text)
+    if not ver or not abi:
+        fails.append("version verb")
+        note(f"FAIL version verb: cannot parse macros from {VERSION_HEADER}")
+        return
+    want = f"sublimation {ver.group(1)} (abi {abi.group(1)})\n"
+    for spelling in ("--version", "version"):
+        name = f"version verb ({spelling})"
+        p = harness.run_text([str(SUB), spelling], input="")
+        if p.returncode == 0 and p.stdout == want:
+            oks.append(name)
+        else:
+            fails.append(name)
+            note(f"FAIL {name}: want {want!r}, got rc={p.returncode} {p.stdout!r}")
+
+
 def main():
     if harness.missing_bins(SUB):
         note(f"sublimation not built at {SUB} -- build sublimation_cli first")
@@ -229,6 +307,10 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         paths = materialize(Path(td))
         for name, argv, real_cmd in FILE_CASES:
+            tool = real_cmd.split()[0]
+            if shutil.which(tool) is None:
+                skips.append(name)
+                continue
             argv = [a.format(**paths) for a in argv]
             so = harness.run_text([str(SUB), *argv], input="").stdout
             ro = harness.run_text(["bash", "-c", real_cmd.format(**paths)], input="").stdout
@@ -240,6 +322,8 @@ def main():
                 print(f"           sublimation: {so!r}")
                 print(f"           grep       : {ro!r}")
         check_exit_codes(paths, fails, oks)
+        check_contract(paths, fails, oks)
+    check_version(fails, oks)
     note(f"{len(oks)} match, {len(fails)} diverged, {len(skips)} skipped"
          + (f" (absent: {', '.join(skips)})" if skips else ""))
     return 1 if fails else 0

@@ -17,8 +17,6 @@ montauk \- Linux observability platform: monitor, eBPF tracer and analyzer
 .IR N ]
 .RB [ \-\-iterations
 .IR N ]
-.RB [ \-\-sleep\-ms
-.IR N ]
 .SH DESCRIPTION
 .B montauk
 is a C++23 Linux observability platform \(em an event-driven monitor, an eBPF
@@ -100,6 +98,17 @@ where text formatting would perturb the workload. Decode offline with
 .BR montauk_trace_decode (1).
 See TRACE MODE for details.
 .TP
+.BI \-\-stream\-out " DEVICE"
+Second, independent binary stream (same format as \-\-trace\-out), meant for a
+character device (e.g. a qemu-backed serial port) so capture survives a hang
+that takes \-\-trace\-out's filesystem down with it.
+.TP
+.B \-\-sched\-detail
+Stream the heavy per-switch scheduler-decision detail \(em per-CPU idle
+boundaries and the SWITCH_IN pick fallback (off by default; the
+placement/slice/stall reports need it, ~6x trace cost on CPU-cycling
+workloads). See the Scheduler-decision detail stream section under TRACE MODE.
+.TP
 .B \-\-json
 Print one structured JSON snapshot of live system state to stdout, then exit.
 Warms two producer cycles so the rate deltas (CPU context switches, network and
@@ -118,10 +127,12 @@ auto-detected colors and all defaults.
 Duration for self-test mode in seconds.
 .TP
 .BI \-\-iterations " N"
-Run for N iterations then exit (useful for benchmarking).
-.TP
-.BI \-\-sleep\-ms " N"
-Sleep N milliseconds between iterations (default: 250).
+Run for N iterations then exit (useful for benchmarking). The refresh
+interval starts at 250 ms and is adjusted live with the
+.B +
+and
+.B \-
+keys (see KEYBINDINGS).
 .SH PROCESS COLLECTION MODES
 montauk supports three collection backends, auto-detected in priority order:
 .SS Kernel Module (Best)
@@ -168,7 +179,7 @@ MONTAUK_COLLECTOR=traditional montauk
 .SS Installation
 .nf
 .RS
-cd montauk-kernel
+cd components/kernel
 \&./install.py
 .RE
 .fi
@@ -407,6 +418,10 @@ the available width; high-core-count systems scroll with arrow keys and
 .B c
 Toggle CPU scale (per-core vs total)
 .TP
+.B + / \-
+Shorten / lengthen the refresh interval by 10 ms per press (bounds 33\-1000 ms,
+default 250 ms)
+.TP
 .B ? / h
 Toggle the in-app help overlay. The overlay loads this manpage at runtime
 (via \fBman -P cat montauk\fR) and renders it inside the PROCESS MONITOR
@@ -599,7 +614,7 @@ MONTAUK_COLLECTOR=kernel montauk
 Binary may not be built with kernel support. Rebuild:
 .nf
 .RS
-cd montauk-kernel && ./install.py
+cd components/kernel && ./install.py
 .RE
 .fi
 .SS NVML Not Loading
@@ -618,7 +633,7 @@ Consider kernel module for lowest overhead
 .IP \(bu 2
 Reduce MONTAUK_MAX_PROCS if tracking too many processes
 .IP \(bu 2
-Increase --sleep-ms for longer intervals
+Press \fB\-\fR in the TUI to lengthen the refresh interval
 .SH SEE ALSO
 .BR htop (1),
 .BR btop (1),

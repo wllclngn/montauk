@@ -8,7 +8,7 @@ class DiskCollector {
 public:
   [[nodiscard]] bool sample(montauk::model::DiskSnapshot& out);
 private:
-  struct Prev { uint64_t rd{}, wr{}, rdsec{}, wrsec{}, tios{}, ms{}; double ts{}; };
+  struct Prev { uint64_t rdsec{}, wrsec{}, tios{}; double ts{}; };
   std::unordered_map<std::string, Prev> last_;
   static constexpr uint64_t kSectorSize = 512; // typical
 };

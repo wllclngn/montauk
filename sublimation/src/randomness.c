@@ -250,11 +250,10 @@ static sub_randomness_t sub_randomness_from(const sub_profile_t *p, size_t n,
     score[SUB_LENS_INVERSION] = sub_clampf(1.0f - 2.0f * fabsf(p->inversion_ratio - 0.5f));
     avail[SUB_LENS_INVERSION] = true;
 
-    // DISTINCT: distinct-value ratio. Few-unique data vetoes here. classify's
-    // sorted/reversed/equal fast paths return before estimate_distinct runs,
-    // leaving distinct_estimate 0 -- that is "not computed", not "zero distinct
-    // values", so the lens is honestly unavailable there (the root fix belongs
-    // in classify_impl.h's fast paths, which own the field).
+    // DISTINCT: distinct-value ratio. Few-unique data vetoes here. Every
+    // classify path with n >= 2 fills distinct_estimate (fast paths included);
+    // 0 survives only as "not computed" (trivial n), where the lens is
+    // honestly unavailable.
     if (p->distinct_estimate > 0) {
         score[SUB_LENS_DISTINCT] = sub_clampf((float)((double)p->distinct_estimate / (double)n));
         avail[SUB_LENS_DISTINCT] = true;

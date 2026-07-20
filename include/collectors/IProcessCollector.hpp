@@ -13,7 +13,13 @@ public:
   // Default: available (no-op)
   [[nodiscard]] virtual bool init() { return true; }
 
-  // Sample current process state into out. Return true on success.
+  // Sample current process state into out.
+  //
+  // Return-value convention for EVERY collector's sample(), process or not:
+  // true means "this snapshot section was refreshed with data this cycle",
+  // false means it was not (source unavailable, read failure, or the call
+  // was a within-interval no-op). Producer tolerates false by carrying the
+  // previous section forward.
   [[nodiscard]] virtual bool sample(montauk::model::ProcessSnapshot& out) = 0;
 
   // Cleanup resources. Default: no-op

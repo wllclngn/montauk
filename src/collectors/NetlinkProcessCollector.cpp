@@ -4,11 +4,8 @@
 #include "util/Churn.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cstring>
 #include <cstdlib>
-#include <fstream>
-#include <sstream>
 #include <unistd.h>
 
 #include <sys/socket.h>
@@ -17,15 +14,6 @@
 #include <linux/cn_proc.h>
 
 namespace montauk::collectors {
-
-// Forward declaration of helper struct and function
-struct StatusInfoNetlink {
-  std::string user;
-  int thread_count{1};
-};
-
-static StatusInfoNetlink info_from_status_netlink(int32_t pid);
-static std::string read_exe_path_netlink(int32_t pid);
 
 NetlinkProcessCollector::NetlinkProcessCollector(size_t max_procs, size_t enrich_top_n)
   : max_procs_(max_procs), enrich_top_n_(enrich_top_n) {}
@@ -105,6 +93,7 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
 
   uint64_t cpu_total = read_cpu_total();
   if (ncpu_ == 0) ncpu_ = read_cpu_count();
+  const uint64_t page_kb = static_cast<uint64_t>(getpagesize() / 1024);
 
   out.processes.clear(); out.total_processes = 0; out.running_processes = 0; out.state_running=0; out.state_sleeping=0; out.state_zombie=0;
   out.total_threads=0;
@@ -176,8 +165,8 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
       continue;
     }
 
-    int32_t ppid = 0; uint64_t ut=0, st=0; int64_t rssp=0; std::string comm; char stch='?';
-    if (!parse_stat_line(*content_opt, stch, ppid, ut, st, rssp, comm)) {
+    uint64_t ut=0, st=0; int64_t rssp=0; std::string comm; char stch='?';
+    if (!parse_stat_line(*content_opt, stch, ut, st, rssp, comm)) {
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
       montauk::model::ProcSample ps;
       ps.pid = pid;
@@ -198,10 +187,9 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     }
 
     montauk::model::ProcSample ps; ps.pid = pid;
-    ps.utime = ut; ps.stime = st; ps.total_time = total_proc;
-    ps.rss_kb = (rssp > 0 ? static_cast<uint64_t>(rssp) * (getpagesize()/1024) : 0);
-    ps.cpu_pct = cpu_pct; ps.cmd = comm;
-    ps.exe_path = read_exe_path_netlink(pid);
+    ps.total_time = total_proc;
+    ps.rss_kb = (rssp > 0 ? static_cast<uint64_t>(rssp) * page_kb : 0);
+    ps.cpu_pct = cpu_pct; ps.cmd = comm; // exe/command/user enriched after top-K below
     out.processes.push_back(std::move(ps));
     if (stch == 'R') out.state_running++;
     else if (stch == 'S' || stch == 'D') out.state_sleeping++;
@@ -212,8 +200,13 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   out.running_processes = out.state_running;
   top_k_by_cpu_pct(out.processes, max_procs_);
 
-  // Enrich top N: command and user
+  // Enrich survivors only: exe_path for every kept row (Security scans the
+  // whole published set), command/user for the top N
   out.tracked_count = out.processes.size();
+  for (auto& ps : out.processes) {
+    if (ps.churn_reason == montauk::model::ChurnReason::None)
+      ps.exe_path = read_exe_path(ps.pid);
+  }
   size_t enrich_n = std::min<size_t>(out.processes.size(), enrich_top_n_);
   out.enriched_count = enrich_n;
   for (size_t i = 0; i < enrich_n; ++i) {
@@ -236,7 +229,7 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     }
     
     // User name and thread count from /proc/[pid]/status
-    auto info = info_from_status_netlink(ps.pid);
+    auto info = info_from_status(ps.pid);
     if (!info.user.empty()) ps.user_name = std::move(info.user);
     out.total_threads += info.thread_count;
   }
@@ -304,9 +297,12 @@ void NetlinkProcessCollector::handle_cn_msg(void* cn_msg_ptr, ssize_t /*len*/) {
       // Update cached command best-effort
       auto cmd = read_cmdline(pid);
       if (cmd.empty()) {
-        // Try comm as a fallback
-        std::ifstream f("/proc/" + std::to_string(pid) + "/comm");
-        if (f) std::getline(f, cmd);
+        // Try comm as a fallback (mapped reader honors MONTAUK_PROC_ROOT)
+        auto comm = montauk::util::read_file_string("/proc/" + std::to_string(pid) + "/comm");
+        if (comm) {
+          cmd = *comm;
+          if (auto nl = cmd.find('\n'); nl != std::string::npos) cmd.resize(nl);
+        }
       }
       if (!cmd.empty()) pid_to_comm_[pid] = std::move(cmd);
       break;
@@ -354,98 +350,6 @@ void NetlinkProcessCollector::send_control_message(int op) {
   msg.m.mcast = static_cast<proc_cn_mcast_op>(op);
 
   (void)::send(nl_sock_, &msg, sizeof(msg), 0);
-}
-
-// Helpers replicated from traditional collector (kept local to avoid refactoring now)
-
-uint64_t NetlinkProcessCollector::read_cpu_total() {
-  auto txt = montauk::util::read_file_string("/proc/stat"); if (!txt) return 0;
-  std::istringstream ss(*txt); std::string line; if (!std::getline(ss, line)) return 0;
-  size_t pos = line.find(' '); if (pos == std::string::npos) return 0;
-  std::string_view rest(line.c_str() + pos + 1);
-  uint64_t vals[8]{}; int i=0; size_t start=0;
-  while (i<8 && start<rest.size()) {
-    while (start<rest.size() && (rest[start]==' '||rest[start]=='\t')) ++start;
-    size_t end=start; while (end<rest.size() && rest[end]>='0'&&rest[end]<='9') ++end;
-    if (end>start) { std::from_chars(rest.data()+start, rest.data()+end, vals[i++]); }
-    start=end+1;
-  }
-  uint64_t total=0; for (int j=0;j<8;++j) total+=vals[j]; return total;
-}
-
-unsigned NetlinkProcessCollector::read_cpu_count() {
-  auto txt = montauk::util::read_file_string("/proc/stat"); if (!txt) return 1;
-  std::istringstream ss(*txt); std::string line; unsigned count = 0; bool first = true;
-  while (std::getline(ss, line)) {
-    if (line.rfind("cpu", 0) == 0) {
-      if (first) { first = false; continue; }
-      if (line.size() >= 4 && std::isdigit(static_cast<unsigned char>(line[3]))) count++;
-    } else if (!first) {
-      break;
-    }
-  }
-  if (count == 0) count = 1;
-  return count;
-}
-
-static std::string read_exe_path_netlink(int32_t pid) {
-  auto link = montauk::util::read_symlink(std::string("/proc/") + std::to_string(pid) + "/exe");
-  if (!link) return {};
-  return *link;
-}
-
-static std::string user_name_cached_local(uint32_t uid) {
-  static std::unordered_map<uint32_t, std::string> cache;
-  auto it = cache.find(uid);
-  if (it != cache.end()) return it->second;
-  std::ifstream pw("/etc/passwd"); std::string pl;
-  while (std::getline(pw, pl)) {
-    auto c1 = pl.find(':'); if (c1==std::string::npos) continue;
-    auto c2 = pl.find(':', c1+1); if (c2==std::string::npos) continue;
-    auto c3 = pl.find(':', c2+1); if (c3==std::string::npos) continue;
-    uint32_t fuid = std::strtoul(pl.c_str()+c2+1, nullptr, 10);
-    if (fuid==uid) {
-      std::string name = pl.substr(0, c1);
-      cache.emplace(uid, name);
-      return name;
-    }
-  }
-  return std::to_string(uid);
-}
-
-static StatusInfoNetlink info_from_status_netlink(int32_t pid) {
-  StatusInfoNetlink info;
-  auto path = std::string("/proc/") + std::to_string(pid) + "/status";
-  auto txt = montauk::util::read_file_string(path);
-  if (!txt) return info;
-  std::istringstream ss(*txt); std::string line;
-  while (std::getline(ss, line)) {
-    if (line.rfind("Uid:", 0) == 0) {
-      std::istringstream ls(line.substr(4));
-      uint32_t uid; ls >> uid;
-      info.user = user_name_cached_local(uid);
-    }
-    else if (line.rfind("Threads:", 0) == 0) {
-      std::istringstream ls(line.substr(8));
-      ls >> info.thread_count;
-    }
-  }
-  return info;
-}
-
-std::string NetlinkProcessCollector::user_from_status(int32_t pid) {
-  auto path = std::string("/proc/") + std::to_string(pid) + "/status";
-  auto txt = montauk::util::read_file_string(path);
-  if (!txt) return {};
-  std::istringstream ss(*txt); std::string line;
-  while (std::getline(ss, line)) {
-    if (line.rfind("Uid:", 0) == 0) {
-      std::istringstream ls(line.substr(4));
-      uint32_t uid; ls >> uid;
-      return user_name_cached_local(uid);
-    }
-  }
-  return {};
 }
 
 } // namespace montauk::collectors

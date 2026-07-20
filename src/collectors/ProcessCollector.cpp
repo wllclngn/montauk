@@ -1,155 +1,31 @@
 #include "collectors/ProcessCollector.hpp"
 #include "collectors/ProcessParsing.hpp"
 #include "util/Procfs.hpp"
-#include <filesystem>
 #include <algorithm>
-#include <sstream>
-#include <fstream>
-#include <mutex>
 #include <unistd.h>
-#include <charconv>
 #include "util/Churn.hpp"
-
-namespace fs = std::filesystem;
 
 namespace montauk::collectors {
 
 ProcessCollector::ProcessCollector(unsigned min_interval_ms, size_t max_procs, size_t enrich_top_n)
   : min_interval_ms_(min_interval_ms), max_procs_(max_procs), enrich_top_n_(enrich_top_n) {}
 
-static uint64_t read_cpu_total() {
-  auto txt = montauk::util::read_file_string("/proc/stat"); if (!txt) return 0;
-  std::istringstream ss(*txt); std::string line; if (!std::getline(ss, line)) return 0;
-  // parse after 'cpu '
-  size_t pos = line.find(' '); if (pos == std::string::npos) return 0;
-  std::string_view rest(line.c_str() + pos + 1);
-  uint64_t vals[8]{}; int i=0; size_t start=0;
-  while (i<8 && start<rest.size()) {
-    while (start<rest.size() && (rest[start]==' '||rest[start]=='\t')) ++start;
-    size_t end=start; while (end<rest.size() && rest[end]>='0'&&rest[end]<='9') ++end;
-    if (end>start) { std::from_chars(rest.data()+start, rest.data()+end, vals[i++]); }
-    start=end+1;
-  }
-  uint64_t total=0; for (int j=0;j<8;++j) total+=vals[j]; return total;
-}
-
-static unsigned read_cpu_count() {
-  auto txt = montauk::util::read_file_string("/proc/stat"); if (!txt) return 1;
-  std::istringstream ss(*txt); std::string line; unsigned count = 0; bool first = true;
-  while (std::getline(ss, line)) {
-    if (line.rfind("cpu", 0) == 0) {
-      if (first) { first = false; continue; } // skip aggregate 'cpu '
-      // per-core lines start with 'cpu' followed by a number
-      if (line.size() >= 4 && std::isdigit(static_cast<unsigned char>(line[3]))) count++;
-    } else if (!first) {
-      break; // stop after cpu block
-    }
-  }
-  if (count == 0) count = 1;
-  return count;
-}
-
-static std::string read_exe_path(int32_t pid) {
-  auto link = montauk::util::read_symlink(std::string("/proc/") + std::to_string(pid) + "/exe");
-  if (!link) return {};
-  return *link;
-}
-
-static std::string user_name_cached(uint32_t uid) {
-  static std::mutex cache_mutex;
-  static std::unordered_map<uint32_t, std::string> cache;
-  
-  {
-    std::lock_guard<std::mutex> lock(cache_mutex);
-    auto it = cache.find(uid);
-    if (it != cache.end()) return it->second;
-  }
-  
-  std::string name;
-  std::ifstream pw("/etc/passwd"); 
-  std::string pl;
-  bool found = false;
-  
-  while (std::getline(pw, pl)) {
-    auto c1 = pl.find(':'); 
-    if (c1==std::string::npos) continue;
-    auto c2 = pl.find(':', c1+1); 
-    if (c2==std::string::npos) continue;
-    auto c3 = pl.find(':', c2+1); 
-    if (c3==std::string::npos) continue;
-    
-    uint32_t fuid = std::strtoul(pl.c_str()+c2+1, nullptr, 10);
-    if (fuid==uid) {
-      name = pl.substr(0, c1);
-      found = true;
-      break;
-    }
-  }
-  
-  if (!found) {
-    name = std::to_string(uid);
-  }
-  
-  {
-    std::lock_guard<std::mutex> lock(cache_mutex);
-    cache.emplace(uid, name);
-  }
-  
-  return name;
-}
-
-StatusInfo ProcessCollector::info_from_status(int32_t pid) {
-  StatusInfo info;
-  auto path = std::string("/proc/")+std::to_string(pid)+"/status";
-  std::optional<std::string> txt;
-  try { txt = montauk::util::read_file_string(path); } catch(...) { txt = std::nullopt; montauk::util::note_churn(montauk::util::ChurnKind::Proc); }
-  if (!txt) return info;
-  std::istringstream ss(*txt); std::string line;
-  while (std::getline(ss, line)) {
-    if (line.rfind("Uid:",0)==0) {
-      std::istringstream ls(line.substr(4));
-      uint32_t uid; ls >> uid;
-      info.user = user_name_cached(uid);
-    }
-    else if (line.rfind("Threads:",0)==0) {
-      std::istringstream ls(line.substr(8));
-      ls >> info.thread_count;
-    }
-  }
-  return info;
-}
-
-std::string ProcessCollector::user_from_status(int32_t pid) {
-  auto path = std::string("/proc/")+std::to_string(pid)+"/status";
-  std::optional<std::string> txt;
-  try { txt = montauk::util::read_file_string(path); } catch(...) { txt = std::nullopt; montauk::util::note_churn(montauk::util::ChurnKind::Proc); }
-  if (!txt) return {};
-  std::istringstream ss(*txt); std::string line;
-  while (std::getline(ss, line)) {
-    if (line.rfind("Uid:",0)==0) {
-      std::istringstream ls(line.substr(4));
-      uint32_t uid; ls >> uid;
-      return user_name_cached(uid);
-    }
-  }
-  return {};
-}
-
 bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   auto now = std::chrono::steady_clock::now();
   if (last_run_.time_since_epoch().count()!=0) {
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_run_).count();
     if (static_cast<unsigned>(elapsed) < min_interval_ms_) {
-      return true; // skip
+      return false; // within min interval: snapshot section not refreshed
     }
   }
   last_run_ = now;
 
   uint64_t cpu_total = read_cpu_total();
   if (ncpu_ == 0) ncpu_ = read_cpu_count();
+  const uint64_t page_kb = static_cast<uint64_t>(getpagesize() / 1024);
   out.processes.clear(); out.total_processes=0; out.running_processes=0; out.state_running=0; out.state_sleeping=0; out.state_zombie=0;
   out.total_threads=0;
-  
+
   for (auto& name : montauk::util::list_dir("/proc")) {
     if (name.empty() || name[0]<'0' || name[0]>'9') continue; // numeric
     int32_t pid = std::strtol(name.c_str(), nullptr, 10);
@@ -160,15 +36,15 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     if (!content_opt) {
       // Record churn and emit a placeholder row so the user sees it happened
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
-      montauk::model::ProcSample ps; ps.pid = pid; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn_reason = montauk::model::ChurnReason::ReadFailed; ps.cmd = name;
+      montauk::model::ProcSample ps; ps.pid = pid; ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn_reason = montauk::model::ChurnReason::ReadFailed; ps.cmd = name;
       out.processes.push_back(std::move(ps));
       continue;
     }
-    int32_t ppid=0; uint64_t ut=0, st=0; int64_t rssp=0; std::string comm;
+    uint64_t ut=0, st=0; int64_t rssp=0; std::string comm;
     char stch='?';
-    if (!parse_stat_line(*content_opt, stch, ppid, ut, st, rssp, comm)) {
+    if (!parse_stat_line(*content_opt, stch, ut, st, rssp, comm)) {
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
-      montauk::model::ProcSample ps; ps.pid = pid; ps.utime=ps.stime=ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn_reason = montauk::model::ChurnReason::ReadFailed; ps.cmd = comm.empty()? name : comm;
+      montauk::model::ProcSample ps; ps.pid = pid; ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn_reason = montauk::model::ChurnReason::ReadFailed; ps.cmd = comm.empty()? name : comm;
       out.processes.push_back(std::move(ps));
       continue;
     }
@@ -181,9 +57,8 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
       uint64_t dt = (cpu_total > last_cpu_total_) ? (cpu_total - last_cpu_total_) : 0;
       if (dt>0) cpu_pct = (100.0 * static_cast<double>(dp) / static_cast<double>(dt)) * static_cast<double>(ncpu_);
     }
-    montauk::model::ProcSample ps; ps.pid=pid; ps.utime=ut; ps.stime=st; ps.total_time=total_proc; ps.rss_kb = (rssp>0 ? static_cast<uint64_t>(rssp)* (getpagesize()/1024) : 0);
-    ps.cpu_pct = cpu_pct; ps.cmd = comm; // will enrich command/user below
-    ps.exe_path = read_exe_path(pid);
+    montauk::model::ProcSample ps; ps.pid=pid; ps.total_time=total_proc; ps.rss_kb = (rssp>0 ? static_cast<uint64_t>(rssp)*page_kb : 0);
+    ps.cpu_pct = cpu_pct; ps.cmd = comm; // exe/command/user enriched after top-K below
     out.processes.push_back(std::move(ps));
     // Count process states
     if (stch == 'R') out.state_running++;
@@ -193,8 +68,13 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   out.total_processes = out.processes.size();
   out.running_processes = out.state_running;
   top_k_by_cpu_pct(out.processes, max_procs_);
-  // enrich top N (cmdline and user) and accumulate thread counts
+  // enrich survivors only: exe_path for every kept row (Security scans the
+  // whole published set), cmdline/user/threads for the top N
   out.tracked_count = out.processes.size();
+  for (auto& ps : out.processes) {
+    if (ps.churn_reason == montauk::model::ChurnReason::None)
+      ps.exe_path = read_exe_path(ps.pid);
+  }
   size_t enrich_n = std::min<size_t>(out.processes.size(), enrich_top_n_);
   out.enriched_count = enrich_n;
   for (size_t i=0;i<enrich_n;i++) {

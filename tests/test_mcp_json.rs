@@ -26,6 +26,59 @@ fn parses_unicode_escape() {
     assert_eq!(v, Value::String("caf\u{e9}".to_string()));
 }
 
+// The escape text is assembled from halves (concat!) so no tool in the
+// edit chain ever sees a full 😀 pair to decode prematurely --
+// the parser under test receives the exact 12-byte escape sequence.
+const EMOJI_PAIR: &str = concat!(r"\ud83d", r"\ude00"); // U+1F600
+const CJK_B_PAIR: &str = concat!(r"\ud840", r"\udc00"); // U+20000
+
+#[test]
+fn decodes_surrogate_pairs_to_non_bmp_code_points() {
+    // U+1F600 as its UTF-16 escape pair -- one emoji out, not two U+FFFD.
+    let v = parse(&format!("\"{EMOJI_PAIR}\"")).unwrap();
+    assert_eq!(v, Value::String("\u{1F600}".to_string()));
+    // Mid-string, with neighbors on both sides.
+    let v = parse(&format!("\"a{EMOJI_PAIR}b\"")).unwrap();
+    assert_eq!(v, Value::String("a\u{1F600}b".to_string()));
+    // CJK Extension B (U+20000), the non-emoji non-BMP case.
+    let v = parse(&format!("\"{CJK_B_PAIR}\"")).unwrap();
+    assert_eq!(v, Value::String("\u{20000}".to_string()));
+    // Raw (unescaped) UTF-8 non-BMP passthrough still works too.
+    let v = parse("\"\u{1F600}\"").unwrap();
+    assert_eq!(v, Value::String("\u{1F600}".to_string()));
+}
+
+#[test]
+fn surrogate_pair_round_trips_through_serialize_and_parse() {
+    let original = Value::String("emoji \u{1F600} and CJK-B \u{20000}".to_string());
+    let reparsed = parse(&original.to_string()).unwrap();
+    assert_eq!(original, reparsed);
+}
+
+#[test]
+fn lone_high_surrogate_becomes_replacement_character() {
+    assert_eq!(parse(r#""\ud83d""#).unwrap(), Value::String("\u{FFFD}".to_string()));
+    // Followed by a non-surrogate escape: U+FFFD then the escape's own char.
+    assert_eq!(parse(r#""\ud83dA""#).unwrap(), Value::String("\u{FFFD}A".to_string()));
+    // Followed by a plain character rather than another escape.
+    assert_eq!(parse(r#""\ud83dx""#).unwrap(), Value::String("\u{FFFD}x".to_string()));
+}
+
+#[test]
+fn swapped_surrogate_pair_becomes_two_replacement_characters() {
+    // Low then high: neither half can pair, both keep the U+FFFD convention.
+    let v = parse(r#""\ude00\ud83d""#).unwrap();
+    assert_eq!(v, Value::String("\u{FFFD}\u{FFFD}".to_string()));
+}
+
+#[test]
+fn high_surrogate_then_valid_pair_recovers_the_pair() {
+    // A lone \ud83d, then a real pair -- the second high surrogate must
+    // not be swallowed by the first's failed pairing.
+    let v = parse(&format!("\"{}{EMOJI_PAIR}\"", r"\ud83d")).unwrap();
+    assert_eq!(v, Value::String("\u{FFFD}\u{1F600}".to_string()));
+}
+
 #[test]
 fn parses_nested_object_and_array() {
     let v = parse(r#"{"a":[1,2,3],"b":{"c":null}}"#).unwrap();

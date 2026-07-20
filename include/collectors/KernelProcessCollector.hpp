@@ -40,8 +40,6 @@ private:
   bool resolve_family();
   bool send_get_snapshot();
   bool recv_snapshot(montauk::model::ProcessSnapshot& out);
-  uint64_t read_cpu_total();
-  int read_cpu_count();
 };
 
 } // namespace montauk::collectors

@@ -355,7 +355,7 @@ bool PmuCollector::sample(montauk::model::PmuSnapshot& out) {
   if (!available_) {
     out.available = false;
     out.l3_available = false;
-    return true; // resilient no-op
+    return false; // no counters sampled: section not refreshed
   }
 
   auto now = std::chrono::steady_clock::now();

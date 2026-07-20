@@ -19,7 +19,6 @@ SUB_CONSTEXPR size_t  SUB_SPECTRAL_MAX_N         = 512;
 SUB_CONSTEXPR double  SUB_JACOBI_TOLERANCE       = 1e-12;
 SUB_CONSTEXPR size_t  SUB_JACOBI_MAX_ITER_MULT   = 100;
 SUB_CONSTEXPR double  SUB_EIGENVALUE_ZERO_THRESH  = 1e-8;
-SUB_CONSTEXPR double  SUB_SPECTRAL_GAP_GOOD      = 0.15;
 SUB_CONSTEXPR double  SUB_SPECTRAL_GAP_POOR      = 0.02;
 SUB_CONSTEXPR double  SUB_JACOBI_NEAR_EQUAL      = 1e-15;
 
@@ -66,13 +65,6 @@ void sub_build_comparison_laplacian(const int64_t *arr, size_t n,
 // Returns iteration count (0 on failure)
 size_t sub_jacobi_eigendecompose(double *A, double *eigenvalues,
                                  size_t n, double *work);
-
-// Argsort Fiedler vector: perm[k] = index of k-th smallest Fiedler entry
-void sub_fiedler_argsort(const double *fiedler, size_t *perm, size_t n);
-
-// Apply permutation: arr becomes arr[perm[0]], arr[perm[1]], ...
-void sub_apply_permutation_i64(int64_t *arr, const size_t *perm, size_t n,
-                               int64_t *scratch);
 
 // Extract spectral gap from sorted eigenvalue array
 double sub_spectral_gap(const double *eigenvalues, size_t n);

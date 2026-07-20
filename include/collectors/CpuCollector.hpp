@@ -11,6 +11,8 @@ public:
 private:
   montauk::model::CpuTimes last_total_{};
   std::vector<montauk::model::CpuTimes> last_per_{};
+  std::vector<montauk::model::CpuTimes> per_scratch_{};  // reused parse buffer
+  std::vector<std::string> freq_paths_{};  // per-core cpufreq paths, built once
   bool has_last_{false};
   std::string cpu_model_{};
   int physical_cores_{0};   // summed per-socket "cpu cores" from /proc/cpuinfo

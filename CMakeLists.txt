@@ -36,15 +36,23 @@ endif()
 # at package() time.
 add_compile_options(-g)
 
+# One warning policy for every first-party target. Linking this instead of
+# repeating the flags per target keeps the policy from drifting between
+# targets (it had been copy-pasted onto nine of them). Third-party or
+# generated sources that cannot meet -Werror simply do not link it.
+add_library(montauk_warnings INTERFACE)
+target_compile_options(montauk_warnings INTERFACE -Wall -Wextra -Werror -Wshadow)
+
 # Build options
 option(MONTAUK_BUILD_TESTS "Build unit tests" OFF)
 option(MONTAUK_KERNEL "Build with kernel module collector support (requires montauk-kernel loaded)" OFF)
 
-# ── sublimation ─────────────────────────────────────────────────────────────
-# montauk's sort algorithm, now an in-tree sub-system (sublimation/). Built
-# as a C23 static library from its own sources with its own flags — NOT
-# montauk's -Werror/-Wshadow (third-party warnings must not fail montauk's
-# build). No system install, no find_package, no fetch: the code lives here.
+# sublimation
+# montauk's adaptive sort and search core, an in-tree sub-system
+# (sublimation/). Built as a C23 static library from its own sources with its
+# own flags, NOT montauk's -Werror/-Wshadow (a new toolchain's fresh warnings
+# must degrade loudly, never break every consumer at once). No system install,
+# no find_package, no fetch: the code lives here.
 add_library(sublimation STATIC
     sublimation/src/classify.c
     sublimation/src/merge.c
@@ -133,7 +141,7 @@ add_library(montauk_core
 )
 target_include_directories(montauk_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(montauk_core PUBLIC _GNU_SOURCE)
-target_compile_options(montauk_core PRIVATE -Wall -Wextra -Werror -Wshadow)
+target_link_libraries(montauk_core PRIVATE montauk_warnings)
 
 # Always attempt NVML (NVIDIA) support by default; if not found, build continues without it.
 # Try common locations for NVML headers. On Arch/others, CUDA installs nvml.h under /opt/cuda/include.
@@ -192,13 +200,13 @@ if(LIBBPF_LIBRARY AND LIBBPF_INCLUDE AND BPFTOOL AND CLANG_BPF)
     OUTPUT ${CMAKE_BINARY_DIR}/montauk_trace.bpf.o
     COMMAND ${CLANG_BPF} -target bpf -g -O2
       -I${CMAKE_BINARY_DIR}
-      -I${CMAKE_SOURCE_DIR}/bpf
+      -I${CMAKE_SOURCE_DIR}/src/bpf
       -D__TARGET_ARCH_x86
       -Wno-missing-declarations
-      -c ${CMAKE_SOURCE_DIR}/bpf/montauk_trace.bpf.c
+      -c ${CMAKE_SOURCE_DIR}/src/bpf/montauk_trace.bpf.c
       -o ${CMAKE_BINARY_DIR}/montauk_trace.bpf.o
-    DEPENDS ${CMAKE_SOURCE_DIR}/bpf/montauk_trace.bpf.c
-            ${CMAKE_SOURCE_DIR}/bpf/montauk_trace.h
+    DEPENDS ${CMAKE_SOURCE_DIR}/src/bpf/montauk_trace.bpf.c
+            ${CMAKE_SOURCE_DIR}/src/bpf/montauk_trace.h
             ${CMAKE_BINARY_DIR}/vmlinux.h
     COMMENT "Compiling BPF program"
   )
@@ -213,7 +221,7 @@ if(LIBBPF_LIBRARY AND LIBBPF_INCLUDE AND BPFTOOL AND CLANG_BPF)
   add_custom_target(bpf_skel DEPENDS ${CMAKE_BINARY_DIR}/montauk_trace.skel.h)
 
   target_sources(montauk_core PRIVATE src/collectors/BpfTraceCollector.cpp)
-  target_include_directories(montauk_core PUBLIC ${CMAKE_BINARY_DIR} ${LIBBPF_INCLUDE} ${CMAKE_SOURCE_DIR}/bpf)
+  target_include_directories(montauk_core PUBLIC ${CMAKE_BINARY_DIR} ${LIBBPF_INCLUDE} ${CMAKE_SOURCE_DIR}/src/bpf)
   target_link_libraries(montauk_core PUBLIC ${LIBBPF_LIBRARY} elf z)
   target_compile_definitions(montauk_core PUBLIC MONTAUK_HAVE_BPF=1)
   add_dependencies(montauk_core bpf_skel)
@@ -233,7 +241,7 @@ message(STATUS "Sublimation: in-tree sub-system (montauk/sublimation)")
 
 add_executable(montauk src/main.cpp)
 target_link_libraries(montauk PRIVATE montauk_core)
-target_compile_options(montauk PRIVATE -Wall -Wextra -Werror -Wshadow)
+target_link_libraries(montauk PRIVATE montauk_warnings)
 set_target_properties(montauk PROPERTIES OUTPUT_NAME montauk)
 
 
@@ -250,25 +258,25 @@ add_executable(montauk_analyze
     src/util/Log.cpp)
 target_include_directories(montauk_analyze PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/bpf)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/bpf)
 # sublimation is montauk's sort -- the sched report sorts wake2run latencies
 # through its direct u64 entry. Links the in-tree sub-system.
 target_link_libraries(montauk_analyze PRIVATE sublimation)
 # Stamp the project version into the analysis .prom _info metric (house style).
 target_compile_definitions(montauk_analyze PRIVATE MONTAUK_VERSION="${PROJECT_VERSION}")
-target_compile_options(montauk_analyze PRIVATE -Wall -Wextra -Werror -Wshadow)
+target_link_libraries(montauk_analyze PRIVATE montauk_warnings)
 set_target_properties(montauk_analyze PROPERTIES OUTPUT_NAME montauk_analyze)
 
 # Binary trace-log decoder (no external deps, no BPF link). Reads --trace-out
 # files and renders them to text/CSV. Pure struct decoding — only needs the
-# shared event headers (model/TraceBinary.hpp + bpf/montauk_trace.h) and the
+# shared event headers (model/TraceBinary.hpp + src/bpf/montauk_trace.h) and the
 # TraceReader record walk, so it builds even when BPF tracing isn't compiled
 # into montauk itself.
 add_executable(montauk_trace_decode src/tools/trace_decode.cpp src/model/TraceReader.cpp src/util/Log.cpp)
 target_include_directories(montauk_trace_decode PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/bpf)
-target_compile_options(montauk_trace_decode PRIVATE -Wall -Wextra -Werror -Wshadow)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/bpf)
+target_link_libraries(montauk_trace_decode PRIVATE montauk_warnings)
 
 # ── sublimation CLI ─────────────────────────────────────────────────────────
 # The command-line front door to the sort sub-system: pipe a numeric stream in,
@@ -280,7 +288,7 @@ set_target_properties(sublimation_cli PROPERTIES
     C_STANDARD 23 C_STANDARD_REQUIRED ON)
 # First-party, hot-edited C: the same wall every C++ target carries. The old
 # "third-party warnings" exemption never described this file.
-target_compile_options(sublimation_cli PRIVATE -Wall -Wextra -Werror -Wshadow)
+target_link_libraries(sublimation_cli PRIVATE montauk_warnings)
 # montauk's include/ for the shared output sink (util/sink.h); the CLI's data
 # output drains through it like the rest of montauk.
 target_include_directories(sublimation_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -294,6 +302,8 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_cpu.cpp
     tests/test_net.cpp
     tests/test_disk.cpp
+    tests/test_fs.cpp
+    tests/test_process_parsing.cpp
     tests/test_gpu_fallback.cpp
     tests/test_gpu_cache.cpp
     tests/test_fdinfo_collector.cpp
@@ -317,7 +327,7 @@ if(MONTAUK_BUILD_TESTS)
   )
   target_include_directories(montauk_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   target_link_libraries(montauk_tests PRIVATE montauk_core)
-  target_compile_options(montauk_tests PRIVATE -Wall -Wextra -Werror -Wshadow)
+  target_link_libraries(montauk_tests PRIVATE montauk_warnings)
   target_compile_definitions(montauk_tests PRIVATE MONTAUK_TESTING=1)
 
   # The output sink (include/util/sink.h) is a shared C23/C++23 header. The C++
@@ -326,12 +336,12 @@ if(MONTAUK_BUILD_TESTS)
   add_executable(montauk_sink_c_test tests/test_sink_c.c)
   set_target_properties(montauk_sink_c_test PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
   target_include_directories(montauk_sink_c_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_compile_options(montauk_sink_c_test PRIVATE -Wall -Wextra -Werror -Wshadow)
+  target_link_libraries(montauk_sink_c_test PRIVATE montauk_warnings)
 
   add_executable(montauk_json_test tests/test_json.c)
   set_target_properties(montauk_json_test PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
   target_include_directories(montauk_json_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_compile_options(montauk_json_test PRIVATE -Wall -Wextra -Werror -Wshadow)
+  target_link_libraries(montauk_json_test PRIVATE montauk_warnings)
 
   # Stats-kernel characterization tests: prom_stats.cpp only compiles into
   # montauk_analyze, so it gets its own small test executable (the
@@ -342,7 +352,7 @@ if(MONTAUK_BUILD_TESTS)
       ${CMAKE_CURRENT_SOURCE_DIR}/src/tools
       ${CMAKE_CURRENT_SOURCE_DIR}/include
       ${CMAKE_CURRENT_SOURCE_DIR}/tests)
-  target_compile_options(montauk_stats_test PRIVATE -Wall -Wextra -Werror -Wshadow)
+  target_link_libraries(montauk_stats_test PRIVATE montauk_warnings)
   target_link_libraries(montauk_stats_test PRIVATE sublimation)
 
   # One entry point for the whole suite -- tests/run.py orchestrates the unit

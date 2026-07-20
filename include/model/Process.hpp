@@ -13,9 +13,7 @@ enum class ChurnReason {
 
 struct ProcSample {
   int32_t pid{};
-  uint64_t utime{};  // jiffies
-  uint64_t stime{};  // jiffies
-  uint64_t total_time{}; // utime+stime
+  uint64_t total_time{}; // utime+stime, jiffies
   uint64_t rss_kb{};
   double   cpu_pct{}; // 0..100 (overall machine)
   ChurnReason churn_reason{ChurnReason::None};

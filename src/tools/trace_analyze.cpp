@@ -205,32 +205,6 @@ static uint64_t drops_total() {
   return t;
 }
 
-static const char* evt_type_name(uint32_t t) {
-  switch (t) {
-    case TRACE_EVT_FORK: return "fork";
-    case TRACE_EVT_EXEC: return "exec";
-    case TRACE_EVT_EXIT: return "exit";
-    case TRACE_EVT_COMM_CHANGE: return "comm";
-    case TRACE_EVT_IO: return "io";
-    case TRACE_EVT_NTSYNC: return "ntsync";
-    case TRACE_EVT_SCHED: return "sched";
-    case TRACE_EVT_HEAP: return "heap";
-    case TRACE_EVT_SIGNAL: return "signal";
-    case TRACE_EVT_MMAP: return "mmap";
-    case TRACE_EVT_PROVIDER: return "provider";
-    case TRACE_EVT_ABORT: return "abort";
-    case TRACE_EVT_HEAPSTACK: return "heapstk";
-    case TRACE_EVT_KEYEDEVT: return "keyedevt";
-    case TRACE_EVT_KSTRAND: return "kstrand";
-    case TRACE_EVT_WAITSTACK: return "waitstack";
-    case TRACE_EVT_SCX_STORM: return "scx_storm";
-    case TRACE_EVT_THREAD_NAME: return "thread_name";
-    case TRACE_EVT_RAWSTACK: return "rawstack";
-    case TRACE_EVT_DROPS: return "drops";
-    default: return "unknown";
-  }
-}
-
 static bool qual_match(int32_t sig, uint32_t pid, uint32_t tid, const char* comm) {
   if (g_qual_sig >= 0 && sig != g_qual_sig) return false;
   if (g_qual_pid >= 0 && pid != static_cast<uint32_t>(g_qual_pid)) return false;
@@ -322,6 +296,7 @@ using montauk::model::sched_op_name;
 using montauk::model::ntsync_op_name;
 using montauk::model::io_syscall_name;
 using montauk::model::signal_name;
+using montauk::model::evt_type_name;
 
 std::string signal_label(int32_t n) {
   if (const char* s = signal_name(n)) return s;
@@ -596,17 +571,23 @@ bool write_analysis_prom(const std::string& out_path, const std::vector<PromMetr
 namespace {
 double us(uint64_t ns) { return static_cast<double>(ns) / 1000.0; }
 double ms(uint64_t ns) { return static_cast<double>(ns) / 1e6; }
-double q_us(const std::vector<uint64_t>& v, double f) {
-  if (v.empty()) return 0.0;
+// Raw quantile over a pre-sorted vector -- the one indexing convention every
+// report uses; q_us/q_ms wrap it for the two common units, unitless counts
+// (e.g. dispatch-stall pass-overs) read it directly.
+uint64_t q_at(const std::vector<uint64_t>& v, double f) {
+  if (v.empty()) return 0;
   size_t i = static_cast<size_t>(static_cast<double>(v.size()) * f);
   if (i >= v.size()) i = v.size() - 1;
-  return us(v[i]);
+  return v[i];
 }
-double q_ms(const std::vector<uint64_t>& v, double f) {
-  if (v.empty()) return 0.0;
-  size_t i = static_cast<size_t>(static_cast<double>(v.size()) * f);
-  if (i >= v.size()) i = v.size() - 1;
-  return ms(v[i]);
+double q_us(const std::vector<uint64_t>& v, double f) { return us(q_at(v, f)); }
+double q_ms(const std::vector<uint64_t>& v, double f) { return ms(q_at(v, f)); }
+// One gauge per quantile label, the shape three reports each hand-rolled as a
+// local push lambda.
+void push_quantile_gauges(std::vector<PromMetric>& out, const char* metric,
+                          std::initializer_list<std::pair<const char*, double>> qs) {
+  for (const auto& [ql, v] : qs)
+    out.push_back({metric, std::string("quantile=\"") + ql + "\"", v});
 }
 }  // namespace
 
@@ -939,6 +920,9 @@ struct WaitsReport final : Report {
     uint64_t last_ts = 0;
     std::unordered_map<int64_t, uint64_t> results;
     std::vector<uint64_t> gaps_ns;
+    // compute() fills these once; emit()/prom() render only.
+    bool have_gaps = false;
+    double gap_med_ms = 0.0, gap_p99_ms = 0.0;
   };
   std::unordered_map<uint64_t, Agg> aggs_;
 
@@ -955,15 +939,19 @@ struct WaitsReport final : Report {
     a.last_ts = w.ts;
   }
 
-  // Sort gaps in place once; med/p99 stay valid for emit and prom. Sorted
-  // through sublimation (u64 flow-model), the same path the sched report
-  // uses for wake2run latencies -- montauk's sort does montauk's analysis.
-  static bool gap_quantiles(Agg& a, double& med_ms, double& p99_ms) {
-    if (a.gaps_ns.empty()) return false;
-    sublimation_u64(a.gaps_ns.data(), a.gaps_ns.size());
-    med_ms = static_cast<double>(a.gaps_ns[a.gaps_ns.size() / 2]) / 1e6;
-    p99_ms = static_cast<double>(a.gaps_ns[(a.gaps_ns.size() * 99) / 100]) / 1e6;
-    return true;
+  // Sort each pair's gaps once and hold the med/p99; emit() and prom() render
+  // from the stored values. Sorted through sublimation (u64 flow-model), the
+  // same path the sched report uses for wake2run latencies -- montauk's sort
+  // does montauk's analysis.
+  void compute() override {
+    for (auto& [k, a] : aggs_) {
+      (void)k;
+      if (a.gaps_ns.empty()) continue;
+      sublimation_u64(a.gaps_ns.data(), a.gaps_ns.size());
+      a.have_gaps = true;
+      a.gap_med_ms = q_ms(a.gaps_ns, 0.50);
+      a.gap_p99_ms = q_ms(a.gaps_ns, 0.99);
+    }
   }
 
   void emit(const montauk::model::TraceReader&) override {
@@ -999,10 +987,9 @@ struct WaitsReport final : Report {
     montauk_sink_appendf(&g_out, "tid      obj                waits      gap_med_ms gap_p99_ms results\n");
     for (Agg* a : rows) {
       char med[24] = "-", p99[24] = "-";
-      double med_ms = 0.0, p99_ms = 0.0;
-      if (gap_quantiles(*a, med_ms, p99_ms)) {
-        std::snprintf(med, sizeof(med), "%.3f", med_ms);
-        std::snprintf(p99, sizeof(p99), "%.3f", p99_ms);
+      if (a->have_gaps) {
+        std::snprintf(med, sizeof(med), "%.3f", a->gap_med_ms);
+        std::snprintf(p99, sizeof(p99), "%.3f", a->gap_p99_ms);
       }
       std::vector<std::pair<int64_t, uint64_t>> res(a->results.begin(), a->results.end());
       sublimation_order_u64(res, true, [](const std::pair<int64_t, uint64_t>& p) { return p.second; });
@@ -1029,15 +1016,14 @@ struct WaitsReport final : Report {
       std::snprintf(lab, sizeof(lab), "tid=\"%u\",obj=\"0x%016" PRIx64 "\"", a.tid, a.obj);
       out.push_back({"montauk_analysis_waits_total", lab, static_cast<double>(a.count)});
     }
-    for (auto& [k, a] : aggs_) {
+    for (const auto& [k, a] : aggs_) {
       (void)k;
-      double med_ms = 0.0, p99_ms = 0.0;
-      if (!gap_quantiles(a, med_ms, p99_ms)) continue;
+      if (!a.have_gaps) continue;
       char qlab[96];
       std::snprintf(qlab, sizeof(qlab), "tid=\"%u\",obj=\"0x%016" PRIx64 "\",quantile=\"0.5\"", a.tid, a.obj);
-      out.push_back({"montauk_analysis_wait_gap_ms", qlab, med_ms});
+      out.push_back({"montauk_analysis_wait_gap_ms", qlab, a.gap_med_ms});
       std::snprintf(qlab, sizeof(qlab), "tid=\"%u\",obj=\"0x%016" PRIx64 "\",quantile=\"0.99\"", a.tid, a.obj);
-      out.push_back({"montauk_analysis_wait_gap_ms", qlab, p99_ms});
+      out.push_back({"montauk_analysis_wait_gap_ms", qlab, a.gap_p99_ms});
     }
   }
 };
@@ -1122,9 +1108,8 @@ struct SpinsReport final : Report {
     s.last_result = w.result;
   }
 
-  // Idempotent: finalize() resets iters, so whichever of emit/prom runs
-  // first drains open runs and the second pass is a no-op.
-  void finalize_all() {
+  // Drain any still-open runs into runs_ once, before any renderer.
+  void compute() override {
     for (auto& [key, s] : state_) {
       (void)key;
       finalize(s.tid, s.obj, s, s.last_ts);
@@ -1144,7 +1129,6 @@ struct SpinsReport final : Report {
   }
 
   void emit(const montauk::model::TraceReader& reader) override {
-    finalize_all();
     header();
     if (runs_.empty()) {
       montauk_sink_appendf(&g_out, "VERDICT: no spin runs detected\n");
@@ -1209,7 +1193,6 @@ struct SpinsReport final : Report {
   }
 
   void prom(std::vector<PromMetric>& out) override {
-    finalize_all();
     std::map<std::string, uint64_t> run_counts;  // label string -> runs
     std::map<uint64_t, std::pair<const Run*, double>> peaks;  // (tid,fd) -> peak run
     for (const Run& r : runs_) {
@@ -1232,7 +1215,6 @@ struct SpinsReport final : Report {
   }
 
   void offenders(std::vector<Offender>& out) override {
-    finalize_all();  // idempotent; drains any open runs
     std::unordered_map<uint64_t, std::pair<const Run*, double>> peaks;
     for (const auto& r : runs_) {
       double rate = run_rate(r);
@@ -2779,14 +2761,11 @@ struct SchedLatencyReport final : Report {
   // The Prometheus gauges, built once from result_ so text/prom/json agree.
   void build_gauges() {
     auto& g = result_.gauges;
-    auto q = [&](const char* ql, double v) {
-      g.push_back({"montauk_analysis_wake2run_us",
-                   std::string("quantile=\"") + ql + "\"", v});
-    };
-    q("0.5", result_.p50);
-    q("0.99", result_.p99);
-    q("0.999", result_.p999);
-    q("worst", result_.worst);
+    push_quantile_gauges(g, "montauk_analysis_wake2run_us",
+                         {{"0.5", result_.p50},
+                          {"0.99", result_.p99},
+                          {"0.999", result_.p999},
+                          {"worst", result_.worst}});
     g.push_back({"montauk_analysis_wake2run_fast_pct", "", result_.fastpct});
     g.push_back({"montauk_analysis_wake2run_mid_pct", "", result_.midpct});
     g.push_back({"montauk_analysis_wake2run_tickfloor_pct", "", result_.tickpct});
@@ -3000,14 +2979,11 @@ struct WorkConservationReport final : Report {
   }
 
   void prom(std::vector<PromMetric>& out) override {
-    if (strand_ns_.empty()) return;  // already sorted in emit()
-    auto push = [&](const char* ql, double v) {
-      out.push_back({"montauk_analysis_idle_strand_ms",
-                     std::string("quantile=\"") + ql + "\"", v});
-    };
-    push("0.5", q_ms(strand_ns_, 0.50));
-    push("0.99", q_ms(strand_ns_, 0.99));
-    push("worst", ms(strand_ns_.back()));
+    if (strand_ns_.empty()) return;  // sorted once in compute()
+    push_quantile_gauges(out, "montauk_analysis_idle_strand_ms",
+                         {{"0.5", q_ms(strand_ns_, 0.50)},
+                          {"0.99", q_ms(strand_ns_, 0.99)},
+                          {"worst", ms(strand_ns_.back())}});
     uint64_t n = pulled_ + local_;
     out.push_back({"montauk_analysis_strand_pull_pct", "",
                    n ? 100.0 * static_cast<double>(pulled_) / static_cast<double>(n) : 0.0});
@@ -3535,12 +3511,12 @@ struct DispatchStallReport final : Report {
     avg_distinct_ = n_ ? (double)distinct_sum / (double)n_ : 0.0;
     (void)same_older;
     sublimation_u64(inter_v.data(), inter_v.size());
-    p99_ = inter_v[(size_t)((double)inter_v.size() * 0.99)];
+    p99_ = q_at(inter_v, 0.99);
     passover_p99_ = (double)p99_;
     // CEILING of a mirror-coherence (inversion-only) fix: p99 of the LEGIT-only
     // pass-overs is the floor a coherence fix alone could reach.
     sublimation_u64(legit_v.data(), legit_v.size());
-    p99_legit_ = legit_v[(size_t)((double)legit_v.size() * 0.99)];
+    p99_legit_ = q_at(legit_v, 0.99);
     ceiling_remains_pct_ = p99_ ? 100.0 * (double)p99_legit_ / (double)p99_ : 0.0;
   }
 
@@ -3949,13 +3925,10 @@ struct SliceReport final : Report {
 
   void prom(std::vector<PromMetric>& out) override {
     if (slices_.empty()) return;
-    auto push = [&](const char* ql, double v) {
-      out.push_back({"montauk_analysis_slice_us",
-                     std::string("quantile=\"") + ql + "\"", v});
-    };
-    push("0.5", q_us(slices_, 0.50));
-    push("0.99", q_us(slices_, 0.99));
-    push("worst", us(slices_.back()));
+    push_quantile_gauges(out, "montauk_analysis_slice_us",
+                         {{"0.5", q_us(slices_, 0.50)},
+                          {"0.99", q_us(slices_, 0.99)},
+                          {"worst", us(slices_.back())}});
     if (traj_ok_)
       out.push_back({"montauk_analysis_slice_trajectory_inversion", "", traj_inversion_});
   }
@@ -4006,7 +3979,7 @@ struct StormReport final : Report {
     storm_pct_ = 100.0 * (double)storm_intervals / (double)samples_.size();
     sublimation_u64(rr.data(), rr.size());
     peak_reenq_rate_ = (double)rr.back();
-    p50_reenq_ = (double)rr[rr.size() / 2];
+    p50_reenq_ = (double)q_at(rr, 0.50);
   }
 
   void emit(const montauk::model::TraceReader&) override {
@@ -4360,8 +4333,10 @@ struct KStrandReport final : Report {
   };
   std::unordered_map<std::string, Agg> by_comm_;
   CpuHolderLedger holder_;
-  // strands buffered until emit() so CPU_IDLE intervals are complete first.
-  struct Ev { uint32_t cpu; uint64_t run_ts, lat; std::string comm; };
+  // strands buffered until compute() so CPU_IDLE intervals are complete first.
+  // comm stays the raw TASK_COMM_LEN bytes (no per-event heap string in the
+  // fold hot path); redaction happens at render.
+  struct Ev { uint32_t cpu; uint64_t run_ts, lat; char comm[16]; };
   std::vector<Ev> evs_;
   CpuIdleIntervals idle_;
   uint64_t total_ = 0, worst_held_ns_ = 0;
@@ -4378,22 +4353,20 @@ struct KStrandReport final : Report {
     }
     if (type != TRACE_EVT_KSTRAND || len < sizeof(montauk_kstrand_event)) return;
     const auto* k = reinterpret_cast<const montauk_kstrand_event*>(data);
-    evs_.push_back({k->cpu, k->timestamp_ns, k->latency_ns, redact_comm(k->comm)});
+    Ev e{k->cpu, k->timestamp_ns, k->latency_ns, {}};
+    std::memcpy(e.comm, k->comm, sizeof(e.comm));
+    evs_.push_back(e);
     ++total_;
   }
 
-  // Aggregate strands into per-kthread rows with the HELD/DARK split. Built here,
-  // NOT in emit(), because the digest path calls offenders()/prom() WITHOUT ever
-  // calling emit() for this report -- deferring the aggregation to emit() would
-  // hide the strand offenders from the one-file report. Idempotent: safe to call
-  // from emit(), offenders() and prom() in any order.
-  bool finalized_ = false;
-  void finalize() {
-    if (finalized_) return;
-    finalized_ = true;
+  // Aggregate strands into per-kthread rows with the HELD/DARK split. Done once
+  // here, before any renderer -- the digest path calls offenders()/prom()
+  // WITHOUT ever calling emit() for this report, so the aggregation cannot live
+  // in emit().
+  void compute() override {
     idle_.finalize();
     for (const auto& e : evs_) {
-      Agg& a = by_comm_[e.comm];
+      Agg& a = by_comm_[std::string(e.comm, strnlen(e.comm, sizeof(e.comm)))];
       a.cpu = e.cpu;
       a.lat.push_back(e.lat);
       if (e.lat > a.max_ns) { a.max_ns = e.lat; a.worst_run_ts = e.run_ts; }
@@ -4413,7 +4386,6 @@ struct KStrandReport final : Report {
                   "(no I/O-completion starvation captured)\n\n");
       return;
     }
-    finalize();
     // Rank kthreads by max strand.
     std::vector<std::pair<std::string, Agg*>> rows;
     rows.reserve(by_comm_.size());
@@ -4441,26 +4413,24 @@ struct KStrandReport final : Report {
         }
       }
       montauk_sink_appendf(&g_out, "%-18s %-5u %-7zu %-9.1f %-9.1f %-6" PRIu64 " %-6" PRIu64 " %s\n",
-                  comm.c_str(), a->cpu, a->lat.size(), ms(a->max_ns),
+                  redact_comm(comm.c_str()).c_str(), a->cpu, a->lat.size(), ms(a->max_ns),
                   q_ms(a->lat, 0.99), a->held, a->dark, held_by.c_str());
     }
     montauk_sink_appendf(&g_out, "\n");
   }
 
   void prom(std::vector<PromMetric>& out) override {
-    finalize();
     out.push_back({"montauk_analysis_kstrand_events_total", "",
                    static_cast<double>(total_)});
     out.push_back({"montauk_analysis_kstrand_worst_held_ms", "", ms(worst_held_ns_)});
   }
 
   void offenders(std::vector<Offender>& out) override {
-    finalize();
     for (auto& [comm, a] : by_comm_) {
       if (a.held == 0) continue;  // DARK-only strands are a tickless-rescue gap, not a held strand
       // sev: 100ms+ held strand wedges fsync/writeback (high); 5-100ms (med).
       int sev = a.max_ns >= 100000000ULL ? 2 : 1;
-      out.push_back({"kthread-strand", comm, "", "max_strand_ms",
+      out.push_back({"kthread-strand", redact_comm(comm.c_str()), "", "max_strand_ms",
                      ms(a.max_ns), sev});
     }
   }
@@ -4630,7 +4600,7 @@ class LocalityReport : public Report {
       auto cad = [](std::vector<uint64_t>& v) {
         if (v.empty()) return 0.0;
         sublimation_u64(v.data(), v.size());
-        return static_cast<double>(v[v.size() / 2]) / 1000.0;  // p50 us
+        return q_us(v, 0.50);
       };
       montauk_sink_appendf(&g_out, "MIGRATION CAUSE (dispatch lane): STEAL (STEP-1) %.0f%% cadence p50 %.0fus  |  "
                   "PLACEMENT (own STEP-0 / select-enqueue) %.0f%% cadence p50 %.0fus\n",
@@ -5446,10 +5416,7 @@ int main(int argc, char** argv) {
         return 2;
       }
     } else {
-      std::fprintf(stderr,
-          "usage: montauk_analyze FILE [--report name[,name...]] [--redact] [--json]\n"
-          "                       [--sig N|NAME] [--comm SUBSTR] [--pid N] [--tid N]\n"
-          "                       [--window SECONDS]\n");
+      log_error("unknown flag '%s' (see montauk_analyze --help)", a.c_str());
       return 2;
     }
   }

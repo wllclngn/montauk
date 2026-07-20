@@ -70,6 +70,8 @@ const Cell& Canvas::at(int x, int y) const {
 
 void Canvas::clear(const Cell& fill_cell) {
     std::fill(buffer_.begin(), buffer_.end(), fill_cell);
+    std::fill(image_mask_.begin(), image_mask_.end(), static_cast<uint8_t>(0));
+    graphics_.clear();
 }
 
 void Canvas::put(int x, int y, const std::string& grapheme, Style style) {

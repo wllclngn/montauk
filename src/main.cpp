@@ -318,7 +318,10 @@ int main(int argc, char** argv) {
   montauk::ui::Renderer renderer;
   renderer.seed_from_config();
 
-  for (int i = 0; (iterations <= 0 || i < iterations) && !g_stop.load(); ++i) {
+  // Snapshot copy target lives outside the render loop so its vector
+  // members reuse capacity across frames instead of reallocating.
+  montauk::model::Snapshot s_copy;
+  for (int i = 0; i < iterations && !g_stop.load(); ++i) {
     // Non-blocking input with poll. Bytes → InputEvents → Renderer.
     struct pollfd pfd{.fd=STDIN_FILENO,.events=POLLIN,.revents=0};
     int to = (i == 0) ? 0 : renderer.sleep_ms();
@@ -338,7 +341,6 @@ int main(int argc, char** argv) {
       }
     }
     // Concurrency hardening: atomic snapshot capture with sequence validation.
-    montauk::model::Snapshot s_copy;
     uint64_t seq_before, seq_after;
     do {
       seq_before = buffers.seq();

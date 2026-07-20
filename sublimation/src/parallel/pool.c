@@ -21,10 +21,6 @@
 #include <string.h>
 #include <unistd.h>
 
-// Forward: sequential sort for each worker's region
-extern void sub_sort_internal_i64(int64_t *restrict arr, size_t n,
-                                  sub_adaptive_t *state);
-
 // SPLITTER SAMPLING
 //
 // Oversampled: take oversample * (k-1) candidates from evenly spaced
@@ -168,7 +164,7 @@ static void *worker_multi_sort_fn(void *arg) {
 
         sub_adaptive_t state;
         sub_adaptive_init(&state, bn);
-        sub_sort_internal_i64(ctx->arr + ctx->bucket_offsets[i], bn, &state);
+        sub_sort_internal_i64(ctx->arr + ctx->bucket_offsets[i], bn, &state, NULL);
     }
 
     return nullptr;
@@ -217,12 +213,16 @@ void sub_parallel_sort_i64(int64_t *arr, size_t n, size_t num_workers,
         free(threads); free(distrib_ctxs); free(all_buckets);
         sub_adaptive_t state;
         sub_adaptive_init(&state, n);
-        sub_sort_internal_i64(arr, n, &state);
+        sub_sort_internal_i64(arr, n, &state, NULL);
         return;
     }
 
     // PHASE 1: SAMPLE SPLITTERS
     sample_splitters(arr, n, splitters, k);
+
+    // Validity flags for joins: pthread_t is opaque, so a zeroed handle is
+    // not a portable "no thread" sentinel. num_workers is clamped to <= 64.
+    bool thread_started[64];
 
     // PHASE 2: PARALLEL CLASSIFICATION
     size_t chunk_size = (n + num_workers - 1) / num_workers;
@@ -244,14 +244,15 @@ void sub_parallel_sort_i64(int64_t *arr, size_t n, size_t num_workers,
         distrib_ctxs[w].my_offsets = &offsets_matrix[w * k];
         distrib_ctxs[w].phase = 0;
 
-        if (pthread_create(&threads[w], nullptr, worker_distrib_fn, &distrib_ctxs[w]) != 0) {
+        thread_started[w] =
+            pthread_create(&threads[w], nullptr, worker_distrib_fn, &distrib_ctxs[w]) == 0;
+        if (!thread_started[w]) {
             worker_distrib_fn(&distrib_ctxs[w]);
-            threads[w] = (pthread_t){0};
         }
     }
 
     for (size_t w = 0; w < num_workers; w++) {
-        if (threads[w]) pthread_join(threads[w], nullptr);
+        if (thread_started[w]) pthread_join(threads[w], nullptr);
     }
 
     // PHASE 3: PREFIX-SUM MERGE (sequential, O(k * num_workers))
@@ -279,14 +280,15 @@ void sub_parallel_sort_i64(int64_t *arr, size_t n, size_t num_workers,
     // PHASE 4: PARALLEL SCATTER
     for (size_t w = 0; w < num_workers; w++) {
         distrib_ctxs[w].phase = 1;
-        if (pthread_create(&threads[w], nullptr, worker_distrib_fn, &distrib_ctxs[w]) != 0) {
+        thread_started[w] =
+            pthread_create(&threads[w], nullptr, worker_distrib_fn, &distrib_ctxs[w]) == 0;
+        if (!thread_started[w]) {
             worker_distrib_fn(&distrib_ctxs[w]);
-            threads[w] = (pthread_t){0};
         }
     }
 
     for (size_t w = 0; w < num_workers; w++) {
-        if (threads[w]) pthread_join(threads[w], nullptr);
+        if (thread_started[w]) pthread_join(threads[w], nullptr);
     }
 
     memcpy(arr, scratch, n * sizeof(int64_t));
@@ -314,7 +316,7 @@ void sub_parallel_sort_i64(int64_t *arr, size_t n, size_t num_workers,
             if (global_counts[b] <= 1) continue;
             sub_adaptive_t state;
             sub_adaptive_init(&state, global_counts[b]);
-            sub_sort_internal_i64(arr + global_offsets[b], global_counts[b], &state);
+            sub_sort_internal_i64(arr + global_offsets[b], global_counts[b], &state, NULL);
         }
         goto cleanup;
     }
@@ -413,17 +415,18 @@ void sub_parallel_sort_i64(int64_t *arr, size_t n, size_t num_workers,
             sort_ctxs[launched].num_assigned = na;
             sort_ctxs[launched].disorder = disorder;
 
-            if (pthread_create(&threads[launched], nullptr, worker_multi_sort_fn,
-                               &sort_ctxs[launched]) != 0) {
+            thread_started[launched] =
+                pthread_create(&threads[launched], nullptr, worker_multi_sort_fn,
+                               &sort_ctxs[launched]) == 0;
+            if (!thread_started[launched]) {
                 worker_multi_sort_fn(&sort_ctxs[launched]);
-                threads[launched] = (pthread_t){0};
             }
             launched++;
             running_idx += na;
         }
 
         for (size_t i = 0; i < launched; i++) {
-            if (threads[i]) pthread_join(threads[i], nullptr);
+            if (thread_started[i]) pthread_join(threads[i], nullptr);
         }
     }
 

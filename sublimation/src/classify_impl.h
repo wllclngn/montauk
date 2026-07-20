@@ -280,6 +280,7 @@ static SUB_TYPED(sub_run_info_t) SUB_TYPED(count_runs)(const SUB_TYPE *arr, size
 
     size_t current_run = 1;
     bool current_ascending = (arr[1] >= arr[0]);
+    bool prev_descending = false;
 
     for (size_t i = 1; i < n; i++) {
         bool ascending = (arr[i] >= arr[i - 1]);
@@ -298,6 +299,11 @@ static SUB_TYPED(sub_run_info_t) SUB_TYPED(count_runs)(const SUB_TYPE *arr, size
         }
         if (ascending)  info.is_reversed = false;
 
+        // Ascending run count: a non-decreasing element ending a descent
+        // block starts a new run; a trailing descent block starts none.
+        if (ascending && prev_descending) info.run_count++;
+        prev_descending = descending;
+
         if (ascending == current_ascending) {
             current_run++;
         } else {
@@ -305,28 +311,13 @@ static SUB_TYPED(sub_run_info_t) SUB_TYPED(count_runs)(const SUB_TYPE *arr, size
                 info.max_run_len = current_run;
             }
             info.mono_count++;
-            if (ascending) {
-                info.run_count++;
-            }
             current_ascending = ascending;
             current_run = 1;
-        }
-
-        if (descending && i > 1 && arr[i - 1] >= arr[i - 2]) {
-            // transitioning from ascending to descending
         }
     }
 
     if (current_run > info.max_run_len) {
         info.max_run_len = current_run;
-    }
-
-    info.run_count = 1;
-    for (size_t i = 1; i < n; i++) {
-        if (arr[i] < arr[i - 1]) {
-            while (i < n && arr[i] < arr[i - 1]) i++;
-            if (i < n) info.run_count++;
-        }
     }
 
     return info;
@@ -489,11 +480,15 @@ static size_t SUB_TYPED(detect_rotation)(const SUB_TYPE *arr, size_t n) {
 }
 
 // FULL CLASSIFICATION
-sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
+// `tableau_ran` reports whether patience_sort_with_tableau already ran on
+// this input, so the public classify wrapper never repeats the work.
+static sub_profile_t SUB_TYPED(sub_classify_core)(const SUB_TYPE *arr, size_t n,
+                                                  bool *tableau_ran) {
     sub_profile_t p = {
         .n = n,
         .disorder = SUB_RANDOM,
     };
+    *tableau_ran = false;
 
     if (n <= 1) {
         p.disorder = SUB_SORTED;
@@ -546,6 +541,7 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
             p.mono_count = 1;
             p.max_run_len = n;
             p.distinct_estimate = SUB_TYPED(estimate_distinct)(arr, n);
+            p.inversion_ratio = 1.0f;   // analytic (contract in sublimation.h)
             return p;
         }
     }
@@ -560,8 +556,12 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
     if (runs.is_sorted) {
         p.disorder = SUB_SORTED;
         p.lis_length = n;
-        p.lds_length = 1;
-        p.distinct_estimate = SUB_TYPED(estimate_distinct)(arr, n);
+        // Sorted with equal endpoints is all-equal (non-decreasing): under
+        // weak orders an equal run is an LDS of length n; matches the AVX2
+        // all-equal path and the patience tableau on equal keys.
+        bool all_equal = !(arr[0] < arr[n - 1]);
+        p.lds_length = all_equal ? n : 1;
+        p.distinct_estimate = all_equal ? 1 : SUB_TYPED(estimate_distinct)(arr, n);
         return p;
     }
 
@@ -570,6 +570,7 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
         p.lis_length = 1;
         p.lds_length = n;
         p.distinct_estimate = SUB_TYPED(estimate_distinct)(arr, n);
+        p.inversion_ratio = 1.0f;   // analytic: strictly decreasing here
         return p;
     }
 
@@ -582,6 +583,10 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
             p.lds_length = 2;
             p.rotation_point = rot;
             p.distinct_estimate = SUB_TYPED(estimate_distinct)(arr, n);
+            // Analytic: a rotation inverts every (prefix, suffix) pair,
+            // rot*(n-rot) of the n*(n-1)/2 total (exact for distinct keys).
+            p.inversion_ratio = (float)(2.0 * (double)rot * (double)(n - rot)
+                                        / ((double)n * (double)(n - 1)));
             return p;
         }
     }
@@ -593,9 +598,11 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
         p.disorder = SUB_NEARLY_SORTED;
         p.lis_length = runs.max_run_len;
         p.distinct_estimate = SUB_TYPED(estimate_distinct)(arr, n);
+        p.inversion_ratio = SUB_TYPED(sample_inversion_ratio)(arr, n);
         // Still do patience sort for tableau if within bounds
         if (n >= SUB_PATIENCE_THRESHOLD && n <= SUB_TABLEAU_MAX_N) {
             SUB_TYPED(patience_sort_with_tableau)(arr, n, &p);
+            *tableau_ran = true;
         }
         return p;
     }
@@ -607,12 +614,9 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
         p.disorder = SUB_NEARLY_SORTED;
         if (p.run_count <= 16 && n >= SUB_PATIENCE_THRESHOLD) {
             SUB_TYPED(patience_sort_with_tableau)(arr, n, &p);
+            *tableau_ran = true;
         } else {
             p.lis_length = n - (size_t)(p.inversion_ratio * (float)n);
-        }
-        // If interleaved sequences detected with k <= 4, use k-way merge hint
-        if (p.interleave_k >= 2 && p.interleave_k <= 4) {
-            p.disorder = SUB_NEARLY_SORTED;
         }
         return p;
     }
@@ -621,6 +625,7 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
         p.disorder = SUB_FEW_UNIQUE;
         if (n >= SUB_PATIENCE_THRESHOLD) {
             SUB_TYPED(patience_sort_with_tableau)(arr, n, &p);
+            *tableau_ran = true;
         }
         return p;
     }
@@ -652,10 +657,11 @@ sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
         p.disorder = SUB_NEARLY_SORTED;
     }
 
-    // If k-interleaved detected with k <= 4, override to NEARLY_SORTED for merge routing
-    if (p.interleave_k >= 2 && p.interleave_k <= 4 && p.disorder == SUB_RANDOM) {
-        p.disorder = SUB_NEARLY_SORTED;
-    }
-
     return p;
+}
+
+// Sort-path entry: classification only, tableau-ran state discarded.
+sub_profile_t SUB_TYPED(sub_classify_internal)(const SUB_TYPE *arr, size_t n) {
+    bool tableau_ran = false;
+    return SUB_TYPED(sub_classify_core)(arr, n, &tableau_ran);
 }

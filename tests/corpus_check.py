@@ -13,6 +13,7 @@ part of the gate and is discarded. Any byte difference fails.
 """
 
 import argparse
+import os
 import subprocess
 import sys
 import tempfile
@@ -129,8 +130,14 @@ def regenerate_fixture(tmp: Path) -> None:
 
 
 def run_stdout(binary: Path, args: list) -> str:
-    """Run a tool over the fixture, returning stdout only (stderr discarded)."""
-    return harness.run_text([str(binary), str(FIXTURE), *args]).stdout
+    """Run a tool over the fixture, returning stdout only (stderr discarded).
+    TZ is pinned to UTC: the summary report renders the capture's fixed epoch
+    as wall-clock text, so an unpinned gate freezes the freezing machine's
+    timezone into the golden and fails everywhere else (confirmed: the one
+    divergent line under TZ=UTC was `start 10:06:40` vs `15:06:40`). The
+    product keeps local time for humans; the gate is hermetic."""
+    env = {**os.environ, "TZ": "UTC"}
+    return harness.run_text([str(binary), str(FIXTURE), *args], env=env).stdout
 
 
 def check_surface(label: str, update: bool) -> bool:
@@ -221,19 +228,25 @@ def main() -> int:
     ap.add_argument("--update", action="store_true",
                     help="re-freeze ALL goldens instead of checking")
     ap.add_argument("--surface", choices=list(SURFACES) + ["cli"],
-                    help="re-freeze only this surface's golden (implies update) -- "
-                         "use when another surface is mid-change and must not be stamped")
+                    help="operate on only this surface's golden; check-only "
+                         "unless --update is ALSO given. --surface used to imply "
+                         "update, which turned an innocent single-surface check "
+                         "into a silent refreeze (a TZ probe rewrote the reports "
+                         "golden that way) -- destructive writes now require the "
+                         "explicit flag, always.")
     args = ap.parse_args()
 
     with tempfile.TemporaryDirectory() as td:
         regenerate_fixture(Path(td))
-        if args.surface:  # per-surface freeze, leaving the others untouched
+        if args.surface:  # one surface, the others untouched either way
             if args.surface == "cli":
-                CLI_GOLDEN.write_text(cli_blob())
-                note(f"updated cli golden ({len(CLI_CASES)} cases)")
-            else:
-                check_surface(args.surface, update=True)
-            return 0
+                if args.update:
+                    CLI_GOLDEN.write_text(cli_blob())
+                    note(f"updated cli golden ({len(CLI_CASES)} cases)")
+                    return 0
+                return 0 if check_cli(False) else 1
+            ok = check_surface(args.surface, args.update)
+            return 0 if ok else 1
         ok = all(check_surface(label, args.update) for label in SURFACES)
         ok = check_cli(args.update) and ok
 

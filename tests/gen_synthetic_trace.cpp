@@ -12,7 +12,7 @@
 // Run:  ./gen_synthetic_trace tests/fixtures/synthetic.mtk
 
 #include "model/TraceBinary.hpp"
-#include "bpf/montauk_trace.h"
+#include "src/bpf/montauk_trace.h"
 
 #include <cstdio>
 #include <cstring>

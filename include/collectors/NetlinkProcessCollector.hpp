@@ -53,13 +53,6 @@ private:
   void event_loop();
   void handle_cn_msg(void* cn_msg_ptr, ssize_t len);
   void send_control_message(int op);
-
-  // Sampling helpers (read_cpu_total/read_cpu_count shared with traditional
-  // logic but replicated here to avoid refactor; parse_stat_line/read_cmdline
-  // now come from collectors/ProcessParsing.hpp instead)
-  static uint64_t read_cpu_total();
-  static unsigned read_cpu_count();
-  static std::string user_from_status(int32_t pid);
 };
 
 } // namespace montauk::collectors

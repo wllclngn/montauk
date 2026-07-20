@@ -43,6 +43,8 @@ typedef struct {
 
 typedef struct {
     sublimation_search_gnfa g;                          // regex program (REGEX mode)
+    uint64_t imap[256];  // per-byte position map, built once at compile time
+                         // (REGEX mode; depends only on pattern + icase)
     char    pattern[SUBLIMATION_SEARCH_MAX_PATTERN + 1];// NUL-terminated source
     size_t  pattern_len;
     int     k;      // fuzzy Hamming threshold (0 = exact/regex)
@@ -60,6 +62,11 @@ SUB_API void sublimation_search_compile(sublimation_search *out, const char *pat
 
 // Did the pattern compile?
 SUB_API int sublimation_search_valid(const sublimation_search *s);
+
+// sizeof(sublimation_search), exported so a foreign binding that mirrors the
+// struct as an opaque buffer (montauk-mcp's ffi.rs) can assert its mirror
+// matches this library at runtime, not just at the mirror's writing.
+SUB_API size_t sublimation_search_sizeof(void);
 
 // Whole-input match (implicitly anchored ^...$). 1 = match, 0 = not.
 SUB_API int sublimation_search_full_match(const sublimation_search *s, const char *input, size_t n);

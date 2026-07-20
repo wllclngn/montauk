@@ -1,4 +1,4 @@
-# montauk trace log  pattern='synthetic'  start=10:06:40.000
+# montauk trace log  pattern='synthetic'  start=15:06:40.000
 [     0.050] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [     0.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us CROSS-DOMAIN
 [     0.053] SCHED SWITCH_IN      cpu=0   pid=1002   

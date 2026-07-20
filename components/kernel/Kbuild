@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0
+# Kbuild file for montauk kernel module
+
+obj-m := montauk.o
+montauk-y := montauk_main.o montauk_table.o montauk_hooks.o montauk_netlink.o
+ccflags-y := -DDEBUG

@@ -13,7 +13,8 @@
 //      inside sub_msd_radix when the caller asked for an index output.
 //
 // Scratch: 8n (packed u64) + 8n (pointer scratch) + 8n (lens scratch)
-// = ~24n bytes. Per-call malloc/free. Larger when indices requested:
+// = ~24n bytes. Per-call malloc/free; sub_msd_radix borrows the pointer and
+// lens scratch buffers for its tie clusters. Larger when indices requested:
 // sub_msd_radix additionally allocates a uint32 scratch inside each call.
 #include "sublimation_strings.h"
 #include "strings/strings_internal.h"
@@ -156,7 +157,9 @@ static void sub_strings_internal(const char **arr, size_t *lens,
         size_t j = i + 1;
         while (j < n && (uint32_t)(packed[j] >> 32) == prefix_i) j++;
         if (j - i >= 2) {
-            sub_msd_radix(arr, lens, indices, str_scratch, i, j, 4);
+            // str_scratch and lens_scratch are idle after the permute phase;
+            // sub_msd_radix borrows both instead of allocating per cluster.
+            sub_msd_radix(arr, lens, indices, str_scratch, lens_scratch, i, j, 4);
         }
         i = j;
     }

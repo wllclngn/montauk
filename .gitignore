@@ -5,6 +5,7 @@ COMMIT_MESSAGE.txt
 /build/
 /build-*/
 */build/
+**/build/
 /src/build/
 cmake-build-*/
 _match_build/
@@ -16,8 +17,8 @@ _match_build/
 /install_manifest.txt
 /compile_commands.json
 
-# Cargo build output (montauk-mcp/, any future Rust crate). Cargo.lock stays
-# tracked -- montauk-mcp is a binary crate, and binaries commit their lock
+# Cargo build output (components/mcp/, any future Rust crate). Cargo.lock stays
+# tracked -- the MCP server is a binary crate, and binaries commit their lock
 # file by convention; only the build output itself is ignored.
 target/
 
@@ -66,8 +67,8 @@ __pycache__/
 
 # Kernel module build products -- kernel-version-specific, never committed
 *.ko
-montauk-kernel/*.mod*
-montauk-kernel/*.o
-montauk-kernel/.*.cmd
-montauk-kernel/Module.symvers
-montauk-kernel/modules.order
+components/kernel/*.mod*
+components/kernel/*.o
+components/kernel/.*.cmd
+components/kernel/Module.symvers
+components/kernel/modules.order

@@ -6,11 +6,6 @@
 
 namespace montauk::collectors {
 
-struct StatusInfo {
-  std::string user;
-  int thread_count{1};
-};
-
 class ProcessCollector : public IProcessCollector {
 public:
   // min_interval_ms governs how often we compute; extra calls within the interval no-op
@@ -28,9 +23,6 @@ private:
   size_t enrich_top_n_{};
   std::chrono::steady_clock::time_point last_run_{};
   unsigned ncpu_{0};
-
-  static std::string user_from_status(int32_t pid);
-  static StatusInfo info_from_status(int32_t pid);
 };
 
 } // namespace montauk::collectors

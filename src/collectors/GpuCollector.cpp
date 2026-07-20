@@ -20,6 +20,19 @@ namespace fs = std::filesystem;
 
 namespace montauk::collectors {
 
+// Aggregate a concise display name from per-device model names:
+// "NAME xN" when all match, "NAME +K more" otherwise.
+static std::string aggregate_gpu_name(const std::vector<std::string>& names) {
+  if (names.empty()) return {};
+  std::unordered_set<std::string> uniq(names.begin(), names.end());
+  if (uniq.size() == 1) {
+    std::string n = *uniq.begin();
+    if (names.size() > 1) n += " x" + std::to_string(names.size());
+    return n;
+  }
+  return names[0] + " +" + std::to_string(names.size() - 1) + " more";
+}
+
 static std::string find_nvidia_smi_path() {
   // Env override wins over the cached config singleton: config() is built once
   // on first access, so a MONTAUK_NVIDIA_SMI_PATH set later (a test injecting a
@@ -130,15 +143,7 @@ static bool read_nvidia_smi_device(montauk::model::GpuVram& out) {
   if (util_count > 0) { v.has_util = true; v.gpu_util_pct = sum_gpu_util / util_count; }
   if (mem_util_count > 0) { v.has_mem_util = true; v.mem_util_pct = sum_mem_util / mem_util_count; }
   if (have_power) { v.has_power = true; v.power_draw_w = total_power_w; }
-  // Aggregate a concise name
-  if (!model_names.empty()) {
-    std::unordered_set<std::string> uniq(model_names.begin(), model_names.end());
-    if (uniq.size() == 1) {
-      v.name = *uniq.begin(); if (model_names.size() > 1) v.name += " x" + std::to_string(model_names.size());
-    } else {
-      v.name = model_names[0] + " +" + std::to_string(model_names.size()-1) + " more";
-    }
-  }
+  if (!model_names.empty()) v.name = aggregate_gpu_name(model_names);
   cached = v; have_cache = true; last_call = now; out = v; return true;
 }
 
@@ -216,21 +221,18 @@ static bool read_nvidia_proc(montauk::model::GpuVram& out) {
     out.total_mb = total_mb_sum;
     out.used_mb  = used_mb_sum;
     out.used_pct = out.total_mb ? (100.0 * static_cast<double>(out.used_mb) / static_cast<double>(out.total_mb)) : 0.0;
-    // Aggregate a concise name
-    if (!model_names.empty()) {
-      std::unordered_set<std::string> uniq(model_names.begin(), model_names.end());
-      if (uniq.size() == 1) {
-        out.name = *uniq.begin();
-        if (model_names.size() > 1) out.name += " x" + std::to_string(model_names.size());
-      } else {
-        out.name = model_names[0] + " +" + std::to_string(model_names.size()-1) + " more";
-      }
-    }
+    if (!model_names.empty()) out.name = aggregate_gpu_name(model_names);
   }
   return any;
 }
 
-static bool read_amd_sysfs(montauk::model::GpuVram& out) {
+// One walk over /sys/class/drm per sample: VRAM (amdgpu mem_info), core busy
+// percent and hwmon power draw are all gathered per card in a single pass
+// (they were previously three separate directory walks). Return value stays
+// "any VRAM device found"; busy/power aggregates go to the out-params.
+static bool read_amd_sysfs(montauk::model::GpuVram& out, double& sum_busy,
+                           unsigned& busy_cnt, double& total_power_w,
+                           bool& have_power) {
   fs::path drm(montauk::util::map_sys_path("/sys/class/drm"));
   if (!fs::exists(drm)) return false;
   bool any = false;
@@ -241,6 +243,30 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out) {
     if (!entry.is_directory()) continue;
     if (!name.starts_with("card")) continue;
     auto dev = entry.path() / "device";
+    // AMD core busy percent (any card exposing gpu_busy_percent)
+    {
+      std::ifstream f(dev / "gpu_busy_percent");
+      if (f) {
+        double v = 0.0; f >> v;
+        if (f) { sum_busy += v; busy_cnt++; }
+      }
+    }
+    // Power via hwmon (all vendors): sum power1_average/input if present
+    try {
+      fs::path hwmons = dev / "hwmon";
+      if (fs::exists(hwmons)) {
+        for (auto& hm : fs::directory_iterator(hwmons)) {
+          auto pavg = hm.path() / "power1_average";
+          auto pinp = hm.path() / "power1_input";
+          for (auto p : {pavg, pinp}) {
+            std::ifstream f(p);
+            if (!f) continue;
+            long long microw = 0; f >> microw; if (!f) continue;
+            if (microw > 0) { total_power_w += static_cast<double>(microw) / 1'000'000.0; have_power = true; break; }
+          }
+        }
+      }
+    } catch (...) { /* ignore */ }
     auto tot = dev / "mem_info_vram_total";
     auto usd = dev / "mem_info_vram_used";
     if (!fs::exists(tot) || !fs::exists(usd)) continue;
@@ -320,16 +346,7 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out) {
     out.total_mb = total_mb_sum;
     out.used_mb  = used_mb_sum;
     out.used_pct = out.total_mb ? (100.0 * static_cast<double>(out.used_mb) / static_cast<double>(out.total_mb)) : 0.0;
-    // Aggregate a concise name
-    if (!names.empty()) {
-      std::unordered_set<std::string> uniq(names.begin(), names.end());
-      if (uniq.size() == 1) {
-        out.name = *uniq.begin();
-        if (names.size() > 1) out.name += " x" + std::to_string(names.size());
-      } else {
-        out.name = names[0] + " +" + std::to_string(names.size()-1) + " more";
-      }
-    }
+    if (!names.empty()) out.name = aggregate_gpu_name(names);
   }
   return any;
 }
@@ -428,15 +445,7 @@ static bool read_nvml_compiled(montauk::model::GpuVram& out) {
     out.total_mb = total_mb_sum;
     out.used_mb  = used_mb_sum;
     out.used_pct = out.total_mb ? (100.0 * static_cast<double>(out.used_mb) / static_cast<double>(out.total_mb)) : 0.0;
-    if (!model_names.empty()) {
-      std::unordered_set<std::string> uniq(model_names.begin(), model_names.end());
-      if (uniq.size() == 1) {
-        out.name = *uniq.begin();
-        if (model_names.size() > 1) out.name += " x" + std::to_string(model_names.size());
-      } else {
-        out.name = model_names[0] + " +" + std::to_string(model_names.size()-1) + " more";
-      }
-    }
+    if (!model_names.empty()) out.name = aggregate_gpu_name(model_names);
     if (have_power) {
       out.has_power = true;
       out.power_draw_w = total_power_w;
@@ -498,49 +507,17 @@ bool GpuCollector::sample(montauk::model::GpuVram& out) const {
   if (read_nvidia_smi_device(out)) { log_backend_once("smi-device"); return true; }
   bool ok = false;
   ok = read_nvidia_proc(out) || ok;
-  ok = read_amd_sysfs(out)   || ok;
-  // AMD core busy percent
+  // Single /sys/class/drm walk gathers VRAM, busy percent and hwmon power
+  double sum_busy = 0.0; unsigned busy_cnt = 0;
+  double total_w = 0.0; bool have_power = false;
   try {
-    fs::path drm(montauk::util::map_sys_path("/sys/class/drm"));
-    if (fs::exists(drm)) {
-      double sum_busy = 0.0; unsigned cnt = 0;
-      for (auto& entry : fs::directory_iterator(drm)) {
-        if (!entry.is_directory()) continue;
-        if (!entry.path().filename().string().starts_with("card")) continue;
-        auto busy = entry.path() / "device" / "gpu_busy_percent";
-        std::ifstream f(busy);
-        if (!f) continue;
-        double v = 0.0; f >> v; if (!f) continue;
-        sum_busy += v; cnt++;
-      }
-      if (cnt > 0) { out.has_util = true; out.gpu_util_pct = sum_busy / cnt; }
-    }
+    ok = read_amd_sysfs(out, sum_busy, busy_cnt, total_w, have_power) || ok;
   } catch (...) { /* ignore */ }
-  // Power via hwmon (all vendors): sum power1_average/input if present
-  try {
-    fs::path drm(montauk::util::map_sys_path("/sys/class/drm"));
-    if (fs::exists(drm)) {
-      double total_w = 0.0; bool have = false;
-      for (auto& entry : fs::directory_iterator(drm)) {
-        if (!entry.is_directory()) continue;
-        if (!entry.path().filename().string().starts_with("card")) continue;
-        fs::path hwmons = entry.path() / "device" / "hwmon";
-        if (!fs::exists(hwmons)) continue;
-        for (auto& hm : fs::directory_iterator(hwmons)) {
-          auto pavg = hm.path() / "power1_average";
-          auto pinp = hm.path() / "power1_input";
-          for (auto p : {pavg, pinp}) {
-            std::ifstream f(p);
-            if (!f) continue;
-            long long microw = 0; f >> microw; if (!f) continue;
-            if (microw > 0) { total_w += static_cast<double>(microw) / 1'000'000.0; have = true; break; }
-          }
-        }
-      }
-      if (have) { out.has_power = true; out.power_draw_w = total_w; }
-    }
-  } catch (...) { /* ignore */ }
-  return ok;
+  if (busy_cnt > 0) { out.has_util = true; out.gpu_util_pct = sum_busy / busy_cnt; }
+  if (have_power) { out.has_power = true; out.power_draw_w = total_w; }
+  // Refreshed this cycle when any backend produced data (VRAM devices, busy
+  // percent or power draw)
+  return ok || out.has_util || out.has_power;
 }
 
 } // namespace montauk::collectors

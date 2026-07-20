@@ -14,6 +14,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 extern void sublimation_u64(uint64_t *arr, size_t n);
 
@@ -93,11 +94,17 @@ void sublimation_pack_sort_f32(
 // 8 passes is even, so the sorted result lands back in the first scratch half.
 static void sub_radix_pairs64(sublimation_pack64_slot *a,
                               sublimation_pack64_slot *b, size_t n) {
+    if (n == 0) return;
+    sublimation_pack64_slot *dest = a;
     for (int pass = 0; pass < 8; pass++) {
         size_t count[256] = {0};
         const int shift = pass * 8;
         for (size_t i = 0; i < n; i++)
             count[(a[i].key >> shift) & 0xFFu]++;
+        // Constant byte: every key shares this byte (the histogram puts all n
+        // in one bucket), so the stable distribution is the identity. Skip
+        // the pass; the final-copy check below restores buffer parity.
+        if (count[(a[0].key >> shift) & 0xFFu] == n) continue;
         size_t sum = 0;
         for (int d = 0; d < 256; d++) { size_t c = count[d]; count[d] = sum; sum += c; }
         for (size_t i = 0; i < n; i++) {
@@ -106,6 +113,10 @@ static void sub_radix_pairs64(sublimation_pack64_slot *a,
         }
         sublimation_pack64_slot *t = a; a = b; b = t;
     }
+    // An odd number of executed passes leaves the sorted data in the other
+    // half; the caller reads the half it passed as `a`.
+    if (a != dest)
+        memcpy(dest, a, n * sizeof(sublimation_pack64_slot));
 }
 
 void sublimation_pack_sort_u64_with_scratch(

@@ -86,18 +86,6 @@ const Config::ChartColors& panel_overrides_for(const std::string& name) {
   return c.global;
 }
 
-// Normalize a NETWORK-style byte/sec sample array by the window max. Returns
-// a new vector in [0, 1]. A floor (1 KB/s) avoids divide-by-zero and keeps an
-// idle network visually flat at ~0 rather than amplifying sensor noise.
-std::vector<float> normalize_network(const std::vector<float>& rx,
-                                      const std::vector<float>& tx) {
-  float peak = 1024.0f;
-  for (float v : rx) if (v > peak) peak = v;
-  for (float v : tx) if (v > peak) peak = v;
-  (void)rx; (void)tx;
-  return {};  // unused — see render() where we normalize inline
-}
-
 } // namespace
 
 ChartPanel::ChartPanel(std::string title,
@@ -212,7 +200,6 @@ void ChartPanel::render(widget::Canvas& canvas,
     ema_smooth(rx, 0.4f);
     ema_smooth(tx, 0.4f);
     chart_.update_dual(rx, tx, style);
-    (void)normalize_network;  // silence unused
   } else if (sources_.primary != nullptr) {
     std::vector<float> samples = sources_.primary->recent(sources_.primary->capacity());
     // Samples are already normalized to [0, 1] by ChartHistories (for pct metrics).

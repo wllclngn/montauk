@@ -118,7 +118,7 @@ static size_t avx2_partition_i64(int64_t *arr, size_t lo, size_t hi, int64_t piv
 // blocks, swapping pairs in place. Memory traffic: 2n bytes per level.
 //
 // PEXT is 1 uop / 3 cycle latency on Intel Skylake (and Zen 3+); microcoded
-// on Zen 1/2 only. Our host is Skylake -- check.
+// on Zen 1/2 only.
 //
 // Used at the top of avx2_quicksort_with_scratch_i64 for partitions large
 // enough that memory traffic dominates the SIMD parallelism of the shuffle
@@ -169,7 +169,7 @@ static inline uint64_t pext_wrong_indices_16(const int64_t *block, int64_t pivot
 // p such that arr[lo..p) < pivot and arr[p..hi) >= pivot.
 // Default visibility so the standalone unit test can link against it.
 __attribute__((visibility("default")))
-size_t block_partition_pext_i64(int64_t *arr, size_t lo, size_t hi, int64_t pivot) {
+size_t sub_block_partition_pext_i64(int64_t *arr, size_t lo, size_t hi, int64_t pivot) {
     const size_t BLOCK = 16;
 
     // Tiny ranges: scalar Lomuto.
@@ -277,7 +277,7 @@ static void avx2_quicksort_with_scratch_i64(int64_t *arr, size_t n,
         // fit, vpcompressq emulation below it.
         size_t pivot_pos;
         if ((hi - 1 - lo) > SUB_PEXT_THRESHOLD) {
-            pivot_pos = block_partition_pext_i64(arr, lo, hi - 1, pivot);
+            pivot_pos = sub_block_partition_pext_i64(arr, lo, hi - 1, pivot);
         } else {
             pivot_pos = avx2_partition_i64(arr, lo, hi - 1, pivot, scratch);
         }
@@ -424,8 +424,12 @@ void sub_random_sort_i64(int64_t *arr, size_t n) {
     // Dynamic B: pick bucket count so each bucket fits L2 with headroom.
     // At n <= ~6.1M the formula clamps to MIN=256 (the empirical local
     // optimum at typical sizes); at n=10M it expands to ~417, eliminating
-    // the L2 cliff diagnosed in research/STATE_OF_THE_SORT.md. Static math,
-    // no learning -- the moratorium forbids grader-driven knobs.
+    // the L2 cliff diagnosed in research/STATE_OF_THE_SORT.md. The knob is
+    // static by design: per-class adaptive grading (the g_class_grader
+    // proposal) was evaluated and declined -- its only win was per-machine
+    // drift the static formula already targets, at the cost of persistent
+    // mutable state and a load-noisy grade signal past the tableau window.
+    // Static math, no learning, by choice.
     size_t B = (n + SUB_RANDOM_TARGET_ELEMS - 1) / SUB_RANDOM_TARGET_ELEMS;
     if (B < SUB_RANDOM_BUCKETS_MIN) B = SUB_RANDOM_BUCKETS_MIN;
     if (B > SUB_RANDOM_BUCKETS_MAX) B = SUB_RANDOM_BUCKETS_MAX;
@@ -638,7 +642,7 @@ void sublimation_i64_parallel(int64_t *restrict arr, size_t n, size_t num_thread
 
     sub_adaptive_t state;
     sub_adaptive_init(&state, n);
-    sub_sort_internal_i64(arr, n, &state);
+    sub_sort_internal_i64(arr, n, &state, &profile);
 }
 
 // PUBLIC API: per-type sort with stats.
@@ -654,7 +658,7 @@ void sublimation_i64_parallel(int64_t *restrict arr, size_t n, size_t num_thread
         sub_adaptive_init(&state, n);                                       \
                                                                              \
         sub_profile_t profile = sub_classify_internal_##SUFFIX(arr, n);     \
-        sub_sort_internal_##SUFFIX(arr, n, &state);                         \
+        sub_sort_internal_##SUFFIX(arr, n, &state, &profile);               \
                                                                              \
         uint64_t t1 = now_ns();                                             \
                                                                              \

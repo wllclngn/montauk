@@ -1,7 +1,7 @@
 #include "collectors/FsCollector.hpp"
+#include "util/Procfs.hpp"
 
 #include <sys/statvfs.h>
-#include <fstream>
 #include <sstream>
 #include <unordered_set>
 #include <utility>
@@ -23,8 +23,10 @@ static uint64_t to_bytes(unsigned long long v) { return static_cast<uint64_t>(v)
 
 bool FsCollector::sample(montauk::model::FsSnapshot& out) {
   out.mounts.clear();
-  std::ifstream f("/proc/self/mounts");
-  if (!f) return false;
+  // Mapped reader honors MONTAUK_PROC_ROOT (a plain ifstream would not)
+  auto txt = montauk::util::read_file_string("/proc/self/mounts");
+  if (!txt) return false;
+  std::istringstream f(*txt);
   std::string line;
   while (std::getline(f, line)) {
     if (line.empty()) continue;

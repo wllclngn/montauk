@@ -13,7 +13,7 @@ A unified observability platform for Linux: An event-driven monitor, eBPF tracer
 
 montauk is a unified **observability platform** for Linux: An event-driven monitor, an eBPF tracer and an offline analyzer in one C++23 binary, built on **sublimation**, its in-tree adaptive sort and search core. The monitor (plain `montauk`) is an event-driven TUI with per-process CPU and multi-vendor GPU attribution, thermal margins and Prometheus export. The tracer (`--trace`) is an eBPF flight recorder over a whole process tree: sync objects, heap, signals, file I/O, scheduler decisions, hardware counters. The analyzer (`montauk_analyze` / `montauk_trace_decode`) folds a capture once into 27 diagnostic reports and cross-run population statistics. Every surface renders as text, Prometheus **and** structured JSON from one typed result, so a script or an agent reads exactly the data the human report shows: one schema, provably consistent, enforced by byte-identical golden gates.
 
-sublimation is the platform's second product, vendored in `montauk/sublimation/` and compiled into everything: The process table's ordering, every ranking the analyzer emits, the latency-structure classification its reports read and all of montauk's text matching run through the one engine. The sort is disorder-classified and adaptive. It measures the structure an input already carries and routes it to the algorithm that structure earns, sorting 100 million random int64 under the AVX2 comparison-sort floor. The matcher is one engine with three faces: literal, regex and fuzzy k-mismatch, byte-parity-gated per face. The same engine is a shell command: the `sublimation` CLI carries the full stream surface (statistics, structure, text and relational operations) with grep-exact exit codes and a 73-case byte-parity gate against GNU coreutils and grep. Two systems, one tree. No system packages, no fetch step: NVML and liburing are auto-detected and optional; everything else lives in the repo.
+sublimation is the platform's second product, vendored in `montauk/sublimation/` and compiled into everything: The process table's ordering, every ranking the analyzer emits, the latency-structure classification its reports read and all of montauk's text matching run through the one engine. The sort is disorder-classified and adaptive. It measures the structure an input already carries and routes it to the algorithm that structure earns, sorting 100 million random int64 under the AVX2 comparison-sort floor. The matcher is one engine with three faces: literal, regex and fuzzy k-mismatch, byte-parity-gated per face. The same engine is a shell command: the `sublimation` CLI carries the full stream surface (statistics, structure, text and relational operations) with grep-exact exit codes and a 74-case byte-parity gate against GNU coreutils and grep (one case skips where datamash is absent). Two systems, one tree. No system packages, no fetch step: NVML and liburing are auto-detected and optional; everything else lives in the repo.
 
 ## Components
 
@@ -23,9 +23,9 @@ sublimation is the platform's second product, vendored in `montauk/sublimation/`
 | **tracer** | `montauk --trace PATTERN` | eBPF flight recorder over a whole process tree: event-driven discovery, no ptrace, no `/proc`. Per-thread state and syscalls, ntsync / futex / keyed-event sync, heap traffic, signals and aborts, file I/O, file-backed mmap, scheduler decisions with wake-to-run latency, CCX-bucketed migrations and hardware PMU counters via `perf_event_open`. Composes with `--metrics`, `--log` and a near-zero-overhead binary log (`--trace-out`). |
 | **analyzer** | `montauk_analyze`, `montauk_trace_decode` | Folds a capture once into single-pass diagnostic reports (27 of them, from `waits` and `doublefree` to `dispatch-stall` and `fractal`) over logs reaching 450 MB+, plus recording-directory digests and cross-run population statistics. No live target, no privileges. |
 | **sublimation** | in-tree core + `sublimation` CLI | montauk's sort, search and match core, used everywhere: the process table, every ordering the analyzer emits, the structure classification its reports read and all of montauk's text matching. The CLI exposes the same engine as a complete stream-processing surface: statistics, structure, text and relational operations, with grep-exact exit codes. See [sublimation](#sublimation-an-adaptive-sort-and-search-core). |
-| **montauk-mcp** | `montauk-mcp/target/release/montauk-mcp` | Agent-facing MCP server: stdio JSON-RPC 2.0, a separate static Rust binary, zero third-party crates. Four read-only tools: `montauk_snapshot`, `montauk_analyze_report`, `montauk_digest` and `sublimation` (direct FFI, no subprocess per call). See [montauk-mcp](#montauk-mcp-the-agent-facing-tool-surface). |
+| **montauk-mcp** | `components/mcp/target/release/montauk-mcp` | Agent-facing MCP server: stdio JSON-RPC 2.0, a separate static Rust binary, zero third-party crates. Four read-only tools: `montauk_snapshot`, `montauk_analyze_report`, `montauk_digest` and `sublimation` (direct FFI, no subprocess per call). See [montauk-mcp](#montauk-mcp-the-agent-facing-tool-surface). |
 
-The optional kernel module (`montauk-kernel`), the external-metrics provider sockets and `montauk-mcp` are the only seams to the outside; everything else is one statically-linked C++23 binary. sublimation ships in the same tree with its own tests: one license, one README for both.
+The kernel module (`montauk-kernel`), the external-metrics provider sockets and `montauk-mcp` are the only seams to the outside; everything else is one statically-linked C++23 binary. sublimation ships in the same tree with its own tests: one license, one README for both.
 
 ## sublimation: an adaptive sort and search core
 
@@ -73,7 +73,7 @@ The matcher is byte-parity-gated against independent oracles on every face: Pyth
 | `sublimation distinct \| tally` | distinct-token count / per-token frequency, `sort \| uniq [-c]` |
 | `sublimation intersect \| subtract \| union \| join` | the two-stream relational lane |
 
-`search` carries the full grep working set: `-F`/`-E`/`-k N` pick the face, `-i` and `-S` (smart case) handle casing, `-v`/`-c`/`-n`/`-o`/`-q`/`-m N` shape output, `-A`/`-B`/`-C` add context, `-w`/`-x` anchor to words or whole lines, `-e PAT`/`-f FILE` build multi-pattern sets, `-l`/`-L` name files with or without a match, `-H`/`-h`/`--label` control the filename prefix, `-s` silences unreadable-file messages, `-a`/`-I` set binary-file handling, `--color=auto|always|never` highlights, `--line-buffered` flushes per line and `--files-from LIST` reads input paths from a list (`find ... -print0 | sublimation search PAT --files-from -`). That last flag is the traversal affordance: native directory walking deliberately stays with grep and rg, by the division-by-target rule below. Exit codes are grep's contract exactly: 0 matched, 1 nothing, 2 unreadable input. The whole surface is byte-verified against GNU grep and coreutils in a 73-case parity gate plus an exit-code oracle.
+`search` carries the full grep working set: `-F`/`-E`/`-k N` pick the face, `-i` and `-S` (smart case) handle casing, `-v`/`-c`/`-n`/`-o`/`-q`/`-m N` shape output, `-A`/`-B`/`-C` add context, `-w`/`-x` anchor to words or whole lines, `-e PAT`/`-f FILE` build multi-pattern sets, `-l`/`-L` name files with or without a match, `-H`/`-h`/`--label` control the filename prefix, `-s` silences unreadable-file messages, `-a`/`-I` set binary-file handling, `--color=auto|always|never` highlights, `--line-buffered` flushes per line and `--files-from LIST` reads input paths from a list (`find ... -print0 | sublimation search PAT --files-from -`). That last flag is the traversal affordance: native directory walking deliberately stays with grep and rg, by the division-by-target rule below. Exit codes are grep's contract exactly: 0 matched, 1 nothing, 2 unreadable input. The whole surface is byte-verified against GNU grep and coreutils in a 74-case parity gate plus an exit-code oracle.
 
 For example: `cat dump | sublimation quantile 0.99 --field 2` for a column's 99th percentile, `ps aux | sublimation where '6 > 100000'` to keep the heavy processes, `seq 1 1000 | shuf | sublimation characterize` to name a stream's shape. The division is by **target**: sublimation owns the stream (the column, filter, reduce, order and structure idioms) while `grep`, `find` and `awk` keep filesystem traversal and the awk language itself.
 
@@ -114,7 +114,7 @@ From 1M to 100M sublimation holds ~16-18 ns/element while Rust ipnsort rises 17.
 
 A scalar bit-parallel field trading blows with the best regex engine there is: ahead of the Rust crate where a rare byte lets the prefilter skip (`MARK[A-Z]R`) or the lazy-DFA reach cache carries a dense low-literal pattern (`A[CG]TT`), behind it only on common-literal `str[a-z]ct` where its SIMD literal prefilter beats the scalar anchor (the one standing gap, scalar vs SIMD, a stated non-goal). Ahead of Go `regexp` across the board, and it buries Python `re`, C++ `std::regex` and POSIX. **Fuzzy k-mismatch is a face no standard library ships**: `SIGKILL` k=1 at **10.8k MB/s**, 12× the brute baseline via the pigeonhole prefilter.
 
-**Lineage.** Influenced by flow-model research (Kyng-Dinic maximum flow, spectral graph theory); the lineage survives in the spectral fallback and the adaptive-control primitives. The rest of the family tree: Robinson-Schensted correspondence (sorting ↔ Young tableaux), TimSort (the run-adaptive lineage; the prior C++ TimSort/Powersort implementation is archived out of tree), Thompson's NFA construction (the prior regex engine, retired in v8.0.0 for the Glushkov field), Fiedler spectral seriation (Atkins-Boman-Hendrickson), CoDel and damped-oscillator adaptive control and AlphaDev-shaped AVX2 sorting networks.
+**Lineage.** Influenced by flow-model research (Kyng-Dinic maximum flow, spectral graph theory); the lineage survives in the spectral fallback and the adaptive-control primitives. The rest of the family tree: Robinson-Schensted correspondence (sorting ↔ Young tableaux), TimSort (the run-adaptive lineage; the prior C++ TimSort/Powersort implementation is archived out of tree), Thompson's NFA construction (the prior regex engine, retired in v8.0.0 for the Glushkov field), Fiedler spectral seriation (Atkins-Boman-Hendrickson), CoDel and damped-oscillator adaptive control and AlphaDev-shaped AVX2 sorting networks. Full citations in [References](#references).
 
 **Build.** Compiled as a static library with montauk. Requires a Haswell-or-newer CPU (BMI2 + AVX2) and gcc 13+ (C23).
 
@@ -125,7 +125,7 @@ A scalar bit-parallel field trading blows with the best regex engine there is: a
 montauk-mcp is a stdio JSON-RPC 2.0 server exposing montauk and sublimation to any MCP-speaking agent: a single static Rust binary, zero third-party crates, the same no-dependency stance as the rest of the tree. It registers with an MCP client with no venv, no interpreter resolution and no PATH entry to go stale:
 
 ```
-claude mcp add --scope project montauk -- montauk-mcp/target/release/montauk-mcp
+claude mcp add --scope project montauk -- components/mcp/target/release/montauk-mcp
 ```
 
 Four tools, read-only and observational only (no killing processes, no scheduler-policy changes, nothing mutating, stated explicitly in every tool description):
@@ -141,40 +141,7 @@ Three of the four wrap subprocesses (`montauk` and `montauk_analyze` are standal
 
 Four substantive source files plus glue: `rpc.rs` (a hand-rolled JSON-RPC 2.0 loop over stdio; stdout carries protocol messages only, all logging goes to stderr), `json.rs` (a from-scratch JSON parser and serializer; `include/util/json.h` is write-only by design, so this is the first thing in montauk that reads JSON), `ffi.rs` (the bindings, linked via `build.rs` against `libsublimation.a`) and `tools.rs` (the tool registry, dispatch and JSON Schemas). `main.rs`/`lib.rs` are the wrapper and module glue.
 
-**Build.** `cd montauk-mcp && cargo build --release`. No CMake target; a separate build tree beside the C++ binary, the same pattern `montauk-kernel` uses.
-
-## Kernel Module (Optional)
-
-`montauk-kernel` eliminates `/proc` parsing entirely: kprobes hook fork/exec/exit and update an in-kernel table read straight from `task_struct`, a workqueue refreshes CPU times at 1 Hz and montauk fetches each snapshot in a single genetlink call. When the module is loaded, montauk detects and uses it automatically. The backend comparison lives under [Process Collection](#process-collection).
-
-**Quick start:**
-```bash
-cd montauk-kernel
-./install.py
-```
-
-This builds the module, installs it, sets up auto-load at boot and rebuilds montauk with kernel support.
-
-**Verify:**
-```bash
-lsmod | grep montauk
-sudo dmesg | grep montauk
-```
-
-**Module parameters:**
-```bash
-sudo modprobe montauk max_procs=4096 debug=1
-echo "options montauk max_procs=4096" | sudo tee /etc/modprobe.d/montauk.conf
-```
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `max_procs` | 8192 | Maximum processes to track |
-| `debug` | false | Enable verbose kernel logging |
-
-**Unload:** `sudo rmmod montauk`
-
-See [`montauk-kernel/README.md`](montauk-kernel/README.md) for the architecture, protocol specification and troubleshooting.
+**Build.** `cd components/mcp && cargo build --release`. No CMake target; a separate build tree beside the C++ binary, the same pattern the kernel module (`components/kernel`) uses.
 
 ## Screenshots
 
@@ -400,7 +367,7 @@ With liburing, this includes the Prometheus serializer tests. A standalone `mont
 **One runner (`tests/run.py`)** drives four layers: the C++/C23 unit tests, the Python gate layer, the live BPF trace harness (root; skipped, not failed, without it) and montauk-mcp's own `cargo test`. The gate layer stacks four proofs:
 
 - `corpus_check.py` freezes the analyzer's reports, the decoder's output, the `sublimation` CLI and the analyzer's `--json` envelope against goldens over a deterministic synthetic capture; any surface changing a byte fails the gate, and a per-report parity pass asserts every report emits identical gauges in its text (`.prom`) and JSON renderings.
-- `parity_check.py` runs 73 cases of sublimation verbs against the real coreutils and GNU grep on identical input and fails on any byte divergence: the regression guard that keeps shell-wrapper routing safe.
+- `parity_check.py` runs 74 cases of sublimation verbs against the real coreutils and GNU grep on identical input (one skips where datamash is absent) and fails on any byte divergence: the regression guard that keeps shell-wrapper routing safe.
 - `pop_gate.py` pins the population mode: an injected +50% shift must be found (full-magnitude Cliff's delta at the boundary pair) and a stable family must yield no change point.
 - `semantic_check.py` rejects any emitted gauge family whose help text is a placeholder or an echo of its own name.
 
@@ -545,6 +512,43 @@ montauk's own footprint. Per-backend overhead, detection latency and syscall cou
 ## Policy
 
 Vendoring is enforced, not aspirational: CMake poisons `FetchContent_Declare` and `ExternalProject_Add` with `FATAL_ERROR` at configure time, so a third-party fetch cannot enter the build. NVML and liburing are auto-detected and gracefully disabled when unavailable.
+
+## References
+
+The work the algorithms descend from. Source-comment attributions and the [Lineage](#sublimation-an-adaptive-sort-and-search-core) paragraph resolve here; sibling-project lineage (the OUROBOROS-derived UI, PANDEMONIUM's oscillator envelope) is in-house.
+
+**Sorting and structure**
+- G. de B. Robinson, "On the Representations of the Symmetric Group", American Journal of Mathematics 60, 1938. C. Schensted, "Longest increasing and decreasing subsequences", Canadian Journal of Mathematics 13, 1961.
+- J. S. Frame, G. de B. Robinson and R. M. Thrall, "The hook graphs of the symmetric group", Canadian Journal of Mathematics 6, 1954.
+- D. Aldous and P. Diaconis, "Longest increasing subsequences: from patience sorting to the Baik-Deift-Johansson theorem", Bulletin of the AMS 36, 1999.
+- J. Baik, P. Deift and K. Johansson, "On the distribution of the length of the longest increasing subsequence of random permutations", Journal of the AMS 12, 1999.
+- T. Peters, "Timsort", CPython `Objects/listsort.txt`, 2002.
+- A. Sato and Y. Matsui, "PCF Learned Sort: a Learning Augmented Sort Algorithm with O(n log log n) Expected Complexity", TMLR 2024, arXiv:2405.07122.
+- S. Edelkamp and A. Weiss, "BlockQuicksort: How Branch Mispredictions don't affect Quicksort", ESA 2016.
+- O. R. L. Peters, "Pattern-defeating Quicksort", arXiv:2106.05123, 2021.
+- M. Axtmann, S. Witt, D. Ferizovic and P. Sanders, "In-Place Parallel Super Scalar Samplesort (IPS4o)", ESA 2017.
+- D. J. Mankowitz et al., "Faster sorting algorithms discovered using deep reinforcement learning", Nature 618, 2023.
+- L. Bergdoll and O. Peters, ipnsort, the Rust standard library's `sort_unstable` implementation as of Rust 1.81, 2024.
+
+**Text matching**
+- K. Thompson, "Programming Techniques: Regular expression search algorithm", Communications of the ACM 11(6), 1968.
+- V. M. Glushkov, "The abstract theory of automata", Russian Mathematical Surveys 16, 1961.
+- R. S. Boyer and J S. Moore, "A fast string searching algorithm", Communications of the ACM 20(10), 1977. R. N. Horspool, "Practical fast searching in strings", Software: Practice and Experience 10(6), 1980.
+
+**Spectral and flow heritage**
+- M. Fiedler, "Algebraic connectivity of graphs", Czechoslovak Mathematical Journal 23, 1973.
+- J. E. Atkins, E. G. Boman and B. Hendrickson, "A spectral algorithm for seriation and the consecutive ones problem", SIAM Journal on Computing 28(1), 1998.
+- E. A. Dinic, "Algorithm for solution of a problem of maximum flow in a network with power estimation", Soviet Mathematics Doklady 11, 1970.
+- L. Chen, R. Kyng, Y. P. Liu, R. Peng, M. Probst Gutenberg and S. Sachdeva, "Maximum Flow and Minimum-Cost Flow in Almost-Linear Time", FOCS 2022.
+
+**Randomness battery**
+- C. Bandt and B. Pompe, "Permutation entropy: a natural complexity measure for time series", Physical Review Letters 88, 174102, 2002.
+- B. Luque, L. Lacasa, F. Ballesteros and J. Luque, "Horizontal visibility graphs: Exact results for random time series", Physical Review E 80, 046103, 2009.
+- J. P. Zbilut and C. L. Webber Jr., "Embeddings and delays as derived from quantification of recurrence plots", Physics Letters A 171, 1992.
+- N. Marwan, M. C. Romano, M. Thiel and J. Kurths, "Recurrence plots for the analysis of complex systems", Physics Reports 438, 2007.
+
+**Adaptive control**
+- K. Nichols and V. Jacobson, "Controlling Queue Delay", ACM Queue 10(5), 2012. RFC 8289, "Controlled Delay Active Queue Management", 2018.
 
 ## License
 

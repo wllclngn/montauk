@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/widget/Color.hpp"
+
 #include <cstdint>
 #include <string>
 
@@ -42,6 +44,10 @@ struct CpuFreqInfo {
   if (value >= caution) return 1;
   return 0;
 }
+
+// Style for a value rendered at a given severity (0 normal, 1 caution,
+// 2 warning), resolved from the active UI palette.
+[[nodiscard]] widget::Style severity_style(int severity);
 
 // Format a byte count as a human-readable size (e.g. "3.5G", "42M", "128K").
 // `precision` controls trailing decimals for non-KB units (pass 0 for whole

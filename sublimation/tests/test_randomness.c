@@ -189,6 +189,16 @@ int main(void) {
        && few_r.verdict == SUB_RAND_STRUCTURED, "few_unique: verdict structured (k < N/2)");
     check(rev_r.verdict == SUB_RAND_STRUCTURED, "reversed: verdict structured");
 
+    // INVERSION lens contract: classify now publishes the analytic
+    // inversion_ratio on the fast paths (reversed ~1.0, sorted 0.0), and the
+    // lens score 1 - 2|r - 0.5| maps both extremes to ~0: a veto either way.
+    check(rev_r.lens_available[SUB_LENS_INVERSION]
+       && rev_r.lens[SUB_LENS_INVERSION] < 0.05f,
+          "reversed: INVERSION lens reads the analytic ~1.0 ratio and vetoes");
+    check(sorted_r.lens_available[SUB_LENS_INVERSION]
+       && sorted_r.lens[SUB_LENS_INVERSION] < 0.05f,
+          "sorted: INVERSION lens reads 0.0 ratio and vetoes");
+
     // Unavailable-lens paths: tableau lenses off above n=10000, RQA/spectral
     // off below n=64; the verdict still forms over what remains.
     check(big_r.lens_count == 6

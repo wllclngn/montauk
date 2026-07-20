@@ -289,7 +289,7 @@ double sub_spectral_gap(const double *eigenvalues, size_t n) {
 // approximate ordering (exact for Robinson matrices, Atkins et al. 1998).
 //
 // Produces perm[k] = index of k-th smallest Fiedler entry.
-void sub_fiedler_argsort(const double *fiedler, size_t *perm, size_t n) {
+static void sub_fiedler_argsort(const double *fiedler, size_t *perm, size_t n) {
     // initialize identity permutation
     for (size_t i = 0; i < n; i++) {
         perm[i] = i;
@@ -311,8 +311,8 @@ void sub_fiedler_argsort(const double *fiedler, size_t *perm, size_t n) {
 // APPLY PERMUTATION
 //
 // Rearrange arr according to perm using scratch buffer.
-void sub_apply_permutation_i64(int64_t *arr, const size_t *perm, size_t n,
-                               int64_t *scratch) {
+static void sub_apply_permutation_i64(int64_t *arr, const size_t *perm, size_t n,
+                                      int64_t *scratch) {
     for (size_t i = 0; i < n; i++) {
         scratch[i] = arr[perm[i]];
     }

@@ -310,6 +310,58 @@ int main(void) {
     test_f64(10000, false, "f64_asc_10k");
     test_f64(10000, true,  "f64_desc_10k");
 
+    // Narrow-range 64-bit keys: constant high bytes make the LSD radix skip
+    // those passes (identity permutation), including the odd-executed-pass
+    // parity case. Output must stay byte-identical to the qsort oracle.
+    {
+        enum { NN = 5000 };
+        struct { unsigned shiftbits; const char *name; } cases[] = {
+            { 8,  "u64_radix_skip_1byte" },   // 1 live byte: 7 skipped, odd executed
+            { 16, "u64_radix_skip_2byte" },   // 2 live bytes: even executed
+            { 24, "u64_radix_skip_3byte" },   // 3 live bytes: odd executed
+        };
+        for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+            for (int desc = 0; desc < 2; desc++) {
+                uint64_t *keys = (uint64_t *)malloc(NN * sizeof(uint64_t));
+                uint32_t *indices = (uint32_t *)malloc(NN * sizeof(uint32_t));
+                u64_pair_t *ref = (u64_pair_t *)malloc(NN * sizeof(u64_pair_t));
+                lcg_seed(0xAB5EEDull + c * 31 + (uint64_t)desc);
+                uint64_t mask = (cases[c].shiftbits >= 64)
+                                    ? ~0ull : ((1ull << cases[c].shiftbits) - 1);
+                for (size_t i = 0; i < NN; i++) {
+                    keys[i] = lcg_next() & mask;
+                    indices[i] = (uint32_t)i;
+                    ref[i].key = keys[i];
+                    ref[i].index = (uint32_t)i;
+                }
+                qsort(ref, NN, sizeof(u64_pair_t), desc ? u64_pair_desc : u64_pair_asc);
+                sublimation_pack_sort_u64(keys, indices, NN, desc);
+                int ok = 1;
+                for (size_t i = 0; i < NN; i++)
+                    if (indices[i] != ref[i].index) { ok = 0; break; }
+                char label[64];
+                snprintf(label, sizeof(label), "%s_%s", cases[c].name,
+                         desc ? "desc" : "asc");
+                if (ok) { printf("  %-50s PASS\n", label); _pass++; }
+                else    { printf("  [FAIL] %s\n", label); _fail++; }
+                free(keys); free(indices); free(ref);
+            }
+        }
+    }
+
+    // All-equal keys: every pass skips; the result is the identity (stable).
+    {
+        enum { EQ = 257 };
+        uint64_t keys[EQ];
+        uint32_t indices[EQ];
+        for (size_t i = 0; i < EQ; i++) { keys[i] = 0xDEADBEEFull; indices[i] = (uint32_t)i; }
+        sublimation_pack_sort_u64(keys, indices, EQ, false);
+        int ok = 1;
+        for (size_t i = 0; i < EQ; i++) if (indices[i] != (uint32_t)i) { ok = 0; break; }
+        if (ok) { printf("  %-50s PASS\n", "u64_radix_all_equal_identity"); _pass++; }
+        else    { printf("  [FAIL] u64_radix_all_equal_identity\n"); _fail++; }
+    }
+
     // 64-bit keys that differ only ABOVE bit 32: the old (key<<32)|index pack
     // would collapse these to equal; the radix path must keep them distinct.
     {

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """montauk test runner -- one entry point for the whole suite.
 
-Four layers, one command, a clear split:
+Five layers, one command, a clear split:
   unit   -- the C++ montauk_tests aggregate + the C23 montauk_sink_c_test
   gate   -- the Python byte-identical output gate (corpus_check.py): analyzer /
             decoder / sublimation CLI stdout vs frozen goldens
+  perf   -- the performance envelopes (perf_gate.py): CPU-time ceilings, a
+            growth bound and the sort-vs-sort oracle
   trace  -- the live BPF trace harness (trace_loadtest.py); needs root, so it is
             skipped (not failed) when not run as root
-  mcp    -- montauk-mcp's own `cargo test`; skipped (not failed) if the crate
+  mcp    -- the MCP server's own `cargo test`; skipped (not failed) if the crate
             isn't built yet (no Cargo.toml)
 
 Usage:
@@ -90,9 +92,9 @@ def layer_trace():
 
 
 def layer_mcp():
-    mcp_dir = ROOT / "montauk-mcp"
+    mcp_dir = ROOT / "components" / "mcp"
     if not (mcp_dir / "Cargo.toml").exists():
-        print("[run] mcp: SKIP (montauk-mcp/Cargo.toml not present)")
+        print("[run] mcp: SKIP (components/mcp/Cargo.toml not present)")
         return True  # a skip is not a failure
     print(f"  $ cargo test --release  (in {mcp_dir})")
     return subprocess.run(["cargo", "test", "--release"], cwd=str(mcp_dir)).returncode == 0
@@ -118,7 +120,7 @@ def main():
         # once (see the configure guard above).
         newest_src = 0.0
         for root in (ROOT / "src", ROOT / "sublimation", ROOT / "include",
-                     ROOT / "bpf", ROOT / "tests"):
+                     ROOT / "tests"):
             if not root.exists():
                 continue
             for p in root.rglob("*"):

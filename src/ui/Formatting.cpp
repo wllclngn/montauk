@@ -1,9 +1,11 @@
 #include "ui/Formatting.hpp"
 #include "ui/Config.hpp"
+#include "ui/widget/Canvas.hpp"
 #include "util/Procfs.hpp"
 #include <algorithm>
 #include <chrono>
 #include <clocale>
+#include <cstdlib>
 #include <ctime>
 #include <iomanip>
 #include <list>
@@ -58,44 +60,99 @@ std::string format_date_now_locale() {
   return std::string(buf);
 }
 
+namespace {
+
+// Current MONTAUK_PROC_ROOT + MONTAUK_SYS_ROOT overrides, joined as one cache
+// key. The identity readers below cache their /proc//sys parses (hostname and
+// kernel are session constants; scheduler refreshes at 1s), but the caches
+// must not outlive a root redirection — tests point these env vars at fixture
+// trees per test case and expect a fresh read.
+std::string identity_root_key() {
+  const char* p = std::getenv("MONTAUK_PROC_ROOT");
+  const char* s = std::getenv("MONTAUK_SYS_ROOT");
+  std::string key = p ? p : "";
+  key += '\x1f';
+  if (s) key += s;
+  return key;
+}
+
+} // namespace
+
 std::string read_hostname() {
+  // Session constant — read /proc once per root and cache.
+  static std::string cached_root;
+  static std::string cached;
+  static bool have = false;
+  std::string root = identity_root_key();
+  if (have && root == cached_root) return cached;
   auto txt = montauk::util::read_file_string("/proc/sys/kernel/hostname");
-  if (!txt) return "unknown";
-  std::string host = *txt;
-  while (!host.empty() && (host.back() == '\n' || host.back() == '\r' || host.back() == ' ')) 
+  std::string host = txt ? *txt : std::string();
+  while (!host.empty() && (host.back() == '\n' || host.back() == '\r' || host.back() == ' '))
     host.pop_back();
-  return host.empty() ? "unknown" : host;
+  if (host.empty()) host = "unknown";
+  cached = std::move(host);
+  cached_root = std::move(root);
+  have = true;
+  return cached;
 }
 
 std::string read_kernel_version() {
+  // Session constant — read /proc once per root and cache.
+  static std::string cached_root;
+  static std::string cached;
+  static bool have = false;
+  std::string root = identity_root_key();
+  if (have && root == cached_root) return cached;
   auto txt = montauk::util::read_file_string("/proc/sys/kernel/osrelease");
-  if (!txt) return "unknown";
-  std::string ver = *txt;
-  while (!ver.empty() && (ver.back() == '\n' || ver.back() == '\r' || ver.back() == ' ')) 
+  std::string ver = txt ? *txt : std::string();
+  while (!ver.empty() && (ver.back() == '\n' || ver.back() == '\r' || ver.back() == ' '))
     ver.pop_back();
-  return ver.empty() ? "unknown" : ver;
+  if (ver.empty()) ver = "unknown";
+  cached = std::move(ver);
+  cached_root = std::move(root);
+  have = true;
+  return cached;
 }
 
 std::string read_scheduler() {
+  // Can change at runtime (sched_ext load/unload) — refresh at most once
+  // per second, same cache shape as read_cpu_freq_info. A root-override
+  // change (fixture redirection) also invalidates.
+  static auto last = std::chrono::steady_clock::time_point{};
+  static std::string cached_root;
+  static std::string cache;
+  auto now = std::chrono::steady_clock::now();
+  std::string root = identity_root_key();
+  if (last.time_since_epoch().count() != 0 && root == cached_root) {
+    auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count();
+    if (dt < 1000) return cache;
+  }
+  std::string out = "CFS";
   auto txt = montauk::util::read_file_string("/sys/kernel/sched_ext/root/ops");
+  bool resolved = false;
   if (txt) {
     std::string name = *txt;
     while (!name.empty() && (name.back() == '\n' || name.back() == '\r' || name.back() == ' '))
       name.pop_back();
-    if (!name.empty()) return name;
+    if (!name.empty()) { out = std::move(name); resolved = true; }
   }
-  auto ver = montauk::util::read_file_string("/proc/sys/kernel/osrelease");
-  if (ver) {
-    int major = 0, minor = 0;
-    auto dot = ver->find('.');
-    if (dot != std::string::npos) {
-      major = std::atoi(ver->c_str());
-      minor = std::atoi(ver->c_str() + dot + 1);
+  if (!resolved) {
+    auto ver = montauk::util::read_file_string("/proc/sys/kernel/osrelease");
+    if (ver) {
+      int major = 0, minor = 0;
+      auto dot = ver->find('.');
+      if (dot != std::string::npos) {
+        major = std::atoi(ver->c_str());
+        minor = std::atoi(ver->c_str() + dot + 1);
+      }
+      if (major > 6 || (major == 6 && minor >= 6))
+        out = "EEVDF";
     }
-    if (major > 6 || (major == 6 && minor >= 6))
-      return "EEVDF";
   }
-  return "CFS";
+  cache = std::move(out);
+  cached_root = std::move(root);
+  last = now;
+  return cache;
 }
 
 std::string read_uptime_formatted() {
@@ -227,6 +284,13 @@ double smooth_value(const std::string& key, double raw, double alpha) {
   double smoothed = alpha * raw + (1.0 - alpha) * (*prev);
   cache.put(key, smoothed);
   return smoothed;
+}
+
+widget::Style severity_style(int severity) {
+  const auto& uic = ui_config();
+  if (severity >= 2) return widget::parse_sgr_style(uic.warning);
+  if (severity >= 1) return widget::parse_sgr_style(uic.caution);
+  return widget::Style{};
 }
 
 std::string sanitize_for_display(const std::string& s, size_t max_len) {

@@ -66,8 +66,8 @@ static void usage(FILE *out) {
         "  outliers              values outside the Tukey IQR fences (robust outlier flag)\n"
         "  histogram             text histogram of the distribution, 10 bins (the shape)\n"
         "  count [--words|--bytes] number of input lines/words/bytes (wc -l/-w/-c)\n"
-        "  head N                first N lines (head -N)\n"
-        "  tail N                last N lines (tail -N)\n"
+        "  head N [FILE]         first N lines (head -N)\n"
+        "  tail N [FILE]         last N lines (tail -N)\n"
         "  distinct              count of distinct tokens (sort | uniq | wc -l)\n"
         "  tally                 per-token frequency, high to low (sort | uniq -c | sort -rn)\n"
         "  classify              disorder class + profile of the stream\n"
@@ -81,15 +81,16 @@ static void usage(FILE *out) {
         "  field N[,M..] [FILE..] the N-th column, or a comma-list, of each line (awk '{print $N}')\n"
         "  where 'N OP V' [FILE] lines where field N OP V (awk '$N OP V'; OP: < <= > >= == !=)\n"
         "  group KEY OP [VAL]    group by field KEY, aggregate field VAL (datamash -g; OP: sum|mean|count|min|max)\n"
-        "  uniq [-d|-u] [-i]     collapse adjacent duplicate lines (-d dups only, -u uniques only, -i case-insensitive)\n"
-        "  cut LO-HI             character columns, 1-based inclusive (cut -c): N, lo-hi, lo-, -hi\n"
-        "  column                align delimited input into columns (column -t)\n"
-        "  tac                   reverse line order\n"
-        "  paste -s              serialize lines into one tab-joined line\n"
+        "  uniq [-d|-u] [-i] [FILE] collapse adjacent duplicate lines (-d dups only, -u uniques only, -i case-insensitive)\n"
+        "  cut LO-HI [FILE]      character columns, 1-based inclusive (cut -c): N, lo-hi, lo-, -hi\n"
+        "  column [FILE]         align delimited input into columns (column -t)\n"
+        "  tac [FILE]            reverse line order\n"
+        "  paste -s [FILE]       serialize lines into one tab-joined line\n"
         "  intersect FILE        lines in both stdin and FILE (set intersection)\n"
         "  subtract FILE         lines in stdin but not in FILE (set difference)\n"
         "  union FILE            distinct lines from stdin and FILE (set union)\n"
         "  join FIELD FILE       join stdin and FILE on field FIELD (relational join)\n"
+        "  version               print the library version and ABI (also --version)\n"
         "\n"
         "  CLASS: sorted reversed nearly-sorted few-unique random phased spectral\n"
         "\n"
@@ -127,12 +128,16 @@ static void usage(FILE *out) {
         "  --files-from LIST     search: read input paths from LIST, newline- or NUL-\n"
         "                        delimited, '-' = stdin (find ... | search --files-from -)\n"
         "  --words / --bytes     count: word count / byte count instead of line count (wc -w/-c)\n"
-        "  short flags bundle    -iE == -i -E, -vn == -v -n, ...\n"
+        "  short flags bundle    -iE == -i -E, -vn == -v -n, ... (verb-scoped:\n"
+        "                        search owns grep's letters; uniq keeps -d/-u/-i,\n"
+        "                        paste -s, replace -i; any other verb+flag pair\n"
+        "                        is an error, never silently ignored)\n"
         "  --nearest             quantile: nearest-rank order statistic (not the estimator)\n"
         "\n"
-        "exit: search/field return 0 when something matched, 1 when nothing did;\n"
-        "      search returns 2 when an input FILE cannot be read (grep's contract:\n"
-        "      -q with a match still returns 0; -s silences the message only).\n",
+        "exit: 0 when output or a match was produced; 1 when nothing matched or\n"
+        "      nothing was produced (search, field, where); 2 on a usage, pattern\n"
+        "      or IO error, including an unreadable FILE (grep's contract: -q with\n"
+        "      a match still returns 0; -s silences the message, never the status).\n",
         out);
 }
 
@@ -165,9 +170,11 @@ static void keyed_push(KeyedBuf *a, double key, char *line) {
     a->n++;
 }
 
-// Open-addressing string hash map (val NULL = plain set), for the two-stream
-// set ops and join. FNV-1a; grows at 50% load.
-typedef struct { char **keys; char **vals; size_t cap, used; } StrMap;
+// Open-addressing string hash map, for the two-stream set ops, join, group
+// and tally (vals NULL entries = plain set; nums carries group ids / counts).
+// FNV-1a; grows at 50% load. This is the ONE probe/grow implementation --
+// group and tally used to carry their own verbatim copies of the same hash.
+typedef struct { char **keys; char **vals; size_t *nums; size_t cap, used; } StrMap;
 static uint64_t str_fnv(const char *s) {
     uint64_t h = 1469598103934665603ULL;
     for (; *s; s++) { h ^= (unsigned char)*s; h *= 1099511628211ULL; }
@@ -177,6 +184,8 @@ static void smap_init(StrMap *m) {
     m->cap = 1024; m->used = 0;
     m->keys = (char **)calloc(m->cap, sizeof(char *));
     m->vals = (char **)calloc(m->cap, sizeof(char *));
+    m->nums = (size_t *)calloc(m->cap, sizeof(size_t));
+    if (!m->keys || !m->vals || !m->nums) { fputs("sublimation: out of memory\n", stderr); exit(1); }
 }
 static size_t smap_slot(StrMap *m, const char *k) {
     size_t i = str_fnv(k) & (m->cap - 1);
@@ -185,25 +194,42 @@ static size_t smap_slot(StrMap *m, const char *k) {
 }
 static int smap_has(StrMap *m, const char *k) { return m->keys[smap_slot(m, k)] != NULL; }
 static const char *smap_get(StrMap *m, const char *k) { size_t i = smap_slot(m, k); return m->keys[i] ? m->vals[i] : NULL; }
-static void smap_put(StrMap *m, const char *k, const char *v) {
-    if ((m->used + 1) * 2 >= m->cap) {
-        size_t nc = m->cap * 2;
-        char **nk = (char **)calloc(nc, sizeof(char *));
-        char **nv = (char **)calloc(nc, sizeof(char *));
-        for (size_t j = 0; j < m->cap; j++) if (m->keys[j]) {
-            size_t p = str_fnv(m->keys[j]) & (nc - 1);
-            while (nk[p]) p = (p + 1) & (nc - 1);
-            nk[p] = m->keys[j]; nv[p] = m->vals[j];
-        }
-        free(m->keys); free(m->vals); m->keys = nk; m->vals = nv; m->cap = nc;
+static void smap_grow(StrMap *m) {
+    size_t nc = m->cap * 2;
+    char  **nk = (char **)calloc(nc, sizeof(char *));
+    char  **nv = (char **)calloc(nc, sizeof(char *));
+    size_t *nn = (size_t *)calloc(nc, sizeof(size_t));
+    if (!nk || !nv || !nn) { fputs("sublimation: out of memory\n", stderr); exit(1); }
+    for (size_t j = 0; j < m->cap; j++) if (m->keys[j]) {
+        size_t p = str_fnv(m->keys[j]) & (nc - 1);
+        while (nk[p]) p = (p + 1) & (nc - 1);
+        nk[p] = m->keys[j]; nv[p] = m->vals[j]; nn[p] = m->nums[j];
     }
+    free(m->keys); free(m->vals); free(m->nums);
+    m->keys = nk; m->vals = nv; m->nums = nn; m->cap = nc;
+}
+static void smap_put(StrMap *m, const char *k, const char *v) {
+    if ((m->used + 1) * 2 >= m->cap) smap_grow(m);
     size_t i = smap_slot(m, k);
     if (m->keys[i]) return;  // first value per key wins
     m->keys[i] = strdup(k); m->vals[i] = v ? strdup(v) : NULL; m->used++;
 }
+// Find-or-insert for the nums-payload users (group's key -> group id, tally's
+// key -> count): returns k's slot, strdup-inserting on first sight (nums[slot]
+// zeroed, *created = 1 when non-NULL). The SLOT is valid only until the next
+// insertion (grow relocates entries); the key STRING is stable for the map's
+// lifetime, so callers may share m->keys[slot] pointers long-term.
+static size_t smap_intern(StrMap *m, const char *k, int *created) {
+    if ((m->used + 1) * 2 >= m->cap) smap_grow(m);
+    size_t i = smap_slot(m, k);
+    if (m->keys[i]) { if (created) *created = 0; return i; }
+    m->keys[i] = strdup(k); m->nums[i] = 0; m->used++;
+    if (created) *created = 1;
+    return i;
+}
 static void smap_free(StrMap *m) {
     for (size_t i = 0; i < m->cap; i++) { free(m->keys[i]); free(m->vals[i]); }
-    free(m->keys); free(m->vals);
+    free(m->keys); free(m->vals); free(m->nums);
 }
 // Load a file's lines (newline-stripped) into a set/map; v != 0 stores the line.
 static int smap_load_file(StrMap *m, const char *path, int store_line) {
@@ -431,16 +457,20 @@ static int load_files_from(const char *list, char ***v, int *n, int *cap) {
 static char *fields_excluding(const char *line, size_t len, int field, const char *delim, char sep) {
     char *copy = (char *)malloc(len + 1);
     memcpy(copy, line, len); copy[len] = '\0';
-    char *out = (char *)malloc(len + 1); out[0] = '\0';
-    char *save = NULL; int col = 0; int first = 1;
-    char sepbuf[2] = {sep, '\0'};
+    // Built with a write pointer, single pass -- strcat-in-loop rescans the
+    // whole prefix per token, O(tokens^2) per line. Tokens plus separators
+    // never exceed the source length, so len + 1 bounds the output.
+    char *out = (char *)malloc(len + 1);
+    char *w = out;
+    char *save = NULL; int col = 0;
     for (char *tok = strtok_r(copy, delim, &save); tok; tok = strtok_r(NULL, delim, &save)) {
         col++;
         if (col == field) continue;
-        if (!first) strcat(out, sepbuf);
-        strcat(out, tok);
-        first = 0;
+        if (w != out) *w++ = sep;
+        size_t tl = strlen(tok);
+        memcpy(w, tok, tl); w += tl;
     }
+    *w = '\0';
     free(copy);
     return out;
 }
@@ -463,6 +493,46 @@ static const char *field_span(const char *line, size_t len, int field,
         if (++col == field) { *flen = i - start; return line + start; }
     }
     return NULL;
+}
+
+// stdin-or-files input walker shared by field and where (search keeps its own
+// richer loop): yields stdin once when no FILE was named, otherwise each named
+// file in turn. An unopenable file reports cannot-open and flags had_error,
+// which the callers turn into exit 2 -- the IO half of the exit contract.
+typedef struct { const char **files; int nfiles, next, had_error; FILE *in; const char *fname; } InputIter;
+static int input_next(InputIter *it) {
+    if (it->in && it->in != stdin) { fclose(it->in); it->in = NULL; }
+    if (it->nfiles == 0) {
+        if (it->next++) return 0;
+        it->in = stdin; it->fname = NULL;
+        return 1;
+    }
+    while (it->next < it->nfiles) {
+        it->fname = it->files[it->next++];
+        it->in = fopen(it->fname, "r");
+        if (it->in) return 1;
+        fprintf(stderr, "sublimation: cannot open '%s'\n", it->fname);
+        it->had_error = 1;
+    }
+    return 0;
+}
+
+// Single optional FILE input for the coreutils-shaped text verbs (uniq, tac,
+// head, tail, cut, column, paste -- each of whose real counterpart reads a
+// named FILE): stdin by default, the one named FILE otherwise. A second
+// positional is a usage error and an unopenable FILE an IO error, both exit 2
+// per the contract in usage(). exit() is safe here: the atexit sink drain
+// covers it and nothing has been emitted yet when inputs are being opened.
+static FILE *open_single_input(const char *cmd, const char *path, const char *extra) {
+    if (extra) {
+        fprintf(stderr, "sublimation: %s takes at most one FILE; '%s' is an "
+                "unexpected argument\n", cmd, extra);
+        exit(2);
+    }
+    if (!path) return stdin;
+    FILE *f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "sublimation: cannot open '%s'\n", path); exit(2); }
+    return f;
 }
 
 // Read stdin into `out`, parsing one double per line (or per --field column).
@@ -513,6 +583,35 @@ int main(int argc, char **argv) {
     montauk_sink_init(&g_out, 1);
     atexit(drain_out);
 
+    // version: sourced ONLY from the header macros -- the one version story.
+    // The CLI has no version of its own; it reports the library it fronts.
+    if (!strcmp(cmd, "version") || !strcmp(cmd, "--version")) {
+        montauk_sink_appendf(&g_out, "sublimation %s (abi %d)\n",
+                             SUBLIMATION_VERSION_STRING, SUBLIMATION_API_VERSION);
+        return 0;
+    }
+
+    // Verb existence is diagnosed BEFORE any stdin read: `sublimation typo`
+    // must say "unknown command", not drain the pipe and then complain about
+    // its contents (the old order reached the check only after read_values,
+    // so `sublimation --version </dev/null` died with "no numeric values").
+    static const char *verbs[] = {
+        "sort", "quantile", "select", "searchsorted", "sum", "mean", "stdev",
+        "variance", "min", "max", "describe", "outliers", "histogram", "count",
+        "head", "tail", "distinct", "tally", "classify", "locate", "rand",
+        "characterize", "search", "replace", "field", "where", "group", "uniq",
+        "cut", "column", "tac", "paste", "intersect", "subtract", "union",
+        "join",
+    };
+    int known_cmd = 0;
+    for (size_t vi = 0; vi < sizeof verbs / sizeof verbs[0]; vi++)
+        if (!strcmp(cmd, verbs[vi])) { known_cmd = 1; break; }
+    if (!known_cmd) {
+        fprintf(stderr, "sublimation: unknown command '%s'\n\n", cmd);
+        usage(stderr);
+        return 2;
+    }
+
     int field = 0;
     const char *delim = " \t";
     int delim_set = 0;  // true once --delim is explicitly given (join's output separator cares)
@@ -546,7 +645,14 @@ int main(int argc, char **argv) {
     const char *pos = NULL;  // positional arg (Q / K / V / CLASS / N)
     const char *files[256];  // grep/contains/field: input files after the pattern
     int nfiles = 0;          // 0 -> read stdin (the pipe case)
-    int is_search = !strcmp(cmd, "search");  // several short flags are verb-scoped (see the bundle switch)
+    // Short flags are verb-scoped (see the bundle switch): search owns grep's
+    // letters, uniq/paste/replace keep exactly their documented ones, every
+    // other verb+short-flag pair is an error rather than a silent no-op
+    // (`field 1 -v -q -F` used to exit 0 having ignored all three).
+    int is_search  = !strcmp(cmd, "search");
+    int is_uniq    = !strcmp(cmd, "uniq");
+    int is_paste   = !strcmp(cmd, "paste");
+    int is_replace = !strcmp(cmd, "replace");
 
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i];
@@ -567,11 +673,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--values")) values = 1;    // locate: emit data, not window ranges
         else if (!strcmp(a, "--words")) count_words = 1;  // count: word count -- wc -w
         else if (!strcmp(a, "--bytes")) count_bytes = 1;  // count: byte count -- wc -c
-        else if (!strcmp(a, "-m") && i + 1 < argc) max_count = strtol(argv[++i], NULL, 10);  // search -m N
-        else if (!strcmp(a, "-k") && i + 1 < argc) kval = strtol(argv[++i], NULL, 10);       // search -k N (fuzzy)
-        else if (!strcmp(a, "-A") && i + 1 < argc) ctx_after = strtol(argv[++i], NULL, 10);   // grep -A N
-        else if (!strcmp(a, "-B") && i + 1 < argc) ctx_before = strtol(argv[++i], NULL, 10);  // grep -B N
-        else if (!strcmp(a, "-C") && i + 1 < argc) ctx_after = ctx_before = strtol(argv[++i], NULL, 10);  // grep -C N
+        else if (is_search && !strcmp(a, "-m") && i + 1 < argc) max_count = strtol(argv[++i], NULL, 10);  // search -m N
+        else if (is_search && !strcmp(a, "-k") && i + 1 < argc) kval = strtol(argv[++i], NULL, 10);       // search -k N (fuzzy)
+        else if (is_search && !strcmp(a, "-A") && i + 1 < argc) ctx_after = strtol(argv[++i], NULL, 10);   // grep -A N
+        else if (is_search && !strcmp(a, "-B") && i + 1 < argc) ctx_before = strtol(argv[++i], NULL, 10);  // grep -B N
+        else if (is_search && !strcmp(a, "-C") && i + 1 < argc) ctx_after = ctx_before = strtol(argv[++i], NULL, 10);  // grep -C N
         else if (is_search && !strcmp(a, "-e") && i + 1 < argc) {                             // grep -e PAT (repeatable)
             if (nepat >= 256) { fprintf(stderr, "sublimation: too many -e patterns\n"); return 2; }
             epats[nepat++] = argv[++i];
@@ -594,13 +700,16 @@ int main(int argc, char **argv) {
         else if (is_search && !strcmp(a, "--files-from") && i + 1 < argc) files_from = argv[++i];
         else if (a[0] == '-' && a[1] && a[1] != '-') {
             // Bundled short flags, getopt-style: -iE == -i -E, -vn == -v -n. Each
-            // char is one boolean grep flag. -E (extended regex) is a no-op:
+            // char is one boolean flag. -E (extended regex) is a no-op:
             // sublimation's NFA is already RE2-lineage ERE, so it is accepted for
             // grep compatibility rather than switching dialects.
-            // The letter set is verb-scoped: search owns grep's letters (-s is
-            // "silence open errors" there, -d/-u are unknown), everyone else
-            // keeps uniq's -d/-u and paste's -s. Same byte, different verb,
-            // different meaning -- scoping is what keeps both correct.
+            // The letter set is verb-scoped BY FAMILY: search owns grep's letters
+            // (-s is "silence open errors" there, -d/-u are unknown), uniq keeps
+            // -d/-u/-i, paste keeps -s, replace keeps -i, and no other verb owns
+            // any short boolean flag. Same byte, different verb, different
+            // meaning -- and a flag outside its family is an ERROR, because a
+            // silently accepted-and-ignored flag (`field 1 -v -q -F` exiting 0)
+            // is the silent-misfire shape the wrappers must never route through.
             for (const char *f = a + 1; *f; f++) {
                 int known = 1;
                 if (is_search) {
@@ -625,24 +734,28 @@ int main(int argc, char **argv) {
                         case 'S': smartcase = 1; break;    // smart case (ripgrep-ism): -i unless a pattern has an uppercase letter
                         default: known = 0; break;
                     }
-                } else {
+                } else if (is_uniq) {
                     switch (*f) {
-                        case 'v': invert = 1; break;
-                        case 'c': count_only = 1; break;
-                        case 'n': number = 1; break;
-                        case 'i': icase = 1; break;
-                        case 'o': only_match = 1; break;
-                        case 'q': quiet = 1; break;
-                        case 'F': fixed = 1; break;
-                        case 'E': break;
                         case 'd': uniq_d = 1; break;       // uniq -d: only duplicated lines
                         case 'u': uniq_u = 1; break;       // uniq -u: only unique lines
+                        case 'i': icase = 1; break;        // uniq -i: case-fold the compare
+                        default: known = 0; break;
+                    }
+                } else if (is_paste) {
+                    switch (*f) {
                         case 's': serial = 1; break;       // paste -s: serialize lines into one
                         default: known = 0; break;
                     }
+                } else if (is_replace) {
+                    switch (*f) {
+                        case 'i': icase = 1; break;        // replace -i: case-insensitive pattern
+                        default: known = 0; break;
+                    }
+                } else {
+                    known = 0;   // no other verb owns any short boolean flag
                 }
                 if (!known) {
-                    fprintf(stderr, "sublimation: unknown option '-%c'\n", *f);
+                    fprintf(stderr, "sublimation: unknown option '-%c' for %s\n", *f, cmd);
                     return 2;
                 }
             }
@@ -1046,14 +1159,10 @@ int main(int argc, char **argv) {
         char *line = NULL;
         size_t cap = 0;
         ssize_t len;
-        long printed = 0;
-        for (int fi = 0; nfiles == 0 ? fi < 1 : fi < nfiles; fi++) {
-            FILE *in = stdin;
-            if (nfiles > 0) {
-                in = fopen(files[fi], "r");
-                if (!in) { fprintf(stderr, "sublimation: cannot open '%s'\n", files[fi]); continue; }
-            }
-            while ((len = getline(&line, &cap, in)) != -1) {
+        long printed = 0;   // lines whose projection was non-empty (the exit-code source)
+        InputIter it = { files, nfiles, 0, 0, NULL, NULL };
+        while (input_next(&it)) {
+            while ((len = getline(&line, &cap, it.in)) != -1) {
                 size_t mlen = (size_t)len;
                 if (mlen && line[mlen - 1] == '\n') mlen--;
                 // awk-exact: capture the requested column(s), print them joined by a
@@ -1074,17 +1183,21 @@ int main(int argc, char **argv) {
                     for (int k = 0; k < ncol; k++)
                         if (cols[k] == f) { got[k] = line + start; gotlen[k] = i - start; }
                 }
+                int nonempty = 0;
                 for (int k = 0; k < ncol; k++) {
                     if (k) montauk_sink_appendc(&g_out, ' ');
-                    if (got[k]) montauk_sink_append(&g_out, got[k], gotlen[k]);
+                    if (got[k]) { montauk_sink_append(&g_out, got[k], gotlen[k]); nonempty = 1; }
                 }
                 montauk_sink_appendc(&g_out, '\n');
                 if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);  // bound memory
-                printed++;
+                // Only a line that actually yielded a column counts toward exit
+                // 0 -- counting every input line made usage()'s "1 when nothing
+                // matched" unreachable (`field 9` on 2-column input exited 0).
+                if (nonempty) printed++;
             }
-            if (in != stdin) fclose(in);
         }
         free(line);
+        if (it.had_error) return 2;   // unreadable FILE: IO error, like search
         return printed ? 0 : 1;
     }
 
@@ -1126,15 +1239,9 @@ int main(int argc, char **argv) {
         ssize_t len;
         long matches = 0;
         int multi = nfiles > 1;
-        for (int fi = 0; nfiles == 0 ? fi < 1 : fi < nfiles; fi++) {
-            FILE *in = stdin;
-            const char *fname = NULL;
-            if (nfiles > 0) {
-                fname = files[fi];
-                in = fopen(fname, "r");
-                if (!in) { fprintf(stderr, "sublimation: cannot open '%s'\n", fname); continue; }
-            }
-            while ((len = getline(&line, &cap, in)) != -1) {
+        InputIter it = { files, nfiles, 0, 0, NULL, NULL };
+        while (input_next(&it)) {
+            while ((len = getline(&line, &cap, it.in)) != -1) {
                 size_t flen;
                 const char *tok = field_span(line, (size_t)len, (int)col, delim, &flen);
                 double x = tok ? strtod(tok, NULL) : 0.0;  // missing / non-numeric -> 0
@@ -1149,13 +1256,13 @@ int main(int argc, char **argv) {
                 }
                 if (keep) {
                     matches++;
-                    if (multi) montauk_sink_appendf(&g_out, "%s:", fname);
+                    if (multi) montauk_sink_appendf(&g_out, "%s:", it.fname);
                     montauk_sink_append(&g_out, line, (size_t)len);
                 }
             }
-            if (in != stdin) fclose(in);
         }
         free(line);
+        if (it.had_error) return 2;   // unreadable FILE: IO error, like search
         return matches ? 0 : 1;
     }
 
@@ -1185,18 +1292,21 @@ int main(int argc, char **argv) {
             fputs("sublimation: group KEY/VAL fields are 1-based\n", stderr);
             return 2;
         }
+        if (nfiles > 2) {  // KEY OP [VAL] consumed; anything further is a mistake
+            fprintf(stderr, "sublimation: group reads stdin; '%s' is an "
+                    "unexpected argument\n", files[2]);
+            return 2;
+        }
 
-        size_t hcap = 1024;
-        char   **hkey = (char **)calloc(hcap, sizeof(char *));  // hash: key ptr
-        size_t *hgid  = (size_t *)calloc(hcap, sizeof(size_t)); // hash: group id + 1 (0 = empty)
+        StrMap km; smap_init(&km);                              // key -> dense group id (nums)
         size_t gcap = 256, gn = 0;                              // dense per-group state
-        char   **gkey = (char **)malloc(gcap * sizeof(char *));
+        char   **gkey = (char **)malloc(gcap * sizeof(char *)); // shares km's key strings
         size_t *grows = (size_t *)malloc(gcap * sizeof(size_t));
         size_t *gnval = (size_t *)malloc(gcap * sizeof(size_t));
         double *gsum  = (double *)malloc(gcap * sizeof(double));
         double *gmin  = (double *)malloc(gcap * sizeof(double));
         double *gmax  = (double *)malloc(gcap * sizeof(double));
-        if (!hkey || !hgid || !gkey || !grows || !gnval || !gsum || !gmin || !gmax) {
+        if (!gkey || !grows || !gnval || !gsum || !gmin || !gmax) {
             fputs("sublimation: out of memory\n", stderr); return 1;
         }
 
@@ -1214,28 +1324,11 @@ int main(int argc, char **argv) {
             // Null-terminate the key field in place for the hash/strcmp/strdup
             // below; group emits aggregates, not the original line, so this is safe.
             char *ktok = (char *)kspan; ktok[klen] = '\0';
-            if ((gn + 1) * 2 >= hcap) {  // grow hash at 50% load, re-insert
-                size_t ncap = hcap * 2;
-                char  **nk = (char **)calloc(ncap, sizeof(char *));
-                size_t *ng = (size_t *)calloc(ncap, sizeof(size_t));
-                if (!nk || !ng) { fputs("sublimation: out of memory\n", stderr); return 1; }
-                for (size_t j = 0; j < hcap; j++) {
-                    if (!hgid[j]) continue;
-                    uint64_t hh = 1469598103934665603ULL;
-                    for (const char *p = hkey[j]; *p; p++) { hh ^= (unsigned char)*p; hh *= 1099511628211ULL; }
-                    size_t q = (size_t)hh & (ncap - 1);
-                    while (nk[q]) q = (q + 1) & (ncap - 1);
-                    nk[q] = hkey[j]; ng[q] = hgid[j];
-                }
-                free(hkey); free(hgid); hkey = nk; hgid = ng; hcap = ncap;
-            }
-            uint64_t h = 1469598103934665603ULL;
-            for (const char *p = ktok; *p; p++) { h ^= (unsigned char)*p; h *= 1099511628211ULL; }
-            size_t i = (size_t)h & (hcap - 1);
-            while (hgid[i] && strcmp(hkey[i], ktok) != 0) i = (i + 1) & (hcap - 1);
+            int created = 0;
+            size_t slot = smap_intern(&km, ktok, &created);  // the one hash implementation
             size_t gid;
-            if (hgid[i]) {
-                gid = hgid[i] - 1;
+            if (!created) {
+                gid = km.nums[slot];
             } else {
                 if (gn == gcap) {  // grow dense arrays (the strings they point to do not move)
                     gcap *= 2;
@@ -1250,9 +1343,9 @@ int main(int argc, char **argv) {
                     }
                 }
                 gid = gn++;
-                gkey[gid] = strdup(ktok);
+                gkey[gid] = km.keys[slot];   // the map's strdup'd key, stable across grows
                 grows[gid] = 0; gnval[gid] = 0; gsum[gid] = 0.0; gmin[gid] = 0.0; gmax[gid] = 0.0;
-                hkey[i] = gkey[gid]; hgid[i] = gid + 1;
+                km.nums[slot] = gid;
             }
             grows[gid]++;
             if (have_val) {
@@ -1272,17 +1365,19 @@ int main(int argc, char **argv) {
             else                          montauk_sink_appendf(&g_out, "%s %.12g\n", gkey[g], gmax[g]);
             if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
         }
-        for (size_t g = 0; g < gn; g++) free(gkey[g]);
-        free(hkey); free(hgid); free(gkey); free(grows); free(gnval); free(gsum); free(gmin); free(gmax);
+        smap_free(&km);   // owns (and frees) the key strings gkey shares
+        free(gkey); free(grows); free(gnval); free(gsum); free(gmin); free(gmax);
         return 0;
     }
 
     // uniq: collapse ADJACENT equal lines (sort first for a global dedup). -d emits
-    // only lines that repeated, -u only lines that did not.
+    // only lines that repeated, -u only lines that did not. stdin or one FILE,
+    // like real uniq's INPUT argument.
     if (!strcmp(cmd, "uniq")) {
+        FILE *in = open_single_input(cmd, pos, nfiles ? files[0] : NULL);
         char *line = NULL, *prev = NULL; size_t lcap = 0, pcap = 0, plen = 0; ssize_t len;
         int have_prev = 0; long run = 0;
-        while ((len = getline(&line, &lcap, stdin)) != -1) {
+        while ((len = getline(&line, &lcap, in)) != -1) {
             size_t l = (len > 0 && line[len - 1] == '\n') ? (size_t)len - 1 : (size_t)len;
             // -i (shared with grep/contains' icase flag): fold ASCII case for the
             // adjacent-duplicate comparison only -- the emitted line keeps its
@@ -1299,19 +1394,23 @@ int main(int argc, char **argv) {
             int show = uniq_d ? (run > 1) : uniq_u ? (run == 1) : 1;
             if (show) { montauk_sink_append(&g_out, prev, plen); montauk_sink_appendc(&g_out, '\n'); }
         }
+        if (in != stdin) fclose(in);
         free(line); free(prev);
         return 0;
     }
 
     // tac: reverse line (arrival) order -- distinct from sort --desc (sorted order).
+    // stdin or one FILE, like real tac's FILE argument.
     if (!strcmp(cmd, "tac")) {
+        FILE *in = open_single_input(cmd, pos, nfiles ? files[0] : NULL);
         char **buf = NULL; size_t bn = 0, bcap = 0;
         char *line = NULL; size_t lcap = 0; ssize_t len;
-        while ((len = getline(&line, &lcap, stdin)) != -1) {
+        while ((len = getline(&line, &lcap, in)) != -1) {
             if (bn == bcap) { bcap = bcap ? bcap * 2 : 1024; buf = (char **)realloc(buf, bcap * sizeof(char *)); }
             buf[bn] = (char *)malloc((size_t)len + 1);
             memcpy(buf[bn], line, (size_t)len); buf[bn][len] = '\0'; bn++;
         }
+        if (in != stdin) fclose(in);
         free(line);
         for (size_t i = bn; i-- > 0;) {
             size_t l = strlen(buf[i]);
@@ -1333,10 +1432,12 @@ int main(int argc, char **argv) {
         if (!pos) { fprintf(stderr, "sublimation: %s needs a count -- e.g. '%s 10'\n", cmd, cmd); return 2; }
         long n = strtol(pos, NULL, 10);
         if (n <= 0) { fputs("sublimation: count must be a positive integer\n", stderr); return 2; }
+        // stdin or one FILE after the count, like real head/tail's -N FILE.
+        FILE *in = open_single_input(cmd, nfiles ? files[0] : NULL, nfiles > 1 ? files[1] : NULL);
         char *line = NULL; size_t lcap = 0; ssize_t len;
         if (!strcmp(cmd, "head")) {
             long shown = 0;
-            while (shown < n && (len = getline(&line, &lcap, stdin)) != -1) {
+            while (shown < n && (len = getline(&line, &lcap, in)) != -1) {
                 montauk_sink_append(&g_out, line, (size_t)len);
                 shown++;
                 if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
@@ -1345,7 +1446,7 @@ int main(int argc, char **argv) {
             typedef struct { char *data; size_t len; } RingLine;
             RingLine *ring = (RingLine *)calloc((size_t)n, sizeof(RingLine));
             size_t count = 0, next = 0;  // next = slot to write, wraps once full (oldest overwritten)
-            while ((len = getline(&line, &lcap, stdin)) != -1) {
+            while ((len = getline(&line, &lcap, in)) != -1) {
                 free(ring[next].data);
                 ring[next].data = (char *)malloc((size_t)len);
                 memcpy(ring[next].data, line, (size_t)len);
@@ -1361,12 +1462,14 @@ int main(int argc, char **argv) {
             }
             free(ring);
         }
+        if (in != stdin) fclose(in);
         free(line);
         return 0;
     }
 
     // cut: character columns (cut -c). RANGE is 1-based inclusive: "N", "lo-hi",
     // "lo-", "-hi". field/where own delimiter columns; this is the char-range gap.
+    // stdin or one FILE after the range, like real cut -c RANGE FILE.
     if (!strcmp(cmd, "cut")) {
         if (!pos) { fputs("sublimation: cut needs a char range -- e.g. 'cut 1-5'\n", stderr); return 2; }
         long clo = 1, chi = -1;  // chi = -1 means "to end of line"
@@ -1374,8 +1477,9 @@ int main(int argc, char **argv) {
         if (!dash) { clo = chi = atol(pos); }
         else { clo = (dash == pos) ? 1 : atol(pos); chi = *(dash + 1) ? atol(dash + 1) : -1; }
         if (clo < 1) clo = 1;
+        FILE *in = open_single_input(cmd, nfiles ? files[0] : NULL, nfiles > 1 ? files[1] : NULL);
         char *line = NULL; size_t lcap = 0; ssize_t len;
-        while ((len = getline(&line, &lcap, stdin)) != -1) {
+        while ((len = getline(&line, &lcap, in)) != -1) {
             size_t l = (len > 0 && line[len - 1] == '\n') ? (size_t)len - 1 : (size_t)len;
             size_t a = (size_t)clo - 1;
             size_t b = (chi < 0) ? l : (size_t)chi;
@@ -1384,17 +1488,20 @@ int main(int argc, char **argv) {
             montauk_sink_appendc(&g_out, '\n');
             if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
         }
+        if (in != stdin) fclose(in);
         free(line);
         return 0;
     }
 
     // column: align delim/whitespace-separated input into columns (column -t).
-    // Buffers the input to compute per-column widths.
+    // Buffers the input to compute per-column widths. stdin or one FILE, like
+    // real column -t FILE.
     if (!strcmp(cmd, "column")) {
+        FILE *in = open_single_input(cmd, pos, nfiles ? files[0] : NULL);
         char **lines = NULL; size_t ln = 0, lcapn = 0;
         char *line = NULL; size_t lcap = 0; ssize_t len;
         size_t *maxw = NULL; size_t maxw_cap = 0;
-        while ((len = getline(&line, &lcap, stdin)) != -1) {
+        while ((len = getline(&line, &lcap, in)) != -1) {
             size_t l = (len > 0 && line[len - 1] == '\n') ? (size_t)len - 1 : (size_t)len;
             char *s = (char *)malloc(l + 1); memcpy(s, line, l); s[l] = '\0';
             if (ln == lcapn) { lcapn = lcapn ? lcapn * 2 : 256; lines = (char **)realloc(lines, lcapn * sizeof(char *)); }
@@ -1417,6 +1524,7 @@ int main(int argc, char **argv) {
             }
             free(tmp);
         }
+        if (in != stdin) fclose(in);
         free(line);
         for (size_t i = 0; i < ln; i++) {
             size_t tl = strlen(lines[i]);
@@ -1444,15 +1552,18 @@ int main(int argc, char **argv) {
     }
 
     // paste: -s serializes all input lines into ONE tab-joined line. (Side-by-side
-    // multi-file paste is the join/set-ops two-stream lane.)
+    // multi-file paste is the join/set-ops two-stream lane.) stdin or one FILE,
+    // like real paste -s FILE.
     if (!strcmp(cmd, "paste")) {
+        FILE *in = open_single_input(cmd, pos, nfiles ? files[0] : NULL);
         char *line = NULL; size_t lcap = 0; ssize_t len; int first = 1;
-        while ((len = getline(&line, &lcap, stdin)) != -1) {
+        while ((len = getline(&line, &lcap, in)) != -1) {
             size_t l = (len > 0 && line[len - 1] == '\n') ? (size_t)len - 1 : (size_t)len;
             if (serial) { if (!first) montauk_sink_appendc(&g_out, '\t'); montauk_sink_append(&g_out, line, l); first = 0; }
             else { montauk_sink_append(&g_out, line, l); montauk_sink_appendc(&g_out, '\n'); }
         }
         if (serial && !first) montauk_sink_appendc(&g_out, '\n');
+        if (in != stdin) fclose(in);
         free(line);
         return 0;
     }
@@ -1462,9 +1573,16 @@ int main(int argc, char **argv) {
     // is stdin's first-seen order, deduped (union appends FILE-only lines after).
     if (!strcmp(cmd, "intersect") || !strcmp(cmd, "subtract") || !strcmp(cmd, "union")) {
         if (!pos) { fprintf(stderr, "sublimation: %s needs a FILE -- e.g. '%s other.txt'\n", cmd, cmd); return 2; }
+        if (nfiles > 0) {  // one FILE only: the other stream is stdin by design
+            fprintf(stderr, "sublimation: %s takes one FILE; '%s' is an "
+                    "unexpected argument\n", cmd, files[0]);
+            return 2;
+        }
         StrMap fileset; smap_init(&fileset);
         if (smap_load_file(&fileset, pos, 0) != 0) {
-            fprintf(stderr, "sublimation: cannot open '%s'\n", pos); smap_free(&fileset); return 1;
+            // IO error is exit 2 (the contract in usage()), not 1 -- 1 is
+            // reserved for "ran fine, nothing matched/produced".
+            fprintf(stderr, "sublimation: cannot open '%s'\n", pos); smap_free(&fileset); return 2;
         }
         StrMap emitted; smap_init(&emitted);
         int is_inter = !strcmp(cmd, "intersect"), is_sub = !strcmp(cmd, "subtract");
@@ -1495,6 +1613,11 @@ int main(int argc, char **argv) {
     // look up its FIELD token in FILE's (token -> line) map; emit the matched pair.
     if (!strcmp(cmd, "join")) {
         if (!pos || nfiles < 1) { fputs("sublimation: join needs FIELD FILE -- e.g. 'join 1 other.txt'\n", stderr); return 2; }
+        if (nfiles > 1) {  // FIELD FILE consumed; anything further is a mistake
+            fprintf(stderr, "sublimation: join takes FIELD FILE; '%s' is an "
+                    "unexpected argument\n", files[1]);
+            return 2;
+        }
         int jf = atoi(pos); if (jf < 1) { fputs("sublimation: join FIELD is 1-based\n", stderr); return 2; }
         // Real join -tCHAR uses CHAR for both input parsing and output joining;
         // with no -t, parsing is any blank run but output is always a plain
@@ -1503,7 +1626,7 @@ int main(int argc, char **argv) {
         char sep = delim_set ? delim[0] : ' ';
         StrMap fm; smap_init(&fm);
         FILE *ff = fopen(files[0], "r");
-        if (!ff) { fprintf(stderr, "sublimation: cannot open '%s'\n", files[0]); smap_free(&fm); return 1; }
+        if (!ff) { fprintf(stderr, "sublimation: cannot open '%s'\n", files[0]); smap_free(&fm); return 2; }  // IO error, per the contract
         char *fl = NULL; size_t flc = 0; ssize_t fll;
         while ((fll = getline(&fl, &flc, ff)) != -1) {
             size_t l = (fll > 0 && fl[fll - 1] == '\n') ? (size_t)fll - 1 : (size_t)fll;
@@ -1550,6 +1673,11 @@ int main(int argc, char **argv) {
     // is literal here; capture-group backreferences (\1) are the deferred extension.
     if (!strcmp(cmd, "replace")) {
         if (!pos || nfiles < 1) { fputs("sublimation: replace needs PATTERN REPLACEMENT -- e.g. 'replace foo bar'\n", stderr); return 2; }
+        if (nfiles > 1) {  // PATTERN REPLACEMENT consumed; replace reads stdin
+            fprintf(stderr, "sublimation: replace reads stdin; '%s' is an "
+                    "unexpected argument\n", files[1]);
+            return 2;
+        }
         const char *repl = files[0]; size_t rlen = strlen(repl);
         sublimation_search srch;
         sublimation_search_compile(&srch, pos, strlen(pos), icase ? SUBLIMATION_SEARCH_ICASE : 0u, 0);
@@ -1578,9 +1706,18 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // Numeric/structural commands read stdin only; a leftover file argument here
-    // is a mistake (grep/contains/field consumed theirs above). Error rather than
-    // silently reading stdin and ignoring the path.
+    // Numeric/structural commands read stdin only; a leftover positional here
+    // is a mistake (the text verbs consumed theirs above). Error rather than
+    // silently reading stdin and ignoring the path: `sublimation sum data.txt`
+    // reporting a confident number about the PIPE is the silent-wrong-answer
+    // shape. Of the verbs that reach this point, only quantile / select /
+    // searchsorted / locate consume a positional (Q / K / V / CLASS).
+    if (pos && strcmp(cmd, "quantile") && strcmp(cmd, "select") &&
+        strcmp(cmd, "searchsorted") && strcmp(cmd, "locate")) {
+        fprintf(stderr, "sublimation: %s reads stdin; '%s' is an unexpected "
+                "argument\n", cmd, pos);
+        return 2;
+    }
     if (nfiles > 0) {
         fprintf(stderr, "sublimation: %s reads stdin; '%s' is an unexpected "
                 "argument\n", cmd, files[0]);
@@ -1593,10 +1730,7 @@ int main(int argc, char **argv) {
     // those tools see them). Grouping is a single-pass open-addressing hash;
     // tally orders the counts through the in-tree u64 sort.
     if (!strcmp(cmd, "tally") || !strcmp(cmd, "distinct")) {
-        size_t hcap = 1024, used = 0;
-        char  **keys = (char **)calloc(hcap, sizeof(char *));
-        size_t *cnts = (size_t *)calloc(hcap, sizeof(size_t));
-        if (!keys || !cnts) { fputs("sublimation: out of memory\n", stderr); return 1; }
+        StrMap tm; smap_init(&tm);   // token -> count (nums payload)
         char *line = NULL; size_t lcap = 0; ssize_t len;
         while ((len = getline(&line, &lcap, stdin)) != -1) {
             if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
@@ -1607,51 +1741,30 @@ int main(int argc, char **argv) {
                 char *p = (char *)sp; p[flen] = '\0';  // in place; tally emits keys, not the line
                 tok = p;
             }
-            if ((used + 1) * 2 >= hcap) {  // grow at 50% load
-                size_t ncap = hcap * 2;
-                char  **nk = (char **)calloc(ncap, sizeof(char *));
-                size_t *nc = (size_t *)calloc(ncap, sizeof(size_t));
-                if (!nk || !nc) { fputs("sublimation: out of memory\n", stderr); return 1; }
-                for (size_t i = 0; i < hcap; i++) {
-                    if (!keys[i]) continue;
-                    uint64_t h = 1469598103934665603ULL;
-                    for (const char *p = keys[i]; *p; p++) { h ^= (unsigned char)*p; h *= 1099511628211ULL; }
-                    size_t j = (size_t)h & (ncap - 1);
-                    while (nk[j]) j = (j + 1) & (ncap - 1);
-                    nk[j] = keys[i]; nc[j] = cnts[i];
-                }
-                free(keys); free(cnts); keys = nk; cnts = nc; hcap = ncap;
-            }
-            uint64_t h = 1469598103934665603ULL;
-            for (const char *p = tok; *p; p++) { h ^= (unsigned char)*p; h *= 1099511628211ULL; }
-            size_t i = (size_t)h & (hcap - 1);
-            while (keys[i] && strcmp(keys[i], tok) != 0) i = (i + 1) & (hcap - 1);
-            if (keys[i]) cnts[i]++;
-            else { keys[i] = strdup(tok); cnts[i] = 1; used++; }
+            tm.nums[smap_intern(&tm, tok, NULL)]++;   // the one hash implementation
         }
         free(line);
 
         if (!strcmp(cmd, "distinct")) {
-            montauk_sink_appendf(&g_out, "%zu\n", used);
-        } else if (used > 0) {
+            montauk_sink_appendf(&g_out, "%zu\n", tm.used);
+        } else if (tm.used > 0) {
             // Compact to dense (key,count); order by count desc through the u64
             // sort. pack = (count << 32) | dense_index -- both fit a line stream.
-            char    **dk     = (char **)malloc(used * sizeof(char *));
-            uint64_t *packed = (uint64_t *)malloc(used * sizeof(uint64_t));
+            char    **dk     = (char **)malloc(tm.used * sizeof(char *));
+            uint64_t *packed = (uint64_t *)malloc(tm.used * sizeof(uint64_t));
             if (!dk || !packed) { fputs("sublimation: out of memory\n", stderr); return 1; }
             size_t d = 0;
-            for (size_t i = 0; i < hcap; i++)
-                if (keys[i]) { dk[d] = keys[i]; packed[d] = ((uint64_t)cnts[i] << 32) | (uint64_t)d; d++; }
-            sublimation_u64(packed, used);             // ascending
-            for (size_t i = used; i-- > 0;) {          // descending = highest count first
+            for (size_t i = 0; i < tm.cap; i++)
+                if (tm.keys[i]) { dk[d] = tm.keys[i]; packed[d] = ((uint64_t)tm.nums[i] << 32) | (uint64_t)d; d++; }
+            sublimation_u64(packed, tm.used);          // ascending
+            for (size_t i = tm.used; i-- > 0;) {       // descending = highest count first
                 unsigned long long count = (unsigned long long)(packed[i] >> 32);
                 size_t idx = (size_t)(packed[i] & 0xFFFFFFFFULL);
                 montauk_sink_appendf(&g_out, "%llu %s\n", count, dk[idx]);
             }
             free(dk); free(packed);
         }
-        for (size_t i = 0; i < hcap; i++) free(keys[i]);
-        free(keys); free(cnts);
+        smap_free(&tm);
         return 0;
     }
 
@@ -1965,6 +2078,9 @@ int main(int argc, char **argv) {
         montauk_sink_appendc(&g_out, '\n');
 
     } else {
+        // Unreachable while the verbs[] table up top matches the dispatch --
+        // unknown commands are rejected before any stdin read. Kept as the
+        // exhaustiveness backstop should the two ever drift.
         fprintf(stderr, "sublimation: unknown command '%s'\n\n", cmd);
         usage(stderr);
         free(data.v);

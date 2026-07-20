@@ -34,13 +34,6 @@ std::string format_pct_digits(double pct) {
   return oss.str();
 }
 
-widget::Style severity_to_style(int severity) {
-  const auto& uic = ui_config();
-  if (severity >= 2) return widget::parse_sgr_style(uic.warning);
-  if (severity >= 1) return widget::parse_sgr_style(uic.caution);
-  return widget::Style{};
-}
-
 void draw_command_classified(widget::Canvas& canvas, int x, int y,
                              int max_width, std::string_view cmd,
                              const UIConfig& ui, int row_severity) {
@@ -53,7 +46,7 @@ void draw_command_classified(widget::Canvas& canvas, int x, int y,
   }();
   const widget::Style muted_style  = widget::parse_sgr_style(ui.muted);
   const widget::Style binary_style = widget::parse_sgr_style(ui.binary);
-  const widget::Style row_style    = severity_to_style(row_severity);
+  const widget::Style row_style    = severity_style(row_severity);
 
   if (row_severity > 0) {
     canvas.draw_text(x, y, cmd.substr(0, std::min<size_t>(cmd.size(), max_width)), row_style);
@@ -188,15 +181,20 @@ void ProcessTable::render(widget::Canvas& canvas,
     return (cpu_scale_ == CPUScale::Total) ? (raw / static_cast<double>(ncpu)) : raw;
   };
 
-  // 1. Smooth + sort + filter.
+  // 1. Smooth + sort + filter. Each process is smoothed exactly once per
+  // frame; the smoothed value is carried through to render via `sm` so the
+  // rendered CPU% always matches the sort key.
   std::vector<size_t> order(s.procs.processes.size());
   std::iota(order.begin(), order.end(), 0);
   std::vector<double> sm(order.size(), 0.0);
-  for (size_t i = 0; i < order.size(); ++i) {
-    const auto& p = s.procs.processes[i];
-    sm[i] = montauk::ui::smooth_value(
-        std::string("proc.cpu.") + std::to_string(p.pid),
-        scale_proc_cpu(p.cpu_pct), 0.35);
+  {
+    std::string key;
+    for (size_t i = 0; i < order.size(); ++i) {
+      const auto& p = s.procs.processes[i];
+      key.assign("proc.cpu.");
+      key += std::to_string(p.pid);
+      sm[i] = montauk::ui::smooth_value(key, scale_proc_cpu(p.cpu_pct), 0.35);
+    }
   }
 
   // Sort via sublimation (montauk's only sort backend). Build a uint32_t
@@ -261,10 +259,10 @@ void ProcessTable::render(widget::Canvas& canvas,
 
   const int skip = scroll_;
   const int take = desired_rows;
-  std::vector<const montauk::model::ProcSample*> displayed;
+  std::vector<size_t> displayed;  // process indices — index into both s.procs.processes and sm
   displayed.reserve(static_cast<size_t>(take));
   int limit = std::min(static_cast<int>(order.size()), skip + take);
-  for (int i = skip; i < limit; ++i) displayed.push_back(&s.procs.processes[order[i]]);
+  for (int i = skip; i < limit; ++i) displayed.push_back(order[i]);
 
   // 3. Sticky column widths.
   int pid_w_meas = 5, user_w_meas = 4, gpu_d_meas = 3, mem_w_meas = 4, gmem_w_meas = 4;
@@ -349,16 +347,14 @@ void ProcessTable::render(widget::Canvas& canvas,
   canvas.draw_text(x_cmd,                             header_y, "COMMAND", title_style);
 
   for (size_t i = 0; i < displayed.size(); ++i) {
-    const auto* p = displayed[i];
+    const auto* p = &s.procs.processes[displayed[i]];
     const int y = inner_y + 1 + static_cast<int>(i);
     if (y >= rect.y + main_h - 1) break;
 
-    const double scaled_cpu = scale_proc_cpu(p->cpu_pct);
-    const double smooth_cpu = montauk::ui::smooth_value(
-        std::string("proc.cpu.") + std::to_string(p->pid), scaled_cpu, 0.35);
+    const double smooth_cpu = sm[displayed[i]];
     const int row_severity = compute_severity(static_cast<int>(smooth_cpu + 0.5),
                                                ui.caution_pct, ui.warning_pct);
-    const widget::Style row_style = severity_to_style(row_severity);
+    const widget::Style row_style = severity_style(row_severity);
 
     {
       std::string pid_str = std::to_string(p->pid);
@@ -388,7 +384,7 @@ void ProcessTable::render(widget::Canvas& canvas,
       if (row_severity == 0) {
         int gsev = compute_severity(static_cast<int>(display_gpu + 0.5),
                                     ui.caution_pct, ui.warning_pct);
-        gpu_style = severity_to_style(gsev);
+        gpu_style = severity_style(gsev);
       }
       canvas.draw_text(right_align_x(x_gpu, gpuw, static_cast<int>(field.size())),
                        y, field, gpu_style);

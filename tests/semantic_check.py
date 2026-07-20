@@ -12,7 +12,6 @@ analysis" -- descriptions nobody could act on, misreads nobody could catch.
 Run:  python3 tests/semantic_check.py   (or via tests/run.py, gate layer)
 """
 import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -20,7 +19,7 @@ from pathlib import Path
 import gen_synthetic_prom as gen
 import harness
 
-ANALYZE = harness.ROOT / "build" / "montauk_analyze"
+ANALYZE = harness.MONTAUK_ANALYZE
 note = harness.logger("semantic")
 
 
@@ -35,9 +34,8 @@ def main() -> int:
         env = dict(os.environ, XDG_CACHE_HOME=str(cache))
         # Emit both surfaces: the pairwise families and the trajectory ones.
         for extra in ([], ["--trajectory"]):
-            subprocess.run([str(ANALYZE), str(archive), "--by", "version",
-                            "--seed", "1729", *extra],
-                           capture_output=True, text=True, env=env, check=False)
+            harness.run_text([str(ANALYZE), str(archive), "--by", "version",
+                              "--seed", "1729", *extra], env=env, check=False)
         bad = []
         families = 0
         for prom in (cache / "montauk").glob("analysis-pop-*.prom"):

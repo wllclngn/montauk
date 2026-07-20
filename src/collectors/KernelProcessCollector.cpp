@@ -3,8 +3,6 @@
 #include "util/Procfs.hpp"
 
 #include <cstring>
-#include <cstdio>
-#include <fstream>
 #include <unordered_set>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -87,7 +85,7 @@ bool KernelProcessCollector::init() {
         return false;
     }
 
-    ncpu_ = read_cpu_count();
+    ncpu_ = static_cast<int>(read_cpu_count());
     return true;
 }
 
@@ -225,6 +223,7 @@ bool KernelProcessCollector::recv_snapshot(montauk::model::ProcessSnapshot& out)
         if (attr_type == MONTAUK_ATTR_PROC_ENTRY && nla_payload > 0) {
             // Parse nested process entry
             montauk::model::ProcSample ps{};
+            uint64_t ut = 0, st = 0;
             struct nlattr* inner = (struct nlattr*)((char*)nla + NLA_HDRLEN);
             int inner_len = nla_payload;
 
@@ -251,10 +250,10 @@ bool KernelProcessCollector::recv_snapshot(montauk::model::ProcessSnapshot& out)
                     // State char stored for potential future use
                     break;
                 case MONTAUK_ATTR_UTIME:
-                    ps.utime = *(uint64_t*)data;
+                    ut = *(uint64_t*)data;
                     break;
                 case MONTAUK_ATTR_STIME:
-                    ps.stime = *(uint64_t*)data;
+                    st = *(uint64_t*)data;
                     break;
                 case MONTAUK_ATTR_RSS_PAGES:
                     ps.rss_kb = (*(uint64_t*)data) * (page_size / 1024);
@@ -289,7 +288,7 @@ bool KernelProcessCollector::recv_snapshot(montauk::model::ProcessSnapshot& out)
             }
 
             // Calculate CPU%
-            ps.total_time = ps.utime + ps.stime;
+            ps.total_time = ut + st;
             if (have_last_) {
                 auto it = last_per_proc_.find(ps.pid);
                 uint64_t last_proc = (it != last_per_proc_.end()) ? it->second : ps.total_time;
@@ -365,31 +364,6 @@ bool KernelProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     }
 
     return recv_snapshot(out);
-}
-
-uint64_t KernelProcessCollector::read_cpu_total() {
-    auto content = montauk::util::read_file_string("/proc/stat");
-    if (!content) return 0;
-
-    // Parse first line: cpu user nice system idle iowait irq softirq steal guest guest_nice
-    uint64_t user=0, nice=0, system=0, idle=0, iowait=0, irq=0, softirq=0, steal=0;
-    if (std::sscanf(content->c_str(), "cpu %lu %lu %lu %lu %lu %lu %lu %lu",
-                    &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal) < 4) {
-        return 0;
-    }
-    return user + nice + system + idle + iowait + irq + softirq + steal;
-}
-
-int KernelProcessCollector::read_cpu_count() {
-    int count = 0;
-    std::ifstream f("/proc/stat");
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.rfind("cpu", 0) == 0 && line.size() > 3 && line[3] >= '0' && line[3] <= '9') {
-            count++;
-        }
-    }
-    return count > 0 ? count : 1;
 }
 
 } // namespace montauk::collectors

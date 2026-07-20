@@ -68,15 +68,37 @@ CORPORA = ["english", "dna", "base64", "frozen_adversarial", "markov",
 UTF8_OK = {"english", "dna", "base64", "markov", "repetitive", "real_src"}
 
 
+def c_std_flag():
+    """First C-standard flag the compiler accepts: gcc 14+ takes -std=c23,
+    gcc 13 (the README's documented floor) only -std=c2x. Same language
+    either way; probing keeps the harness alive on the floor compiler."""
+    probe = BUILD / "_std_probe.c"
+    BUILD.mkdir(exist_ok=True)
+    probe.write_text("int main(void){return 0;}\n")
+    for flag in ("-std=c23", "-std=c2x"):
+        r = subprocess.run(["cc", flag, "-fsyntax-only", str(probe)],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return flag
+    return "-std=c2x"
+
+
 def build():
     BUILD.mkdir(exist_ok=True)
     bins = {}
 
     def run(cmd, **kw):
-        return subprocess.run(cmd, capture_output=True, text=True, **kw)
+        # An absent toolchain (no go, no rustc/cargo) must read as a named
+        # skip, never a raw traceback -- the parity gate's "skipped
+        # (absent: ...)" convention.
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, **kw)
+        except FileNotFoundError:
+            return subprocess.CompletedProcess(
+                cmd, 127, "", f"toolchain not found: {cmd[0]}")
 
     # our engine: always rebuild from source (the checked-in binary may be stale)
-    r = run(["cc", "-O2", "-march=native", "-std=c23", "-o", str(OURBIN),
+    r = run(["cc", "-O2", "-march=native", c_std_flag(), "-o", str(OURBIN),
              str(SEARCH / "search_research.c"), "-lm"])
     if r.returncode != 0:
         warn(f"our engine build failed: {r.stderr[-300:]}")

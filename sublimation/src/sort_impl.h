@@ -406,10 +406,15 @@ static size_t SUB_TYPED(partition_one_level)(SUB_TYPE *arr, size_t lo, size_t hi
     size_t n = hi - lo + 1;
 
     // EQUAL ELEMENT DETECTION
-#ifdef SUB_TYPE_IS_I64
+    // Sign-agnostic equality: u64 shares the gate via a bit-exact cast into
+    // the int64_t last_pivot slot. 32-bit and float types stay out: the gate
+    // only pays off where the mid-sort duplicate collapse is the production
+    // path (the 64-bit types montauk sorts run on), and floats cannot round-
+    // trip through the int64_t slot without bit-punning NaN/-0.0 semantics.
+#if defined(SUB_TYPE_IS_I64) || defined(SUB_TYPE_IS_U64)
     if (*disorder != SUB_FEW_UNIQUE && state->has_last_pivot) {
         size_t mid = lo + n / 2;
-        if (arr[mid] == state->last_pivot) {
+        if ((int64_t)arr[mid] == state->last_pivot) {
             *disorder = SUB_FEW_UNIQUE;
         }
     }
@@ -427,8 +432,8 @@ static size_t SUB_TYPED(partition_one_level)(SUB_TYPE *arr, size_t lo, size_t hi
                                                    &state->comparisons, &state->swaps);
     state->levels_built++;
 
-#ifdef SUB_TYPE_IS_I64
-    state->last_pivot = arr[pivot_pos];
+#if defined(SUB_TYPE_IS_I64) || defined(SUB_TYPE_IS_U64)
+    state->last_pivot = (int64_t)arr[pivot_pos];
     state->has_last_pivot = true;
 #endif
 
@@ -462,8 +467,6 @@ static size_t SUB_TYPED(partition_one_level)(SUB_TYPE *arr, size_t lo, size_t hi
             }
         }
 #endif
-
-        state->rescan_trigger = (size_t)((float)state->rescan_trigger * SUB_RESCAN_GROWTH);
     }
 
     return pivot_pos;
@@ -659,10 +662,15 @@ static void SUB_TYPED(fix_rotation)(SUB_TYPE *arr, size_t n, size_t rot, uint64_
 }
 
 // INTERNAL SORT ENTRY
-void SUB_TYPED(sub_sort_internal)(SUB_TYPE *restrict arr, size_t n, sub_adaptive_t *state) {
+// `profile_in`: the caller's classification of arr (NULL = classify here).
+// Threading the profile through keeps classification at once per public sort
+// call; the public entries pass the profile fast_path_dispatch already built.
+void SUB_TYPED(sub_sort_internal)(SUB_TYPE *restrict arr, size_t n, sub_adaptive_t *state,
+                                  const sub_profile_t *profile_in) {
     if (n <= 1) return;
 
-    sub_profile_t profile = SUB_TYPED(sub_classify_internal)(arr, n);
+    sub_profile_t profile = profile_in ? *profile_in
+                                       : SUB_TYPED(sub_classify_internal)(arr, n);
 
     switch (profile.disorder) {
     case SUB_SORTED:
@@ -844,5 +852,5 @@ void SUB_TYPED(sublimation)(SUB_TYPE *restrict arr, size_t n) {
 
     sub_adaptive_t state;
     sub_adaptive_init(&state, n);
-    SUB_TYPED(sub_sort_internal)(arr, n, &state);
+    SUB_TYPED(sub_sort_internal)(arr, n, &state, &profile);
 }

@@ -78,6 +78,45 @@ inline const char* io_syscall_name(int32_t nr) {
   }
 }
 
+// Event TYPE -> lowercase name: the analyzer's summary rows and prom labels.
+inline const char* evt_type_name(uint32_t t) {
+  switch (t) {
+    case TRACE_EVT_FORK: return "fork";
+    case TRACE_EVT_EXEC: return "exec";
+    case TRACE_EVT_EXIT: return "exit";
+    case TRACE_EVT_COMM_CHANGE: return "comm";
+    case TRACE_EVT_IO: return "io";
+    case TRACE_EVT_NTSYNC: return "ntsync";
+    case TRACE_EVT_SCHED: return "sched";
+    case TRACE_EVT_HEAP: return "heap";
+    case TRACE_EVT_SIGNAL: return "signal";
+    case TRACE_EVT_MMAP: return "mmap";
+    case TRACE_EVT_PROVIDER: return "provider";
+    case TRACE_EVT_ABORT: return "abort";
+    case TRACE_EVT_HEAPSTACK: return "heapstk";
+    case TRACE_EVT_KEYEDEVT: return "keyedevt";
+    case TRACE_EVT_KSTRAND: return "kstrand";
+    case TRACE_EVT_WAITSTACK: return "waitstack";
+    case TRACE_EVT_SCX_STORM: return "scx_storm";
+    case TRACE_EVT_THREAD_NAME: return "thread_name";
+    case TRACE_EVT_RAWSTACK: return "rawstack";
+    case TRACE_EVT_DROPS: return "drops";
+    default: return "unknown";
+  }
+}
+
+// The four lifecycle types as trace_decode.cpp's per-event line prints them
+// (caps, COMM for COMM_CHANGE) -- a distinct surface from evt_type_name's
+// lowercase naming, kept as its own table so the decode text stays byte-stable.
+inline const char* lifecycle_type_name(uint32_t t) {
+  switch (t) {
+    case TRACE_EVT_FORK: return "FORK";
+    case TRACE_EVT_EXEC: return "EXEC";
+    case TRACE_EVT_EXIT: return "EXIT";
+    default:             return "COMM";
+  }
+}
+
 // Signal number -> canonical name, nullptr when unnamed. Shared by the
 // signals report and the --sig qualifier parser (trace_analyze.cpp) and by
 // trace_decode.cpp's per-event signal formatting.

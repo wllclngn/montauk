@@ -1,5 +1,6 @@
 #include "ui/widget/Panel.hpp"
 #include "ui/Config.hpp"
+#include "ui/Formatting.hpp"
 
 #include <algorithm>
 
@@ -30,14 +31,6 @@ int visual_cols(std::string_view s) {
     ++i;
   }
   return cols;
-}
-
-// Style for a row's value column based on severity.
-Style severity_style(int severity) {
-  const auto& uic = ui_config();
-  if (severity >= 2) return parse_sgr_style(uic.warning);
-  if (severity >= 1) return parse_sgr_style(uic.caution);
-  return Style{};  // default fg
 }
 
 } // namespace

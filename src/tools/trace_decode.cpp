@@ -35,6 +35,7 @@ using montauk::model::sched_op_name;
 using montauk::model::ntsync_op_name;
 using montauk::model::io_syscall_name;
 using montauk::model::signal_name;
+using montauk::model::lifecycle_type_name;
 
 // Format an absolute wall-clock ns-since-epoch into HH:MM:SS.mmm.
 std::string wall_str(uint64_t wall_ns) {
@@ -53,7 +54,7 @@ int main(int argc, char** argv) {
   montauk_sink_init(&g_out, 1);
   std::atexit(drain_out);
   if (argc < 2) {
-    std::fprintf(stderr, "usage: montauk_trace_decode FILE [--csv]\n");
+    montauk::util::log_error("usage: montauk_trace_decode FILE [--csv]");
     return 2;
   }
   const char* path = argv[1];
@@ -310,10 +311,8 @@ int main(int argc, char** argv) {
       case TRACE_EVT_COMM_CHANGE: {
         if (len < sizeof(montauk_ring_event)) break;
         auto* e = reinterpret_cast<const montauk_ring_event*>(data);
-        const char* tn = type == TRACE_EVT_FORK ? "FORK"
-                       : type == TRACE_EVT_EXEC ? "EXEC"
-                       : type == TRACE_EVT_EXIT ? "EXIT" : "COMM";
-        montauk_sink_appendf(&g_out, "[          ] %-5s pid=%-7u ppid=%-7u comm='%.16s'", tn, e->pid, e->ppid, e->comm);
+        montauk_sink_appendf(&g_out, "[          ] %-5s pid=%-7u ppid=%-7u comm='%.16s'",
+                    lifecycle_type_name(type), e->pid, e->ppid, e->comm);
         if (type == TRACE_EVT_EXEC) montauk_sink_appendf(&g_out, " file='%.64s'", e->filename);
         montauk_sink_appendf(&g_out, "\n");
         break;

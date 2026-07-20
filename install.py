@@ -2,21 +2,26 @@
 """
 montauk installer
 
-Builds and installs montauk system monitor, optionally with kernel module
-and/or eBPF trace support.
+Builds and installs montauk system monitor, with kernel module and eBPF
+trace support built by default.
 
-The kernel module and eBPF trace are part of montauk -- always built, no prompt,
-no opt-out. They require kernel headers and the eBPF toolchain (clang, bpftool,
-libbpf, kernel BTF); a missing prereq aborts the install with the fix to run.
+The kernel module and eBPF trace build unless opted out (--no-kernel,
+--no-bpf). When a feature is requested its prereqs are mandatory: kernel
+headers for the module, the eBPF toolchain (clang, bpftool, libbpf, kernel
+BTF) for trace; a missing prereq aborts the install with the fix to run.
+montauk-mcp (the MCP server) builds via cargo when cargo is on PATH and is
+skipped by name when it is not.
 
 Usage:
-    ./install.py              # Build and install (kernel module + eBPF trace, mandatory)
+    ./install.py              # Build and install (kernel module + eBPF trace by default)
+    ./install.py --no-bpf     # Build without eBPF trace (-DMONTAUK_NO_BPF=ON)
+    ./install.py --no-kernel  # Build without the kernel module
     ./install.py --debug      # Debug build
     ./install.py --prefix /usr # Install to /usr instead of /usr/local
     ./install.py build        # Build only, don't install
     ./install.py clean        # Clean build directory
     ./install.py uninstall    # Remove installed files and kernel module
-    ./install.py test         # Run tests
+    ./install.py test         # Run the full test suite (python3 tests/run.py)
 """
 
 import argparse
@@ -163,7 +168,7 @@ def init_theme(install_path: Path) -> bool:
 
 def build_and_install_kernel_module(source_dir: Path) -> bool:
     """Build, install, and load the montauk kernel module."""
-    kernel_dir = source_dir / "montauk-kernel"
+    kernel_dir = source_dir / "components" / "kernel"
     if not kernel_dir.exists():
         log_error(f"Kernel module source not found at {kernel_dir}")
         return False
@@ -322,12 +327,10 @@ def check_bpf_deps() -> dict:
 
 
 def resolve_bpf(args) -> bool:
-    """eBPF trace support is MANDATORY -- montauk IS its tracer, not a monitor
-    that optionally traces. Verify the toolchain (clang, bpftool, libbpf, kernel
-    BTF); fail with the install command if any piece is missing. There is no
-    prompt and no opt-out: --no-bpf is accepted but ignored with a warning."""
-    if getattr(args, "no_bpf", False):
-        log_warn("eBPF trace is part of montauk now; --no-bpf ignored")
+    """eBPF trace support is on by default -- montauk IS its tracer. When it
+    is requested (no --no-bpf), verify the toolchain (clang, bpftool, libbpf,
+    kernel BTF) and fail with the install command if any piece is missing.
+    Callers skip this entirely under --no-bpf."""
     deps = check_bpf_deps()
     missing = [name for name, ok in (
         ("clang", deps["clang"]),
@@ -352,14 +355,12 @@ def resolve_bpf(args) -> bool:
 # =============================================================================
 
 def resolve_kernel(args, source_dir: Path) -> bool:
-    """The kernel module is MANDATORY -- it is part of montauk now, not an
-    option. Verify the running kernel's headers; fail with the install command
-    if they're missing. There is no prompt and no opt-out: --no-kernel is
-    accepted but ignored with a warning."""
-    if getattr(args, "no_kernel", False):
-        log_warn("the kernel module is part of montauk now; --no-kernel ignored")
+    """The kernel module is on by default. When it is requested (no
+    --no-kernel), verify the running kernel's headers and fail with the
+    install command if they're missing. Callers skip this entirely under
+    --no-kernel."""
     kver = get_kernel_version()
-    kernel_src = source_dir / "montauk-kernel"
+    kernel_src = source_dir / "components" / "kernel"
     if not kernel_src.exists():
         log_error(f"kernel module source missing at {kernel_src}")
         return False
@@ -375,25 +376,56 @@ def resolve_kernel(args, source_dir: Path) -> bool:
     return True
 
 
+def build_mcp(source_dir: Path) -> bool:
+    """Build montauk-mcp, the MCP server -- a sibling cargo crate that links
+    the CMake-built libsublimation.a, so it must run after the main build.
+    cargo is optional: absent cargo skips the crate by name; present cargo
+    must build it cleanly."""
+    mcp_dir = source_dir / "components" / "mcp"
+    if not mcp_dir.exists():
+        log_warn("montauk-mcp source not found -- MCP server skipped")
+        return True
+    if shutil.which("cargo") is None:
+        log_warn("cargo not found -- montauk-mcp (MCP server) skipped")
+        return True
+
+    log_info("BUILDING MCP SERVER (montauk-mcp)")
+    ret = run_cmd(["cargo", "build", "--release"], cwd=mcp_dir)
+    if ret != 0:
+        log_error("montauk-mcp build failed!")
+        return False
+
+    mcp_bin = mcp_dir / "target" / "release" / "montauk-mcp"
+    if not mcp_bin.exists():
+        log_error("montauk-mcp binary not found after build!")
+        return False
+    log_info(f"Built {mcp_bin}")
+    return True
+
+
 def cmd_build(args, source_dir: Path) -> bool:
-    """Build montauk (and optionally the kernel module, eBPF trace)."""
+    """Build montauk (and by default the kernel module, eBPF trace)."""
     build_dir = source_dir / "build"
-    # Kernel module and eBPF trace are MANDATORY -- part of montauk, not options.
-    # resolve_* verify the prereqs and print the exact fix; a miss aborts here
-    # rather than silently building a lesser montauk.
-    use_kernel = resolve_kernel(args, source_dir)
-    if not use_kernel:
+    # Kernel module and eBPF trace default ON; --no-kernel / --no-bpf opt out.
+    # For a requested feature, resolve_* verify the prereqs and print the
+    # exact fix; a miss aborts here rather than silently building a lesser
+    # montauk. An opted-out feature skips its resolve entirely.
+    use_kernel = not getattr(args, "no_kernel", False)
+    use_bpf = not getattr(args, "no_bpf", False)
+    if use_kernel and not resolve_kernel(args, source_dir):
         return False
-    use_bpf = resolve_bpf(args)
-    if not use_bpf:
-        return False
-
-    # Build the kernel module first (always).
-    if not build_and_install_kernel_module(source_dir):
+    if use_bpf and not resolve_bpf(args):
         return False
 
-    # sublimation (montauk's sort algorithm) is an in-tree sub-system at
-    # montauk/sublimation/ — CMake builds it as part of the montauk build.
+    # Build the kernel module first (when requested).
+    if use_kernel:
+        if not build_and_install_kernel_module(source_dir):
+            return False
+    else:
+        log_info("Kernel module: skipped (--no-kernel)")
+
+    # sublimation (montauk's adaptive sort and search core) is an in-tree
+    # sub-system at montauk/sublimation/. CMake builds it with the montauk build.
     # No fetch, no system install. It needs a Haswell-or-newer CPU
     # (BMI2 + AVX2); the C23 compile will fail on older hardware.
 
@@ -408,14 +440,21 @@ def cmd_build(args, source_dir: Path) -> bool:
         cmake_args.append("-DCMAKE_BUILD_TYPE=Release")
         log_info("Build type: Release")
 
+    # Both switches are passed explicitly so a stale CMakeCache from a prior
+    # configure can't leak the opposite setting into this build (same reason
+    # MONTAUK_BUILD_TESTS below is always passed).
     if use_kernel:
         cmake_args.append("-DMONTAUK_KERNEL=ON")
         log_info("Kernel collector: enabled")
+    else:
+        cmake_args.append("-DMONTAUK_KERNEL=OFF")
+        log_info("Kernel collector: disabled (--no-kernel)")
 
     if not use_bpf:
         cmake_args.append("-DMONTAUK_NO_BPF=ON")
-        log_info("eBPF trace: disabled")
+        log_info("eBPF trace: disabled (--no-bpf)")
     else:
+        cmake_args.append("-DMONTAUK_NO_BPF=OFF")
         log_info("eBPF trace: enabled (--trace mode)")
 
     log_info("sublimation: in-tree sub-system (montauk/sublimation), built with montauk")
@@ -463,6 +502,10 @@ def cmd_build(args, source_dir: Path) -> bool:
 
     size = binary.stat().st_size
     log_info(f"Built {binary} ({size} bytes)")
+
+    # montauk-mcp links libsublimation.a out of build/, so it builds last.
+    if not build_mcp(source_dir):
+        return False
 
     # Stash decisions for cmd_install to use
     args._use_kernel = use_kernel
@@ -519,13 +562,22 @@ def cmd_install(args, source_dir: Path) -> bool:
         else:
             log_warn(f"{tool} missing from build dir — not installed")
 
+    # montauk-mcp (the MCP server) ships beside montauk when cargo built it;
+    # a cargo-less box already got the named skip in build_mcp.
+    mcp_bin = source_dir / "components" / "mcp" / "target" / "release" / "montauk-mcp"
+    if mcp_bin.exists():
+        if install_atomic(mcp_bin, prefix / "bin" / "montauk-mcp") == 0:
+            log_info(f"Installed {prefix / 'bin' / 'montauk-mcp'}")
+        else:
+            log_warn("Failed to install montauk-mcp")
+
     # The generic profile harness (montauk_profile): a montauk feature any
     # application uses to turn a montauk capture into a montauk_analyze report --
     # capture (launch/attach/existing trace), run the reports, assemble. Installed
     # importable as a module (apps add this dir to sys.path for their own diagnose
     # script) plus a `montauk-profile` CLI shim for the generic command/attach/
     # trace path.
-    profile_src = source_dir / "profiles" / "montauk_profile.py"
+    profile_src = source_dir / "components" / "profile" / "montauk_profile.py"
     if profile_src.exists():
         lib_dest = prefix / "lib" / "montauk" / "montauk_profile.py"
         cli_dest = prefix / "bin" / "montauk-profile"
@@ -582,7 +634,7 @@ def cmd_install(args, source_dir: Path) -> bool:
         log_info("Kernel module is loaded and will auto-load on boot.")
         log_warn("Re-run this installer after kernel upgrades!")
 
-    log_info("sublimation is montauk's sort algorithm — built in-tree (montauk/sublimation).")
+    log_info("sublimation is montauk's adaptive sort and search core, built in-tree (montauk/sublimation).")
 
     return True
 
@@ -618,6 +670,7 @@ def cmd_uninstall(args, source_dir: Path) -> bool:
                prefix / "bin" / "montauk_analyze",
                prefix / "bin" / "montauk_trace_decode",
                prefix / "bin" / "sublimation",
+               prefix / "bin" / "montauk-mcp",
                prefix / "bin" / "montauk-profile",
                prefix / "lib" / "montauk" / "montauk_profile.py",
                prefix / "share" / "man" / "man1" / "montauk.1"]
@@ -648,30 +701,18 @@ def cmd_uninstall(args, source_dir: Path) -> bool:
 
 
 def cmd_test(args, source_dir: Path) -> bool:
-    """Run tests."""
-    build_dir = source_dir / "build"
-    test_binary = build_dir / "montauk_tests"
-
+    """Run the full suite via tests/run.py -- all five layers (unit, gate,
+    perf, trace, mcp), not just the montauk_tests binary. run.py does its
+    own configure-and-build of the test targets."""
     log_info("RUNNING TESTS")
 
-    if not test_binary.exists():
-        log_info("Tests not built, building with tests enabled...")
+    runner = source_dir / "tests" / "run.py"
+    if not runner.exists():
+        log_error(f"Test runner missing at {runner}")
+        return False
 
-        cmake_args = ["cmake", "-S", str(source_dir), "-B", str(build_dir),
-                       "-DMONTAUK_BUILD_TESTS=ON"]
-        ret = run_cmd(cmake_args)
-        if ret != 0:
-            log_error("Configure failed")
-            return False
-
-        ret = run_cmd(["cmake", "--build", str(build_dir),
-                        f"-j{multiprocessing.cpu_count()}"])
-        if ret != 0:
-            log_error("Build failed")
-            return False
-
-    log_info(f"Executing {test_binary}")
-    ret = run_cmd([str(test_binary)])
+    log_info(f"Executing {sys.executable} {runner}")
+    ret = run_cmd([sys.executable, str(runner)])
 
     if ret == 0:
         log_info("All tests passed")
@@ -701,35 +742,38 @@ Commands:
   build       Build only
   clean       Remove build directory
   uninstall   Remove installed binary and kernel module
-  test        Run tests
+  test        Run the full test suite (python3 tests/run.py: unit, gate,
+              perf, trace, mcp layers)
 
 Examples:
-  ./install.py                    # Build and install (kernel module + eBPF trace, mandatory)
+  ./install.py                    # Build and install (kernel module + eBPF trace by default)
+  ./install.py --no-bpf           # Build without eBPF trace (-DMONTAUK_NO_BPF=ON)
   ./install.py --test             # Also build montauk_tests alongside
   ./install.py --prefix /usr      # Install to /usr/bin
   ./install.py build              # Build only
   ./install.py clean              # Clean build
 
-The kernel module and eBPF trace are always built -- no prompt, no opt-out.
+The kernel module and eBPF trace build by default; --no-kernel / --no-bpf
+opt out. montauk-mcp (the MCP server) builds when cargo is on PATH.
 """
     )
 
     parser.add_argument("command", nargs="?", default="install",
                        choices=["install", "build", "clean", "uninstall", "test"],
                        help="Command to run (default: install)")
-    # Kernel module and eBPF trace are mandatory now. These flags are kept so
-    # existing callers don't break: --kernel/--bpf are no-ops (the default), and
-    # --no-kernel/--no-bpf are accepted but ignored with a warning.
+    # Kernel module and eBPF trace default ON; the --no-* flags opt out and
+    # also skip the corresponding prereq check (headers / eBPF toolchain).
     kernel_group = parser.add_mutually_exclusive_group()
     kernel_group.add_argument("--kernel", action="store_true",
-                              help="(default; kept for compatibility) build the kernel module")
+                              help="(default) build the kernel module")
     kernel_group.add_argument("--no-kernel", action="store_true",
-                              help="ignored -- the kernel module is mandatory")
+                              help="skip the kernel module (headers not required)")
     bpf_group = parser.add_mutually_exclusive_group()
     bpf_group.add_argument("--bpf", action="store_true",
-                            help="(default; kept for compatibility) build eBPF trace support")
+                            help="(default) build eBPF trace support")
     bpf_group.add_argument("--no-bpf", action="store_true",
-                            help="ignored -- eBPF trace is mandatory")
+                            help="build without eBPF trace (-DMONTAUK_NO_BPF=ON; "
+                                 "eBPF toolchain not required)")
     parser.add_argument("--debug", action="store_true",
                        help="Build with debug symbols")
     parser.add_argument("--test", action="store_true",

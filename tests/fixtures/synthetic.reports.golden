@@ -22,7 +22,7 @@ VERDICT: no cache_topology snapshot in the trace -- cannot map migration distanc
 REPORT summary
 VERDICT: 8.6k events in 0.1 s (73.0k/s), dominated by SCHED WAKE2RUN (23%)
 pattern         synthetic
-start           10:06:40.000
+start           15:06:40.000
 format_version  1
 first_event_ms  0.050
 duration_s      0.118

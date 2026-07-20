@@ -57,8 +57,10 @@
 // internal sort path skips the tableau for performance.
 #define DEFINE_PUBLIC_CLASSIFY(T, SUFFIX)                                  \
     sub_profile_t sublimation_classify_##SUFFIX(const T *arr, size_t n) { \
-        sub_profile_t p = sub_classify_internal_##SUFFIX(arr, n);         \
-        if (n >= SUB_PATIENCE_THRESHOLD && n <= SUB_TABLEAU_MAX_N) {      \
+        bool tableau_ran = false;                                          \
+        sub_profile_t p = sub_classify_core_##SUFFIX(arr, n, &tableau_ran); \
+        if (!tableau_ran &&                                                \
+            n >= SUB_PATIENCE_THRESHOLD && n <= SUB_TABLEAU_MAX_N) {      \
             patience_sort_with_tableau_##SUFFIX(arr, n, &p);              \
         }                                                                  \
         return p;                                                          \

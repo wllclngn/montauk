@@ -12,14 +12,15 @@
 
 // MSD radix tiebreak on a contiguous range of strings.
 //
-//   arr     : pointer array (permuted in-place by this call)
-//   lens    : per-string length (parallel to arr); permuted alongside arr
-//   indices : optional (NULL = not tracked). When non-NULL, permuted in
-//             parallel so `indices[i]` tracks the original caller-supplied
-//             index that ended up at sorted position i.
-//   scratch : auxiliary pointer buffer of length >= (hi - lo)
-//   lo, hi  : half-open range [lo, hi) within arr to sort
-//   depth   : byte offset to start comparing at (inclusive)
+//   arr          : pointer array (permuted in-place by this call)
+//   lens         : per-string length (parallel to arr); permuted alongside arr
+//   indices      : optional (NULL = not tracked). When non-NULL, permuted in
+//                  parallel so `indices[i]` tracks the original caller-supplied
+//                  index that ended up at sorted position i.
+//   scratch      : auxiliary pointer buffer of length >= (hi - lo)
+//   lens_scratch : auxiliary length buffer of length >= (hi - lo)
+//   lo, hi       : half-open range [lo, hi) within arr to sort
+//   depth        : byte offset to start comparing at (inclusive)
 //
 // Iterative; uses a heap-allocated work stack so adversarial deep-prefix
 // inputs cannot blow the C stack. NOT stable within ties.
@@ -28,6 +29,7 @@ void sub_msd_radix(
     size_t *lens,
     uint32_t *indices,
     const char **scratch,
+    size_t *lens_scratch,
     size_t lo,
     size_t hi,
     size_t depth);

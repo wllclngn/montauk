@@ -25,10 +25,10 @@ extern "C" {
 #endif
 
 // Release version (source-of-truth for the library tag, pkgbuild, tests).
-#define SUBLIMATION_VERSION_MAJOR  2
-#define SUBLIMATION_VERSION_MINOR  3
+#define SUBLIMATION_VERSION_MAJOR  3
+#define SUBLIMATION_VERSION_MINOR  0
 #define SUBLIMATION_VERSION_PATCH  0
-#define SUBLIMATION_VERSION_STRING "2.3.0"
+#define SUBLIMATION_VERSION_STRING "3.0.0"
 
 // ABI version. Bumped only when the library ABI breaks; independent from
 // the release version above. Readers should compare this value at runtime
@@ -52,6 +52,25 @@ typedef enum {
 } sub_disorder_t;
 
 // Classification profile (the initial level graph)
+//
+// Fill contract -- every classifier return path honors these semantics:
+//   inversion_ratio    Fraction of inverted pairs. Analytic on the fast
+//                      paths (sorted/all-equal 0.0; reversed 1.0, ties on
+//                      the AVX2 non-increasing path may overstate slightly;
+//                      rotated 2*rot*(n-rot)/(n*(n-1)), exact for distinct
+//                      keys); a 128-pair sampled estimate everywhere else.
+//                      Never a placeholder 0.0 on a disordered input.
+//   lis_length         Longest increasing subsequence: exact pile count when
+//                      the patience tableau ran, n on sorted/all-equal (weak
+//                      order), an inversion-derived estimate otherwise.
+//   lds_length         Longest decreasing subsequence. All-equal inputs
+//                      publish n on every path (an equal run is an LDS of
+//                      length n under weak orders, matching the tableau);
+//                      strictly sorted publishes 1, reversed publishes n.
+//   distinct_estimate  Sampled estimate; exactly 1 on all-equal fast paths.
+//                      0 only when not computed (n <= 1).
+//   info_theoretic_bound, interleave_k
+//                      Filled only when the tableau ran (0 = not computed).
 typedef struct {
     size_t n;                    // array size
     size_t run_count;            // ascending runs
@@ -63,7 +82,7 @@ typedef struct {
     float  info_theoretic_bound; // log2(f^lambda) via hook length formula (0 if not computed)
     size_t interleave_k;         // detected k-interleaved sorted sequences (0 if none)
     size_t distinct_estimate;    // approximate distinct values
-    float  inversion_ratio;      // estimated inversion fraction (sampled)
+    float  inversion_ratio;      // estimated inversion fraction (see contract above)
     size_t phase_boundary;       // index of detected regime change (0 = none)
     size_t rotation_point;       // rotation point for rotated sorted arrays (0 = none)
     float  spectral_gap;         // lambda_2 of comparison graph (0 if not computed)

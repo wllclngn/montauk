@@ -63,23 +63,17 @@ void sub_msd_radix(
     size_t *lens,
     uint32_t *indices,
     const char **scratch,
+    size_t *lens_scratch,
     size_t lo,
     size_t hi,
     size_t depth)
 {
     if (hi - lo < 2) return;
 
-    size_t *lens_scratch = (size_t *)malloc((hi - lo) * sizeof(size_t));
-    if (!lens_scratch) {
-        sub_insertion_sort(arr, lens, indices, lo, hi, depth);
-        return;
-    }
-
     uint32_t *idx_scratch = NULL;
     if (indices) {
         idx_scratch = (uint32_t *)malloc((hi - lo) * sizeof(uint32_t));
         if (!idx_scratch) {
-            free(lens_scratch);
             sub_insertion_sort(arr, lens, indices, lo, hi, depth);
             return;
         }
@@ -88,7 +82,6 @@ void sub_msd_radix(
     size_t stack_cap = 64;
     sub_msd_frame_t *stack = (sub_msd_frame_t *)malloc(stack_cap * sizeof(sub_msd_frame_t));
     if (!stack) {
-        free(lens_scratch);
         free(idx_scratch);
         sub_insertion_sort(arr, lens, indices, lo, hi, depth);
         return;
@@ -138,25 +131,29 @@ void sub_msd_radix(
             size_t bs = f.lo + count[(size_t)r];
             size_t be = f.lo + count[(size_t)(r + 1)];
             if (be - bs >= 2) {
-                if (sp >= stack_cap) {
-                    stack_cap *= 2;
+                if (sp == stack_cap) {
+                    size_t new_cap = stack_cap * 2;
                     sub_msd_frame_t *new_stack = (sub_msd_frame_t *)realloc(
-                        stack, stack_cap * sizeof(sub_msd_frame_t));
-                    if (!new_stack) {
-                        free(stack);
-                        free(lens_scratch);
-                        free(idx_scratch);
-                        sub_insertion_sort(arr, lens, indices, bs, be, f.depth + 1);
-                        return;
+                        stack, new_cap * sizeof(sub_msd_frame_t));
+                    if (new_stack) {
+                        stack = new_stack;
+                        stack_cap = new_cap;
                     }
-                    stack = new_stack;
                 }
-                stack[sp++] = (sub_msd_frame_t){bs, be, f.depth + 1};
+                if (sp == stack_cap) {
+                    // Growth failed: finish this bucket in place with the
+                    // allocation-free insertion sort instead of pushing.
+                    // Every bucket is either pushed or fully sorted, so the
+                    // whole range still comes out sorted -- never a silent
+                    // partial result.
+                    sub_insertion_sort(arr, lens, indices, bs, be, f.depth + 1);
+                } else {
+                    stack[sp++] = (sub_msd_frame_t){bs, be, f.depth + 1};
+                }
             }
         }
     }
 
     free(stack);
-    free(lens_scratch);
     free(idx_scratch);
 }

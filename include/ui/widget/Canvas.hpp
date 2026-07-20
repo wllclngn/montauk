@@ -35,7 +35,9 @@ public:
     Cell& at(int x, int y);
     const Cell& at(int x, int y) const;
 
-    // Drawing primitives
+    // Drawing primitives. clear() resets the canvas to a fresh-frame state:
+    // every cell becomes fill_cell and the image mask and queued graphics
+    // commands are dropped, so a persistent canvas can be reused per frame.
     void clear(const Cell& fill_cell = Cell{" ", {}});
     void put(int x, int y, const std::string& grapheme, Style style = {});
 

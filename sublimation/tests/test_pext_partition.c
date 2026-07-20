@@ -1,4 +1,4 @@
-// test_pext_partition.c -- standalone unit test for block_partition_pext_i64.
+// test_pext_partition.c -- standalone unit test for sub_block_partition_pext_i64.
 //
 // Verifies the in-place PEXT partition before integration into the random
 // path. Tests:
@@ -26,7 +26,7 @@ static int cmp_i64(const void *a, const void *b) {
     return (x > y) - (x < y);
 }
 
-// Verify that block_partition_pext_i64 produced a valid partition AND
+// Verify that sub_block_partition_pext_i64 produced a valid partition AND
 // preserved the multiset. Returns 1 on success, 0 on failure.
 static int verify_partition(const int64_t *original, const int64_t *partitioned,
                              size_t n, size_t p, int64_t pivot, const char *label) {
@@ -77,7 +77,7 @@ static int run_one(size_t n, int64_t pivot, uint64_t seed,
     }
     memcpy(work, orig, n * sizeof(int64_t));
 
-    size_t p = block_partition_pext_i64(work, 0, n, pivot);
+    size_t p = sub_block_partition_pext_i64(work, 0, n, pivot);
     int ok = verify_partition(orig, work, n, p, pivot, label);
 
     free(orig);

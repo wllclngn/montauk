@@ -34,7 +34,17 @@ BENCH_DIR = SCRIPT_DIR / "bench"
 LOG_DIR = Path.home() / ".cache" / "sublimation"
 
 VERBOSE = False
-VERSION = "1.2.0"
+
+def _read_version():
+    """The one version story: SUBLIMATION_VERSION_STRING in sublimation.h is
+    the source of truth; the suite parses it at runtime instead of hardcoding
+    a copy that drifts (this constant sat at 1.2.0 through two majors)."""
+    header = SRC_DIR / "include" / "sublimation.h"
+    m = re.search(r'#define\s+SUBLIMATION_VERSION_STRING\s+"([^"]+)"',
+                  header.read_text())
+    return m.group(1) if m else "unknown"
+
+VERSION = _read_version()
 
 
 # LOGGING ([HH:MM:SS] [LEVEL]   message)
@@ -225,6 +235,9 @@ def test_c_suites(R):
         ("antiqsort",         TEST_DIR / "test_antiqsort.c",         300),
         ("strings",           TEST_DIR / "test_strings.c",           120),
         ("randomness",        TEST_DIR / "test_randomness.c",        120),
+        ("profile_contract",  TEST_DIR / "test_profile_contract.c",  120),
+        ("pack",              TEST_DIR / "test_pack.c",              120),
+        ("pext_partition",    TEST_DIR / "test_pext_partition.c",    120),
     ]:
         if not src.exists():
             R.skip(name, "source not found")

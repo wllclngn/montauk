@@ -50,7 +50,15 @@ def build() -> bool:
     if not cc:
         note("FAIL: no C compiler (clang/cc/gcc)")
         return False
-    r = subprocess.run([cc, "-O2", "-march=native", "-std=c23",
+    # gcc 14+ takes -std=c23, gcc 13 (the documented floor) only -std=c2x;
+    # probe rather than hardcode so the oracle runs on the floor compiler.
+    std = "-std=c23"
+    probe = subprocess.run([cc, std, "-fsyntax-only", "-x", "c", "-"],
+                           input="int main(void){return 0;}",
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        std = "-std=c2x"
+    r = subprocess.run([cc, "-O2", "-march=native", std,
                         str(CSRC), "-o", str(CBIN)],
                        capture_output=True, text=True)
     if r.returncode != 0:

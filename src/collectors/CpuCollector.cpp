@@ -86,7 +86,8 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
   auto txt_opt = montauk::util::read_file_string("/proc/stat");
   if (!txt_opt) return false;
   const std::string& txt = *txt_opt;
-  montauk::model::CpuTimes agg{}; std::vector<montauk::model::CpuTimes> per;
+  montauk::model::CpuTimes agg{};
+  std::vector<montauk::model::CpuTimes>& per = per_scratch_; per.clear();
   uint64_t ctxt = 0, intr = 0;
   size_t start = 0; bool after_cpu = false;
   while (start < txt.size()) {
@@ -153,8 +154,10 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
       }
     }
   }
-  last_total_ = agg; last_per_ = per; has_last_ = true;
-  out.total_times = agg; out.per_core = std::move(per); out.usage_pct = usage; out.per_core_pct = std::move(per_pct);
+  // Swap the reused parse buffer into last_per_ (no copy); the one remaining
+  // copy fills the published snapshot's warm per_core vector.
+  last_total_ = agg; last_per_.swap(per); has_last_ = true;
+  out.total_times = agg; out.per_core = last_per_; out.usage_pct = usage; out.per_core_pct = std::move(per_pct);
   out.pct_user = pct_user; out.pct_system = pct_sys; out.pct_iowait = pct_iow; out.pct_irq = pct_irq; out.pct_steal = pct_steal;
   out.ctxt_per_sec = ctxt_per_sec;
   out.intr_per_sec = intr_per_sec;
@@ -167,11 +170,19 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
   {
     double mhz_sum = 0.0;
     int nfreq = 0;
-    const int ncpu = (int)out.per_core_pct.size();
-    for (int c = 0; c < ncpu; ++c) {
-      auto f = montauk::util::read_file_string(
-          "/sys/devices/system/cpu/cpu" + std::to_string(c) +
-          "/cpufreq/scaling_cur_freq");
+    const size_t ncpu = out.per_core_pct.size();
+    // Path strings built once (rebuilt only if the core count changes); the
+    // MONTAUK_SYS_ROOT remap still happens per read inside read_file_string.
+    if (freq_paths_.size() != ncpu) {
+      freq_paths_.clear();
+      freq_paths_.reserve(ncpu);
+      for (size_t c = 0; c < ncpu; ++c) {
+        freq_paths_.push_back("/sys/devices/system/cpu/cpu" + std::to_string(c) +
+                              "/cpufreq/scaling_cur_freq");
+      }
+    }
+    for (const auto& path : freq_paths_) {
+      auto f = montauk::util::read_file_string(path);
       if (!f) continue;
       try {
         mhz_sum += std::stoul(*f) / 1000.0;

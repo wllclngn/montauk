@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <format>
-#include <sstream>
 
 namespace montauk::ui {
 
@@ -25,33 +24,34 @@ void append_sgr(std::string& frame, const widget::Style& s) {
     frame += "\x1b[0m";
     return;
   }
-  std::ostringstream oss;
-  oss << "\x1b[0";
-  if (widget::has_attribute(s.attr, widget::Attribute::Bold))      oss << ";1";
-  if (widget::has_attribute(s.attr, widget::Attribute::Dim))       oss << ";2";
-  if (widget::has_attribute(s.attr, widget::Attribute::Underline)) oss << ";4";
-  if (widget::has_attribute(s.attr, widget::Attribute::Blink))     oss << ";5";
-  if (widget::has_attribute(s.attr, widget::Attribute::Reverse))   oss << ";7";
+  auto append_num = [&frame](int v) { frame += std::to_string(v); };
+  frame += "\x1b[0";
+  if (widget::has_attribute(s.attr, widget::Attribute::Bold))      frame += ";1";
+  if (widget::has_attribute(s.attr, widget::Attribute::Dim))       frame += ";2";
+  if (widget::has_attribute(s.attr, widget::Attribute::Underline)) frame += ";4";
+  if (widget::has_attribute(s.attr, widget::Attribute::Blink))     frame += ";5";
+  if (widget::has_attribute(s.attr, widget::Attribute::Reverse))   frame += ";7";
   if (widget::is_truecolor(s.fg)) {
-    oss << ";38;2;" << static_cast<int>(widget::color_r(s.fg)) << ';'
-                     << static_cast<int>(widget::color_g(s.fg)) << ';'
-                     << static_cast<int>(widget::color_b(s.fg));
+    frame += ";38;2;";
+    append_num(widget::color_r(s.fg)); frame += ';';
+    append_num(widget::color_g(s.fg)); frame += ';';
+    append_num(widget::color_b(s.fg));
   } else if (s.fg != widget::Color::Default) {
     int idx = static_cast<int>(s.fg);
-    if (idx >= 1 && idx <= 8)       oss << ';' << (29 + idx);
-    else if (idx >= 9 && idx <= 16) oss << ';' << (81 + idx);
+    if (idx >= 1 && idx <= 8)       { frame += ';'; append_num(29 + idx); }
+    else if (idx >= 9 && idx <= 16) { frame += ';'; append_num(81 + idx); }
   }
   if (widget::is_truecolor(s.bg)) {
-    oss << ";48;2;" << static_cast<int>(widget::color_r(s.bg)) << ';'
-                     << static_cast<int>(widget::color_g(s.bg)) << ';'
-                     << static_cast<int>(widget::color_b(s.bg));
+    frame += ";48;2;";
+    append_num(widget::color_r(s.bg)); frame += ';';
+    append_num(widget::color_g(s.bg)); frame += ';';
+    append_num(widget::color_b(s.bg));
   } else if (s.bg != widget::Color::Default) {
     int idx = static_cast<int>(s.bg);
-    if (idx >= 1 && idx <= 8)       oss << ';' << (39 + idx);
-    else if (idx >= 9 && idx <= 16) oss << ';' << (91 + idx);
+    if (idx >= 1 && idx <= 8)       { frame += ';'; append_num(39 + idx); }
+    else if (idx >= 9 && idx <= 16) { frame += ';'; append_num(91 + idx); }
   }
-  oss << 'm';
-  frame += oss.str();
+  frame += 'm';
 }
 
 // Build a frame buffer that contains only the cells that changed between
@@ -136,9 +136,11 @@ struct Renderer::Impl {
   // PROCESS MONITOR. False = process table; true = cpu_grid.
   bool                  cpu_view   = false;
 
-  // Previous frame's canvas, kept for dirty-cell diffing in render().
-  // Empty until the first frame; on resize we replace it with a fresh
-  // blank canvas at the new size and force a full repaint.
+  // Persistent canvases, swapped each frame so both keep their buffers:
+  // `canvas` is cleared and redrawn per frame, `prev_canvas` holds the
+  // previous frame for dirty-cell diffing. On resize both are resized
+  // (which clears them) and the next frame is a full repaint.
+  widget::Canvas        canvas{1, 1};
   widget::Canvas        prev_canvas{1, 1};
   int                   last_cols  = 0;
   int                   last_rows  = 0;
@@ -237,7 +239,8 @@ void Renderer::render(const montauk::model::Snapshot& s) {
   // next frame as a full repaint against a fresh blank baseline.
   const bool size_changed = (cols != impl_->last_cols || rows != impl_->last_rows);
   if (size_changed) {
-    impl_->prev_canvas = widget::Canvas(cols, rows);
+    impl_->canvas.resize(cols, rows);
+    impl_->prev_canvas.resize(cols, rows);
     impl_->last_cols = cols;
     impl_->last_rows = rows;
   }
@@ -249,7 +252,8 @@ void Renderer::render(const montauk::model::Snapshot& s) {
   root.add_item(widget::LayoutConstraints::flexible(20, cols, 1.0f));
   auto rects = root.compute_layout(cols, rows);
 
-  widget::Canvas canvas(cols, rows);
+  widget::Canvas& canvas = impl_->canvas;
+  canvas.clear();
   const widget::LayoutRect left_rect{rects[0].x, 0, rects[0].width, rows};
   const widget::LayoutRect right_rect{rects[1].x, 0, rects[1].width, rows};
 
@@ -271,8 +275,9 @@ void Renderer::render(const montauk::model::Snapshot& s) {
                                             rows, cols, size_changed);
   enqueue_frame(std::move(frame));
 
-  // Move the just-rendered canvas into prev for next frame's diff.
-  impl_->prev_canvas = std::move(canvas);
+  // Swap the just-rendered canvas into prev for next frame's diff; both
+  // buffers stay allocated across frames.
+  std::swap(impl_->prev_canvas, impl_->canvas);
 }
 
 } // namespace montauk::ui
