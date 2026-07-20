@@ -252,6 +252,10 @@ montauk_process_cpu_percent{pid="939",cmd="gpu-process"} 0.5
 # TYPE montauk_process_memory_bytes gauge
 montauk_process_memory_bytes{pid="805",cmd="montauk"} 46641152
 montauk_process_memory_bytes{pid="939",cmd="gpu-process"} 274423808
+# HELP montauk_process_anomaly_score Per-process fused anomaly score
+# TYPE montauk_process_anomaly_score gauge
+montauk_process_anomaly_score{pid="805",cmd="montauk"} 0
+montauk_process_anomaly_score{pid="939",cmd="gpu-process"} 0
 # HELP montauk_process_gpu_utilization_percent Per-process GPU utilization
 # TYPE montauk_process_gpu_utilization_percent gauge
 montauk_process_gpu_utilization_percent{pid="939",cmd="gpu-process"} 9

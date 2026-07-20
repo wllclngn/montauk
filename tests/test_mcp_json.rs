@@ -1,8 +1,8 @@
-// montauk-mcp's hand-rolled JSON parser/serializer (montauk_mcp::json) -- the
+// vector's hand-rolled JSON parser/serializer (vector::json) -- the
 // first thing in montauk that reads JSON, since include/util/json.h is
 // write-only by design.
 
-use montauk_mcp::json::{parse, Value};
+use vector::json::{parse, Value};
 
 #[test]
 fn parses_scalars() {

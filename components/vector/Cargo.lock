@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "montauk-mcp"
+name = "vector"
 version = "8.1.0"

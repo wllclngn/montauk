@@ -26,7 +26,7 @@ pub fn run_with_io<R: BufRead, W: Write>(dispatcher: &mut dyn Dispatcher, input:
         let line = match line {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("montauk-mcp: stdin read error: {e}");
+                eprintln!("vector: stdin read error: {e}");
                 break;
             }
         };
@@ -40,7 +40,7 @@ pub fn run_with_io<R: BufRead, W: Write>(dispatcher: &mut dyn Dispatcher, input:
             Err(e) => {
                 // JSON-RPC 2.0: a parse error gets an error RESPONSE with a
                 // null id, not a silent drop.
-                eprintln!("montauk-mcp: malformed JSON-RPC line: {e}");
+                eprintln!("vector: malformed JSON-RPC line: {e}");
                 emit(&mut stdout, error_response(Value::Null, -32700, "Parse error"));
                 continue;
             }
@@ -53,7 +53,7 @@ pub fn run_with_io<R: BufRead, W: Write>(dispatcher: &mut dyn Dispatcher, input:
                 // Invalid Request: reply with the request's own id when one
                 // is recoverable (the request parsed as an object carrying
                 // "id"), null otherwise, per JSON-RPC 2.0.
-                eprintln!("montauk-mcp: request missing 'method'");
+                eprintln!("vector: request missing 'method'");
                 let id = id.unwrap_or(Value::Null);
                 emit(&mut stdout, error_response(id, -32600, "Invalid Request"));
                 continue;

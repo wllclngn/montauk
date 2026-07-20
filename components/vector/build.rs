@@ -1,6 +1,6 @@
 // Links against the CMake-built libsublimation.a. This crate lives at
-// components/mcp/; build/ is two levels up. No CMakeLists.txt
-// involvement -- montauk-mcp is built and installed entirely by cargo /
+// components/vector/; build/ is two levels up. No CMakeLists.txt
+// involvement -- vector is built and installed entirely by cargo /
 // install.py). MONTAUK_BUILD_DIR overrides the default relative path for
 // out-of-tree builds.
 fn main() {

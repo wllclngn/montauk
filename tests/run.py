@@ -77,7 +77,15 @@ def layer_gate():
     parity = run([sys.executable, str(ROOT / "tests" / "parity_check.py")]) == 0
     pop = run([sys.executable, str(ROOT / "tests" / "pop_gate.py")]) == 0
     semantic = run([sys.executable, str(ROOT / "tests" / "semantic_check.py")]) == 0
-    return corpus and parity and pop and semantic
+    # Shipped sublimation-API byte-parity gates (self-build libsublimation and a
+    # harness that touches only the public API, then diff against numpy oracles).
+    subt = ROOT / "sublimation" / "tests"
+    match = run([sys.executable, str(subt / "test_search_match.py")]) == 0
+    learn = run([sys.executable, str(subt / "test_learn.py")]) == 0
+    spectral = run([sys.executable, str(subt / "test_spectral.py")]) == 0
+    signal = run([sys.executable, str(subt / "test_signal.py")]) == 0
+    return (corpus and parity and pop and semantic and match and learn
+            and spectral and signal)
 
 
 def layer_perf():
@@ -92,9 +100,9 @@ def layer_trace():
 
 
 def layer_mcp():
-    mcp_dir = ROOT / "components" / "mcp"
+    mcp_dir = ROOT / "components" / "vector"
     if not (mcp_dir / "Cargo.toml").exists():
-        print("[run] mcp: SKIP (components/mcp/Cargo.toml not present)")
+        print("[run] mcp: SKIP (components/vector/Cargo.toml not present)")
         return True  # a skip is not a failure
     print(f"  $ cargo test --release  (in {mcp_dir})")
     return subprocess.run(["cargo", "test", "--release"], cwd=str(mcp_dir)).returncode == 0

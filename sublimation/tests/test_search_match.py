@@ -12,7 +12,6 @@ new API reports is byte-identical to an independent Python reference:
 The corpora and cases are reused from test_search_research.py. find/find_from/
 full_match are exercised for self-consistency. Any divergence fails loudly.
 """
-import importlib.util
 import os
 import re
 import shutil
@@ -23,7 +22,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SUB_ROOT = HERE.parent
 SRC_DIR = SUB_ROOT / "src"
-RESEARCH = HERE / "search" / "test_search_research.py"
 BUILD = HERE / "_match_build"
 LIB = BUILD / "libsublimation.a"
 CBIN = BUILD / "test_search_match"
@@ -33,12 +31,9 @@ def note(msg):
     print(f"[match] {msg}", flush=True)
 
 
-# Reuse the research corpora + reference generator verbatim.
-_spec = importlib.util.spec_from_file_location("search_research_ref", RESEARCH)
-_ref = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_ref)
-gen_corpora = _ref.gen_corpora
-overlapping_count = _ref.overlapping_count
+# Reuse the committed corpus fixture (shared with the research harness).
+sys.path.insert(0, str(HERE))
+from search_corpora import gen_corpora, overlapping_count  # noqa: E402
 
 
 def end_positions(pattern, text):

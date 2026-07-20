@@ -67,6 +67,9 @@ add_library(sublimation STATIC
     sublimation/src/parallel/pool.c
     sublimation/src/strings/msd_radix.c
     sublimation/src/strings/sort_strings.c
+    sublimation/src/learn/detect.c
+    sublimation/src/learn/spectral.c
+    sublimation/src/learn/signal.c
 )
 set_target_properties(sublimation PROPERTIES
     C_STANDARD 23
@@ -105,6 +108,7 @@ add_library(montauk_core
     src/app/Producer.cpp
     src/app/Security.cpp
     src/app/Alerts.cpp
+    src/app/AnomalyEnrichment.cpp
     src/app/Filter.cpp
     src/app/PrometheusSerializer.cpp
     src/app/JsonSerializer.cpp
@@ -309,6 +313,7 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_fdinfo_collector.cpp
     tests/test_snapshot_buffers.cpp
     tests/test_trace_buffers.cpp
+    tests/test_anomaly.cpp
     tests/test_producer_basic.cpp
     tests/test_stress.cpp
     tests/test_filters.cpp

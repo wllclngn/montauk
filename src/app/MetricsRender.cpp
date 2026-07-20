@@ -380,6 +380,7 @@ void render_processes(MetricsSink& sink, const MetricsSnapshot& s) {
     MetricDesc mem_desc{nullptr, "montauk_process_memory_bytes", "Per-process resident memory"};
     MetricDesc gpu_util_desc{nullptr, "montauk_process_gpu_utilization_percent", "Per-process GPU utilization"};
     MetricDesc gpu_mem_desc{nullptr, "montauk_process_gpu_memory_bytes", "Per-process GPU memory"};
+    MetricDesc anom_desc{nullptr, "montauk_process_anomaly_score", "Per-process fused anomaly score"};
     for (int i = 0; i < s.top_procs_count; ++i) {
       const auto& p = s.top_procs[i];
       sink.entry_begin();
@@ -390,6 +391,8 @@ void render_processes(MetricsSink& sink, const MetricsSnapshot& s) {
       sink.u64({"rss_kb", nullptr, nullptr}, p.rss_kb);
       if (p.has_gpu_util) sink.f64({"gpu_util_pct", nullptr, nullptr}, p.gpu_util_pct);
       if (p.has_gpu_mem) sink.u64({"gpu_mem_kb", nullptr, nullptr}, p.gpu_mem_kb);
+      sink.f64({"anomaly_score", nullptr, nullptr}, p.anomaly_score);
+      sink.i64({"anomaly_axis", nullptr, nullptr}, p.anomaly_axis);
 
       // Prometheus per-process labels: pid + cmd, cmd truncated to 32 chars --
       // preserved verbatim from emit_labeled_2d/2u's original max_len=32 arg.
@@ -400,6 +403,7 @@ void render_processes(MetricsSink& sink, const MetricsSnapshot& s) {
       sink.labeled_u64(mem_desc, l, p.rss_kb * 1024ULL);
       if (p.has_gpu_util) sink.labeled_f64(gpu_util_desc, l, p.gpu_util_pct);
       if (p.has_gpu_mem) sink.labeled_u64(gpu_mem_desc, l, p.gpu_mem_kb * 1024ULL);
+      sink.labeled_f64(anom_desc, l, p.anomaly_score);
       sink.entry_end();
     }
     sink.collection_end();

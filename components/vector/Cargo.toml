@@ -1,18 +1,18 @@
 [package]
-name = "montauk-mcp"
+name = "vector"
 # Rides montauk's release train (the platform version), not sublimation's.
 version = "8.1.0"
 edition = "2021"
 
 [lib]
-name = "montauk_mcp"
+name = "vector"
 path = "src/lib.rs"
 
 [[bin]]
-name = "montauk-mcp"
+name = "vector"
 path = "src/main.rs"
 
-# Every montauk-mcp test lives under the repo's real ./tests/ directory
+# Every vector test lives under the repo's real ./tests/ directory
 # alongside test_*.cpp/test_*.py, not scattered as inline #[cfg(test)]
 # blocks in src/ -- these paths point Cargo's test harness there explicitly,
 # since Cargo's own `tests/` convention is crate-relative by default.

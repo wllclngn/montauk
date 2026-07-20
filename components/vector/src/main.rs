@@ -1,4 +1,4 @@
-// montauk-mcp -- agent-facing MCP tool surface over montauk/sublimation.
+// vector -- agent-facing MCP tool surface over montauk/sublimation.
 // Read-only / observational only: no killing processes, no scheduler-policy
 // changes, nothing mutating, in any of the four tools (see tools.rs).
 //
@@ -7,11 +7,11 @@
 // tests/test_mcp_json.rs and tests/test_mcp_rpc.rs already exercise
 // json.rs and rpc.rs.
 
-use montauk_mcp::{ffi, rpc, tools::ToolServer};
+use vector::{ffi, rpc, tools::ToolServer};
 
 fn main() {
     if std::env::args().any(|a| a == "--version") {
-        println!("montauk-mcp {} (sublimation api v{}, {})",
+        println!("vector {} (sublimation api v{}, {})",
                   env!("CARGO_PKG_VERSION"), ffi::api_version(), ffi::version());
         return;
     }

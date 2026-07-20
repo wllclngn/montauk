@@ -64,7 +64,7 @@ SUB_API void sublimation_search_compile(sublimation_search *out, const char *pat
 SUB_API int sublimation_search_valid(const sublimation_search *s);
 
 // sizeof(sublimation_search), exported so a foreign binding that mirrors the
-// struct as an opaque buffer (montauk-mcp's ffi.rs) can assert its mirror
+// struct as an opaque buffer (vector's ffi.rs) can assert its mirror
 // matches this library at runtime, not just at the mirror's writing.
 SUB_API size_t sublimation_search_sizeof(void);
 

@@ -1,14 +1,14 @@
-// montauk-mcp's real tool-dispatch surface (montauk_mcp::tools::ToolServer) --
-// the actual four tools an MCP client calls, as opposed to test_mcp_rpc.rs's
+// vector's real tool-dispatch surface (vector::tools::ToolServer) --
+// the actual tools an MCP client calls, as opposed to test_mcp_rpc.rs's
 // framing tests (which deliberately use a trivial EchoDispatcher and never
 // touch ToolServer at all) or test_mcp_json.rs's parser tests. Before this
 // file, ToolServer's dispatch logic -- initialize, tools/list, tools/call
-// for all four tools, argument validation, subprocess wrapping, FFI dispatch
+// for every tool, argument validation, subprocess wrapping, FFI dispatch
 // -- had zero test coverage.
 
-use montauk_mcp::json::Value;
-use montauk_mcp::rpc::Dispatcher;
-use montauk_mcp::tools::ToolServer;
+use vector::json::Value;
+use vector::rpc::Dispatcher;
+use vector::tools::ToolServer;
 use std::path::PathBuf;
 use std::sync::Once;
 
@@ -42,7 +42,7 @@ fn ffi_search_size_contract_holds() {
     // The Rust SubSearch mirror and the C sublimation_search must be the
     // same size, or compile writes past the mirror's stack buffer. The C
     // side pins its half with a static_assert; this is the runtime half.
-    montauk_mcp::ffi::assert_search_size_matches();
+    vector::ffi::assert_search_size_matches();
 }
 
 #[test]
@@ -53,18 +53,26 @@ fn initialize_reports_protocol_version_and_server_info() {
         &Value::String("2024-11-05".to_string())
     );
     let info = result.get("serverInfo").unwrap();
-    assert_eq!(info.get("name").unwrap(), &Value::String("montauk-mcp".to_string()));
+    assert_eq!(info.get("name").unwrap(), &Value::String("vector".to_string()));
     assert!(result.get("capabilities").unwrap().get("tools").is_some());
 }
 
 #[test]
-fn tools_list_names_all_four_tools() {
+fn tools_list_names_all_seven_tools() {
     let result = call("tools/list", None).unwrap();
     let tools = result.get("tools").unwrap().as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t.get("name").unwrap().as_str().unwrap()).collect();
     assert_eq!(
         names,
-        vec!["montauk_snapshot", "montauk_analyze_report", "montauk_digest", "sublimation"]
+        vec![
+            "montauk_snapshot",
+            "montauk_anomalies",
+            "montauk_similar",
+            "montauk_regime",
+            "montauk_analyze_report",
+            "montauk_digest",
+            "sublimation"
+        ]
     );
     // Every tool description must say what it wraps or does -- a regression
     // where a description goes empty would otherwise pass silently.
@@ -105,7 +113,7 @@ fn sublimation_sort_returns_ascending_order() {
         ),
     ]);
     let result = tool_call("sublimation", args).unwrap();
-    let parsed = montauk_mcp::json::parse(tool_text(&result)).expect("sublimation sort output must parse");
+    let parsed = vector::json::parse(tool_text(&result)).expect("sublimation sort output must parse");
     let sorted = parsed.get("result").unwrap().as_array().unwrap();
     let values: Vec<f64> = sorted.iter().map(|v| v.as_f64().unwrap()).collect();
     assert_eq!(values, vec![1.0, 3.0, 5.0]);
@@ -119,7 +127,7 @@ fn sublimation_classify_names_a_disorder_class() {
         ("values", Value::Array(values)),
     ]);
     let result = tool_call("sublimation", args).unwrap();
-    let parsed = montauk_mcp::json::parse(tool_text(&result)).expect("sublimation classify output must parse");
+    let parsed = vector::json::parse(tool_text(&result)).expect("sublimation classify output must parse");
     // Ascending 0..64 is the textbook "already sorted" case.
     assert_eq!(parsed.get("disorder").unwrap(), &Value::String("sorted".to_string()));
 }
@@ -132,7 +140,7 @@ fn sublimation_grep_reports_match_position() {
         ("text", Value::String("hello world".to_string())),
     ]);
     let result = tool_call("sublimation", args).unwrap();
-    let parsed = montauk_mcp::json::parse(tool_text(&result)).expect("sublimation grep output must parse");
+    let parsed = vector::json::parse(tool_text(&result)).expect("sublimation grep output must parse");
     assert_eq!(parsed.get("matched").unwrap(), &Value::Bool(true));
     assert_eq!(parsed.get("start").unwrap(), &Value::Number(6.0));
 }
@@ -145,7 +153,7 @@ fn sublimation_grep_no_match_reports_false() {
         ("text", Value::String("hello world".to_string())),
     ]);
     let result = tool_call("sublimation", args).unwrap();
-    let parsed = montauk_mcp::json::parse(tool_text(&result)).expect("sublimation grep output must parse");
+    let parsed = vector::json::parse(tool_text(&result)).expect("sublimation grep output must parse");
     assert_eq!(parsed.get("matched").unwrap(), &Value::Bool(false));
 }
 
@@ -190,7 +198,7 @@ fn sublimation_contains_case_insensitive() {
         ("icase", Value::Bool(true)),
     ]);
     let result = tool_call("sublimation", args).unwrap();
-    let parsed = montauk_mcp::json::parse(tool_text(&result)).expect("sublimation contains output must parse");
+    let parsed = vector::json::parse(tool_text(&result)).expect("sublimation contains output must parse");
     assert_eq!(parsed.get("matched").unwrap(), &Value::Bool(true));
 }
 
@@ -246,7 +254,7 @@ fn montauk_digest_missing_dir_is_an_error() {
 // binaries built earlier in the same tree (../build/ relative to
 // CARGO_MANIFEST_DIR). Skipped, not failed, if the binaries aren't there --
 // same missing-binary discipline tests/harness.py's missing_bins() uses,
-// since a fresh checkout with montauk-mcp built but montauk_core not yet
+// since a fresh checkout with vector built but montauk_core not yet
 // built shouldn't fail this suite. All three share one PATH mutation, done
 // once in one test function -- std::env::set_var is process-global, and
 // Rust runs #[test] functions in parallel by default, so splitting this
@@ -287,7 +295,7 @@ fn subprocess_backed_tools_happy_paths() {
         let args = Value::obj(vec![("file", Value::String(fixture.to_string_lossy().into_owned()))]);
         let result = tool_call("montauk_analyze_report", args).unwrap();
         let text = tool_text(&result);
-        let parsed = montauk_mcp::json::parse(text).expect("montauk_analyze --json output must parse");
+        let parsed = vector::json::parse(text).expect("montauk_analyze --json output must parse");
         assert!(parsed.get("schema_version").is_some());
         assert!(parsed.get("reports").is_some());
     }
@@ -301,7 +309,7 @@ fn subprocess_backed_tools_happy_paths() {
         let args = Value::obj(vec![("dir", Value::String(digest_dir.to_string_lossy().into_owned()))]);
         let result = tool_call("montauk_digest", args).unwrap();
         let text = tool_text(&result);
-        let parsed = montauk_mcp::json::parse(text).expect("montauk_analyze --digest --json output must parse");
+        let parsed = vector::json::parse(text).expect("montauk_analyze --digest --json output must parse");
         assert!(parsed.get("schema_version").is_some());
         assert!(parsed.get("digest").is_some());
         std::fs::remove_dir_all(&digest_dir).ok();
@@ -311,7 +319,7 @@ fn subprocess_backed_tools_happy_paths() {
     if build.join("montauk").exists() {
         let result = tool_call("montauk_snapshot", Value::obj(vec![])).unwrap();
         let text = tool_text(&result);
-        let parsed = montauk_mcp::json::parse(text).expect("montauk --json output must parse");
+        let parsed = vector::json::parse(text).expect("montauk --json output must parse");
         assert!(parsed.get("cpu").is_some());
         assert!(parsed.get("memory").is_some());
     }

@@ -1,6 +1,11 @@
 # Project metadata
 COMMIT_MESSAGE.txt
 
+# Research / prototyping staging: prototypes, benches and design notes, some
+# referencing confidential sibling research. Local only,
+# graduates into tests/ and the tree once proven. Never shipped.
+tests/research/
+
 # Build directories and artifacts
 /build/
 /build-*/
@@ -8,7 +13,7 @@ COMMIT_MESSAGE.txt
 **/build/
 /src/build/
 cmake-build-*/
-_match_build/
+_*_build/
 
 # CMake in-tree (avoid committing if someone configured in source)
 /CMakeCache.txt
@@ -17,7 +22,7 @@ _match_build/
 /install_manifest.txt
 /compile_commands.json
 
-# Cargo build output (components/mcp/, any future Rust crate). Cargo.lock stays
+# Cargo build output (components/vector/, any future Rust crate). Cargo.lock stays
 # tracked -- the MCP server is a binary crate, and binaries commit their lock
 # file by convention; only the build output itself is ignored.
 target/

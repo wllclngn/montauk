@@ -647,13 +647,13 @@ void sublimation_search_compile(sublimation_search *out, const char *pattern,
 
 int sublimation_search_valid(const sublimation_search *s) { return s->valid; }
 
-// The opaque-buffer contract with foreign callers (montauk-mcp mirrors this
+// The opaque-buffer contract with foreign callers (vector mirrors this
 // struct as a byte buffer in Rust). The static assert pins the size the
 // mirror was written against; growth breaks THIS build, never a caller's
 // stack. The sizeof export lets a binding assert the contract at runtime.
 static_assert(sizeof(sublimation_search) == 5696,
               "sublimation_search grew: update every foreign mirror "
-              "(components/mcp/src/ffi.rs) and this assert together");
+              "(components/vector/src/ffi.rs) and this assert together");
 
 size_t sublimation_search_sizeof(void) { return sizeof(sublimation_search); }
 

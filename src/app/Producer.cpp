@@ -1,6 +1,7 @@
 #include "app/Producer.hpp"
 #include "util/Log.hpp"
 #include "app/ChartHistories.hpp"
+#include "app/AnomalyEnrichment.hpp"
 #include <unistd.h>
 #include <cstdio>
 #include <cstring>
@@ -188,6 +189,7 @@ void Producer::run(std::stop_token st) {
       s.alerts.clear();
       for (auto& it : a) s.alerts.push_back(montauk::model::AlertItem{it.severity, it.message});
     }
+    montauk::app::enrich_anomalies(s.procs);
     chart_histories().push_snapshot(s);
     buffers_.publish();
   }
@@ -228,6 +230,7 @@ void Producer::run(std::stop_token st) {
         gpu_attr_->enrich(s);
         next_nvml = now + nvml_interval;
       }
+      montauk::app::enrich_anomalies(s.procs);
       chart_histories().push_snapshot(s);
       buffers_.publish();
     }

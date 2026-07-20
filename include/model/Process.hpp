@@ -25,6 +25,10 @@ struct ProcSample {
   std::string user_name;
   std::string cmd;
   std::string exe_path;
+  // Cross-sectional anomaly enrichment (AnomalyEnrichment): fused score over the
+  // live process population, higher = more anomalous, with the dominant feature.
+  double  anomaly_score{0.0};
+  int8_t  anomaly_axis{-1};   // 0=cpu, 1=rss, 2=gpu; -1 = none
 };
 
 struct ProcessSnapshot {

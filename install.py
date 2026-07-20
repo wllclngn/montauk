@@ -9,7 +9,7 @@ The kernel module and eBPF trace build unless opted out (--no-kernel,
 --no-bpf). When a feature is requested its prereqs are mandatory: kernel
 headers for the module, the eBPF toolchain (clang, bpftool, libbpf, kernel
 BTF) for trace; a missing prereq aborts the install with the fix to run.
-montauk-mcp (the MCP server) builds via cargo when cargo is on PATH and is
+vector (the MCP server) builds via cargo when cargo is on PATH and is
 skipped by name when it is not.
 
 Usage:
@@ -377,27 +377,27 @@ def resolve_kernel(args, source_dir: Path) -> bool:
 
 
 def build_mcp(source_dir: Path) -> bool:
-    """Build montauk-mcp, the MCP server -- a sibling cargo crate that links
+    """Build vector, the MCP server -- a sibling cargo crate that links
     the CMake-built libsublimation.a, so it must run after the main build.
     cargo is optional: absent cargo skips the crate by name; present cargo
     must build it cleanly."""
-    mcp_dir = source_dir / "components" / "mcp"
+    mcp_dir = source_dir / "components" / "vector"
     if not mcp_dir.exists():
-        log_warn("montauk-mcp source not found -- MCP server skipped")
+        log_warn("vector source not found -- MCP server skipped")
         return True
     if shutil.which("cargo") is None:
-        log_warn("cargo not found -- montauk-mcp (MCP server) skipped")
+        log_warn("cargo not found -- vector (MCP server) skipped")
         return True
 
-    log_info("BUILDING MCP SERVER (montauk-mcp)")
+    log_info("BUILDING MCP SERVER (vector)")
     ret = run_cmd(["cargo", "build", "--release"], cwd=mcp_dir)
     if ret != 0:
-        log_error("montauk-mcp build failed!")
+        log_error("vector build failed!")
         return False
 
-    mcp_bin = mcp_dir / "target" / "release" / "montauk-mcp"
+    mcp_bin = mcp_dir / "target" / "release" / "vector"
     if not mcp_bin.exists():
-        log_error("montauk-mcp binary not found after build!")
+        log_error("vector binary not found after build!")
         return False
     log_info(f"Built {mcp_bin}")
     return True
@@ -503,7 +503,7 @@ def cmd_build(args, source_dir: Path) -> bool:
     size = binary.stat().st_size
     log_info(f"Built {binary} ({size} bytes)")
 
-    # montauk-mcp links libsublimation.a out of build/, so it builds last.
+    # vector links libsublimation.a out of build/, so it builds last.
     if not build_mcp(source_dir):
         return False
 
@@ -562,14 +562,14 @@ def cmd_install(args, source_dir: Path) -> bool:
         else:
             log_warn(f"{tool} missing from build dir — not installed")
 
-    # montauk-mcp (the MCP server) ships beside montauk when cargo built it;
+    # vector (the MCP server) ships beside montauk when cargo built it;
     # a cargo-less box already got the named skip in build_mcp.
-    mcp_bin = source_dir / "components" / "mcp" / "target" / "release" / "montauk-mcp"
+    mcp_bin = source_dir / "components" / "vector" / "target" / "release" / "vector"
     if mcp_bin.exists():
-        if install_atomic(mcp_bin, prefix / "bin" / "montauk-mcp") == 0:
-            log_info(f"Installed {prefix / 'bin' / 'montauk-mcp'}")
+        if install_atomic(mcp_bin, prefix / "bin" / "vector") == 0:
+            log_info(f"Installed {prefix / 'bin' / 'vector'}")
         else:
-            log_warn("Failed to install montauk-mcp")
+            log_warn("Failed to install vector")
 
     # The generic profile harness (montauk_profile): a montauk feature any
     # application uses to turn a montauk capture into a montauk_analyze report --
@@ -670,7 +670,7 @@ def cmd_uninstall(args, source_dir: Path) -> bool:
                prefix / "bin" / "montauk_analyze",
                prefix / "bin" / "montauk_trace_decode",
                prefix / "bin" / "sublimation",
-               prefix / "bin" / "montauk-mcp",
+               prefix / "bin" / "vector",
                prefix / "bin" / "montauk-profile",
                prefix / "lib" / "montauk" / "montauk_profile.py",
                prefix / "share" / "man" / "man1" / "montauk.1"]
@@ -754,7 +754,7 @@ Examples:
   ./install.py clean              # Clean build
 
 The kernel module and eBPF trace build by default; --no-kernel / --no-bpf
-opt out. montauk-mcp (the MCP server) builds when cargo is on PATH.
+opt out. vector (the MCP server) builds when cargo is on PATH.
 """
     )
 
