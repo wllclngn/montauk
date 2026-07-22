@@ -41,8 +41,9 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
       continue;
     }
     uint64_t ut=0, st=0; int64_t rssp=0; std::string comm;
+    uint64_t minflt=0, majflt=0; int nthreads=1;
     char stch='?';
-    if (!parse_stat_line(*content_opt, stch, ut, st, rssp, comm)) {
+    if (!parse_stat_line(*content_opt, stch, ut, st, rssp, comm, minflt, majflt, nthreads)) {
       montauk::util::note_churn(montauk::util::ChurnKind::Proc);
       montauk::model::ProcSample ps; ps.pid = pid; ps.total_time=0; ps.rss_kb=0; ps.cpu_pct=0.0; ps.churn_reason = montauk::model::ChurnReason::ReadFailed; ps.cmd = comm.empty()? name : comm;
       out.processes.push_back(std::move(ps));
@@ -59,6 +60,7 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     }
     montauk::model::ProcSample ps; ps.pid=pid; ps.total_time=total_proc; ps.rss_kb = (rssp>0 ? static_cast<uint64_t>(rssp)*page_kb : 0);
     ps.cpu_pct = cpu_pct; ps.cmd = comm; // exe/command/user enriched after top-K below
+    ps.flt_raw = minflt + majflt; ps.thread_count = nthreads;
     out.processes.push_back(std::move(ps));
     // Count process states
     if (stch == 'R') out.state_running++;

@@ -1,6 +1,6 @@
-# HELP montauk_system_info System specs: cpu model, cores, memory, gpu, kernel, scheduler
+# HELP montauk_system_info System specs: montauk version, cpu model, cores, memory, gpu, kernel, scheduler
 # TYPE montauk_system_info gauge
-montauk_system_info{cpu_model="Test CPU",physical_cores="6",logical_cpus="12",mem_total_gib="62.7",gpu="Test GPU",kernel="7.1.3-arch1-2",sched="pandemonium",cache_domain="2"} 1
+montauk_system_info{version="8.3.0",cpu_model="Test CPU",physical_cores="6",logical_cpus="12",mem_total_gib="62.7",gpu="Test GPU",kernel="7.1.3-arch1-2",sched="pandemonium",cache_domain="2"} 1
 # HELP montauk_cpu_usage_percent Aggregate CPU utilization
 # TYPE montauk_cpu_usage_percent gauge
 montauk_cpu_usage_percent 42.5

@@ -30,6 +30,17 @@ int sublimation_spectral_residual(const double *signal, size_t n, size_t q,
                                   double tau, size_t z, double *saliency,
                                   uint8_t *flags);
 
+// Self-join matrix profile over a real series: for every length-m subsequence,
+// the z-normalized Euclidean distance to its nearest non-trivial neighbour
+// (STOMP -- the first sliding-dot-product row via the FFT above, the rest via
+// the O(1) diagonal recurrence). Fills mp[n-m+1] and mpi[n-m+1] (the
+// nearest-neighbour subsequence index). argmax(mp) is the discord (the single
+// most anomalous window); the smallest-mp pair is the motif (the most
+// recurring pattern). A trivial-match exclusion of m/4 each side is applied.
+// Returns 0 on success, nonzero if m < 2, m > n, or on OOM.
+int sublimation_matrix_profile(const double *series, size_t n, size_t m,
+                               double *mp, int64_t *mpi);
+
 #ifdef __cplusplus
 }
 #endif

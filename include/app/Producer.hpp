@@ -64,6 +64,9 @@ private:
   montauk::collectors::ThermalCollector thermal_{};
   // Rolling cache of per-process GPU util with a short TTL to avoid flicker between NVML sample windows (test helper)
   std::unordered_map<int, std::pair<int, std::chrono::steady_clock::time_point>> last_proc_gpu_;
+  // Per-pid cumulative fault count from the previous cycle; the anomaly
+  // enrichment derives its fault-delta feature from this and refreshes it.
+  std::unordered_map<int32_t, uint64_t> anomaly_prev_faults_;
   // Unified GPU attributor (NVML + fdinfo)
   std::unique_ptr<montauk::app::GpuAttributor> gpu_attr_;
 };

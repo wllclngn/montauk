@@ -134,6 +134,42 @@ def main():
     note(f"  spike at {spike} {'flagged' if hit else 'MISSED'}")
     fails += not hit
 
+    note("matrix profile: mp vs numpy brute-force z-normalized reference")
+    nmp, win = 256, 16
+    ii = np.arange(nmp, dtype=float)
+    mps = np.sin(0.3 * ii) + 0.5 * np.sin(0.7 * ii)
+    mps[100:110] += 3.0  # planted discord
+    Lm = nmp - win + 1
+    excl = win // 4
+
+    def znorm(x):
+        sd = x.std()
+        return (x - x.mean()) / (sd if sd > 1e-10 else 1.0)
+
+    subs = np.array([znorm(mps[k:k + win]) for k in range(Lm)])
+    ref_mp = np.full(Lm, np.inf)
+    for a in range(Lm):
+        for b in range(Lm):
+            if abs(a - b) <= excl:
+                continue
+            d = float(np.linalg.norm(subs[a] - subs[b]))
+            if d < ref_mp[a]:
+                ref_mp[a] = d
+    mp_out = run(["mp", str(win)], mps)
+    got_mp = np.array([float(ln.split()[0]) for ln in mp_out])
+    ok = np.allclose(got_mp, ref_mp, rtol=1e-6, atol=1e-6)
+    note(f"  mp values {'ok' if ok else 'DIVERGED'} "
+         f"(max|d|={np.max(np.abs(got_mp - ref_mp)):.2e})")
+    fails += not ok
+    disc_ok = int(np.argmax(got_mp)) == int(np.argmax(ref_mp))
+    motif_ok = int(np.argmin(got_mp)) == int(np.argmin(ref_mp))
+    note(f"  discord+motif indices {'match' if disc_ok and motif_ok else 'DIVERGED'}")
+    fails += not (disc_ok and motif_ok)
+    disc = int(np.argmax(got_mp))
+    hit = 100 - win < disc <= 110
+    note(f"  behavioral: discord at {disc} {'in planted window' if hit else 'MISSED'}")
+    fails += not hit
+
     note("")
     if fails:
         note(f"GATE FAILED: {fails} check(s) diverged")

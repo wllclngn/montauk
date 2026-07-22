@@ -8,14 +8,21 @@
 //   4. Parallel scatter: each worker scatters its chunk into global
 //      bucket positions using cached assignments. Disjoint writes.
 //   5. Parallel per-bucket sort: greedy load-balanced assignment,
-//      single wave of thread creation.
+//      largest bucket to the least-loaded worker.
 //
-// Classification and scatter are O(n/p), removing the Amdahl bottleneck.
-// Thread creation is minimized: 3 barrier phases, num_workers threads each.
+// Thread lifecycle is paid ONCE per sort: the worker threads are spawned a
+// single time and held across all phases with a barrier, rather than the
+// three create+join waves an earlier version paid. The serial sections
+// (prefix-sum merge, scatter-back + greedy assignment) run on worker 0 while
+// the others wait at the next barrier. This is deliberately intra-sort, not a
+// persistent cross-call pool: sublimation stays a stateless, synchronous
+// library that owns no threads between calls. Measured worth it -- at the
+// n>=250K threshold the three-wave lifecycle was ~35% of the sort.
 #define _POSIX_C_SOURCE 200809L
 #define _GNU_SOURCE
 #include "internal/pool.h"
 #include "internal/sort_internal.h"
+#include <pthread.h>
 #include <sched.h>
 #include <stdlib.h>
 #include <string.h>
@@ -95,92 +102,197 @@ static inline size_t find_bucket(int64_t val, const int64_t *splitters,
     return lo;
 }
 
-// Worker context for classify + scatter phases
+// Start-gate: workers park here until the main thread confirms every worker
+// spawned (go) or that one failed (abort), so a create failure never leaves a
+// worker deadlocked on a barrier sized for the full set.
 typedef struct {
-    const int64_t *arr;
-    size_t         chunk_lo;
-    size_t         chunk_hi;       // exclusive
-    const int64_t *splitters;
-    size_t         num_splitters;
-    size_t         num_buckets;
-    size_t        *my_counts;      // [num_buckets], worker-local
-    uint16_t      *my_buckets;     // cached bucket assignments for this chunk
-    int64_t       *scratch;
-    size_t        *my_offsets;     // [num_buckets], per-worker write positions
-    int            phase;          // 0 = classify, 1 = scatter
-} sub_distrib_ctx_t;
+    pthread_mutex_t m;
+    pthread_cond_t  c;
+    int             state;   // 0 = wait, 1 = go, 2 = abort
+} sub_gate_t;
 
-static void *worker_distrib_fn(void *arg) {
-    sub_distrib_ctx_t *ctx = (sub_distrib_ctx_t *)arg;
+// One worker's view of the sort. All the matrix pointers are shared (identical
+// across workers); worker 0 alone reads/writes the global_* arrays and the
+// sort assignment during the serial sections, fenced by the barrier.
+typedef struct {
+    int             worker_id;
+    size_t          num_workers;
 
-    if (ctx->phase == 0) {
-        // CLASSIFY: count + cache bucket assignments
-        const int64_t *arr = ctx->arr;
-        const int64_t *splitters = ctx->splitters;
-        size_t ns = ctx->num_splitters;
-        size_t *counts = ctx->my_counts;
-        uint16_t *buckets = ctx->my_buckets;
+    int64_t        *arr;
+    size_t          n;
+    const int64_t  *splitters;
+    size_t          num_splitters;
+    size_t          k;               // num_buckets
+    int64_t        *scratch;
 
-        memset(counts, 0, ctx->num_buckets * sizeof(size_t));
+    size_t          chunk_lo;
+    size_t          chunk_hi;        // exclusive
+    size_t         *my_counts;       // &counts_matrix[w*k]
+    uint16_t       *my_buckets;      // &all_buckets[chunk_lo]
+    size_t         *my_offsets;      // &offsets_matrix[w*k]
 
-        size_t len = ctx->chunk_hi - ctx->chunk_lo;
-        for (size_t i = 0; i < len; i++) {
-            size_t b = find_bucket(arr[ctx->chunk_lo + i], splitters, ns);
-            buckets[i] = (uint16_t)b;
-            counts[b]++;
-        }
-    } else {
-        // SCATTER: use cached assignments (no re-classification)
-        const int64_t *arr = ctx->arr;
-        int64_t *scratch = ctx->scratch;
-        size_t *offsets = ctx->my_offsets;
-        const uint16_t *buckets = ctx->my_buckets;
+    // shared, worker 0 owns during serial sections
+    size_t         *counts_matrix;
+    size_t         *offsets_matrix;
+    size_t         *global_counts;
+    size_t         *global_offsets;
+    size_t         *bucket_order;
+    size_t         *assign_offsets;  // flattened per-worker bucket start offsets
+    size_t         *assign_counts;   // flattened per-worker bucket sizes
+    size_t         *worker_sort_start; // [num_workers] slice start in assign_*
+    size_t         *worker_sort_n;     // [num_workers] slice length
 
-        size_t len = ctx->chunk_hi - ctx->chunk_lo;
-        for (size_t i = 0; i < len; i++) {
-            size_t b = buckets[i];
-            scratch[offsets[b]++] = arr[ctx->chunk_lo + i];
+    pthread_barrier_t *barrier;
+    sub_gate_t        *gate;
+} sub_pool_worker_t;
+
+// PHASE 2 body: count + cache bucket assignments for this chunk.
+static void do_classify(sub_pool_worker_t *c) {
+    memset(c->my_counts, 0, c->k * sizeof(size_t));
+    size_t len = c->chunk_hi - c->chunk_lo;
+    for (size_t i = 0; i < len; i++) {
+        size_t b = find_bucket(c->arr[c->chunk_lo + i], c->splitters,
+                               c->num_splitters);
+        c->my_buckets[i] = (uint16_t)b;
+        c->my_counts[b]++;
+    }
+}
+
+// PHASE 3 body (worker 0): prefix-sum merge over the per-worker counts into
+// global bucket counts, global bucket offsets, and each worker's write cursor.
+static void do_merge(sub_pool_worker_t *c) {
+    size_t k = c->k, nw = c->num_workers;
+    for (size_t b = 0; b < k; b++) {
+        size_t total = 0;
+        for (size_t w = 0; w < nw; w++) total += c->counts_matrix[w * k + b];
+        c->global_counts[b] = total;
+    }
+    c->global_offsets[0] = 0;
+    for (size_t b = 1; b < k; b++)
+        c->global_offsets[b] = c->global_offsets[b - 1] + c->global_counts[b - 1];
+    for (size_t b = 0; b < k; b++) {
+        size_t running = c->global_offsets[b];
+        for (size_t w = 0; w < nw; w++) {
+            c->offsets_matrix[w * k + b] = running;
+            running += c->counts_matrix[w * k + b];
         }
     }
+}
 
+// PHASE 4 body: scatter this chunk into global bucket positions using cached
+// assignments. Disjoint writes across workers.
+static void do_scatter(sub_pool_worker_t *c) {
+    size_t len = c->chunk_hi - c->chunk_lo;
+    for (size_t i = 0; i < len; i++) {
+        size_t b = c->my_buckets[i];
+        c->scratch[c->my_offsets[b]++] = c->arr[c->chunk_lo + i];
+    }
+}
+
+// PHASE 5 setup (worker 0): scatter back into arr, then greedily assign
+// buckets (largest first) to the least-loaded worker, recording each worker's
+// slice of the flattened assignment arrays.
+static void do_assign(sub_pool_worker_t *c) {
+    memcpy(c->arr, c->scratch, c->n * sizeof(int64_t));
+
+    size_t k = c->k, nw = c->num_workers;
+    for (size_t i = 0; i < k; i++) c->bucket_order[i] = i;
+    // insertion sort bucket indices by descending count
+    for (size_t i = 1; i < k; i++) {
+        size_t key = c->bucket_order[i];
+        size_t j = i;
+        while (j > 0 &&
+               c->global_counts[c->bucket_order[j - 1]] < c->global_counts[key]) {
+            c->bucket_order[j] = c->bucket_order[j - 1];
+            j--;
+        }
+        c->bucket_order[j] = key;
+    }
+
+    size_t load[64] = {0};
+    size_t nass[64] = {0};
+    for (size_t i = 0; i < k; i++) {
+        size_t b = c->bucket_order[i];
+        if (c->global_counts[b] <= 1) continue;
+        size_t best = 0;
+        for (size_t w = 1; w < nw; w++) if (load[w] < load[best]) best = w;
+        load[best] += c->global_counts[b];
+        nass[best]++;
+    }
+
+    size_t off = 0;
+    for (size_t w = 0; w < nw; w++) {
+        c->worker_sort_start[w] = off;
+        off += nass[w];
+        c->worker_sort_n[w] = 0;
+    }
+
+    size_t load2[64] = {0};
+    for (size_t i = 0; i < k; i++) {
+        size_t b = c->bucket_order[i];
+        if (c->global_counts[b] <= 1) continue;
+        size_t best = 0;
+        for (size_t w = 1; w < nw; w++) if (load2[w] < load2[best]) best = w;
+        load2[best] += c->global_counts[b];
+        size_t slot = c->worker_sort_start[best] + c->worker_sort_n[best];
+        c->assign_offsets[slot] = c->global_offsets[b];
+        c->assign_counts[slot] = c->global_counts[b];
+        c->worker_sort_n[best]++;
+    }
+}
+
+// PHASE 5 body: sort this worker's assigned buckets in place.
+static void do_sort(sub_pool_worker_t *c) {
+    size_t start = c->worker_sort_start[c->worker_id];
+    size_t cnt = c->worker_sort_n[c->worker_id];
+    for (size_t j = 0; j < cnt; j++) {
+        size_t bn = c->assign_counts[start + j];
+        if (bn <= 1) continue;
+        sub_adaptive_t state;
+        sub_adaptive_init(&state, bn);
+        sub_sort_internal_i64(c->arr + c->assign_offsets[start + j], bn,
+                              &state, NULL);
+    }
+}
+
+// Persistent worker: one spawn, all phases, barrier between each.
+static void *worker_all(void *arg) {
+    sub_pool_worker_t *c = (sub_pool_worker_t *)arg;
+
+    pthread_mutex_lock(&c->gate->m);
+    while (c->gate->state == 0) pthread_cond_wait(&c->gate->c, &c->gate->m);
+    int go = c->gate->state;
+    pthread_mutex_unlock(&c->gate->m);
+    if (go == 2) return nullptr;   // a sibling failed to spawn; abort cleanly
+
+    do_classify(c);
+    pthread_barrier_wait(c->barrier);                 // (1) all classified
+    if (c->worker_id == 0) do_merge(c);
+    pthread_barrier_wait(c->barrier);                 // (2) offsets ready
+    do_scatter(c);
+    pthread_barrier_wait(c->barrier);                 // (3) all scattered
+    if (c->worker_id == 0) do_assign(c);
+    pthread_barrier_wait(c->barrier);                 // (4) arr + assignment ready
+    do_sort(c);
     return nullptr;
 }
 
-// Worker context for multi-bucket sort phase
-typedef struct {
-    int64_t       *arr;
-    size_t        *bucket_offsets;  // array of start offsets for this worker's buckets
-    size_t        *bucket_counts;   // array of sizes for this worker's buckets
-    size_t         num_assigned;    // how many buckets assigned to this worker
-    int            disorder;
-} sub_multi_sort_ctx_t;
-
-static void *worker_multi_sort_fn(void *arg) {
-    sub_multi_sort_ctx_t *ctx = (sub_multi_sort_ctx_t *)arg;
-
-    for (size_t i = 0; i < ctx->num_assigned; i++) {
-        size_t bn = ctx->bucket_counts[i];
-        if (bn <= 1) continue;
-
-        sub_adaptive_t state;
-        sub_adaptive_init(&state, bn);
-        sub_sort_internal_i64(ctx->arr + ctx->bucket_offsets[i], bn, &state, NULL);
-    }
-
-    return nullptr;
+static void sequential_sort(int64_t *arr, size_t n) {
+    sub_adaptive_t state;
+    sub_adaptive_init(&state, n);
+    sub_sort_internal_i64(arr, n, &state, NULL);
 }
 
 // PARALLEL SORT ENTRY POINT
 void sub_parallel_sort_i64(int64_t *arr, size_t n, size_t num_workers,
                            int disorder) {
+    (void)disorder;   // per-bucket sort is adaptive; kept for ABI stability
     if (n <= 1) return;
     if (num_workers < 2) num_workers = 2;
     if (num_workers > 64) num_workers = 64;
 
-    // Overpartition: more buckets than workers for load balance.
-    // Each worker handles multiple buckets in the sort phase via
-    // greedy assignment (largest-first to least-loaded worker).
-    // This is a single wave of thread creation -- no per-wave overhead.
+    // Overpartition: more buckets than workers for load balance. Each worker
+    // handles multiple buckets in the sort phase via greedy assignment.
     size_t k = num_workers * 4;
     if (k > n / 128) k = n / 128;   // at least 128 elements per bucket
     if (k < num_workers) k = num_workers;
@@ -201,252 +313,108 @@ void sub_parallel_sort_i64(int64_t *arr, size_t n, size_t num_workers,
     size_t *offsets_matrix = malloc(num_workers * k * sizeof(size_t));
     size_t *global_offsets = malloc(k * sizeof(size_t));
     size_t *global_counts = malloc(k * sizeof(size_t));
-    pthread_t *threads = malloc(num_workers * sizeof(pthread_t));
-    sub_distrib_ctx_t *distrib_ctxs = malloc(num_workers * sizeof(sub_distrib_ctx_t));
     uint16_t *all_buckets = malloc(buckets_bytes);
+    size_t *bucket_order = malloc(k * sizeof(size_t));
+    size_t *assign_offsets = malloc(k * sizeof(size_t));
+    size_t *assign_counts = malloc(k * sizeof(size_t));
+    size_t *worker_sort_start = malloc(num_workers * sizeof(size_t));
+    size_t *worker_sort_n = malloc(num_workers * sizeof(size_t));
+    pthread_t *threads = malloc(num_workers * sizeof(pthread_t));
+    sub_pool_worker_t *ctxs = malloc(num_workers * sizeof(sub_pool_worker_t));
 
     if (!splitters || !scratch || !counts_matrix || !offsets_matrix ||
-        !global_offsets || !global_counts || !threads || !distrib_ctxs ||
-        !all_buckets) {
-        free(splitters); free(scratch); free(counts_matrix);
-        free(offsets_matrix); free(global_offsets); free(global_counts);
-        free(threads); free(distrib_ctxs); free(all_buckets);
-        sub_adaptive_t state;
-        sub_adaptive_init(&state, n);
-        sub_sort_internal_i64(arr, n, &state, NULL);
-        return;
+        !global_offsets || !global_counts || !all_buckets || !bucket_order ||
+        !assign_offsets || !assign_counts || !worker_sort_start ||
+        !worker_sort_n || !threads || !ctxs) {
+        if (arr && n > 1) sequential_sort(arr, n);
+        goto cleanup;
     }
 
     // PHASE 1: SAMPLE SPLITTERS
     sample_splitters(arr, n, splitters, k);
 
-    // Validity flags for joins: pthread_t is opaque, so a zeroed handle is
-    // not a portable "no thread" sentinel. num_workers is clamped to <= 64.
-    bool thread_started[64];
+    pthread_barrier_t barrier;
+    pthread_barrier_init(&barrier, nullptr, (unsigned)num_workers);
+    sub_gate_t gate;
+    pthread_mutex_init(&gate.m, nullptr);
+    pthread_cond_init(&gate.c, nullptr);
+    gate.state = 0;
 
-    // PHASE 2: PARALLEL CLASSIFICATION
     size_t chunk_size = (n + num_workers - 1) / num_workers;
-
     for (size_t w = 0; w < num_workers; w++) {
         size_t lo = w * chunk_size;
         size_t hi = lo + chunk_size;
         if (hi > n) hi = n;
+        if (lo > n) lo = n;
 
-        distrib_ctxs[w].arr = arr;
-        distrib_ctxs[w].chunk_lo = lo;
-        distrib_ctxs[w].chunk_hi = hi;
-        distrib_ctxs[w].splitters = splitters;
-        distrib_ctxs[w].num_splitters = num_splitters;
-        distrib_ctxs[w].num_buckets = k;
-        distrib_ctxs[w].my_counts = &counts_matrix[w * k];
-        distrib_ctxs[w].my_buckets = &all_buckets[lo];
-        distrib_ctxs[w].scratch = scratch;
-        distrib_ctxs[w].my_offsets = &offsets_matrix[w * k];
-        distrib_ctxs[w].phase = 0;
-
-        thread_started[w] =
-            pthread_create(&threads[w], nullptr, worker_distrib_fn, &distrib_ctxs[w]) == 0;
-        if (!thread_started[w]) {
-            worker_distrib_fn(&distrib_ctxs[w]);
-        }
+        ctxs[w].worker_id = (int)w;
+        ctxs[w].num_workers = num_workers;
+        ctxs[w].arr = arr;
+        ctxs[w].n = n;
+        ctxs[w].splitters = splitters;
+        ctxs[w].num_splitters = num_splitters;
+        ctxs[w].k = k;
+        ctxs[w].scratch = scratch;
+        ctxs[w].chunk_lo = lo;
+        ctxs[w].chunk_hi = hi;
+        ctxs[w].my_counts = &counts_matrix[w * k];
+        ctxs[w].my_buckets = &all_buckets[lo];
+        ctxs[w].my_offsets = &offsets_matrix[w * k];
+        ctxs[w].counts_matrix = counts_matrix;
+        ctxs[w].offsets_matrix = offsets_matrix;
+        ctxs[w].global_counts = global_counts;
+        ctxs[w].global_offsets = global_offsets;
+        ctxs[w].bucket_order = bucket_order;
+        ctxs[w].assign_offsets = assign_offsets;
+        ctxs[w].assign_counts = assign_counts;
+        ctxs[w].worker_sort_start = worker_sort_start;
+        ctxs[w].worker_sort_n = worker_sort_n;
+        ctxs[w].barrier = &barrier;
+        ctxs[w].gate = &gate;
     }
 
+    // Spawn once. Workers park on the gate until we confirm all spawned; a
+    // create failure aborts every worker before it touches the barrier, then
+    // we sort sequentially -- the same resource-exhaustion fallback the
+    // allocation failure above takes. No worker can deadlock on a barrier
+    // sized for a set that never fully spawned, and on abort arr is untouched.
+    size_t started = 0;
     for (size_t w = 0; w < num_workers; w++) {
-        if (thread_started[w]) pthread_join(threads[w], nullptr);
+        if (pthread_create(&threads[w], nullptr, worker_all, &ctxs[w]) != 0)
+            break;
+        started++;
     }
 
-    // PHASE 3: PREFIX-SUM MERGE (sequential, O(k * num_workers))
-    for (size_t b = 0; b < k; b++) {
-        size_t total = 0;
-        for (size_t w = 0; w < num_workers; w++) {
-            total += counts_matrix[w * k + b];
-        }
-        global_counts[b] = total;
-    }
+    bool all_started = (started == num_workers);
+    pthread_mutex_lock(&gate.m);
+    gate.state = all_started ? 1 : 2;
+    pthread_cond_broadcast(&gate.c);
+    pthread_mutex_unlock(&gate.m);
 
-    global_offsets[0] = 0;
-    for (size_t b = 1; b < k; b++) {
-        global_offsets[b] = global_offsets[b - 1] + global_counts[b - 1];
-    }
+    for (size_t w = 0; w < started; w++)
+        pthread_join(threads[w], nullptr);
 
-    for (size_t b = 0; b < k; b++) {
-        size_t running = global_offsets[b];
-        for (size_t w = 0; w < num_workers; w++) {
-            offsets_matrix[w * k + b] = running;
-            running += counts_matrix[w * k + b];
-        }
-    }
+    pthread_barrier_destroy(&barrier);
+    pthread_mutex_destroy(&gate.m);
+    pthread_cond_destroy(&gate.c);
 
-    // PHASE 4: PARALLEL SCATTER
-    for (size_t w = 0; w < num_workers; w++) {
-        distrib_ctxs[w].phase = 1;
-        thread_started[w] =
-            pthread_create(&threads[w], nullptr, worker_distrib_fn, &distrib_ctxs[w]) == 0;
-        if (!thread_started[w]) {
-            worker_distrib_fn(&distrib_ctxs[w]);
-        }
-    }
-
-    for (size_t w = 0; w < num_workers; w++) {
-        if (thread_started[w]) pthread_join(threads[w], nullptr);
-    }
-
-    memcpy(arr, scratch, n * sizeof(int64_t));
-
-    // PHASE 5: PARALLEL PER-BUCKET SORT
-    // Greedy load-balanced assignment: sort buckets by size descending,
-    // assign each bucket to the least-loaded worker.
-    // Single wave of num_workers threads.
-
-    // Sort bucket indices by size (descending) using insertion sort
-    size_t *bucket_order = malloc(k * sizeof(size_t));
-    // Per-worker assignment lists
-    size_t *assign_offsets = malloc(k * sizeof(size_t));  // bucket offsets per worker
-    size_t *assign_counts = malloc(k * sizeof(size_t));   // bucket counts per worker
-    size_t *worker_nassigned = calloc(num_workers, sizeof(size_t));
-    size_t *worker_load = calloc(num_workers, sizeof(size_t));
-    // Temporary: worker -> list of bucket indices
-    size_t *worker_buckets = malloc(k * sizeof(size_t));
-    sub_multi_sort_ctx_t *sort_ctxs = malloc(num_workers * sizeof(sub_multi_sort_ctx_t));
-
-    if (!bucket_order || !assign_offsets || !assign_counts || !worker_nassigned ||
-        !worker_load || !worker_buckets || !sort_ctxs) {
-        // Fallback: sequential
-        for (size_t b = 0; b < k; b++) {
-            if (global_counts[b] <= 1) continue;
-            sub_adaptive_t state;
-            sub_adaptive_init(&state, global_counts[b]);
-            sub_sort_internal_i64(arr + global_offsets[b], global_counts[b], &state, NULL);
-        }
-        goto cleanup;
-    }
-
-    // Initialize bucket order
-    for (size_t i = 0; i < k; i++) bucket_order[i] = i;
-
-    // Insertion sort by descending count
-    for (size_t i = 1; i < k; i++) {
-        size_t key = bucket_order[i];
-        size_t j = i;
-        while (j > 0 && global_counts[bucket_order[j-1]] < global_counts[key]) {
-            bucket_order[j] = bucket_order[j-1];
-            j--;
-        }
-        bucket_order[j] = key;
-    }
-
-    // Greedy assignment: for each bucket (largest first), assign to
-    // the worker with the smallest current load.
-    // First pass: count assignments per worker
-    {
-        size_t temp_load[64];
-        memset(temp_load, 0, num_workers * sizeof(size_t));
-        size_t temp_nassigned[64];
-        memset(temp_nassigned, 0, num_workers * sizeof(size_t));
-
-        for (size_t i = 0; i < k; i++) {
-            size_t b = bucket_order[i];
-            if (global_counts[b] <= 1) continue;
-
-            // find least loaded worker
-            size_t best_w = 0;
-            for (size_t w = 1; w < num_workers; w++) {
-                if (temp_load[w] < temp_load[best_w]) best_w = w;
-            }
-            temp_load[best_w] += global_counts[b];
-            temp_nassigned[best_w]++;
-        }
-
-        memcpy(worker_nassigned, temp_nassigned, num_workers * sizeof(size_t));
-    }
-
-    // Compute per-worker bucket list start offsets in worker_buckets
-    {
-        size_t offset = 0;
-        for (size_t w = 0; w < num_workers; w++) {
-            worker_load[w] = offset; // reuse as start index
-            offset += worker_nassigned[w];
-            worker_nassigned[w] = 0; // reset for second pass
-        }
-    }
-
-    // Second pass: actually assign bucket indices
-    {
-        size_t temp_load[64];
-        memset(temp_load, 0, num_workers * sizeof(size_t));
-
-        for (size_t i = 0; i < k; i++) {
-            size_t b = bucket_order[i];
-            if (global_counts[b] <= 1) continue;
-
-            size_t best_w = 0;
-            for (size_t w = 1; w < num_workers; w++) {
-                if (temp_load[w] < temp_load[best_w]) best_w = w;
-            }
-            temp_load[best_w] += global_counts[b];
-
-            size_t slot = worker_load[best_w] + worker_nassigned[best_w];
-            worker_buckets[slot] = b;
-            worker_nassigned[best_w]++;
-        }
-    }
-
-    // Build per-worker offset/count arrays and launch
-    {
-        size_t launched = 0;
-        size_t running_idx = 0;
-
-        for (size_t w = 0; w < num_workers; w++) {
-            size_t na = worker_nassigned[w];
-            if (na == 0) continue;
-
-            size_t start = worker_load[w];
-
-            // Fill assign_offsets and assign_counts for this worker
-            for (size_t j = 0; j < na; j++) {
-                size_t b = worker_buckets[start + j];
-                assign_offsets[running_idx + j] = global_offsets[b];
-                assign_counts[running_idx + j] = global_counts[b];
-            }
-
-            sort_ctxs[launched].arr = arr;
-            sort_ctxs[launched].bucket_offsets = &assign_offsets[running_idx];
-            sort_ctxs[launched].bucket_counts = &assign_counts[running_idx];
-            sort_ctxs[launched].num_assigned = na;
-            sort_ctxs[launched].disorder = disorder;
-
-            thread_started[launched] =
-                pthread_create(&threads[launched], nullptr, worker_multi_sort_fn,
-                               &sort_ctxs[launched]) == 0;
-            if (!thread_started[launched]) {
-                worker_multi_sort_fn(&sort_ctxs[launched]);
-            }
-            launched++;
-            running_idx += na;
-        }
-
-        for (size_t i = 0; i < launched; i++) {
-            if (thread_started[i]) pthread_join(threads[i], nullptr);
-        }
-    }
+    if (!all_started) sequential_sort(arr, n);
 
 cleanup:
-    free(bucket_order);
-    free(assign_offsets);
-    free(assign_counts);
-    free(worker_nassigned);
-    free(worker_load);
-    free(worker_buckets);
-    free(sort_ctxs);
     free(splitters);
     free(scratch);
     free(counts_matrix);
     free(offsets_matrix);
     free(global_offsets);
     free(global_counts);
-    free(threads);
-    free(distrib_ctxs);
     free(all_buckets);
+    free(bucket_order);
+    free(assign_offsets);
+    free(assign_counts);
+    free(worker_sort_start);
+    free(worker_sort_n);
+    free(threads);
+    free(ctxs);
 }
 
 size_t sub_default_num_workers(void) {

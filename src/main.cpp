@@ -43,6 +43,10 @@ using montauk::ui::config;
 int main(int argc, char** argv) {
   std::setlocale(LC_ALL, "");  // Required for wcwidth() to work correctly
   std::signal(SIGINT, on_sigint);
+  // SIGTERM too (systemd/kill default): run the same graceful teardown -- the
+  // final drop-snapshot flush and the trace-pattern liveness WARN -- rather
+  // than a hard kill that skips the whole run-loop teardown.
+  std::signal(SIGTERM, on_sigint);
   montauk_sink_init(&g_out, 1);
   std::atexit(drain_out);
   // Text-only UI is the default and only mode. Ctrl+C to exit.

@@ -23,7 +23,7 @@ pub const TOOLS_LIST: &[(&str, &str)] = &[
     ),
     (
         "montauk_anomalies",
-        "What is anomalous on the system right now, ranked and explained. Fuses MAD, Mahalanobis and Half-Space Trees over the live process population (CPU, RSS, GPU) into a per-process anomaly score, and returns the top processes with the dominant feature axis and a plain-language note. Read-only, wraps `montauk --json`. Arguments: top (number, optional, how many to return, default 5).",
+        "What is anomalous on the system right now, ranked and explained. Fuses MAD and Mahalanobis over the live process population (CPU, RSS, GPU, page-fault rate, thread count) into a per-process anomaly score, and returns the top processes with the dominant feature axis and a plain-language note. Read-only, wraps `montauk --json`. Arguments: top (number, optional, how many to return, default 5).",
     ),
     (
         "montauk_similar",
@@ -43,7 +43,7 @@ pub const TOOLS_LIST: &[(&str, &str)] = &[
     ),
     (
         "sublimation",
-        "Direct call into sublimation's sort/classify/grep/contains engines -- no subprocess. Arguments: op (\"sort\"|\"classify\"|\"grep\"|\"contains\"), values (number array, for sort/classify), pattern/text (strings, for grep/contains), icase (bool, optional).",
+        "Read-only call into sublimation's engines over a bounded input. The hot matcher/sort ops are direct FFI (no subprocess): \"sort\"|\"classify\" over values, \"grep\"|\"contains\" over pattern+text. The stat and stream ops route through the sublimation CLI, which owns those computations: over values -- \"sum\"|\"mean\"|\"stdev\"|\"variance\"|\"min\"|\"max\"|\"quantile\" (needs q in 0..1)|\"describe\"|\"outliers\"|\"histogram\"|\"characterize\"; over text (newline-separated lines) -- \"count\"|\"distinct\"|\"tally\". Arguments: op (required), values (number array), q (number, quantile only), pattern/text (strings), icase (bool, optional). For large or piped streams use the sublimation CLI directly; this tool is for bounded in-conversation analysis.",
     ),
 ];
 
@@ -111,8 +111,14 @@ pub fn input_schema_for(name: &str) -> Value {
         ),
         "sublimation" => schema_object(
             vec![
-                ("op", schema_string_enum(&["sort", "classify", "grep", "contains"])),
+                ("op", schema_string_enum(&[
+                    "sort", "classify", "grep", "contains",
+                    "sum", "mean", "stdev", "variance", "min", "max", "quantile",
+                    "describe", "outliers", "histogram", "characterize",
+                    "count", "distinct", "tally",
+                ])),
                 ("values", schema_number_array()),
+                ("q", schema_prop("number")),
                 ("pattern", schema_prop("string")),
                 ("text", schema_prop("string")),
                 ("icase", schema_prop("boolean")),
@@ -133,6 +139,49 @@ pub fn run_subprocess(bin: &str, args: &[&str]) -> Result<String, (i64, String)>
         return Err((-32000, format!("{bin} exited with {}: {stderr}", output.status)));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+// A subprocess variant that feeds a bounded input over stdin, for the
+// sublimation CLI's stream verbs (the stat/reduce/structure ops the C library
+// computes only inside cli.c, not through the FFI surface). stdin is written in
+// full and closed before stdout is drained; safe for the bounded results this
+// tool is scoped to, not for streaming large output.
+pub fn run_subprocess_stdin(bin: &str, args: &[&str], stdin_data: &str)
+    -> Result<String, (i64, String)> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new(bin)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| (-32000, format!("failed to spawn {bin}: {e}")))?;
+    child
+        .stdin
+        .take()
+        .ok_or((-32000, format!("{bin}: no stdin handle")))?
+        .write_all(stdin_data.as_bytes())
+        .map_err(|e| (-32000, format!("write to {bin} stdin: {e}")))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| (-32000, format!("wait for {bin}: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err((-32000, format!("{bin} exited with {}: {stderr}", output.status)));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+// f64 slice -> newline-separated stdin. Rust's default f64 formatting is the
+// shortest round-trippable decimal, so no precision is lost feeding the CLI.
+fn numbers_to_stdin(values: &[f64]) -> String {
+    let mut s = String::new();
+    for v in values {
+        s.push_str(&v.to_string());
+        s.push('\n');
+    }
+    s
 }
 
 pub fn text_content(text: String) -> Value {
@@ -192,6 +241,8 @@ pub fn call_montauk_anomalies(args: &Value) -> Result<Value, (i64, String)> {
             0 => "cpu",
             1 => "rss",
             2 => "gpu",
+            3 => "faults",
+            4 => "threads",
             _ => "none",
         }
     };
@@ -203,6 +254,8 @@ pub fn call_montauk_anomalies(args: &Value) -> Result<Value, (i64, String)> {
                 0 => format!("{cpu:.0}% CPU"),
                 1 => format!("{:.0} MB RSS", rss / 1024.0),
                 2 => "GPU activity".to_string(),
+                3 => "elevated page-fault rate".to_string(),
+                4 => "elevated thread count".to_string(),
                 _ => "no dominant feature".to_string(),
             };
             let note =
@@ -502,8 +555,39 @@ pub fn call_sublimation(args: &Value) -> Result<Value, (i64, String)> {
                 None => Value::obj(vec![("matched", Value::Bool(false))]),
             }
         }
+        // Numeric-stream stat verbs: route the values through the sublimation
+        // CLI (which owns these computations), returning its text verbatim.
+        "sum" | "mean" | "stdev" | "variance" | "min" | "max" | "describe"
+        | "outliers" | "histogram" | "characterize" => {
+            let values = values_as_f64(args)?;
+            let stdin = numbers_to_stdin(&values);
+            let out = run_subprocess_stdin("sublimation", &[op], &stdin)?;
+            return Ok(text_content(out));
+        }
+        "quantile" => {
+            let values = values_as_f64(args)?;
+            let q = args
+                .get("q")
+                .and_then(Value::as_f64)
+                .ok_or((-32602, "quantile requires 'q' (a probability in 0..1)".to_string()))?;
+            let stdin = numbers_to_stdin(&values);
+            let qs = q.to_string();
+            let out = run_subprocess_stdin("sublimation", &["quantile", &qs], &stdin)?;
+            return Ok(text_content(out));
+        }
+        // Text-line verbs: the input is arbitrary newline-separated lines.
+        "count" | "distinct" | "tally" => {
+            let text = arg_str(args, "text")
+                .ok_or((-32602, format!("'{op}' requires 'text' (newline-separated lines)")))?;
+            let out = run_subprocess_stdin("sublimation", &[op], text)?;
+            return Ok(text_content(out));
+        }
         other => {
-            return Err((-32602, format!("unknown op '{other}' -- expected sort|classify|grep|contains")));
+            return Err((-32602, format!(
+                "unknown op '{other}' -- expected one of sort|classify|grep|contains|\
+                 sum|mean|stdev|variance|min|max|quantile|describe|outliers|histogram|\
+                 characterize|count|distinct|tally"
+            )));
         }
     };
     Ok(text_content(result.to_string()))

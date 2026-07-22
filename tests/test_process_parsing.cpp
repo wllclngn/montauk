@@ -1,8 +1,10 @@
-// ProcessParsing: /proc/PID/stat field extraction (comm edge cases) and the
-// shared /proc/stat helpers under a MONTAUK_PROC_ROOT sandbox.
+// ProcessParsing: /proc/PID/stat field extraction (comm edge cases, the
+// fault/thread counters) and the shared /proc/stat helpers under a
+// MONTAUK_PROC_ROOT sandbox.
 #include "minitest.hpp"
 #include "env_guard.hpp"
 #include "collectors/ProcessParsing.hpp"
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <unistd.h>
@@ -10,15 +12,25 @@
 namespace fs = std::filesystem;
 
 // 52-field stat line builder: pid (comm) state ppid ... utime stime ... rss ...
+// with minflt/majflt/num_threads placed at their real field positions (10, 12,
+// 20) so the extraction of each is exercised, not just skipped over.
 static std::string stat_line(const std::string& comm, char state,
-                             uint64_t utime, uint64_t stime, int64_t rss) {
+                             uint64_t utime, uint64_t stime, int64_t rss,
+                             uint64_t minflt = 0, uint64_t majflt = 0,
+                             int num_threads = 0) {
   std::string s = "1234 (" + comm + ") ";
   s += state;
   s += " 1";                                     // ppid
-  for (int i = 0; i < 9; ++i) s += " 0";         // pgrp..cmajflt
+  for (int i = 0; i < 5; ++i) s += " 0";         // pgrp, session, tty, tpgid, flags
+  s += " " + std::to_string(minflt);             // minflt (field 10)
+  s += " 0";                                     // cminflt
+  s += " " + std::to_string(majflt);             // majflt (field 12)
+  s += " 0";                                     // cmajflt
   s += " " + std::to_string(utime);
   s += " " + std::to_string(stime);
-  for (int i = 0; i < 7; ++i) s += " 0";         // cutime..starttime
+  for (int i = 0; i < 4; ++i) s += " 0";         // cutime, cstime, priority, nice
+  s += " " + std::to_string(num_threads);        // num_threads (field 20)
+  s += " 0 0";                                   // itrealvalue, starttime
   s += " 4096";                                  // vsize
   s += " " + std::to_string(rss);
   for (int i = 0; i < 28; ++i) s += " 0";        // trailing fields
@@ -28,8 +40,10 @@ static std::string stat_line(const std::string& comm, char state,
 
 TEST(parse_stat_line_simple_comm) {
   char st = '?'; uint64_t ut = 0, stime = 0; int64_t rss = 0; std::string comm;
+  uint64_t mf = 0, jf = 0; int nt = 0;
   ASSERT_TRUE(montauk::collectors::parse_stat_line(
-      stat_line("bash", 'S', 111, 22, 3300), st, ut, stime, rss, comm));
+      stat_line("bash", 'S', 111, 22, 3300), st, ut, stime, rss, comm,
+      mf, jf, nt));
   ASSERT_EQ(comm, std::string("bash"));
   ASSERT_EQ(st, 'S');
   ASSERT_EQ(ut, 111ull);
@@ -41,8 +55,10 @@ TEST(parse_stat_line_comm_with_spaces_and_parens) {
   // Everything between the first '(' and the LAST ')' is the comm, verbatim;
   // internal spaces and parens must not shift the numeric fields.
   char st = '?'; uint64_t ut = 0, stime = 0; int64_t rss = 0; std::string comm;
+  uint64_t mf = 0, jf = 0; int nt = 0;
   ASSERT_TRUE(montauk::collectors::parse_stat_line(
-      stat_line("Web (Content) x", 'R', 7, 8, 9), st, ut, stime, rss, comm));
+      stat_line("Web (Content) x", 'R', 7, 8, 9), st, ut, stime, rss, comm,
+      mf, jf, nt));
   ASSERT_EQ(comm, std::string("Web (Content) x"));
   ASSERT_EQ(st, 'R');
   ASSERT_EQ(ut, 7ull);
@@ -53,8 +69,10 @@ TEST(parse_stat_line_comm_with_spaces_and_parens) {
 TEST(parse_stat_line_comm_fully_parenthesized) {
   // systemd's "(sd-pam)" style comm: nested parens resolve exactly.
   char st = '?'; uint64_t ut = 0, stime = 0; int64_t rss = 0; std::string comm;
+  uint64_t mf = 0, jf = 0; int nt = 0;
   ASSERT_TRUE(montauk::collectors::parse_stat_line(
-      stat_line("(sd-pam)", 'S', 5, 6, 70), st, ut, stime, rss, comm));
+      stat_line("(sd-pam)", 'S', 5, 6, 70), st, ut, stime, rss, comm,
+      mf, jf, nt));
   ASSERT_EQ(comm, std::string("(sd-pam)"));
   ASSERT_EQ(st, 'S');
   ASSERT_EQ(ut, 5ull);
@@ -62,12 +80,30 @@ TEST(parse_stat_line_comm_fully_parenthesized) {
   ASSERT_EQ(rss, 70ll);
 }
 
+TEST(parse_stat_line_faults_and_threads) {
+  // The fault counters (fields 10, 12) and num_threads (field 20) extract
+  // without shifting comm/utime/stime/rss around them.
+  char st = '?'; uint64_t ut = 0, stime = 0; int64_t rss = 0; std::string comm;
+  uint64_t mf = 0, jf = 0; int nt = 0;
+  ASSERT_TRUE(montauk::collectors::parse_stat_line(
+      stat_line("app", 'R', 40, 12, 5500, /*minflt=*/900, /*majflt=*/7,
+                /*num_threads=*/24),
+      st, ut, stime, rss, comm, mf, jf, nt));
+  ASSERT_EQ(mf, 900ull);
+  ASSERT_EQ(jf, 7ull);
+  ASSERT_EQ(nt, 24);
+  ASSERT_EQ(ut, 40ull);       // fields around the new ones stay put
+  ASSERT_EQ(stime, 12ull);
+  ASSERT_EQ(rss, 5500ll);
+}
+
 TEST(parse_stat_line_rejects_malformed) {
   char st = '?'; uint64_t ut = 0, stime = 0; int64_t rss = 0; std::string comm;
-  ASSERT_TRUE(!montauk::collectors::parse_stat_line("garbage without parens",
-                                                    st, ut, stime, rss, comm));
-  ASSERT_TRUE(!montauk::collectors::parse_stat_line("1234 )backwards( S",
-                                                    st, ut, stime, rss, comm));
+  uint64_t mf = 0, jf = 0; int nt = 0;
+  ASSERT_TRUE(!montauk::collectors::parse_stat_line(
+      "garbage without parens", st, ut, stime, rss, comm, mf, jf, nt));
+  ASSERT_TRUE(!montauk::collectors::parse_stat_line(
+      "1234 )backwards( S", st, ut, stime, rss, comm, mf, jf, nt));
 }
 
 TEST(read_cpu_total_and_count_honor_proc_root) {

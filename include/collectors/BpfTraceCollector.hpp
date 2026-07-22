@@ -135,6 +135,10 @@ private:
   std::vector<montauk::model::NtsyncSample> pending_ntsync_;
 
   bool printed_waiting_{false};
+  // Whole-run match tracking for the end-of-capture liveness WARN: set once any
+  // cycle sees a matched process, so teardown can flag a pattern that matched
+  // nothing for the entire run.
+  bool ever_matched_{false};
   std::atomic<bool> load_failed_{false};
   std::unordered_set<int32_t> excluded_pids_;
   // Pids whose /proc/<pid>/maps sidecar has been snapshotted (first HEAP

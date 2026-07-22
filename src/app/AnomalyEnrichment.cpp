@@ -26,25 +26,35 @@ std::vector<double> rank_normalize(const std::vector<double>& v) {
 }
 }  // namespace
 
-void enrich_anomalies(montauk::model::ProcessSnapshot& procs) {
+void enrich_anomalies(montauk::model::ProcessSnapshot& procs,
+                      std::unordered_map<int32_t, uint64_t>& prev_faults) {
   auto& ps = procs.processes;
   const size_t n = ps.size();
   for (auto& p : ps) { p.anomaly_score = 0.0; p.anomaly_axis = -1; }
-  if (n < 8) return;  // too few for a meaningful cross-sectional distribution
+  auto refresh_faults = [&]() {
+    prev_faults.clear();
+    prev_faults.reserve(ps.size());
+    for (const auto& p : ps) prev_faults[p.pid] = p.flt_raw;
+  };
+  if (n < 8) { refresh_faults(); return; }  // too few for a distribution
 
-  constexpr size_t d = 3;  // cpu%, rss, gpu%
+  constexpr size_t d = 5;  // cpu%, rss, gpu%, fault delta, thread count
   std::vector<double> x(n * d);
   for (size_t i = 0; i < n; ++i) {
     x[i * d + 0] = ps[i].cpu_pct;
     x[i * d + 1] = static_cast<double>(ps[i].rss_kb);
     x[i * d + 2] = ps[i].has_gpu_util ? ps[i].gpu_util_pct : 0.0;
+    auto pf = prev_faults.find(ps[i].pid);
+    x[i * d + 3] = (pf != prev_faults.end() && ps[i].flt_raw > pf->second)
+                       ? static_cast<double>(ps[i].flt_raw - pf->second) : 0.0;
+    x[i * d + 4] = static_cast<double>(ps[i].thread_count);
   }
 
-  // Two detectors at this feature width: MAD catches a process extreme on any
-  // single axis, Mahalanobis catches one whose combination of axes is unusual.
-  // Half-Space Trees is redundant with these at three features and rebuilt a
-  // deterministic forest every frame, so it is not in the live ensemble; it
-  // returns as a standing model once the feature set is wide enough to earn it.
+  // Two detectors: MAD catches a process extreme on any single axis (cpu, rss,
+  // gpu, fault delta or thread count), Mahalanobis catches one whose
+  // combination of axes is unusual. Half-Space Trees stays out of the live
+  // per-frame ensemble (it rebuilt a deterministic forest every frame); its
+  // return as a standing model over this wider feature set is tracked separately.
   std::vector<double> mad(n), maha(n);
   sublimation_mad_scores(x.data(), n, d, mad.data());
   if (sublimation_mahalanobis(x.data(), n, d, 1e-3, maha.data()) != 0)
@@ -55,7 +65,7 @@ void enrich_anomalies(montauk::model::ProcessSnapshot& procs) {
 
   // Per-column standardization drives the dominant-axis attribution: the feature
   // with the largest absolute z-score is what makes a process anomalous.
-  double mean[d] = {0, 0, 0}, sd[d] = {0, 0, 0};
+  double mean[d] = {0, 0, 0, 0, 0}, sd[d] = {0, 0, 0, 0, 0};
   for (size_t i = 0; i < n; ++i)
     for (size_t j = 0; j < d; ++j) mean[j] += x[i * d + j];
   for (size_t j = 0; j < d; ++j) mean[j] /= static_cast<double>(n);
@@ -74,6 +84,7 @@ void enrich_anomalies(montauk::model::ProcessSnapshot& procs) {
     }
     ps[i].anomaly_axis = static_cast<int8_t>(axis);
   }
+  refresh_faults();
 }
 
 }  // namespace montauk::app

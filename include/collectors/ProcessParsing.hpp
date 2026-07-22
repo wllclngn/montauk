@@ -37,7 +37,9 @@ inline double now_secs() {
 // extraction it replaced.
 inline bool parse_stat_line(const std::string& content, char& state,
                              uint64_t& utime, uint64_t& stime,
-                             int64_t& rss_pages, std::string& comm) {
+                             int64_t& rss_pages, std::string& comm,
+                             uint64_t& minflt, uint64_t& majflt,
+                             int& num_threads) {
   const auto lp = content.find('(');
   const auto rp = content.rfind(')');
   if (lp == std::string::npos || rp == std::string::npos || rp < lp) return false;
@@ -55,13 +57,21 @@ inline bool parse_stat_line(const std::string& content, char& state,
     if (b < e) state = *b;
   }
   (void)next_field();  // ppid (no caller uses it)
-  // Skip fields up to utime (9 fields: pgrp..cmajflt).
-  for (int i = 0; i < 9; ++i) (void)next_field();
+  // pgrp, session, tty_nr, tpgid, flags (5), then minflt, cminflt, majflt,
+  // cmajflt -- the same 9 fields the old code skipped wholesale, now capturing
+  // the two page-fault counters.
+  for (int i = 0; i < 5; ++i) (void)next_field();
+  { auto [b, e] = next_field(); std::from_chars(b, e, minflt); }
+  (void)next_field();  // cminflt
+  { auto [b, e] = next_field(); std::from_chars(b, e, majflt); }
+  (void)next_field();  // cmajflt
   { auto [b, e] = next_field(); std::from_chars(b, e, utime); }
   { auto [b, e] = next_field(); std::from_chars(b, e, stime); }
-  // Skip: cutime, cstime, priority, nice, num_threads, itrealvalue, starttime
-  // (7 fields), then vsize.
-  for (int i = 0; i < 8; ++i) (void)next_field();
+  // cutime, cstime, priority, nice (4), then num_threads, then itrealvalue,
+  // starttime, vsize (3) -- the same 8 fields, now capturing num_threads.
+  for (int i = 0; i < 4; ++i) (void)next_field();
+  { auto [b, e] = next_field(); std::from_chars(b, e, num_threads); }
+  for (int i = 0; i < 3; ++i) (void)next_field();
   { auto [b, e] = next_field(); std::from_chars(b, e, rss_pages); }
   return true;
 }

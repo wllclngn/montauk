@@ -189,7 +189,7 @@ void Producer::run(std::stop_token st) {
       s.alerts.clear();
       for (auto& it : a) s.alerts.push_back(montauk::model::AlertItem{it.severity, it.message});
     }
-    montauk::app::enrich_anomalies(s.procs);
+    montauk::app::enrich_anomalies(s.procs, anomaly_prev_faults_);
     chart_histories().push_snapshot(s);
     buffers_.publish();
   }
@@ -230,7 +230,7 @@ void Producer::run(std::stop_token st) {
         gpu_attr_->enrich(s);
         next_nvml = now + nvml_interval;
       }
-      montauk::app::enrich_anomalies(s.procs);
+      montauk::app::enrich_anomalies(s.procs, anomaly_prev_faults_);
       chart_histories().push_snapshot(s);
       buffers_.publish();
     }

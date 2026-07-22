@@ -12,6 +12,13 @@
 
 #include <cstdio>
 
+// Stamped by CMake (project VERSION -> montauk_core PUBLIC); the fallback keeps
+// any TU that compiles this outside the build honest rather than silently
+// undefined.
+#ifndef MONTAUK_VERSION
+#define MONTAUK_VERSION "unknown"
+#endif
+
 namespace montauk::app {
 
 namespace {
@@ -24,6 +31,7 @@ void render_system(MetricsSink& sink, const MetricsSnapshot& s) {
   double mem_gib = static_cast<double>(s.mem.total_kb) / (1024.0 * 1024.0);
 
   sink.section_begin("system");
+  sink.str({"version", nullptr, nullptr}, MONTAUK_VERSION);
   sink.str({"cpu_model", nullptr, nullptr}, s.cpu.model);
   sink.i64({"physical_cores", nullptr, nullptr}, s.cpu.physical_cores);
   sink.i64({"logical_cpus", nullptr, nullptr}, s.cpu.logical_threads);
@@ -53,14 +61,15 @@ void render_system(MetricsSink& sink, const MetricsSnapshot& s) {
   std::string sched_san = san(sched);
 
   std::vector<Label> labels = {
-      {"cpu_model", cpu_model_san}, {"physical_cores", physical_cores},
-      {"logical_cpus", logical_cpus}, {"mem_total_gib", mem_buf},
-      {"gpu", gpu_san},              {"kernel", kernel_san},
-      {"sched", sched_san},
+      {"version", MONTAUK_VERSION},  {"cpu_model", cpu_model_san},
+      {"physical_cores", physical_cores}, {"logical_cpus", logical_cpus},
+      {"mem_total_gib", mem_buf},     {"gpu", gpu_san},
+      {"kernel", kernel_san},         {"sched", sched_san},
   };
   if (!s.pmu.l3_per_cache_domain.empty()) labels.push_back({"cache_domain", cache_domain});
   sink.info_line("montauk_system_info",
-                 "System specs: cpu model, cores, memory, gpu, kernel, scheduler", labels);
+                 "System specs: montauk version, cpu model, cores, memory, gpu, kernel, scheduler",
+                 labels);
 }
 
 void render_cpu(MetricsSink& sink, const MetricsSnapshot& s) {

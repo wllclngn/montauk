@@ -5,6 +5,9 @@
 #include "app/AnomalyEnrichment.hpp"
 #include "model/Process.hpp"
 
+#include <cstdint>
+#include <unordered_map>
+
 using montauk::model::ProcessSnapshot;
 using montauk::model::ProcSample;
 
@@ -30,7 +33,8 @@ static size_t top_scored(const ProcessSnapshot& ps) {
 TEST(anomaly_flags_cpu_outlier) {
   auto ps = make_pop(30);
   ps.processes[7].cpu_pct = 99.0;                      // a CPU burner
-  montauk::app::enrich_anomalies(ps);
+  std::unordered_map<int32_t, uint64_t> pf;
+  montauk::app::enrich_anomalies(ps, pf);
   ASSERT_EQ(top_scored(ps), static_cast<size_t>(7));
   ASSERT_EQ(static_cast<int>(ps.processes[7].anomaly_axis), 0);  // cpu
 }
@@ -38,7 +42,8 @@ TEST(anomaly_flags_cpu_outlier) {
 TEST(anomaly_flags_rss_outlier) {
   auto ps = make_pop(30);
   ps.processes[12].rss_kb = 8000000;                   // a ~8 GB memory hog
-  montauk::app::enrich_anomalies(ps);
+  std::unordered_map<int32_t, uint64_t> pf;
+  montauk::app::enrich_anomalies(ps, pf);
   ASSERT_EQ(top_scored(ps), static_cast<size_t>(12));
   ASSERT_EQ(static_cast<int>(ps.processes[12].anomaly_axis), 1);  // rss
 }
@@ -46,7 +51,8 @@ TEST(anomaly_flags_rss_outlier) {
 TEST(anomaly_skips_tiny_population) {
   auto ps = make_pop(5);                               // fewer than 8: unscored
   ps.processes[2].cpu_pct = 99.0;
-  montauk::app::enrich_anomalies(ps);
+  std::unordered_map<int32_t, uint64_t> pf;
+  montauk::app::enrich_anomalies(ps, pf);
   for (const auto& p : ps.processes) {
     ASSERT_EQ(p.anomaly_score, 0.0);
     ASSERT_EQ(static_cast<int>(p.anomaly_axis), -1);

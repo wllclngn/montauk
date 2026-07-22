@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 8.0.0 LANGUAGES C CXX)
+project(montauk VERSION 8.3.0 LANGUAGES C CXX)
 # (7.17.0: kick-capture honesty -- the storm report no longer manufactures a
 #  false kick/s=0 when the scx storm probes are unattached, and kick-latency
 #  surfaces the KICK_ISSUE->RESCHED pairing (availability, unanswered share,
@@ -145,6 +145,7 @@ add_library(montauk_core
 )
 target_include_directories(montauk_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(montauk_core PUBLIC _GNU_SOURCE)
+target_compile_definitions(montauk_core PUBLIC MONTAUK_VERSION="${PROJECT_VERSION}")
 target_link_libraries(montauk_core PRIVATE montauk_warnings)
 
 # Always attempt NVML (NVIDIA) support by default; if not found, build continues without it.

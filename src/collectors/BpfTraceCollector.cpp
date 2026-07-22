@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
+#include <sys/utsname.h>
 #include <cerrno>
 #include <filesystem>
 #include <string>
@@ -25,6 +26,20 @@ namespace {
 // Flush the binary trace buffer once it crosses this size — one write()
 // per ~256 KB instead of per event.
 constexpr size_t kTraceFlushThreshold = 256 * 1024;
+
+// scx#3687 (sched-ext/scx, Open): on Linux 7.1.x, attaching a second BPF
+// program to a sched_ext kfunc (montauk's fentry/scx_bpf_kick_cpu) while a
+// struct_ops scheduler is loaded and calling that kfunc faults the kernel in
+// bpf_prog_get_assoc_struct_ops -- a box-wide freeze. The framework fix is
+// expected at 7.2, so the opt-in scx storm probes stay gated below it; bump
+// the minor here if 7.2 ships without the fix.
+bool kernel_scx_storm_safe() {
+  struct utsname u;
+  if (uname(&u) != 0) return false;          // unknown -> treat as unsafe
+  int major = 0, minor = 0;
+  if (std::sscanf(u.release, "%d.%d", &major, &minor) != 2) return false;
+  return major > 7 || (major == 7 && minor >= 2);
+}
 
 // Read a /sys attribute (one line, sysfs-root-aware via util::Procfs) and
 // return just its first line, trimmed. Empty string if unreadable.
@@ -1421,16 +1436,25 @@ void BpfTraceCollector::run(std::stop_token st) {
   // simply empty, never a freeze.
   if (const char* sv = std::getenv("MONTAUK_SCX_STORM");
       sv && sv[0] && sv[0] != '0') {
-    skel_->links.handle_scx_kick    = bpf_program__attach(skel_->progs.handle_scx_kick);
-    skel_->links.handle_scx_reenq   = bpf_program__attach(skel_->progs.handle_scx_reenq);
-    skel_->links.handle_resched_curr = bpf_program__attach(skel_->progs.handle_resched_curr);
-    if (skel_->links.handle_scx_kick && skel_->links.handle_scx_reenq &&
-        skel_->links.handle_resched_curr) {
-      scx_storm_active_ = true;
-      montauk::util::log_info("scx storm probes attached (MONTAUK_SCX_STORM)");
-    } else
-      montauk::util::log_warn("scx storm probes requested but attach failed -- "
-                              "StormReport will be empty");
+    if (!kernel_scx_storm_safe()) {
+      // scx#3687: the trampoline attach faults the kernel under a live
+      // struct_ops scheduler on 7.1.x. Refuse the attach until 7.2, even when
+      // explicitly requested -- an empty StormReport beats a frozen box.
+      montauk::util::log_warn("MONTAUK_SCX_STORM ignored: this kernel is below "
+                              "7.2, where the scx storm probes trip a sched_ext "
+                              "framework fault (scx#3687); re-enabled on 7.2");
+    } else {
+      skel_->links.handle_scx_kick    = bpf_program__attach(skel_->progs.handle_scx_kick);
+      skel_->links.handle_scx_reenq   = bpf_program__attach(skel_->progs.handle_scx_reenq);
+      skel_->links.handle_resched_curr = bpf_program__attach(skel_->progs.handle_resched_curr);
+      if (skel_->links.handle_scx_kick && skel_->links.handle_scx_reenq &&
+          skel_->links.handle_resched_curr) {
+        scx_storm_active_ = true;
+        montauk::util::log_info("scx storm probes attached (MONTAUK_SCX_STORM)");
+      } else
+        montauk::util::log_warn("scx storm probes requested but attach failed -- "
+                                "StormReport will be empty");
+    }
   }
 
   // Bind the decision programs to the configured scheduler tracepoints, if any.
@@ -1663,6 +1687,7 @@ void BpfTraceCollector::run(std::stop_token st) {
     } else {
       printed_waiting_ = false;
       snap.waiting_for_match = false;
+      ever_matched_ = true;
     }
 
     buffers_.publish();
@@ -1695,6 +1720,13 @@ void BpfTraceCollector::run(std::stop_token st) {
   // the run, then flush so they land before the fd closes.
   append_drop_snapshot(/*force=*/true);
   trace_flush();
+
+  // Capture-time liveness notice: a pattern that matched no process for the
+  // whole run yields honest-empty reports downstream and no signal at capture
+  // time, so a mistyped comm can burn an entire run silently. Name it once here.
+  if (!ever_matched_)
+    montauk::util::log_warn("trace pattern '%s' matched no process for the "
+                            "entire capture", pattern_.c_str());
 }
 
 } // namespace montauk::collectors

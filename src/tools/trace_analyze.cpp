@@ -235,6 +235,7 @@ static std::string redact_comm(const char* comm) {
 #include "sublimation_pack.h"   // index-by-key sorts (u64/f64) for report rows
 #include "sublimation_order.hpp" // sublimation_order_u64/_f64: struct-by-key ordering
 #include "sublimation_search.h" // structural locator: where a disorder pattern sits
+#include "sublimation_signal.h" // matrix profile (STOMP on the FFT): discords + motifs
 #include "util/sink.h"          // buffered stdout sink: one drain, not a printf per line
 #include "util/json.h"          // write-only JSON serializer on the sink (the --json renderer)
 
@@ -3335,6 +3336,13 @@ struct DispatchStallReport final : Report {
   // oldest waiter sorts highest, so a higher class outranks age. cls = score>>48.
   struct Pk { uint64_t ts; int pid; uint32_t lane; uint64_t score; };
   std::unordered_map<uint32_t, std::vector<Pk>> picks_;  // cpu -> picks
+  // Fallback pick stream reconstructed from SWITCH_IN when no native PICK
+  // tracepoint is bound (stock EEVDF): a switch-in is a pick. Lane and score
+  // are unavailable there, so the class/lane sub-analysis is suppressed in
+  // reconstructed mode; the preempt-vs-order split (pass-over count) holds
+  // from either stream.
+  std::unordered_map<uint32_t, std::vector<Pk>> switch_picks_;
+  bool reconstructed_ = false;
   static uint64_t cls_of(uint64_t score) { return score >> 48; }
   // floored wake: (wake_ts, run_ts, run_cpu, wakee_pid)
   struct FW { uint64_t wake_ts, run_ts; uint32_t cpu; int pid; };
@@ -3362,6 +3370,11 @@ struct DispatchStallReport final : Report {
     const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
     if (s->op == SCHED_OP_PICK) {
       picks_[s->cpu].push_back({s->timestamp_ns, s->pid, s->sub_idx, s->score});
+      return;
+    }
+    if (s->op == SCHED_OP_SWITCH_IN) {
+      // Reconstructed pick: switch-in = pick; lane/score unavailable (zeroed).
+      switch_picks_[s->cpu].push_back({s->timestamp_ns, s->pid, 0, 0});
       return;
     }
     if (s->op == SCHED_OP_CPU_IDLE) {
@@ -3397,7 +3410,11 @@ struct DispatchStallReport final : Report {
   // scalars without emit() having run. emit() renders from the members.
   void compute() override {
     if (floored_.empty()) return;
-    for (auto& kv : picks_)
+    // Prefer the native PICK stream; fall back to the SWITCH_IN reconstruction
+    // so the preempt-vs-order split works on schedulers that emit no PICK.
+    reconstructed_ = picks_.empty() && !switch_picks_.empty();
+    auto& src = reconstructed_ ? switch_picks_ : picks_;
+    for (auto& kv : src)
       sublimation_order_u64(kv.second, false, [](const Pk& e) { return e.ts; });
     idle_.finalize();
     have_idle_ = !idle_.empty();
@@ -3428,10 +3445,10 @@ struct DispatchStallReport final : Report {
     inter_v.reserve(floored_.size());
     legit_v.reserve(floored_.size());
     for (auto& fw : floored_) {
-      auto it = picks_.find(fw.cpu);
+      auto it = src.find(fw.cpu);
       uint64_t inter = 0, legit = 0;
       std::unordered_set<int> po_pids;
-      if (it != picks_.end()) {
+      if (it != src.end()) {
         const auto& pv = it->second;
         // the pick that finally served this wakee + its class/score (search first)
         bool have_served = false;
@@ -3526,6 +3543,9 @@ struct DispatchStallReport final : Report {
       montauk_sink_appendf(&g_out, "VERDICT: no tick-floored wakes -- nothing to attribute\n\n");
       return;
     }
+    if (reconstructed_)
+      montauk_sink_appendf(&g_out, "  PROVENANCE: pick stream reconstructed from SWITCH_IN (no native "
+                  "PICK tracepoint); preempt-vs-order holds, class/lane analysis omitted\n");
     montauk_sink_appendf(&g_out, "VERDICT: %s saturated floored wakes; PREEMPT-STARVED %.0f%% "
                 "(0 intervening picks) / ORDER-STARVED %.0f%% (CPU served others "
                 "first); avg %.1f pass-overs, p99 %llu pass-overs\n",
@@ -3550,6 +3570,7 @@ struct DispatchStallReport final : Report {
                     (double)hv[i].second / 1e6);
       montauk_sink_appendf(&g_out, "  (the task that ran the CPU through the HELD waits)\n");
     }
+    if (!reconstructed_) {
     montauk_sink_appendf(&g_out, "  LANE: %.0f%% of pass-over picks via MIRROR / %.0f%% via SUB; "
                 "floored wakees finally served %.0f%% MIRROR / %.0f%% SUB\n",
                 po_mirror_pct_, 100.0 - po_mirror_pct_,
@@ -3564,6 +3585,7 @@ struct DispatchStallReport final : Report {
     montauk_sink_appendf(&g_out, "  (LOWER + SAME-NEWER are the illegitimate pass-overs the score "
                 "key should have prevented -- a cache-fragmented dispatch serving "
                 "its local best, not the global oldest)\n");
+    }
     montauk_sink_appendf(&g_out, "  CONCENTRATION: avg %.1f DISTINCT pass-over tasks per floored "
                 "wake vs avg %.1f pass-over PICKS -- ratio %.2f (low = a few hogs "
                 "re-picked, fair-share/lag fix; ~1.0 = deep distinct backlog, "
@@ -4918,6 +4940,214 @@ struct IolatReport final : Report {
   }
 };
 
+// REPORT seat: self-preemption and CPU-seat anchoring, reconstructed from the
+// per-CPU SWITCH_IN stream every scheduler emits (no PICK needed). A task's
+// stint count (SWITCH_INs) over its wake count (WAKE2RUNs) exposes
+// self-preemption -- rescheduled without a fresh wake, a cost wake2run alone
+// cannot show. Seat dominance is the share of a task's stints on its most
+// frequent CPU (1.0 = perfectly anchored, low = churning across CPUs).
+// Floored-wake share (sub-tick resumes) rides along for context. Generic:
+// pure SWITCH_IN/WAKE2RUN derivations, no scheduler-specific logic.
+struct SeatReport final : Report {
+  static constexpr uint64_t kTickFloorNs = 900000ULL;
+  std::unordered_map<int, uint64_t> stints_;   // pid -> SWITCH_IN count
+  std::unordered_map<int, uint64_t> wakes_;    // pid -> WAKE2RUN count
+  std::unordered_map<int, std::unordered_map<uint32_t, uint64_t>> cpu_stints_;
+  uint64_t total_wakes_ = 0;
+  uint64_t floored_wakes_ = 0;
+
+  struct Row { int pid; uint64_t stints, wakes; double ratio, dom; uint32_t cpu; };
+  std::vector<Row> rows_;
+  ReportResult r_;
+  bool computed_ = false;
+
+  const char* name() const override { return "seat"; }
+
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
+    const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    if (s->op == SCHED_OP_SWITCH_IN) {
+      ++stints_[s->pid];
+      ++cpu_stints_[s->pid][s->cpu];
+    } else if (s->op == SCHED_OP_WAKE2RUN) {
+      ++wakes_[s->pid];
+      ++total_wakes_;
+      if (s->runtime_ns < kTickFloorNs) ++floored_wakes_;
+    }
+  }
+
+  // Lazy finalize: driven by the framework's compute() hook when present, but
+  // also self-triggered from emit()/prom()/offenders() so the text and JSON
+  // paths agree regardless of call order.
+  void ensure() {
+    if (computed_) return;
+    computed_ = true;
+    for (const auto& [pid, st] : stints_) {
+      if (st < 8) continue;  // ignore one-off scheduling, not churn
+      uint64_t wk = wakes_.count(pid) ? wakes_.at(pid) : 0;
+      double ratio = wk ? static_cast<double>(st) / static_cast<double>(wk)
+                        : static_cast<double>(st);
+      uint64_t top = 0; uint32_t top_cpu = 0;
+      for (const auto& [cpu, c] : cpu_stints_.at(pid))
+        if (c > top) { top = c; top_cpu = cpu; }
+      rows_.push_back({pid, st, wk, ratio,
+                       static_cast<double>(top) / static_cast<double>(st), top_cpu});
+    }
+    std::sort(rows_.begin(), rows_.end(),
+              [](const Row& a, const Row& b) { return a.ratio > b.ratio; });
+    double floored = total_wakes_
+        ? static_cast<double>(floored_wakes_) / static_cast<double>(total_wakes_)
+        : 0.0;
+    size_t sp = 0;
+    for (const auto& row : rows_) if (row.ratio > 1.5) ++sp;
+    char v[192];
+    std::snprintf(v, sizeof(v),
+        "%zu ranked pids, %zu self-preempting (stints/wakes > 1.5); "
+        "floored-wake share %.1f%%", rows_.size(), sp, floored * 100.0);
+    r_.verdict = v;
+    r_.gauges.push_back({"montauk_analysis_seat_floored_wake_ratio", "", floored});
+    r_.gauges.push_back(
+        {"montauk_analysis_seat_self_preempting", "", static_cast<double>(sp)});
+    size_t k = 0;
+    for (const auto& row : rows_) {
+      if (row.ratio <= 1.5 || k >= 8) break;
+      int sev = row.ratio > 4.0 ? 2 : (row.ratio > 2.0 ? 1 : 0);
+      r_.offenders.push_back({"self-preempt", "tid=" + std::to_string(row.pid),
+                              "", "stint_wake_ratio", row.ratio, sev});
+      ++k;
+    }
+  }
+
+  void compute() override { ensure(); }
+
+  void emit(const montauk::model::TraceReader&) override {
+    ensure();
+    header();
+    if (rows_.empty()) {
+      montauk_sink_appendf(&g_out, "VERDICT: no SWITCH_IN stints to rank\n\n");
+      return;
+    }
+    montauk_sink_appendf(&g_out, "VERDICT: %s\n", r_.verdict.c_str());
+    size_t k = 0;
+    for (const auto& row : rows_) {
+      if (row.ratio <= 1.5 || k >= 8) break;
+      montauk_sink_appendf(&g_out,
+          "  tid=%d: %llu stints / %llu wakes (ratio %.2f), seat dominance "
+          "%.0f%% (cpu %u)\n", row.pid, (unsigned long long)row.stints,
+          (unsigned long long)row.wakes, row.ratio, row.dom * 100.0, row.cpu);
+      ++k;
+    }
+    if (k == 0)
+      montauk_sink_appendf(&g_out, "  (no self-preemption above 1.5x)\n");
+    montauk_sink_appendf(&g_out, "\n");
+  }
+
+  void prom(std::vector<PromMetric>& out) override {
+    ensure();
+    for (const auto& g : r_.gauges) out.push_back(g);
+  }
+  void offenders(std::vector<Offender>& out) override {
+    ensure();
+    for (const auto& o : r_.offenders) out.push_back(o);
+  }
+};
+
+// REPORT matrix-profile: the unsupervised complement to the hand-written
+// report family. Bins the scheduling-event stream into a fixed set of time
+// windows and runs sublimation's matrix profile (STOMP on the graduated FFT)
+// over the per-window rate, surfacing the run's discord (the single most
+// anomalous window) and its motif (the most recurring pattern) without being
+// told what to look for. Generic: one binned rate series, no scheduler logic.
+struct MatrixProfileReport final : Report {
+  std::vector<uint64_t> ts_;
+  ReportResult r_;
+  bool computed_ = false;
+  bool have_ = false;
+  uint64_t n_ev_ = 0;
+  size_t nbins_ = 0, win_ = 0;
+  double bin_ms_ = 0.0, discord_score_ = 0.0, motif_dist_ = 0.0, mean_mp_ = 0.0;
+  int64_t discord_bin_ = -1, motif_bin_ = -1, motif_nn_ = -1;
+
+  const char* name() const override { return "matrix-profile"; }
+
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
+    const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    ts_.push_back(s->timestamp_ns);
+  }
+
+  void ensure() {
+    if (computed_) return;
+    computed_ = true;
+    n_ev_ = ts_.size();
+    constexpr size_t NBINS = 128, WIN = 8;
+    if (n_ev_ < NBINS * 2) return;          // too sparse for a meaningful profile
+    sublimation_u64(ts_.data(), ts_.size());
+    uint64_t t0 = ts_.front(), t1 = ts_.back();
+    if (t1 <= t0) return;
+    uint64_t span = t1 - t0;
+    std::vector<double> series(NBINS, 0.0);
+    for (uint64_t t : ts_) {
+      size_t b = static_cast<size_t>(((t - t0) * NBINS) / span);
+      if (b >= NBINS) b = NBINS - 1;
+      series[b] += 1.0;
+    }
+    size_t L = NBINS - WIN + 1;
+    std::vector<double> mp(L);
+    std::vector<int64_t> mpi(L);
+    if (sublimation_matrix_profile(series.data(), NBINS, WIN, mp.data(),
+                                   mpi.data()) != 0)
+      return;
+    size_t dbin = 0, mbin = 0;
+    double sum = 0.0;
+    for (size_t i = 0; i < L; i++) {
+      sum += mp[i];
+      if (mp[i] > mp[dbin]) dbin = i;
+      if (mp[i] < mp[mbin]) mbin = i;
+    }
+    have_ = true;
+    nbins_ = NBINS;
+    win_ = WIN;
+    bin_ms_ = static_cast<double>(span) / static_cast<double>(NBINS) / 1e6;
+    discord_bin_ = static_cast<int64_t>(dbin);
+    discord_score_ = mp[dbin];
+    motif_bin_ = static_cast<int64_t>(mbin);
+    motif_nn_ = mpi[mbin];
+    motif_dist_ = mp[mbin];
+    mean_mp_ = sum / static_cast<double>(L);
+    r_.gauges.push_back(
+        {"montauk_analysis_matrix_profile_discord_score", "", discord_score_});
+    r_.gauges.push_back({"montauk_analysis_matrix_profile_mean", "", mean_mp_});
+    r_.gauges.push_back({"montauk_analysis_matrix_profile_discord_ms", "",
+                         static_cast<double>(discord_bin_) * bin_ms_});
+  }
+
+  void compute() override { ensure(); }
+
+  void emit(const montauk::model::TraceReader&) override {
+    ensure();
+    header();
+    if (!have_) {
+      montauk_sink_appendf(&g_out,
+          "VERDICT: too few scheduling events for a profile\n\n");
+      return;
+    }
+    montauk_sink_appendf(&g_out,
+        "VERDICT: %llu sched events over %zu windows of %.2fms; discord (most "
+        "anomalous) window %lld at %.0fms, profile %.2f vs mean %.2f; motif "
+        "(most recurring) windows %lld~%lld at distance %.2f\n\n",
+        (unsigned long long)n_ev_, nbins_, bin_ms_,
+        (long long)discord_bin_, static_cast<double>(discord_bin_) * bin_ms_,
+        discord_score_, mean_mp_,
+        (long long)motif_bin_, (long long)motif_nn_, motif_dist_);
+  }
+
+  void prom(std::vector<PromMetric>& out) override {
+    ensure();
+    for (const auto& g : r_.gauges) out.push_back(g);
+  }
+};
+
 std::vector<std::unique_ptr<Report>> make_reports() {
   std::vector<std::unique_ptr<Report>> reports;
   reports.push_back(std::make_unique<IolatReport>());
@@ -4947,6 +5177,8 @@ std::vector<std::unique_ptr<Report>> make_reports() {
   reports.push_back(std::make_unique<HeapstkReport>());
   reports.push_back(std::make_unique<DoubleFreeReport>());
   reports.push_back(std::make_unique<FractalReport>());
+  reports.push_back(std::make_unique<SeatReport>());
+  reports.push_back(std::make_unique<MatrixProfileReport>());
   return reports;
 }
 

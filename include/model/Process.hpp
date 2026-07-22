@@ -25,10 +25,14 @@ struct ProcSample {
   std::string user_name;
   std::string cmd;
   std::string exe_path;
+  // Extra stat-derived signals for anomaly enrichment (all-process, free from
+  // the /proc/PID/stat line the collectors already parse).
+  uint64_t flt_raw{0};      // cumulative minor+major faults; rate derived in enrichment
+  int      thread_count{1}; // /proc/PID/stat num_threads
   // Cross-sectional anomaly enrichment (AnomalyEnrichment): fused score over the
   // live process population, higher = more anomalous, with the dominant feature.
   double  anomaly_score{0.0};
-  int8_t  anomaly_axis{-1};   // 0=cpu, 1=rss, 2=gpu; -1 = none
+  int8_t  anomaly_axis{-1};   // 0=cpu 1=rss 2=gpu 3=faults 4=threads; -1 = none
 };
 
 struct ProcessSnapshot {

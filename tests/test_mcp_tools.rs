@@ -233,6 +233,57 @@ fn sublimation_grep_missing_text_is_an_error() {
     assert_eq!(err.0, -32602);
 }
 
+// sublimation stat/stream ops route through the sublimation CLI. The q check
+// for quantile fails before any spawn (binary-independent); the live ops skip
+// gracefully when the binary isn't on PATH (the mcp layer runs cargo test with
+// no build/ on PATH).
+
+#[test]
+fn sublimation_quantile_without_q_is_an_error() {
+    let args = Value::obj(vec![
+        ("op", Value::String("quantile".to_string())),
+        ("values", Value::Array(vec![Value::Number(1.0), Value::Number(2.0)])),
+    ]);
+    let err = tool_call("sublimation", args).unwrap_err();
+    assert_eq!(err.0, -32602);
+    assert!(err.1.contains('q'), "got: {}", err.1);
+}
+
+#[test]
+fn sublimation_mean_routes_through_the_cli() {
+    let args = Value::obj(vec![
+        ("op", Value::String("mean".to_string())),
+        ("values", Value::Array(
+            vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)])),
+    ]);
+    match tool_call("sublimation", args) {
+        Ok(r) => assert_eq!(tool_text(&r).trim(), "2"),
+        Err((_, msg)) if msg.contains("failed to spawn") => {
+            eprintln!("skip: sublimation not on PATH");
+        }
+        Err(e) => panic!("unexpected error: {e:?}"),
+    }
+}
+
+#[test]
+fn sublimation_tally_counts_text_lines() {
+    let args = Value::obj(vec![
+        ("op", Value::String("tally".to_string())),
+        ("text", Value::String("a\nb\na".to_string())),
+    ]);
+    match tool_call("sublimation", args) {
+        Ok(r) => {
+            let out = tool_text(&r);
+            assert!(out.contains("2 a"), "got: {out}");
+            assert!(out.contains("1 b"), "got: {out}");
+        }
+        Err((_, msg)) if msg.contains("failed to spawn") => {
+            eprintln!("skip: sublimation not on PATH");
+        }
+        Err(e) => panic!("unexpected error: {e:?}"),
+    }
+}
+
 // montauk_analyze_report / montauk_digest: argument validation fails before
 // any subprocess is spawned, so these are safe to run with no binary on PATH.
 

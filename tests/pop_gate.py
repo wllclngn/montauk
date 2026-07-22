@@ -119,6 +119,25 @@ def main() -> int:
         check("missing-axis-diagnostic",
               "no series carried label 'host'" in proc.stderr)
 
+        # diagnostics: a per-file-unique label fragments every cell to N=1; it
+        # is named with the exact --drop-label that unfragments the run.
+        frag = Path(td) / "frag"
+        frag.mkdir()
+        for i, sched in enumerate(["eevdf", "bpfland", "eevdf", "bpfland"], 1):
+            (frag / f"run-2026070{i}-000000.prom").write_text(
+                "# TYPE bench_latency_us gauge\n"
+                f'bench_latency_us{{scheduler="{sched}",stamp="s{i:04d}"}} '
+                f"{100 + i * 5}.0\n")
+        fp = harness.run_text([str(ANALYZE), str(frag), "--by", "scheduler",
+                               "--no-emit"])
+        check("fragmenting-label-named",
+              "--drop-label stamp" in fp.stderr and
+              "stamp' is unique per file" in fp.stderr)
+        fp2 = harness.run_text([str(ANALYZE), str(frag), "--by", "scheduler",
+                                "--drop-label", "stamp", "--no-emit"])
+        check("fragmenting-label-fix-works",
+              " vs " in fp2.stdout and "[N=2" in fp2.stdout)
+
     note(f"{'FAIL' if fails else 'PASS'}: "
          f"{len(fails)} failure(s)" if fails else "PASS: all properties hold")
     return 1 if fails else 0

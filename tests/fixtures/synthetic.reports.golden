@@ -71,12 +71,9 @@ VERDICT: 21 tick-floored wakes (>=900us); PLACEMENT-MISS 100% (idle CPU was free
 
 
 REPORT dispatch-stall
+  PROVENANCE: pick stream reconstructed from SWITCH_IN (no native PICK tracepoint); preempt-vs-order holds, class/lane analysis omitted
 VERDICT: 21 saturated floored wakes; PREEMPT-STARVED 100% (0 intervening picks) / ORDER-STARVED 0% (CPU served others first); avg 0.0 pass-overs, p99 0 pass-overs
   PREEMPT split: no CPU_IDLE events -- cannot separate DARK (idle strand) from HELD (busy hog); recapture with a montauk that streams CPU_IDLE
-  LANE: 0% of pass-over picks via MIRROR / 100% via SUB; floored wakees finally served 0% MIRROR / 100% SUB
-  CLASS: pass-over tasks vs the wakee's class -- 0% HIGHER (cross-class: class beats age) / 0% SAME / 0% LOWER (priority inversion)
-  SAME-class age: 0% of same-class pass-overs were NEWER than the wakee (FIFO violation -- newer served ahead of older); rest older (legit drain)
-  (LOWER + SAME-NEWER are the illegitimate pass-overs the score key should have prevented -- a cache-fragmented dispatch serving its local best, not the global oldest)
   CONCENTRATION: avg 0.0 DISTINCT pass-over tasks per floored wake vs avg 0.0 pass-over PICKS -- ratio 0.00 (low = a few hogs re-picked, fair-share/lag fix; ~1.0 = deep distinct backlog, deadline fix)
 
   CEILING: p99 pass-overs 0 total -> 0 if ALL inversions removed (0% remains = LEGIT backlog only eligibility/lag can cut; 100% is the mirror-coherence headroom)
@@ -163,4 +160,13 @@ SERIES                 H(DFA)     H(R/S)    D=2-H  decades  VERDICT
 dispatch-rate        0.618±0.109      0.322    1.382     2.87  indistinguishable from uncorrelated
 migration-rate       0.496±0.073      0.288    1.504     2.87  indistinguishable from uncorrelated
 NOTE: raw-event timeline spans 2.9 decades of scale -- a rigorous read, not the <1-decade .prom-scrape estimate
+
+
+REPORT seat
+VERDICT: 2 ranked pids, 0 self-preempting (stints/wakes > 1.5); floored-wake share 99.0%
+  (no self-preemption above 1.5x)
+
+
+REPORT matrix-profile
+VERDICT: 8387 sched events over 128 windows of 0.92ms; discord (most anomalous) window 105 at 97ms, profile 2.20 vs mean 1.13; motif (most recurring) windows 114~117 at distance 0.00
 

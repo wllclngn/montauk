@@ -5,6 +5,7 @@
 //
 //   test_signal fft            -> N lines "re im" (the forward DFT)
 //   test_signal sr Q TAU Z     -> N lines "saliency flag"
+//   test_signal mp M           -> (N-M+1) lines "matrix_profile nn_index"
 #include "sublimation_signal.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -46,6 +47,20 @@ int main(int argc, char **argv) {
         }
         for (size_t i = 0; i < n; i++) printf("%.12g %d\n", sal[i], (int)fl[i]);
         free(sal); free(fl);
+    } else if (!strcmp(m, "mp")) {
+        size_t win = argc > 2 ? (size_t)atol(argv[2]) : 16;
+        if (win < 2 || win > n || n - win + 1 < 2) {
+            fprintf(stderr, "mp: series too short for window\n"); return 2;
+        }
+        size_t Lm = n - win + 1;
+        double *mp = malloc(Lm * sizeof(double));
+        int64_t *mpi = malloc(Lm * sizeof(int64_t));
+        if (sublimation_matrix_profile(sig, n, win, mp, mpi)) {
+            fprintf(stderr, "mp failed\n"); return 2;
+        }
+        for (size_t i = 0; i < Lm; i++)
+            printf("%.12g %lld\n", mp[i], (long long)mpi[i]);
+        free(mp); free(mpi);
     } else {
         fprintf(stderr, "test_signal: unknown mode '%s'\n", m); return 2;
     }

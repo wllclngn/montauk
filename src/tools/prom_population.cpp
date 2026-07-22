@@ -49,6 +49,10 @@ void ensure_pop_out() {
 
 using LabelVec = std::vector<std::pair<std::string, std::string>>;
 
+// Fragmenting-label diagnostic accumulator: label name -> file -> value set.
+using DiagLabelValues =
+    std::map<std::string, std::map<std::string, std::set<std::string>>>;
+
 // One reconstructed-sample pool plus the per-run scalar vector, per group.
 struct Cell {
   LabelVec display;  // cell labels (sans compare axis), for the report header
@@ -341,7 +345,8 @@ std::string capture_key_from_path(const std::string& path) {
 // Parse one file: inject `version` into every sample's labels; route gauges to
 // the run vectors and histogram parts to the per-cell pools.
 void parse_file(const std::string& path, const PopOptions& opt,
-                std::map<std::string, Family>& data, ParseStats& ps) {
+                std::map<std::string, Family>& data, ParseStats& ps,
+                DiagLabelValues& diag) {
   FILE* f = std::fopen(path.c_str(), "r");
   if (!f) {
     util::log_error("cannot open %s", path.c_str());
@@ -464,6 +469,20 @@ void parse_file(const std::string& path, const PopOptions& opt,
       std::string c = label_get(labels, "git_commit");
       if (!c.empty()) commit = c;
       continue;
+    }
+
+    // Fragmenting-label diagnostic: record each raw label's value per file. A
+    // label constant within a file but distinct across files is a per-run key
+    // that fragments every cell to N=1; the post-parse scan names it and the
+    // exact --drop-label that unfragments the run.
+    for (const auto& kv : labels) {
+      if (kv.first == opt.compare_axis || kv.first == "le" ||
+          kv.first == "capture")
+        continue;
+      bool dropped = false;
+      for (const auto& d : opt.drop_labels)
+        if (d == kv.first) { dropped = true; break; }
+      if (!dropped) diag[kv.first][path].insert(kv.second);
     }
 
     // Histogram component? The base is aliased before the lookup, so a
@@ -1006,7 +1025,8 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
   }
   std::map<std::string, Family> data;
   ParseStats ps;
-  for (const auto& f : files) parse_file(f, opt, data, ps);
+  DiagLabelValues diag;
+  for (const auto& f : files) parse_file(f, opt, data, ps, diag);
   if (ps.no_axis > 0)
     util::log_info("series skipped: %zu (no label '%s')", ps.no_axis,
                    opt.compare_axis.c_str());
@@ -1068,9 +1088,28 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
     for (auto& cell_kv : fam_kv.second.cells)
       for (auto& g : cell_kv.second.runs)
         max_group_n = std::max(max_group_n, static_cast<int>(g.second.size()));
-  if (max_group_n <= 1)
+  if (max_group_n <= 1) {
     util::log_warn("N=1 per group -- inference underpowered; collect >=3 runs "
                    "per '%s' value for a verdict", opt.compare_axis.c_str());
+    // Name the fragmenting culprits: a label whose value is unique per file
+    // (constant within, distinct across) is what split every cell to N=1.
+    for (const auto& [name, per_file] : diag) {
+      const size_t nfiles = per_file.size();
+      if (nfiles < 2) continue;
+      bool constant_within = true;
+      std::set<std::string> distinct;
+      for (const auto& [file, vals] : per_file) {
+        (void)file;
+        if (vals.size() != 1) { constant_within = false; break; }
+        distinct.insert(*vals.begin());
+      }
+      if (constant_within && distinct.size() == nfiles)
+        util::log_warn("label '%s' is unique per file (%zu files, %zu distinct "
+                       "values) -- it fragments every cell; re-run with "
+                       "--drop-label %s", name.c_str(), nfiles,
+                       distinct.size(), name.c_str());
+    }
+  }
 
   // Every (family, cell) is statistically independent of every other, so the
   // resampling work fans out across a thread pool. Each item derives its Rng
