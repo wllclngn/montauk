@@ -232,20 +232,16 @@ static std::string redact_comm(const char* comm) {
 }
 
 #include "sublimation.h"        // in-tree sub-system: flow-model sort, classify
-#include "sublimation_pack.h"   // index-by-key sorts (u64/f64) for report rows
-#include "sublimation_order.hpp" // sublimation_order_u64/_f64: struct-by-key ordering
+#include "sublimation_order.hpp" // sublimation_order_u64/_f64: struct-by-key ordering (pulls in sublimation_pack.h)
 #include "sublimation_search.h" // structural locator: where a disorder pattern sits
 #include "sublimation_signal.h" // matrix profile (STOMP on the FFT): discords + motifs
 #include "util/sink.h"          // buffered stdout sink: one drain, not a printf per line
 #include "util/json.h"          // write-only JSON serializer on the sink (the --json renderer)
 
-#include <algorithm>
 #include <chrono>
-#include <cinttypes>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <map>
@@ -2560,7 +2556,6 @@ static const char* disorder_name(sub_disorder_t d) {
     case SUB_FEW_UNIQUE:    return "FEW_UNIQUE";
     case SUB_RANDOM:        return "RANDOM";
     case SUB_PHASED:        return "PHASED";
-    case SUB_SPECTRAL:      return "SPECTRAL";
   }
   return "?";
 }
@@ -2644,10 +2639,14 @@ struct SchedLatencyReport final : Report {
     const double dn = static_cast<double>(lat_.size());
     sub_profile_t prof = sublimation_classify_u64(lat_.data(), lat_.size());
 
-    // Locate WHERE structure sits in the arrival-order timeline (the third
-    // sublimation primitive: search). classify above says WHAT the whole
-    // sequence is; the locator slides it across the stream and names the
-    // stretches that carry exploitable structure. Also runs before the sort.
+    // Profile WHERE structure sits in the arrival-order timeline, using the
+    // search primitive's raw scan (sublimation_profile). classify above says
+    // WHAT the whole sequence is; the profile slides the classifier across the
+    // stream and reports each window's class, so we can name the stretches that
+    // carry exploitable structure AND measure the structured fraction. (locate
+    // is this same scan filtered to a single target class; here we need every
+    // window's class for the fraction, so profile is the right entry.) Also
+    // runs before the sort.
     double structured_frac = 0.0;
     if (lat_.size() >= 1024) {
       const size_t win = std::min<size_t>(512, lat_.size() / 8);
@@ -3174,13 +3173,21 @@ struct CpuIdleIntervals {
   }
 
   // ns of [a,b) the given CPU spent idle (overlap with its idle intervals).
+  // Intervals are disjoint and sorted by start (finalize), so their ends ascend
+  // too: binary-search the first interval reaching past `a`, then walk until one
+  // starts at/after `b`. Every skipped interval contributes zero, so this is
+  // exactly the old full scan without its O(n) cost per query (was O(n^2) over a
+  // sched-heavy trace).
   uint64_t overlap(uint32_t cpu, uint64_t a, uint64_t b) const {
     auto it = iv_.find(cpu);
     if (it == iv_.end() || b <= a) return 0;
+    const auto& ivs = it->second;
+    auto first = std::lower_bound(ivs.begin(), ivs.end(), a,
+        [](const std::pair<uint64_t, uint64_t>& iv, uint64_t v) { return iv.second <= v; });
     uint64_t acc = 0;
-    for (const auto& iv : it->second) {
-      uint64_t lo = iv.first > a ? iv.first : a;
-      uint64_t hi = iv.second < b ? iv.second : b;
+    for (auto i = first; i != ivs.end() && i->first < b; ++i) {
+      uint64_t lo = i->first > a ? i->first : a;
+      uint64_t hi = i->second < b ? i->second : b;
       if (hi > lo) acc += hi - lo;
     }
     return acc;
@@ -3368,6 +3375,7 @@ struct DispatchStallReport final : Report {
     holder_.fold(type, data, len);
     if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
     const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    if (s->timestamp_ns > max_ts_) max_ts_ = s->timestamp_ns;  // trace end, for censored strands
     if (s->op == SCHED_OP_PICK) {
       picks_[s->cpu].push_back({s->timestamp_ns, s->pid, s->sub_idx, s->score});
       return;
@@ -3402,6 +3410,12 @@ struct DispatchStallReport final : Report {
   double ceiling_remains_pct_ = 0;      // % of p99 pass-overs left after removing inversions (legit-backlog = lag prize)
   uint64_t dark_ = 0, n_dark_idle_ = 0; bool have_idle_ = false;
   uint64_t worst_dark_ns_ = 0;
+  // Censored strands: a CPU idle (dark) at trace end that never resumed. Its
+  // wakee never runs, so no WAKE2RUN and no floored wake is recorded -- these
+  // are invisible to worst_dark_ above, which sees only strands that resolved.
+  uint64_t max_ts_ = 0;
+  uint64_t censored_n_ = 0, worst_censored_ns_ = 0;
+  static constexpr uint64_t kCensoredStrandNs = 50000000ULL;  // 50ms: a strand, not end-idle jitter
   uint64_t p99_ = 0, p99_legit_ = 0;    // pass-over p99 (total / legit-only), for the CEILING line
   uint64_t n_ = 0;
 
@@ -3409,6 +3423,19 @@ struct DispatchStallReport final : Report {
   // concentration) and the two pass-over p99s once, so prom()/json() read the
   // scalars without emit() having run. emit() renders from the members.
   void compute() override {
+    // Censored strands first, BEFORE the empty-floored early-out: a host that
+    // wedged emits no WAKE2RUN, so floored_ is empty in exactly the lethal case
+    // the summary must not read as healthy. A CPU still idle at trace end, dark
+    // for >= kCensoredStrandNs, is a strand the capture stopped mid-flight.
+    for (const auto& kv : idle_.open_) {
+      if (max_ts_ > kv.second) {
+        uint64_t dark = max_ts_ - kv.second;
+        if (dark >= kCensoredStrandNs) {
+          ++censored_n_;
+          if (dark > worst_censored_ns_) worst_censored_ns_ = dark;
+        }
+      }
+    }
     if (floored_.empty()) return;
     // Prefer the native PICK stream; fall back to the SWITCH_IN reconstruction
     // so the preempt-vs-order split works on schedulers that emit no PICK.
@@ -3535,12 +3562,92 @@ struct DispatchStallReport final : Report {
     sublimation_u64(legit_v.data(), legit_v.size());
     p99_legit_ = q_at(legit_v, 0.99);
     ceiling_remains_pct_ = p99_ ? 100.0 * (double)p99_legit_ / (double)p99_ : 0.0;
+    build_verdict();
+  }
+
+  std::string verdict_;
+  // The headline the JSON envelope carries, so a consumer never has to fall
+  // back to the .txt report for the verdict -- the same finding the VERDICT and
+  // CENSORED lines render, as one string.
+  void build_verdict() {
+    char b[512];
+    if (floored_.empty()) {
+      std::snprintf(b, sizeof b, "no tick-floored wakes to attribute%s",
+                    censored_n_ ? "" : " (nothing pending)");
+    } else {
+      std::snprintf(b, sizeof b,
+          "%s saturated floored wakes; PREEMPT-STARVED %.0f%% / ORDER-STARVED "
+          "%.0f%%; avg %.1f pass-overs, p99 %llu",
+          fmt_count((double)n_).c_str(), preempt_pct_, order_pct_, avg_inter_,
+          (unsigned long long)p99_);
+    }
+    verdict_ = b;
+    if (have_idle_ && !floored_.empty()) {
+      std::snprintf(b, sizeof b, "; %.0f%% DARK (worst %.1fms) / %.0f%% HELD",
+                    dark_pct_, (double)worst_dark_ns_ / 1e6, held_pct_);
+      verdict_ += b;
+    }
+    if (censored_n_) {
+      std::snprintf(b, sizeof b,
+          "; CENSORED %llu CPU(s) dark at trace end, worst %.1fms unresolved "
+          "(host-death signature, not in worst-dark)",
+          (unsigned long long)censored_n_, (double)worst_censored_ns_ / 1e6);
+      verdict_ += b;
+    }
+  }
+
+  // The JSON face carries the verdict string, the per-kthread held_by
+  // attribution and the censored-strand counts, so montauk_analyze_report is a
+  // complete substitute for the .txt report -- one typed result, every face.
+  void json(montauk_json& j) override {
+    montauk_json_obj_begin(&j);
+    montauk_json_kstr(&j, "name", name());
+    montauk_json_kstr(&j, "verdict", verdict_.c_str());
+    if (censored_n_) {
+      montauk_json_key(&j, "censored_strands");
+      montauk_json_obj_begin(&j);
+        montauk_json_ku64(&j, "cpus", censored_n_);
+        montauk_json_knum(&j, "worst_ms", (double)worst_censored_ns_ / 1e6);
+      montauk_json_obj_end(&j);
+    }
+    if (!held_by_.empty()) {
+      std::vector<std::pair<uint32_t, uint64_t>> hv(held_by_.begin(), held_by_.end());
+      sublimation_order_u64(hv, true,
+                            [](const std::pair<uint32_t, uint64_t>& p) { return p.second; });
+      montauk_json_key(&j, "held_by");
+      montauk_json_arr_begin(&j);
+      for (size_t i = 0; i < hv.size() && i < 8; ++i) {
+        montauk_json_obj_begin(&j);
+          montauk_json_kstr(&j, "task", holder_.name_of(hv[i].first).c_str());
+          montauk_json_ku64(&j, "tid", hv[i].first);
+          montauk_json_knum(&j, "held_ms", (double)hv[i].second / 1e6);
+        montauk_json_obj_end(&j);
+      }
+      montauk_json_arr_end(&j);
+    }
+    json_gauges(j);
+    json_offenders(j);
+    montauk_json_obj_end(&j);
+  }
+
+  // The unresolved-at-trace-end strand line. Loudest when it is the only
+  // thing wrong: worst_dark above counts only strands that resolved, so on a
+  // wedged host (no WAKE2RUN) this is the sole signal the CPU died dark.
+  void emit_censored() {
+    if (!censored_n_) return;
+    montauk_sink_appendf(&g_out, "  CENSORED: %llu CPU(s) still dark at trace end, "
+                "worst %.1fms unresolved -- a strand open when the capture stopped "
+                "(a wakee that never ran, so it is NOT in the worst-dark figure above; "
+                "the host-death signature)\n",
+                (unsigned long long)censored_n_, (double)worst_censored_ns_ / 1e6);
   }
 
   void emit(const montauk::model::TraceReader&) override {
     header();
     if (floored_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no tick-floored wakes -- nothing to attribute\n\n");
+      montauk_sink_appendf(&g_out, "VERDICT: no tick-floored wakes -- nothing to attribute\n");
+      emit_censored();  // ... but a wedged host has no floored wakes AND a lethal strand
+      montauk_sink_appendf(&g_out, "\n");
       return;
     }
     if (reconstructed_)
@@ -3560,6 +3667,7 @@ struct DispatchStallReport final : Report {
       montauk_sink_appendf(&g_out, "  PREEMPT split: no CPU_IDLE events -- cannot separate DARK "
                   "(idle strand) from HELD (busy hog); recapture with a montauk "
                   "that streams CPU_IDLE\n");
+    emit_censored();
     if (!held_by_.empty()) {
       std::vector<std::pair<uint32_t, uint64_t>> hv(held_by_.begin(), held_by_.end());
       sublimation_order_u64(hv, true,
@@ -3657,6 +3765,12 @@ struct DispatchStallReport final : Report {
   }
 
   void prom(std::vector<PromMetric>& out) override {
+    // Before the n_ guard: a wedged host has n_==0 but is the whole point.
+    if (censored_n_) {
+      out.push_back({"montauk_analysis_dispatch_censored_strands", "", (double)censored_n_});
+      out.push_back({"montauk_analysis_dispatch_worst_censored_ms", "",
+                     (double)worst_censored_ns_ / 1e6});
+    }
     if (!n_) return;
     out.push_back({"montauk_analysis_dispatch_preempt_pct", "", preempt_pct_});
     out.push_back({"montauk_analysis_dispatch_order_pct", "", order_pct_});
@@ -3667,11 +3781,16 @@ struct DispatchStallReport final : Report {
                      (double)worst_dark_ns_ / 1e6});
     }
     out.push_back({"montauk_analysis_dispatch_avg_passovers", "", avg_inter_});
-    out.push_back({"montauk_analysis_dispatch_passover_mirror_pct", "", po_mirror_pct_});
-    out.push_back({"montauk_analysis_dispatch_served_mirror_pct", "", served_mirror_pct_});
-    out.push_back({"montauk_analysis_dispatch_passover_higher_class_pct", "", po_higher_pct_});
-    out.push_back({"montauk_analysis_dispatch_passover_same_class_pct", "", po_same_pct_});
-    out.push_back({"montauk_analysis_dispatch_passover_lower_class_pct", "", po_lower_pct_});
+    // LANE/CLASS gauges need native PICK score/lane data; in reconstructed mode
+    // (SWITCH_IN fallback) they are fabricated, so emit() omits them -- the .prom
+    // and --json surfaces (which read prom()) must omit them for the same reason.
+    if (!reconstructed_) {
+      out.push_back({"montauk_analysis_dispatch_passover_mirror_pct", "", po_mirror_pct_});
+      out.push_back({"montauk_analysis_dispatch_served_mirror_pct", "", served_mirror_pct_});
+      out.push_back({"montauk_analysis_dispatch_passover_higher_class_pct", "", po_higher_pct_});
+      out.push_back({"montauk_analysis_dispatch_passover_same_class_pct", "", po_same_pct_});
+      out.push_back({"montauk_analysis_dispatch_passover_lower_class_pct", "", po_lower_pct_});
+    }
     out.push_back({"montauk_analysis_dispatch_passover_p99", "", passover_p99_});
     // Concentration ratio: distinct pass-over tasks / total pass-over picks. Low
     // (~0.3) = a few hogs re-picked = the fair-share/lag prize; ~1.0 = deep
@@ -4441,6 +4560,64 @@ struct KStrandReport final : Report {
     montauk_sink_appendf(&g_out, "\n");
   }
 
+  // The .txt table's per-kthread held_by attribution, structured, so a JSON
+  // consumer sees which task held the CPU through each strand without falling
+  // back to the text report.
+  void json(montauk_json& j) override {
+    montauk_json_obj_begin(&j);
+    montauk_json_kstr(&j, "name", name());
+    if (evs_.empty()) {
+      montauk_json_kstr(&j, "verdict",
+          "no per-CPU kthread strands over threshold");
+      json_gauges(j);
+      montauk_json_obj_end(&j);
+      return;
+    }
+    char vb[256];
+    std::snprintf(vb, sizeof vb,
+        "%zu strands across %zu per-CPU kthreads; worst HELD strand %.1fms "
+        "(I/O-completion freeze signature)",
+        static_cast<size_t>(total_), by_comm_.size(), ms(worst_held_ns_));
+    montauk_json_kstr(&j, "verdict", vb);
+    std::vector<std::pair<std::string, Agg*>> rows;
+    rows.reserve(by_comm_.size());
+    for (auto& kv : by_comm_) rows.push_back({kv.first, &kv.second});
+    sublimation_order_u64(rows, true,
+                          [](const std::pair<std::string, Agg*>& r) { return r.second->max_ns; });
+    montauk_json_key(&j, "kthreads");
+    montauk_json_arr_begin(&j);
+    size_t shown = 0;
+    for (auto& [comm, a] : rows) {
+      if (shown++ >= 20) break;
+      sublimation_u64(a->lat.data(), a->lat.size());
+      montauk_json_obj_begin(&j);
+        montauk_json_kstr(&j, "kthread", redact_comm(comm.c_str()).c_str());
+        montauk_json_ku64(&j, "cpu", a->cpu);
+        montauk_json_ku64(&j, "strands", a->lat.size());
+        montauk_json_knum(&j, "max_ms", ms(a->max_ns));
+        montauk_json_knum(&j, "p99_ms", q_ms(a->lat, 0.99));
+        montauk_json_ku64(&j, "held", a->held);
+        montauk_json_ku64(&j, "dark", a->dark);
+        if (a->held && a->worst_run_ts) {
+          uint64_t ws = a->worst_run_ts > a->max_ns ? a->worst_run_ts - a->max_ns : 0;
+          CpuHolderLedger::Holder hd = holder_.dominant(a->cpu, ws, a->worst_run_ts);
+          if (hd.window_ns) {
+            montauk_json_key(&j, "held_by");
+            montauk_json_obj_begin(&j);
+              montauk_json_kstr(&j, "task", holder_.name_of(hd.tid).c_str());
+              montauk_json_ku64(&j, "tid", hd.tid);
+              montauk_json_knum(&j, "coverage_pct",
+                                100.0 * (double)hd.held_ns / (double)hd.window_ns);
+            montauk_json_obj_end(&j);
+          }
+        }
+      montauk_json_obj_end(&j);
+    }
+    montauk_json_arr_end(&j);
+    json_gauges(j);
+    montauk_json_obj_end(&j);
+  }
+
   void prom(std::vector<PromMetric>& out) override {
     out.push_back({"montauk_analysis_kstrand_events_total", "",
                    static_cast<double>(total_)});
@@ -4993,8 +5170,7 @@ struct SeatReport final : Report {
       rows_.push_back({pid, st, wk, ratio,
                        static_cast<double>(top) / static_cast<double>(st), top_cpu});
     }
-    std::sort(rows_.begin(), rows_.end(),
-              [](const Row& a, const Row& b) { return a.ratio > b.ratio; });
+    sublimation_order_f64(rows_, true, [](const Row& r) { return r.ratio; });
     double floored = total_wakes_
         ? static_cast<double>(floored_wakes_) / static_cast<double>(total_wakes_)
         : 0.0;
@@ -5220,6 +5396,7 @@ void emit_offenders_text(const std::vector<Offender>& offs,
 // (SystemInfo/ScxStability/ThermalPower/HotCpu/Offender/Report::json()), one
 // parse per source, two renderings -- same discipline as --report --json.
 void emit_digest_json(const std::string& dir, bool have_events,
+                       const std::string& events_path,
                        const std::vector<std::unique_ptr<Report>>& reports,
                        const std::vector<Offender>& offs,
                        const montauk::pop::HotCpu& hot) {
@@ -5235,6 +5412,9 @@ void emit_digest_json(const std::string& dir, bool have_events,
     montauk_json_obj_begin(&j);
       montauk_json_kstr(&j, "dir", dir.c_str());
       montauk_json_kbool(&j, "has_events", have_events);
+      // Name the layout so a consumer that got has_events:false knows what was
+      // looked for -- the <dir>.events sibling or the in-dir events.bin.
+      montauk_json_kstr(&j, "events_path", events_path.c_str());
     montauk_json_obj_end(&j);
 
     if (sys.found) {
@@ -5345,13 +5525,22 @@ int run_digest(const std::string& dir, bool redact, bool want_json) {
   while (!base.empty() && base.back() == '/') base.pop_back();
   std::string events = base + ".events";
 
-  // The per-event .events sibling is optional: a .prom-only recording (e.g. a
+  // The per-event stream is optional: a .prom-only recording (e.g. a
   // system-metrics capture with no --trace-out) still has SYSTEM specs and the
   // THERMAL/POWER block worth reporting. Only the offenders and the wake2run
-  // verdict need the event stream; degrade gracefully when it is absent.
+  // verdict need it; degrade gracefully when it is absent. Two layouts carry
+  // it: the montauk --trace `<dir>.events` sibling, and the freeze-archive /
+  // bare-capture layout that keeps `events.bin` INSIDE the dir. Try both.
   montauk::model::TraceReader reader;
   bool have_events =
       reader.open(events.c_str()) == montauk::model::TraceReadStatus::Ok;
+  if (!have_events) {
+    std::string inside = base + "/events.bin";
+    if (reader.open(inside.c_str()) == montauk::model::TraceReadStatus::Ok) {
+      have_events = true;
+      events = inside;
+    }
+  }
 
   auto reports = make_reports();
   if (have_events) {
@@ -5375,7 +5564,10 @@ int run_digest(const std::string& dir, bool redact, bool want_json) {
   rank_offenders(offs);
 
   if (want_json) {
-    emit_digest_json(dir, have_events, reports, offs, hot);
+    // When nothing opened, report the layouts that were tried, not a bare path.
+    std::string events_path = have_events ? events
+                                          : (base + ".events | " + base + "/events.bin");
+    emit_digest_json(dir, have_events, events_path, reports, offs, hot);
     return 0;
   }
 
@@ -5409,9 +5601,12 @@ int run_digest(const std::string& dir, bool redact, bool want_json) {
         log_info("digest metrics -> %s", out_path.c_str());
     }
   } else {
-    log_warn("no per-event trace beside '%s' -- system metrics + offenders only "
-             "(wake2run latency needs a --trace-out capture)", base.c_str());
-    montauk_sink_appendf(&g_out, "\nKEY METRICS: not analyzed (no per-event trace)\n");
+    log_warn("no per-event trace at '%s.events' or '%s/events.bin' -- system "
+             "metrics + offenders only (wake2run latency needs the event stream, "
+             "from a --trace-out capture or a freeze-archive events.bin)",
+             base.c_str(), base.c_str());
+    montauk_sink_appendf(&g_out, "\nKEY METRICS: not analyzed (no per-event trace; "
+             "expected %s.events or %s/events.bin)\n", base.c_str(), base.c_str());
   }
   return 0;
 }

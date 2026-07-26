@@ -46,9 +46,9 @@ def build():
     objs = []
     for s in sorted(str(p) for p in SRC_DIR.rglob("*.c")):
         obj = BUILD / (Path(s).parent.name + "_" + Path(s).stem + ".o")
-        # Zero-warning gate on the learn-lane spectral.c only, not the existing
-        # sort-fallback src/spectral.c (whose C23-attribute warnings are benign).
-        our = Path(s).name == "spectral.c" and Path(s).parent.name == "learn"
+        # Zero-warning gate on the spectral kernel core; the typed front-ends
+        # (spectral_typed.c) instantiate a template and are not held to it.
+        our = Path(s).name == "spectral_kernel.c"
         extra = ["-Wall", "-Wextra"] if our else []
         r = subprocess.run(base + extra + ["-c", s, "-o", str(obj)],
                            capture_output=True, text=True)
@@ -57,10 +57,11 @@ def build():
             sys.stdout.write(r.stderr)
             return False
         if our and r.stderr.strip():
-            note("FAIL: learn/spectral.c emitted warnings (zero-warning gate):")
+            note("FAIL: spectral_kernel.c emitted warnings (zero-warning gate):")
             sys.stdout.write(r.stderr)
             return False
         objs.append(str(obj))
+    LIB.unlink(missing_ok=True)  # ar rcs appends; a removed source must not linger
     subprocess.run(["ar", "rcs", str(LIB)] + objs, check=True)
     r = subprocess.run([cc, std, "-O2", "-march=native",
                         "-I", str(SRC_DIR / "include"), "-I", str(SRC_DIR),
@@ -71,7 +72,7 @@ def build():
         sys.stdout.write(r.stderr)
         return False
     note(f"built libsublimation.a + harness via {Path(cc).name} "
-         f"(spectral.c: zero warnings)")
+         f"(spectral_kernel.c: zero warnings)")
     return True
 
 

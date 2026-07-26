@@ -69,6 +69,13 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
   }
   out.total_processes = out.processes.size();
   out.running_processes = out.state_running;
+  // Baseline EVERY scanned pid before reducing to the top-K, so a process that
+  // is quiet now but spikes later still has a prior sample to diff against.
+  // Capturing only the survivors (below the top_k call) made any process outside
+  // the initial top-K read 0% forever and never surface.
+  last_per_proc_.clear();
+  for (auto& p : out.processes) last_per_proc_[p.pid] = p.total_time;
+  last_cpu_total_ = cpu_total; have_last_ = true;
   top_k_by_cpu_pct(out.processes, max_procs_);
   // enrich survivors only: exe_path for every kept row (Security scans the
   // whole published set), cmdline/user/threads for the top N
@@ -93,13 +100,11 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     if (!info.user.empty()) ps.user_name = std::move(info.user);
     out.total_threads += info.thread_count;
   }
-  // For non-enriched processes, estimate 1 thread each (conservative)
-  if (out.processes.size() > enrich_n) {
-    out.total_threads += (out.processes.size() - enrich_n);
-  }
-  // update last maps
-  last_per_proc_.clear(); for (auto& p : out.processes) last_per_proc_[p.pid] = p.total_time;
-  last_cpu_total_ = cpu_total; have_last_ = true;
+  // Non-enriched rows never read /proc/pid/status, but num_threads was already
+  // parsed from /proc/pid/stat during the scan -- sum the real value rather than
+  // estimating 1 per process.
+  for (size_t i = enrich_n; i < out.processes.size(); ++i)
+    out.total_threads += out.processes[i].thread_count;
   return true;
 }
 

@@ -8,8 +8,9 @@ namespace montauk::app {
 
 // Cross-sectional anomaly enrichment over the live process population. Builds a
 // per-process feature vector (CPU %, RSS, GPU %, fault delta, thread count) and
-// fuses two sublimation learn-lane detectors (robust MAD, Mahalanobis) into a
-// rank-averaged anomaly_score per process, plus the dominant feature axis. The
+// fuses three sublimation learn-lane detectors (robust MAD, Mahalanobis, Half-
+// Space Trees) into a rank-averaged anomaly_score per process, plus the dominant
+// feature axis. The
 // fault delta is derived from prev_faults, the caller-owned per-pid cumulative
 // fault count from the previous cycle (the Producer holds it across frames and
 // this call refreshes it). Runs on the Producer thread before publish; writes

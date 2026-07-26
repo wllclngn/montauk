@@ -38,16 +38,30 @@ void sublimation_ewma_scores(const double *x, size_t n, size_t d, double alpha,
 // Per-row squared Mahalanobis distance against the sample mean and population
 // covariance with `ridge` added to the diagonal. Returns 0 on success, nonzero
 // if the covariance is not positive definite. d2[n] filled.
-int sublimation_mahalanobis(const double *x, size_t n, size_t d, double ridge,
-                            double *d2);
+[[nodiscard]] int sublimation_mahalanobis(const double *x, size_t n, size_t d,
+                                          double ridge, double *d2);
 
 // Streaming Half-Space Trees anomaly score per row (Tan-Ting-Liu, IJCAI 2011).
 // Trees are built with no data; a lower score means more anomalous. Deterministic
 // given `seed`. Returns 0 on success, nonzero on allocation failure. scores[n]
 // filled.
-int sublimation_hstrees(const double *x, size_t n, size_t d, unsigned trees,
-                        unsigned depth, size_t window, uint64_t size_limit,
-                        uint64_t seed, double *scores);
+[[nodiscard]] int sublimation_hstrees(const double *x, size_t n, size_t d,
+                                      unsigned trees, unsigned depth, size_t window,
+                                      uint64_t size_limit, uint64_t seed,
+                                      double *scores);
+
+// Fused process-population anomaly score. Composes the three SPATIAL detectors
+// (MAD, Mahalanobis, Half-Space Trees) by rank-average -- combining their
+// incommensurate scales cleanly, ties sharing one averaged rank so a degenerate
+// detector contributes a neutral 0.5 rather than a phantom ramp -- and reports
+// each row's dominant axis (the feature with the largest standardized deviation,
+// or -1 if every column is flat). The one anomaly fusion montauk's snapshot
+// enrichment and vector's montauk_anomalies both call, so the conclusion is
+// computed once, in the core. Deterministic (fixed HST seed). scores[n] and
+// axes[n] are caller-allocated. Returns 0 on success, nonzero on allocation
+// failure (scores/axes then untouched).
+[[nodiscard]] int sublimation_anomaly_fuse(const double *x, size_t n, size_t d,
+                                           double *scores, int8_t *axes);
 
 #ifdef __cplusplus
 }

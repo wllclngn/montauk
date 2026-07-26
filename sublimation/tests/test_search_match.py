@@ -13,6 +13,7 @@ The corpora and cases are reused from test_search_research.py. find/find_from/
 full_match are exercised for self-consistency. Any divergence fails loudly.
 """
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -93,6 +94,7 @@ def build_lib() -> bool:
         objs.append(str(obj))
     if match_warned:
         return False
+    LIB.unlink(missing_ok=True)  # ar rcs appends; a removed source must not linger
     subprocess.run(["ar", "rcs", str(LIB)] + objs, check=True)
     r = subprocess.run([cc, "-std=c2x", "-O2", "-march=native",
                         "-I", str(SRC_DIR / "include"), "-I", str(SRC_DIR),
@@ -131,6 +133,51 @@ def c_full(face, k, pat: bytes, data: bytes) -> int:
     r = subprocess.run(_argv(str(CBIN), "full", face, str(k), pat),
                        input=data, capture_output=True)
     return int(r.stdout.decode().strip() or "-1")
+
+
+def c_findfrom(face, pat: bytes, data: bytes) -> dict:
+    # One process walks find_from over every start offset in [0, n]; returns
+    # {from: start} (start == -1 when no match at or after `from`).
+    r = subprocess.run(_argv(str(CBIN), "findfrom", face, "0", pat),
+                       input=data, capture_output=True)
+    out = {}
+    for line in r.stdout.decode().splitlines():
+        frm, start = line.split()
+        out[int(frm)] = int(start)
+    return out
+
+
+def find_from_sweep() -> int:
+    # find_from over from in [0, n] on short haystacks (n < 64), both faces,
+    # ICASE on and off, against bytes.find as the memmem/strstr oracle. The
+    # target is continuation correctness: a shifted anchor or a missed leftmost
+    # match on resume shows as a divergence at some `from`. Literal patterns
+    # only (no metacharacters) so the regex face must land on the same
+    # occurrences the literal oracle does. Deterministic seed, no clock.
+    rnd = random.Random(20260724)
+    alpha = b"abABcC "   # mixed case + space: exercises ICASE folding and misses
+    faces = (("fixed", False), ("fixedi", True), ("regex", False), ("regexi", True))
+    fails = 0
+    sweeps = 0
+    for _ in range(500):
+        n = rnd.randint(0, 40)                      # n < 64
+        data = bytes(rnd.choice(alpha) for _ in range(n))
+        pat = bytes(rnd.choice(alpha) for _ in range(rnd.randint(1, 5)))
+        for face, icase in faces:
+            got = c_findfrom(face, pat, data)
+            h = data.lower() if icase else data
+            p = pat.lower() if icase else pat
+            for frm in range(n + 1):
+                truth = h.find(p, frm)              # leftmost match with start >= frm, or -1
+                if got.get(frm, -999) != truth:
+                    note(f"  DIVERGED face={face} pat={pat!r} data={data!r} "
+                         f"from={frm} got={got.get(frm)} truth={truth}")
+                    fails += 1
+                    break
+            sweeps += 1
+    note(f"  {sweeps} (haystack x face) sweeps, every from-offset checked -> "
+         + ("byte-parity" if fails == 0 else f"{fails} DIVERGED"))
+    return fails
 
 
 def main() -> int:
@@ -308,6 +355,11 @@ def main() -> int:
             ff_fail += 1
     note(f"  find/full: {'consistent' if ff_fail == 0 else str(ff_fail) + ' DIVERGED'}")
     fails += ff_fail
+
+    # find_from continuation: from-offset sweep on short haystacks vs bytes.find.
+    note("")
+    note("find_from short-haystack sweep vs bytes.find (both faces, ICASE on/off)")
+    fails += find_from_sweep()
 
     note("")
     if fails:

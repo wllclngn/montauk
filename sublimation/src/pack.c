@@ -11,12 +11,30 @@
 // (ascending or descending); the low 32 bits being the original index
 // keep the sort stable for equal keys.
 #include "sublimation_pack.h"
+#include "internal/sort_internal.h"   // SUB_TYPED, SUB_KEY, sub_classify_internal_u64
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 extern void sublimation_u64(uint64_t *arr, size_t n);
+
+// Keyed spectral merge over (key, idx) slots -- the structured arm of the 64-bit
+// index sort. The one merge body (merge_impl.h) sorts slots by .key while moving
+// whole slots, so the index rides the key through the R_eff merge. Serial only:
+// the parallel structured pole has no slot-typed sub_sort_internal, and the
+// index sort's structured case (monotonic timestamps) collapses to few runs.
+void sub_spectral_merge_pack64(sublimation_pack64_slot *arr, size_t n, uint64_t *comparisons);
+#define SUB_TYPE sublimation_pack64_slot
+#define SUB_SUFFIX _pack64
+#define SUB_KEY(x) ((x).key)
+#define SUB_MERGE_SERIAL_ONLY
+#include "merge_impl.h"
+#undef SUB_TYPE
+#undef SUB_SUFFIX
+#undef SUB_KEY
+#undef SUB_MERGE_SERIAL_ONLY
 
 static inline uint64_t sub_pack_key_u32(uint32_t k, uint32_t idx, bool desc) {
     uint32_t mono = desc ? ~k : k;
@@ -119,6 +137,38 @@ static void sub_radix_pairs64(sublimation_pack64_slot *a,
         memcpy(dest, a, n * sizeof(sublimation_pack64_slot));
 }
 
+// Adaptive 64-bit index dispatch. The value sort routes by disorder (radix for
+// high-entropy, the R_eff merge for structure); the 32-bit pack path inherits
+// that by packing into a u64 and calling sublimation_u64. The 64-bit key does
+// not co-pack with the index, so this routes the slots directly: classify the
+// keys, send structure (monotonic timestamps, the dominant montauk case) to the
+// keyed spectral merge, random / few-unique to the stable LSD radix. Both arms
+// are stable and leave the result in `a`, so the two produce the identical index
+// permutation -- the merge only changes speed, exploiting order the radix cannot.
+// Below SUB_PACK_ADAPT_MIN the radix is already trivially fast, so skip the
+// classify (which needs a contiguous key copy) and sort directly.
+enum { SUB_PACK_ADAPT_MIN = 512 };
+
+static void sub_pack_dispatch64(sublimation_pack64_slot *a,
+                                sublimation_pack64_slot *b, size_t n) {
+    if (n < 2) return;
+    if (n >= SUB_PACK_ADAPT_MIN) {
+        uint64_t *keys = (uint64_t *)malloc(n * sizeof(uint64_t));
+        if (keys) {
+            for (size_t i = 0; i < n; i++) keys[i] = a[i].key;
+            sub_profile_t p = sub_classify_internal_u64(keys, n);
+            free(keys);
+            if (p.disorder == SUB_SORTED || p.disorder == SUB_REVERSED
+                || p.disorder == SUB_NEARLY_SORTED || p.disorder == SUB_PHASED) {
+                uint64_t cmp = 0;
+                sub_spectral_merge_pack64(a, n, &cmp);
+                return;
+            }
+        }
+    }
+    sub_radix_pairs64(a, b, n);
+}
+
 void sublimation_pack_sort_u64_with_scratch(
     const uint64_t *keys, uint32_t *indices, size_t n, bool desc,
     sublimation_pack64_slot *scratch) {
@@ -128,7 +178,7 @@ void sublimation_pack_sort_u64_with_scratch(
         a[i].key = desc ? ~mono : mono;
         a[i].idx = indices[i];
     }
-    sub_radix_pairs64(a, b, n);
+    sub_pack_dispatch64(a, b, n);
     for (size_t i = 0; i < n; i++) indices[i] = a[i].idx;
 }
 
@@ -141,7 +191,7 @@ void sublimation_pack_sort_i64_with_scratch(
         a[i].key = desc ? ~mono : mono;
         a[i].idx = indices[i];
     }
-    sub_radix_pairs64(a, b, n);
+    sub_pack_dispatch64(a, b, n);
     for (size_t i = 0; i < n; i++) indices[i] = a[i].idx;
 }
 
@@ -154,7 +204,7 @@ void sublimation_pack_sort_f64_with_scratch(
         a[i].key = desc ? ~mono : mono;
         a[i].idx = indices[i];
     }
-    sub_radix_pairs64(a, b, n);
+    sub_pack_dispatch64(a, b, n);
     for (size_t i = 0; i < n; i++) indices[i] = a[i].idx;
 }
 

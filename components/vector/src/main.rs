@@ -1,6 +1,6 @@
 // vector -- agent-facing MCP tool surface over montauk/sublimation.
 // Read-only / observational only: no killing processes, no scheduler-policy
-// changes, nothing mutating, in any of the four tools (see tools.rs).
+// changes, nothing mutating, in any of the seven tools (see tools.rs).
 //
 // Thin wrapper: the dispatch logic lives in the library (tools.rs) so
 // tests/test_mcp_tools.rs can exercise it directly, the same way

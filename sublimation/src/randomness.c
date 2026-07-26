@@ -154,18 +154,14 @@ static bool sub_spectral_flat_score(const double *s, size_t m, float *score) {
     if (ok) {
         for (size_t i = 0; i < m; i++)
             grid[i] = range > 0.0 ? (int64_t)(((s[i] - lo) / range) * 1e9) : 0;
-        sub_build_comparison_laplacian(grid, m, L, 0x12345678ull ^ (uint64_t)m);
-        size_t iters = sub_jacobi_eigendecompose(L, ev, m, work);
-        if (iters == 0) {
-            ok = false;                       // Jacobi did not converge
+        sub_build_comparison_laplacian_i64(grid, m, L, 0x12345678ull ^ (uint64_t)m);
+        sub_spectral_jacobi(L, m, ev, work);  // L destroyed; ev eigenvalues, work V
+        double lmax = ev[m - 1];
+        if (lmax <= SUB_EIGENVALUE_ZERO_THRESH) {
+            ok = false;                       // degenerate spectrum
         } else {
-            double lmax = ev[m - 1];
-            if (lmax <= SUB_EIGENVALUE_ZERO_THRESH) {
-                ok = false;                   // degenerate spectrum
-            } else {
-                double ratio = sub_spectral_gap(ev, m) / lmax;
-                *score = sub_clampf((float)(ratio / SUB_RAND_SPECTRAL_FLAT_BASELINE));
-            }
+            double ratio = sub_spectral_gap(ev, m) / lmax;
+            *score = sub_clampf((float)(ratio / SUB_RAND_SPECTRAL_FLAT_BASELINE));
         }
     }
     free(grid);
@@ -312,3 +308,22 @@ sub_randomness_t sublimation_randomness_i64(const int64_t *arr, size_t n) {
 sub_randomness_t sublimation_randomness_f64(const double *arr, size_t n) {
     SUB_RANDOMNESS_BODY(_f64);
 }
+
+// 32-bit types widen to their 64-bit counterpart and reuse the proven battery.
+// Sign-extend / zero-extend / float-widen are order-preserving, so every lens
+// reads identically. The battery runs only at the margins (small n / ambiguous),
+// so the O(n) widen copy is negligible.
+#define SUB_RANDOMNESS_WIDEN(SUF32, T32, SUF64, T64, CAST)                  \
+sub_randomness_t sublimation_randomness_##SUF32(const T32 *arr, size_t n) { \
+    if (n < 2) { sub_randomness_t z = {0}; return z; }                      \
+    T64 *w = malloc(n * sizeof(T64));                                       \
+    if (!w) { sub_randomness_t z = {0}; return z; }                         \
+    for (size_t i = 0; i < n; i++) w[i] = (CAST)arr[i];                     \
+    sub_randomness_t r = sublimation_randomness_##SUF64(w, n);              \
+    free(w);                                                               \
+    return r;                                                              \
+}
+SUB_RANDOMNESS_WIDEN(i32, int32_t,  i64, int64_t,  int64_t)
+SUB_RANDOMNESS_WIDEN(u32, uint32_t, u64, uint64_t, uint64_t)
+SUB_RANDOMNESS_WIDEN(f32, float,    f64, double,   double)
+#undef SUB_RANDOMNESS_WIDEN

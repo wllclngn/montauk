@@ -8,6 +8,16 @@
 #define SUB_MERGE_CONSTANTS_DEFINED
 SUB_CONSTEXPR size_t SUB_MIN_MERGE = 32;
 SUB_CONSTEXPR size_t SUB_MIN_GALLOP = 7;
+SUB_CONSTEXPR size_t SUB_SMERGE_MIN_CHUNK = 16384;  // parallel structured sort: min chunk per frame
+#endif
+
+// Element-to-key accessor. Scalar instantiations leave it identity (codegen
+// unchanged); a satellite-carrying instantiation (the pack64 index sort) defines
+// SUB_KEY(x) to project the sort key out of a {key, payload} slot before
+// inclusion, so the one merge body sorts slots by key while moving whole slots.
+#ifndef SUB_KEY
+#define SUB_KEY(x) (x)
+#define SUB_KEY_LOCAL
 #endif
 
 typedef struct {
@@ -22,7 +32,7 @@ static void SUB_TYPED(binary_insertion_sort)(SUB_TYPE *arr, size_t n, uint64_t *
         while (lo < hi) {
             size_t mid = lo + (hi - lo) / 2;
             (*cmp)++;
-            if (arr[mid] > key) hi = mid;
+            if (SUB_KEY(arr[mid]) > SUB_KEY(key)) hi = mid;
             else lo = mid + 1;
         }
         if (lo < i) {
@@ -36,10 +46,10 @@ static size_t SUB_TYPED(count_run_asc)(SUB_TYPE *arr, size_t n, uint64_t *cmp) {
     if (n <= 1) return n;
     size_t run = 1;
     (*cmp)++;
-    if (arr[1] < arr[0]) {
+    if (SUB_KEY(arr[1]) < SUB_KEY(arr[0])) {
         while (run < n - 1) {
             (*cmp)++;
-            if (arr[run + 1] >= arr[run]) break;
+            if (SUB_KEY(arr[run + 1]) >= SUB_KEY(arr[run])) break;
             run++;
         }
         run++;
@@ -49,7 +59,7 @@ static size_t SUB_TYPED(count_run_asc)(SUB_TYPE *arr, size_t n, uint64_t *cmp) {
     } else {
         while (run < n - 1) {
             (*cmp)++;
-            if (arr[run + 1] < arr[run]) break;
+            if (SUB_KEY(arr[run + 1]) < SUB_KEY(arr[run])) break;
             run++;
         }
         run++;
@@ -62,11 +72,11 @@ static size_t SUB_TYPED(gallop_left)(SUB_TYPE key, const SUB_TYPE *base, size_t 
                                       size_t hint, uint64_t *cmp) {
     size_t last_ofs = 0, ofs = 1;
     (*cmp)++;
-    if (base[hint] < key) {
+    if (SUB_KEY(base[hint]) < SUB_KEY(key)) {
         size_t max_ofs = len - hint;
         while (ofs < max_ofs) {
             (*cmp)++;
-            if (!(base[hint + ofs] < key)) break;
+            if (!(SUB_KEY(base[hint + ofs]) < SUB_KEY(key))) break;
             last_ofs = ofs;
             ofs = (ofs << 1) + 1;
             if (ofs <= last_ofs) ofs = max_ofs;
@@ -78,7 +88,7 @@ static size_t SUB_TYPED(gallop_left)(SUB_TYPE key, const SUB_TYPE *base, size_t 
         size_t max_ofs = hint + 1;
         while (ofs < max_ofs) {
             (*cmp)++;
-            if (base[hint - ofs] < key) break;
+            if (SUB_KEY(base[hint - ofs]) < SUB_KEY(key)) break;
             last_ofs = ofs;
             ofs = (ofs << 1) + 1;
             if (ofs <= last_ofs) ofs = max_ofs;
@@ -91,7 +101,7 @@ static size_t SUB_TYPED(gallop_left)(SUB_TYPE key, const SUB_TYPE *base, size_t 
     while (last_ofs < ofs) {
         size_t mid = last_ofs + ((ofs - last_ofs) >> 1);
         (*cmp)++;
-        if (base[mid] < key) last_ofs = mid + 1;
+        if (SUB_KEY(base[mid]) < SUB_KEY(key)) last_ofs = mid + 1;
         else ofs = mid;
     }
     return ofs;
@@ -102,11 +112,11 @@ static size_t SUB_TYPED(gallop_right)(SUB_TYPE key, const SUB_TYPE *base, size_t
                                        size_t hint, uint64_t *cmp) {
     size_t last_ofs = 0, ofs = 1;
     (*cmp)++;
-    if (key < base[hint]) {
+    if (SUB_KEY(key) < SUB_KEY(base[hint])) {
         size_t max_ofs = hint + 1;
         while (ofs < max_ofs) {
             (*cmp)++;
-            if (!(key < base[hint - ofs])) break;
+            if (!(SUB_KEY(key) < SUB_KEY(base[hint - ofs]))) break;
             last_ofs = ofs;
             ofs = (ofs << 1) + 1;
             if (ofs <= last_ofs) ofs = max_ofs;
@@ -119,7 +129,7 @@ static size_t SUB_TYPED(gallop_right)(SUB_TYPE key, const SUB_TYPE *base, size_t
         size_t max_ofs = len - hint;
         while (ofs < max_ofs) {
             (*cmp)++;
-            if (key < base[hint + ofs]) break;
+            if (SUB_KEY(key) < SUB_KEY(base[hint + ofs])) break;
             last_ofs = ofs;
             ofs = (ofs << 1) + 1;
             if (ofs <= last_ofs) ofs = max_ofs;
@@ -131,7 +141,7 @@ static size_t SUB_TYPED(gallop_right)(SUB_TYPE key, const SUB_TYPE *base, size_t
     while (last_ofs < ofs) {
         size_t mid = last_ofs + ((ofs - last_ofs) >> 1);
         (*cmp)++;
-        if (key < base[mid]) ofs = mid;
+        if (SUB_KEY(key) < SUB_KEY(base[mid])) ofs = mid;
         else last_ofs = mid + 1;
     }
     return ofs;
@@ -150,7 +160,7 @@ static void SUB_TYPED(merge_lo)(SUB_TYPE *base_arr, size_t left_len, size_t righ
         size_t cnt1 = 0, cnt2 = 0;
         do {
             (*cmp)++;
-            if (*c2 < *c1) {
+            if (SUB_KEY(*c2) < SUB_KEY(*c1)) {
                 *dest++ = *c2++; rr--; cnt2++; cnt1 = 0;
                 if (rr == 0) goto SUB_TYPED(done_lo);
             } else {
@@ -207,7 +217,7 @@ static void SUB_TYPED(merge_hi)(SUB_TYPE *base_arr, size_t left_len, size_t righ
         size_t cnt1 = 0, cnt2 = 0;
         do {
             (*cmp)++;
-            if (*c2 < *c1) {
+            if (SUB_KEY(*c2) < SUB_KEY(*c1)) {
                 *dest-- = *c1--; lr--; cnt1++; cnt2 = 0;
                 if (lr == 0) goto SUB_TYPED(done_hi);
             } else {
@@ -298,10 +308,17 @@ static void SUB_TYPED(merge_reff)(SUB_TYPE *arr, SUB_TYPED(sub_run_t) *runs, siz
 
     size_t num_bounds = num_runs - 1;
 
+    // Effective resistance on the run-boundary PATH Laplacian. The runs form a
+    // path graph; on a path R_eff between adjacent runs is the single edge's
+    // resistance, 1/w for affinity w across the boundary, so with w = 1/(1+gap)
+    // the resistance is 1+gap. This closed form was measured equivalent to the
+    // full eigensolver R_eff (sublimation_effective_resistance on a run-affinity
+    // graph) in merge order and comparison count -- the full graph adds O(n^3)
+    // for no gain -- so the closed form is the spectral merge.
     SUB_TYPED(sub_boundary_t) bounds[511];
     for (size_t i = 0; i < num_bounds; i++) {
         size_t end_i = runs[i].base + runs[i].length - 1;
-        double gap = fabs((double)arr[runs[i + 1].base] - (double)arr[end_i]);
+        double gap = fabs((double)SUB_KEY(arr[runs[i + 1].base]) - (double)SUB_KEY(arr[end_i]));
         bounds[i].idx = i;
         bounds[i].resistance = 1.0 + gap;
     }
@@ -343,9 +360,12 @@ static void SUB_TYPED(merge_reff)(SUB_TYPE *arr, SUB_TYPED(sub_run_t) *runs, siz
     }
 }
 
-// NATURAL-RUN MERGE: detect natural runs, coalesce already-ordered
-// neighbors, then merge pairs in R_eff (boundary-resistance) order with
-// galloping merges.
+// SPECTRAL MERGE: detect natural runs, coalesce already-ordered neighbors, then
+// merge pairs in order of effective resistance on the run-boundary path
+// Laplacian (see merge_reff), with galloping merges. Effective resistance is
+// spectral graph theory, so the name is literal; the path R_eff has a closed
+// form (measured equivalent to the full eigensolver, which costs O(n^3) for no
+// gain).
 void SUB_TYPED(sub_spectral_merge)(SUB_TYPE *arr, size_t n, uint64_t *comparisons) {
     if (n < 2) return;
     if (n < SUB_MIN_MERGE) {
@@ -386,7 +406,7 @@ void SUB_TYPED(sub_spectral_merge)(SUB_TYPE *arr, size_t n, uint64_t *comparison
         detected[out] = detected[0];
         for (size_t i = 1; i < num_runs; i++) {
             size_t prev_end = detected[out].base + detected[out].length - 1;
-            if (arr[prev_end] <= arr[detected[i].base]) {
+            if (SUB_KEY(arr[prev_end]) <= SUB_KEY(arr[detected[i].base])) {
                 detected[out].length += detected[i].length;
             } else {
                 out++;
@@ -410,3 +430,74 @@ void SUB_TYPED(sub_spectral_merge)(SUB_TYPE *arr, size_t n, uint64_t *comparison
 
     free(tmp);
 }
+
+// PARALLEL STRUCTURED SORT (the structured pole -- the large/structured 2x2
+// cell). The DFS forks the input into chunks and sorts each in parallel on the
+// work-stealing engine; the spectral merge then CLOSES over the sorted chunks.
+// Mirror of the parallel radix, whose byte-buckets come out ordered and need no
+// close. The divide is a pure fork (fire-and-forget, like radix); the R_eff
+// merge is the join. Serial fork/close pieces are all reused -- this only wires
+// them to the engine. Skipped for a satellite instantiation (SUB_MERGE_SERIAL_
+// ONLY): the pack64 index sort wants only the serial spectral merge, and the
+// engine frame's sub_sort_internal has no slot-typed form.
+#ifndef SUB_MERGE_SERIAL_ONLY
+typedef struct { size_t nchunks; } SUB_TYPED(sub_smerge_ctx_t);
+
+static void SUB_TYPED(smerge_frame)(sub_dfs_frame_t f, sub_dfs_ctx_t *ctx, void *user) {
+    if (f.depth == 0) {                              // root: divide into chunks
+        size_t P = ((SUB_TYPED(sub_smerge_ctx_t) *)user)->nchunks;
+        SUB_TYPE *a = (SUB_TYPE *)f.base;
+        size_t n = f.n, cs = n / P;
+        for (size_t i = 0; i < P; i++) {
+            size_t base = i * cs, len = (i == P - 1) ? n - base : cs;
+            sub_dfs_push(ctx, (sub_dfs_frame_t){ .base = a + base, .n = len, .depth = 1 });
+        }
+    } else {                                         // chunk: full serial sort
+        (void)user;
+        sub_adaptive_t st;
+        sub_adaptive_init(&st, f.n);
+        SUB_TYPED(sub_sort_internal)((SUB_TYPE *)f.base, f.n, &st, nullptr);
+    }
+}
+
+void SUB_TYPED(sub_smerge_par)(SUB_TYPE *restrict arr, size_t n, size_t workers) {
+    size_t P = workers * 4;
+    size_t max_chunks = n / SUB_SMERGE_MIN_CHUNK;
+    if (P > max_chunks) P = max_chunks;
+    if (P > 256) P = 256;                            // merge_reff bounds[] cap
+    if (n < 2 || workers < 2 || P < 2) {             // too small to fork: serial
+        if (n > 1) { sub_adaptive_t st; sub_adaptive_init(&st, n);
+                     SUB_TYPED(sub_sort_internal)(arr, n, &st, nullptr); }
+        return;
+    }
+
+    SUB_TYPED(sub_smerge_ctx_t) c = { P };
+    sub_dfs_frame_t root = { .base = arr, .n = n, .depth = 0 };
+    bool forked = sub_dfs_run(workers, root, SUB_TYPED(smerge_frame), &c);
+
+    SUB_TYPE *tmp = forked ? malloc((n / 2 + 1) * sizeof(SUB_TYPE)) : nullptr;
+    if (!forked || !tmp) {                           // engine/tmp OOM: serial sort
+        free(tmp);
+        sub_adaptive_t st; sub_adaptive_init(&st, n);
+        SUB_TYPED(sub_sort_internal)(arr, n, &st, nullptr);
+        return;
+    }
+
+    // Close: R_eff spectral merge over the P sorted chunks (each an ordered run).
+    SUB_TYPED(sub_run_t) runs[257];
+    size_t cs = n / P;
+    for (size_t i = 0; i < P; i++) {
+        runs[i].base = i * cs;
+        runs[i].length = (i == P - 1) ? n - i * cs : cs;
+    }
+    size_t min_gallop = SUB_MIN_GALLOP;
+    uint64_t cmp = 0;
+    SUB_TYPED(merge_reff)(arr, runs, P, tmp, &min_gallop, &cmp);
+    free(tmp);
+}
+#endif // SUB_MERGE_SERIAL_ONLY
+
+#ifdef SUB_KEY_LOCAL
+#undef SUB_KEY
+#undef SUB_KEY_LOCAL
+#endif

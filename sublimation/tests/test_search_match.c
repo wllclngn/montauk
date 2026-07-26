@@ -41,6 +41,8 @@ int main(int argc, char **argv) {
 
     unsigned flags = 0;
     if (strcmp(face, "fixed") == 0) flags |= SUBLIMATION_SEARCH_FIXED;
+    else if (strcmp(face, "fixedi") == 0) flags |= SUBLIMATION_SEARCH_FIXED | SUBLIMATION_SEARCH_ICASE;
+    else if (strcmp(face, "regexi") == 0) flags |= SUBLIMATION_SEARCH_ICASE;
     else if (strcmp(face, "fuzzy") == 0) { /* fuzzy selected by k > 0 below */ }
     else if (strcmp(face, "regex") != 0) { fprintf(stderr, "bad face: %s\n", face); return 2; }
 
@@ -60,6 +62,15 @@ int main(int argc, char **argv) {
         else printf("%ld %ld\n", start, end);
     } else if (strcmp(op, "full") == 0) {
         printf("%d\n", sublimation_search_full_match(&s, (const char *)hay, n));
+    } else if (strcmp(op, "findfrom") == 0) {
+        // Walk find_from over every start offset in [0, n] in one process, so a
+        // continuation-restart bug (a shifted anchor, a missed leftmost match on
+        // resume) shows as a divergence at some `from` against the oracle.
+        for (size_t from = 0; from <= n; from++) {
+            long end = -1;
+            long start = sublimation_search_find_from(&s, (const char *)hay, n, from, &end);
+            printf("%zu %ld\n", from, start);
+        }
     } else {
         fprintf(stderr, "bad op: %s\n", op);
         free(hay);

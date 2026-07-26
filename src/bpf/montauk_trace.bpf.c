@@ -609,6 +609,13 @@ SEC("tp/sched/sched_process_exit")
 int handle_exit(struct trace_event_raw_sched_process_exit *ctx) {
   u32 pid = ctx->pid;
 
+  // Thread cleanup runs for EVERY thread exit, before the tracked gate:
+  // thread_map is keyed by tid (= ctx->pid here) while is_tracked() gates on the
+  // tgid via proc_map, so a worker thread (tid != tgid) would fail the gate and
+  // its entry would never be removed -- the map then fills under thread churn
+  // and caps coverage. Deleting an absent key is a no-op.
+  bpf_map_delete_elem(&thread_map, &pid);
+
   if (!is_tracked(pid))
     return 0;
 
@@ -644,8 +651,6 @@ int handle_exit(struct trace_event_raw_sched_process_exit *ctx) {
                       sig_low, 0 /* sender unknown at exit */, code);
   }
 
-  // Thread cleanup: delete this tid from thread_map
-  bpf_map_delete_elem(&thread_map, &pid);
   return 0;
 }
 

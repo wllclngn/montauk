@@ -35,6 +35,18 @@ private:
   void ensure_nvml_init();
   void nvml_shutdown_if_needed();
 #endif
+
+  // Always valid, even in a build without NVML (returns false there): true only
+  // when NVML is compiled in AND initialized OK. The nvidia-smi fallbacks that
+  // run "only when NVML is unavailable" call this instead of the nvml_ok_ member
+  // directly, so they compile on a box with no NVML headers.
+  bool nvml_available() const {
+#ifdef MONTAUK_HAVE_NVML
+    return nvml_ok_;
+#else
+    return false;
+#endif
+  }
 };
 
 } // namespace montauk::app

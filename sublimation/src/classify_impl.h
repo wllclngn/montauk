@@ -336,10 +336,8 @@ static float SUB_TYPED(sample_inversion_ratio)(const SUB_TYPE *arr, size_t n) {
     uint64_t rng = 0x5DEECE66Dull ^ (uint64_t)n;
 
     for (size_t k = 0; k < sample_count; k++) {
-        rng = rng * 6364136223846793005ull + 1442695040888963407ull;
-        size_t i = (size_t)(rng >> 33) % n;
-        rng = rng * 6364136223846793005ull + 1442695040888963407ull;
-        size_t j = (size_t)(rng >> 33) % n;
+        size_t i = sub_lcg_index(&rng, n);
+        size_t j = sub_lcg_index(&rng, n);
 
         if (i == j) continue;
         if (i > j) { size_t tmp = i; i = j; j = tmp; }
@@ -403,7 +401,8 @@ static size_t SUB_TYPED(detect_phase_boundary)(const SUB_TYPE *arr, size_t n) {
         for (size_t j = i; j + 1 < end; j++) {
             if (arr[j] > arr[j + 1]) inv++;
         }
-        float rate = (float)inv / (float)(end - i);
+        if (end - i < 2) continue;                 // no adjacent pairs to rate
+        float rate = (float)inv / (float)(end - i - 1);  // pairs, not elements
         if (sub_osc_detect(&osc, rate)) return i;
     }
 

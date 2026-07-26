@@ -20,7 +20,7 @@
 //   sublimation field N[,M..] [--delim D]                (column(s) -- awk '{print $N}', '{print $1,$3}')
 //   sublimation where 'N OP V' [--delim D]               (numeric column filter -- awk '$N OP V')
 //
-// CLASS is one of: sorted reversed nearly-sorted few-unique random phased spectral
+// CLASS is one of: sorted reversed nearly-sorted few-unique random phased
 // --field N pulls the N-th (1-based) delimited column per line, so awk's column
 // extraction is folded in -- no `awk '{print $N}' | ...` needed.
 //
@@ -33,6 +33,7 @@
 #include "sublimation_pack.h"
 #include "sublimation_search.h"
 #include "sublimation_randomness.h"
+#include "sublimation_stats.h"
 #include "sublimation_text.h"
 
 #include "util/sink.h"
@@ -48,6 +49,15 @@
 // per printf; stderr diagnostics stay on stderr unchanged.
 static montauk_sink g_out;
 static void drain_out(void) { montauk_sink_drain(&g_out); }
+
+// Checked allocation for the line-buffering verbs. A NULL from the allocator is
+// an out-of-memory the CLI cannot proceed past, so report it and exit rather
+// than dereference NULL. cli.c is the top-level program, so exiting here is
+// correct; the library itself never exits.
+static void oom(void) { fputs("sublimation: out of memory\n", stderr); exit(2); }
+static void *xmalloc(size_t n) { void *p = malloc(n); if (!p && n) oom(); return p; }
+static void *xcalloc(size_t nm, size_t sz) { void *p = calloc(nm, sz); if (!p && nm && sz) oom(); return p; }
+static void *xrealloc(void *q, size_t n) { void *p = realloc(q, n); if (!p && n) oom(); return p; }
 
 static void usage(FILE *out) {
     fputs(
@@ -92,12 +102,17 @@ static void usage(FILE *out) {
         "  join FIELD FILE       join stdin and FILE on field FIELD (relational join)\n"
         "  version               print the library version and ABI (also --version)\n"
         "\n"
-        "  CLASS: sorted reversed nearly-sorted few-unique random phased spectral\n"
+        "  CLASS: sorted reversed nearly-sorted few-unique random phased\n"
         "\n"
         "options:\n"
-        "  --field N             pull the N-th (1-based) delimited column per line\n"
-        "  --delim D             column delimiter chars (default: whitespace)\n"
+        "  --field N             pull the N-th (1-based) delimited column per line;\n"
+        "                        negative counts from the end (-1 = last column)\n"
+        "  --delim D (-d D)      column delimiter chars (default: whitespace);\n"
+        "                        -d is the alias everywhere except uniq (which owns -d)\n"
         "  --desc                sort descending\n"
+        "  --human               sort --keyed: scale K/M/G/T/P suffixed keys\n"
+        "                        (1024-based) so `du -sh | sort --keyed --human`\n"
+        "                        orders by real size -- coreutils' `sort -h`\n"
         "  --keyed               sort: keep the whole line, order by --field N (or\n"
         "                        the whole line) as the key -- a row-preserving\n"
         "                        keyed sort, not just the extracted value\n"
@@ -107,6 +122,9 @@ static void usage(FILE *out) {
         "  -i / -o               search: case-insensitive (-i) / print only the match (-o)\n"
         "  -q / -m N             search: quiet (exit status only) / stop after N matches per file\n"
         "  -F / -E               search: fixed string (literal) / extended regex (the default)\n"
+        "                        regex is a bitset engine capped at 64 positions (one per\n"
+        "                        literal/class/metachar, summed across | branches); a longer\n"
+        "                        pattern is rejected as 'bad pattern' -- split it across -e or use -F\n"
         "  -k N                  search: fuzzy, match within N mismatches (approximate)\n"
         "  -A N / -B N / -C N    search: N lines of trailing/leading/both context (-C = both);\n"
         "                        standalone tokens only, not bundleable with other short flags\n"
@@ -125,6 +143,9 @@ static void usage(FILE *out) {
         "  --line-buffered       search: flush per output line (automatic at a TTY)\n"
         "  --color WHEN          search: highlight matches, filenames, line numbers\n"
         "                        (auto|always|never; bare --color = auto; also --color=WHEN)\n"
+        "  --tally               search: count each extracted match instead of\n"
+        "                        printing it, highest first (implies -o) -- the\n"
+        "                        `search -o ... | tally` pipeline in one verb\n"
         "  --files-from LIST     search: read input paths from LIST, newline- or NUL-\n"
         "                        delimited, '-' = stdin (find ... | search --files-from -)\n"
         "  --words / --bytes     count: word count / byte count instead of line count (wc -w/-c)\n"
@@ -159,6 +180,24 @@ static void vec_push(Vec *a, double x) {
 // comparator and no libc qsort. The index is uint32_t, so the verb carries
 // the library's documented 2^32-line cap.
 typedef struct { double *keys; char **lines; size_t n, cap; } KeyedBuf;
+// `du -h`/`sort -h` style magnitude suffix trailing a numeric key: K M G T P E,
+// 1024-based, tolerating the 'i'/'B' spellings (4.0K, 16MiB, 1.2G). Returns the
+// multiplier for whatever follows the number, 1.0 when there is no suffix.
+static double human_scale(const char *s) {
+    // The suffix must abut the number, exactly as du -h emits it ("4.0K\tpath").
+    // Skipping whitespace first would read the next column's first letter as a
+    // magnitude -- "512\ttiny" became 512 TiB.
+    switch (*s) {
+        case 'k': case 'K': return 1024.0;
+        case 'm': case 'M': return 1024.0 * 1024.0;
+        case 'g': case 'G': return 1024.0 * 1024.0 * 1024.0;
+        case 't': case 'T': return 1024.0 * 1024.0 * 1024.0 * 1024.0;
+        case 'p': case 'P': return 1024.0 * 1024.0 * 1024.0 * 1024.0 * 1024.0;
+        case 'e': case 'E': return 1024.0 * 1024.0 * 1024.0 * 1024.0 * 1024.0 * 1024.0;
+        default: return 1.0;
+    }
+}
+
 static void keyed_push(KeyedBuf *a, double key, char *line) {
     if (a->n == a->cap) {
         a->cap = a->cap ? a->cap * 2 : 1024;
@@ -543,13 +582,19 @@ static size_t read_values(Vec *out, int field, const char *delim) {
     ssize_t len;
     size_t skipped = 0;
     while ((len = getline(&line, &cap, stdin)) != -1) {
+        char numbuf[64];
         const char *src = line;
         if (field > 0) {
             size_t flen;
-            src = field_span(line, (size_t)len, field, delim, &flen);
-            if (!src) { skipped++; continue; }
-            // src points into line and is followed by a delimiter/newline, so
-            // strtod stops at the field boundary with no null terminator needed.
+            const char *f = field_span(line, (size_t)len, field, delim, &flen);
+            if (!f) { skipped++; continue; }
+            // Bound strtod to the field: a delimiter that is itself a strtod byte
+            // ('.', 'e', 'x', sign, digit) would otherwise pull the next field
+            // into the number. Copy out, NUL-terminated, and parse that.
+            if (flen >= sizeof(numbuf)) flen = sizeof(numbuf) - 1;
+            memcpy(numbuf, f, flen);
+            numbuf[flen] = '\0';
+            src = numbuf;
         }
         char *end = NULL;
         double x = strtod(src, &end);
@@ -567,14 +612,23 @@ static int parse_class(const char *s, sub_disorder_t *out) {
     if (!strcmp(s, "few-unique"))    { *out = SUB_FEW_UNIQUE;    return 1; }
     if (!strcmp(s, "random"))        { *out = SUB_RANDOM;        return 1; }
     if (!strcmp(s, "phased"))        { *out = SUB_PHASED;        return 1; }
-    if (!strcmp(s, "spectral"))      { *out = SUB_SPECTRAL;      return 1; }
     return 0;
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2 || !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) {
+    if (argc < 2 || !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help") ||
+        !strcmp(argv[1], "help")) {
         usage(stdout);
         return 0;
+    }
+    // `VERB --help` reaches the usage text too, so asking a verb how it works
+    // never costs an error exit. Only the long form is scanned past argv[1]:
+    // search owns -h for its filename-prefix toggle.
+    for (int i = 2; i < argc; i++) {
+        if (!strcmp(argv[i], "--help")) {
+            usage(stdout);
+            return 0;
+        }
     }
     const char *cmd = argv[1];
 
@@ -617,9 +671,11 @@ int main(int argc, char **argv) {
     int delim_set = 0;  // true once --delim is explicitly given (join's output separator cares)
     int desc = 0;
     int keyed = 0;                                // sort --keyed: preserve full lines, order by key
+    int human = 0;                                // sort --keyed --human: K/M/G suffixed keys
     size_t window = 512, stride = 0;
     int invert = 0, count_only = 0, number = 0;  // search line-filter flags
     int icase = 0, only_match = 0, fixed = 0;     // search -i (case-fold), -o (matches only), -F (fixed string)
+    int tally_mode = 0;                           // search --tally: count spans instead of printing them
     int quiet = 0;                                // search -q: exit status only, no output
     long max_count = 0;                           // search -m N: stop after N matches per file (0 = unlimited)
     long kval = 0;                                // search -k N: fuzzy, up to N mismatches (0 = exact/regex)
@@ -665,8 +721,16 @@ int main(int argc, char **argv) {
         if (!strcmp(a, "--")) { endopts = 1; continue; }
         if (!strcmp(a, "--field") && i + 1 < argc) field = atoi(argv[++i]);
         else if (!strcmp(a, "--delim") && i + 1 < argc) { delim = argv[++i]; delim_set = 1; }
+        // -d is the --delim alias everywhere except uniq, which owns -d for its
+        // dups-only toggle (same byte, different verb, the rule the short-flag
+        // families already follow below).
+        else if (!is_uniq && !strcmp(a, "-d") && i + 1 < argc) { delim = argv[++i]; delim_set = 1; }
+        // A bare negative integer is a positional, not a bundled short flag --
+        // this is what lets `field -1` mean the last column.
+        else if (!pos && a[0] == '-' && isdigit((unsigned char)a[1])) pos = a;
         else if (!strcmp(a, "--desc")) desc = 1;
         else if (!strcmp(a, "--keyed")) keyed = 1;  // sort: keep the whole line, order by the key
+        else if (!strcmp(a, "--human")) human = 1;  // sort --keyed: scale K/M/G/T keys
         else if (!strcmp(a, "--window") && i + 1 < argc) window = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(a, "--stride") && i + 1 < argc) stride = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(a, "--nearest")) nearest = 1;  // quantile: nearest-rank order statistic
@@ -698,6 +762,8 @@ int main(int argc, char **argv) {
             else { fprintf(stderr, "sublimation: --color takes auto|always|never\n"); return 2; }
         }
         else if (is_search && !strcmp(a, "--files-from") && i + 1 < argc) files_from = argv[++i];
+        // --tally implies -o: it counts the spans, so it must extract them.
+        else if (is_search && !strcmp(a, "--tally")) { tally_mode = 1; only_match = 1; }
         else if (a[0] == '-' && a[1] && a[1] != '-') {
             // Bundled short flags, getopt-style: -iE == -i -E, -vn == -v -n. Each
             // char is one boolean flag. -E (extended regex) is a no-op:
@@ -825,7 +891,15 @@ int main(int argc, char **argv) {
             int pk = pats[p][0] ? (int)kval : 0;
             sublimation_search_compile(&srchs[p], pats[p], strlen(pats[p]), pflags, pk);
             if (!sublimation_search_valid(&srchs[p])) {
-                fprintf(stderr, "sublimation: bad pattern '%s'\n", pats[p]);
+                // The regex face is a bitset NFA capped at 64 positions (one per
+                // literal char / class / metachar, summed across | branches), so
+                // an over-long pattern is rejected here just like bad syntax --
+                // name both causes so a too-long pattern is not read as a typo.
+                if (pk == 0 && !fixed)
+                    fprintf(stderr, "sublimation: bad pattern '%s' -- invalid regex, or over "
+                            "the 64-position limit (split it across -e, or use -F)\n", pats[p]);
+                else
+                    fprintf(stderr, "sublimation: bad pattern '%s' (empty or too long)\n", pats[p]);
                 return 2;
             }
         }
@@ -851,6 +925,11 @@ int main(int argc, char **argv) {
         size_t cap = 0;
         ssize_t len;
         long matches = 0;                 // total selected lines/spans: the exit-code source
+        // search --tally: intern every -o span instead of printing it, then emit
+        // per-span counts once every file is walked. `-o | tally` was the
+        // workhorse pipeline; this collapses it to one verb and one hash pass.
+        StrMap tmap;
+        if (tally_mode) smap_init(&tmap);
         int q_done = 0;                   // -q: stop everything at the first hit
         int had_error = 0;                // an unreadable FILE -> exit 2, grep's contract
         // -A/-B/-C context lines. Confirmed directly against real grep before
@@ -977,6 +1056,9 @@ int main(int argc, char **argv) {
                         size_t mend = (size_t)end;
                         if (mend > mstart) {
                             fmatches++;
+                            // grep -c counts matching LINES, not -o spans: one hit
+                            // on this line is enough, move on.
+                            if (count_only) break;
                             if (!quiet && !count_only) {
                                 if (binary) {
                                     if (!bin_announced) {
@@ -1004,6 +1086,25 @@ int main(int argc, char **argv) {
                                 }
                                 line_has_match = 1;
                                 printed_any = 1;
+                                if (tally_mode) {
+                                    // Count the span, print nothing; the match
+                                    // is a slice of a live line, so copy it out
+                                    // NUL-terminated for the intern table.
+                                    size_t klen = mend - mstart;
+                                    char stackk[256];
+                                    char *key = (klen < sizeof stackk) ? stackk
+                                                                       : (char *)malloc(klen + 1);
+                                    if (key) {
+                                        memcpy(key, line + mstart, klen);
+                                        key[klen] = '\0';
+                                        tmap.nums[smap_intern(&tmap, key, NULL)]++;
+                                        if (key != stackk) free(key);
+                                    }
+                                    off = mend;
+                                    if (quiet) q_done = 1;
+                                    else if (max_count && fmatches >= max_count) fdone = 1;
+                                    continue;
+                                }
                                 emit_prefix(&g_out, prefix ? disp : NULL, lineno, number, ':', color);
                                 if (color) {
                                     montauk_sink_append(&g_out, "\x1b[01;31m", 8);
@@ -1118,6 +1219,31 @@ int main(int argc, char **argv) {
             }
             matches += fmatches;
         }
+        // --tally emit: highest count first, the same pack-and-sort the tally
+        // verb uses (count << 32 | dense index, ordered by the u64 sort).
+        if (tally_mode) {
+            if (tmap.used > 0 && !quiet) {
+                char    **dk     = (char **)malloc(tmap.used * sizeof(char *));
+                uint64_t *packed = (uint64_t *)malloc(tmap.used * sizeof(uint64_t));
+                if (dk && packed) {
+                    size_t d = 0;
+                    for (size_t z = 0; z < tmap.cap; z++)
+                        if (tmap.keys[z]) {
+                            dk[d] = tmap.keys[z];
+                            packed[d] = ((uint64_t)tmap.nums[z] << 32) | (uint64_t)d;
+                            d++;
+                        }
+                    sublimation_u64(packed, tmap.used);
+                    for (size_t z = tmap.used; z-- > 0;) {
+                        unsigned long long c = (unsigned long long)(packed[z] >> 32);
+                        size_t idx = (size_t)(packed[z] & 0xFFFFFFFFULL);
+                        montauk_sink_appendf(&g_out, "%llu %s\n", c, dk[idx]);
+                    }
+                }
+                free(dk); free(packed);
+            }
+            smap_free(&tmap);
+        }
         free(line);
         if (ring) { for (size_t z = 0; z < ring_cap; z++) free(ring[z].data); free(ring); }
         for (int p = 0; p < npat; p++) free(pats[p]);
@@ -1147,8 +1273,11 @@ int main(int argc, char **argv) {
         for (const char *p = pos; *p; ) {
             char *e;
             long c = strtol(p, &e, 10);
-            if (e == p || c < 1 || ncol >= 64) {
-                fputs("sublimation: field needs N or a comma-list N,M,... (1-based)\n", stderr);
+            // 1-based forward, or negative from the end (-1 = last column).
+            // Zero is the one index that names nothing either way.
+            if (e == p || c == 0 || c < -64 || c > 64 || ncol >= 64) {
+                fputs("sublimation: field needs N or a comma-list N,M,... "
+                      "(1-based, or negative from the end: -1 is the last)\n", stderr);
                 return 2;
             }
             cols[ncol++] = (int)c;
@@ -1172,6 +1301,14 @@ int main(int argc, char **argv) {
                 const char *got[64];
                 size_t gotlen[64];
                 for (int k = 0; k < ncol; k++) { got[k] = NULL; gotlen[k] = 0; }
+                // A negative column counts from the end, and the end is only
+                // known once the line is walked. Keep a ring of the last
+                // `maxneg` spans so one pass still answers both directions.
+                int maxneg = 0;
+                for (int k = 0; k < ncol; k++)
+                    if (cols[k] < 0 && -cols[k] > maxneg) maxneg = -cols[k];
+                const char *ringp[64];
+                size_t ringl[64];
                 size_t i = 0;
                 int f = 0;
                 while (i < mlen) {
@@ -1182,6 +1319,20 @@ int main(int argc, char **argv) {
                     f++;
                     for (int k = 0; k < ncol; k++)
                         if (cols[k] == f) { got[k] = line + start; gotlen[k] = i - start; }
+                    if (maxneg) {
+                        int slot = (f - 1) % maxneg;
+                        ringp[slot] = line + start;
+                        ringl[slot] = i - start;
+                    }
+                }
+                for (int k = 0; k < ncol; k++) {
+                    if (cols[k] >= 0) continue;
+                    int m = -cols[k];
+                    if (m <= f && m <= maxneg) {
+                        int slot = (f - m) % maxneg;
+                        got[k] = ringp[slot];
+                        gotlen[k] = ringl[slot];
+                    }
                 }
                 int nonempty = 0;
                 for (int k = 0; k < ncol; k++) {
@@ -1406,8 +1557,8 @@ int main(int argc, char **argv) {
         char **buf = NULL; size_t bn = 0, bcap = 0;
         char *line = NULL; size_t lcap = 0; ssize_t len;
         while ((len = getline(&line, &lcap, in)) != -1) {
-            if (bn == bcap) { bcap = bcap ? bcap * 2 : 1024; buf = (char **)realloc(buf, bcap * sizeof(char *)); }
-            buf[bn] = (char *)malloc((size_t)len + 1);
+            if (bn == bcap) { bcap = bcap ? bcap * 2 : 1024; buf = (char **)xrealloc(buf, bcap * sizeof(char *)); }
+            buf[bn] = (char *)xmalloc((size_t)len + 1);
             memcpy(buf[bn], line, (size_t)len); buf[bn][len] = '\0'; bn++;
         }
         if (in != stdin) fclose(in);
@@ -1444,11 +1595,11 @@ int main(int argc, char **argv) {
             }
         } else {
             typedef struct { char *data; size_t len; } RingLine;
-            RingLine *ring = (RingLine *)calloc((size_t)n, sizeof(RingLine));
+            RingLine *ring = (RingLine *)xcalloc((size_t)n, sizeof(RingLine));
             size_t count = 0, next = 0;  // next = slot to write, wraps once full (oldest overwritten)
             while ((len = getline(&line, &lcap, in)) != -1) {
                 free(ring[next].data);
-                ring[next].data = (char *)malloc((size_t)len);
+                ring[next].data = (char *)xmalloc((size_t)len);
                 memcpy(ring[next].data, line, (size_t)len);
                 ring[next].len = (size_t)len;
                 next = (next + 1) % (size_t)n;
@@ -1503,19 +1654,19 @@ int main(int argc, char **argv) {
         size_t *maxw = NULL; size_t maxw_cap = 0;
         while ((len = getline(&line, &lcap, in)) != -1) {
             size_t l = (len > 0 && line[len - 1] == '\n') ? (size_t)len - 1 : (size_t)len;
-            char *s = (char *)malloc(l + 1); memcpy(s, line, l); s[l] = '\0';
-            if (ln == lcapn) { lcapn = lcapn ? lcapn * 2 : 256; lines = (char **)realloc(lines, lcapn * sizeof(char *)); }
+            char *s = (char *)xmalloc(l + 1); memcpy(s, line, l); s[l] = '\0';
+            if (ln == lcapn) { lcapn = lcapn ? lcapn * 2 : 256; lines = (char **)xrealloc(lines, lcapn * sizeof(char *)); }
             lines[ln++] = s;
             // Scratch copy for strtok_r (it writes NULs into the buffer); s
             // itself is kept intact for the render pass below.
-            char *tmp = (char *)malloc(l + 1); memcpy(tmp, s, l); tmp[l] = '\0';
+            char *tmp = (char *)xmalloc(l + 1); memcpy(tmp, s, l); tmp[l] = '\0';
             char *save = NULL; size_t c = 0;
             for (char *tok = strtok_r(tmp, delim, &save); tok; tok = strtok_r(NULL, delim, &save)) {
                 size_t w = strlen(tok);
                 if (c >= maxw_cap) {
                     size_t new_cap = maxw_cap ? maxw_cap * 2 : 64;
                     while (new_cap <= c) new_cap *= 2;
-                    maxw = (size_t *)realloc(maxw, new_cap * sizeof(size_t));
+                    maxw = (size_t *)xrealloc(maxw, new_cap * sizeof(size_t));
                     for (size_t k = maxw_cap; k < new_cap; k++) maxw[k] = 0;
                     maxw_cap = new_cap;
                 }
@@ -1528,10 +1679,10 @@ int main(int argc, char **argv) {
         free(line);
         for (size_t i = 0; i < ln; i++) {
             size_t tl = strlen(lines[i]);
-            char *tmp = (char *)malloc(tl + 1); memcpy(tmp, lines[i], tl); tmp[tl] = '\0';
+            char *tmp = (char *)xmalloc(tl + 1); memcpy(tmp, lines[i], tl); tmp[tl] = '\0';
             char *save = NULL; char **toks = NULL; size_t toks_cap = 0, nt = 0;
             for (char *tok = strtok_r(tmp, delim, &save); tok; tok = strtok_r(NULL, delim, &save)) {
-                if (nt == toks_cap) { toks_cap = toks_cap ? toks_cap * 2 : 64; toks = (char **)realloc(toks, toks_cap * sizeof(char *)); }
+                if (nt == toks_cap) { toks_cap = toks_cap ? toks_cap * 2 : 64; toks = (char **)xrealloc(toks, toks_cap * sizeof(char *)); }
                 toks[nt++] = tok;
             }
             for (size_t c = 0; c < nt; c++) {
@@ -1791,7 +1942,10 @@ int main(int argc, char **argv) {
             }
             char *end = NULL;
             double x = strtod(src, &end);
-            if (end == src) { skipped++; continue; }
+            // A NaN key ("nan"/"NaN") parses but is no more a valid sort key than
+            // "abc" is -- skip it the same way, not letting it slip into the sort.
+            if (end == src || isnan(x)) { skipped++; continue; }
+            if (human) x *= human_scale(end);   // 4.0K sorts under 16M, not over it
             keyed_push(&kb, x, strdup(line));
         }
         free(line);
@@ -1866,96 +2020,53 @@ int main(int argc, char **argv) {
         else      for (size_t i = 0; i < data.n; i++) montauk_sink_appendf(&g_out, "%.12g\n", data.v[i]);
 
     } else if (!strcmp(cmd, "sum")) {     // awk '{s+=$N} END{print s}'
-        double s = 0.0;
-        for (size_t i = 0; i < data.n; i++) s += data.v[i];
-        montauk_sink_appendf(&g_out, "%.12g\n", s);
+        montauk_sink_appendf(&g_out, "%.12g\n", sublimation_sum_f64(data.v, data.n));
 
     } else if (!strcmp(cmd, "mean")) {    // awk '{s+=$N} END{print s/NR}' (over the parsed values)
-        double s = 0.0;
-        for (size_t i = 0; i < data.n; i++) s += data.v[i];
-        montauk_sink_appendf(&g_out, "%.12g\n", s / (double)data.n);
+        montauk_sink_appendf(&g_out, "%.12g\n", sublimation_mean_f64(data.v, data.n));
 
     } else if (!strcmp(cmd, "variance") || !strcmp(cmd, "stdev")) {
         // SAMPLE variance / stdev (n-1 denominator), matching the convention the
         // PANDEMONIUM suite's mean_stdev() uses so it is an exact drop-in. n<2 has
-        // no spread -> 0.0 (same as mean_stdev). Two-pass for numerical stability.
+        // no spread -> 0.0 (same as mean_stdev).
         if (data.n < 2) { montauk_sink_appendf(&g_out, "0\n"); }
         else {
-            double s = 0.0;
-            for (size_t i = 0; i < data.n; i++) s += data.v[i];
-            double mean = s / (double)data.n;
-            double ss = 0.0;
-            for (size_t i = 0; i < data.n; i++) {
-                double d = data.v[i] - mean;
-                ss += d * d;
-            }
-            double var = ss / (double)(data.n - 1);
-            montauk_sink_appendf(&g_out, "%.12g\n", !strcmp(cmd, "stdev") ? sqrt(var) : var);
+            montauk_sink_appendf(&g_out, "%.12g\n",
+                !strcmp(cmd, "stdev") ? sublimation_stdev_f64(data.v, data.n)
+                                      : sublimation_variance_f64(data.v, data.n));
         }
 
     } else if (!strcmp(cmd, "min")) {     // running minimum
-        double m = data.v[0];
-        for (size_t i = 1; i < data.n; i++) if (data.v[i] < m) m = data.v[i];
-        montauk_sink_appendf(&g_out, "%.12g\n", m);
+        montauk_sink_appendf(&g_out, "%.12g\n", sublimation_min_f64(data.v, data.n));
 
     } else if (!strcmp(cmd, "max")) {     // running maximum
-        double m = data.v[0];
-        for (size_t i = 1; i < data.n; i++) if (data.v[i] > m) m = data.v[i];
-        montauk_sink_appendf(&g_out, "%.12g\n", m);
+        montauk_sink_appendf(&g_out, "%.12g\n", sublimation_max_f64(data.v, data.n));
 
     } else if (!strcmp(cmd, "describe")) {  // pandas .describe() / R summary() in one shot
-        sublimation_f64(data.v, data.n);    // sort: min/max + the estimator quantiles
-        double s = 0.0;
-        for (size_t i = 0; i < data.n; i++) s += data.v[i];
-        double mean = s / (double)data.n;
-        double var = 0.0;
-        if (data.n >= 2) {                  // sample (n-1) variance, like the stdev verb
-            double ss = 0.0;
-            for (size_t i = 0; i < data.n; i++) { double d = data.v[i] - mean; ss += d * d; }
-            var = ss / (double)(data.n - 1);
-        }
-        // Estimator-index quantiles, identical to the default `quantile Q` path.
-        size_t i25 = (size_t)(0.25 * (double)data.n); if (i25 >= data.n) i25 = data.n - 1;
-        size_t i50 = (size_t)(0.50 * (double)data.n); if (i50 >= data.n) i50 = data.n - 1;
-        size_t i75 = (size_t)(0.75 * (double)data.n); if (i75 >= data.n) i75 = data.n - 1;
-        montauk_sink_appendf(&g_out, "%-6s %zu\n",   "count", data.n);
-        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "mean",  mean);
-        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "stdev", sqrt(var));
-        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "min",   data.v[0]);
-        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "25%",   data.v[i25]);
-        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "50%",   data.v[i50]);
-        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "75%",   data.v[i75]);
-        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "max",   data.v[data.n - 1]);
+        sub_describe_t d = sublimation_describe_f64(data.v, data.n);
+        montauk_sink_appendf(&g_out, "%-6s %zu\n",   "count", d.n);
+        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "mean",  d.mean);
+        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "stdev", d.stdev);
+        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "min",   d.min);
+        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "25%",   d.q25);
+        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "50%",   d.q50);
+        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "75%",   d.q75);
+        montauk_sink_appendf(&g_out, "%-6s %.12g\n", "max",   d.max);
 
     } else if (!strcmp(cmd, "outliers")) {  // values outside the Tukey IQR fences
-        sublimation_f64(data.v, data.n);
-        // Robust fences off the quartiles -- median/IQR-based, so the outliers do
-        // not corrupt the threshold the way a mean +/- k*sigma rule lets them.
-        size_t i25 = (size_t)(0.25 * (double)data.n); if (i25 >= data.n) i25 = data.n - 1;
-        size_t i75 = (size_t)(0.75 * (double)data.n); if (i75 >= data.n) i75 = data.n - 1;
-        double q1 = data.v[i25], q3 = data.v[i75], iqr = q3 - q1;
-        double lo = q1 - 1.5 * iqr, hi = q3 + 1.5 * iqr;
+        double lo, hi;
+        sublimation_tukey_fences_f64(data.v, data.n, &lo, &hi);  // sorts in place
         for (size_t i = 0; i < data.n; i++)
             if (data.v[i] < lo || data.v[i] > hi)
                 montauk_sink_appendf(&g_out, "%.12g\n", data.v[i]);
 
     } else if (!strcmp(cmd, "histogram")) {  // text histogram (10 bins) -- the shape
-        double mn = data.v[0], mx = data.v[0];
-        for (size_t i = 1; i < data.n; i++) { if (data.v[i] < mn) mn = data.v[i]; if (data.v[i] > mx) mx = data.v[i]; }
         enum { NB = 10 };
-        size_t cnt[NB]; for (int b = 0; b < NB; b++) cnt[b] = 0;
-        double range = mx - mn;
-        for (size_t i = 0; i < data.n; i++) {
-            int b = 0;
-            if (range > 0.0) {
-                b = (int)((data.v[i] - mn) / range * (double)NB);
-                if (b >= NB) b = NB - 1; else if (b < 0) b = 0;
-            }
-            cnt[b]++;
-        }
+        size_t cnt[NB];
+        double mn = 0.0, bw = 0.0;
+        sublimation_histogram_f64(data.v, data.n, NB, cnt, &mn, &bw);
         size_t maxc = 0; for (int b = 0; b < NB; b++) if (cnt[b] > maxc) maxc = cnt[b];
-        int nb = (range > 0.0) ? NB : 1;     // all values equal -> a single bin
-        double bw = range / NB;
+        int nb = (bw > 0.0) ? NB : 1;        // all values equal -> a single bin
         for (int b = 0; b < nb; b++) {
             size_t blen = maxc ? cnt[b] * 40 / maxc : 0;
             if (cnt[b] > 0 && blen == 0) blen = 1;  // a non-empty bin always shows one block
@@ -1969,22 +2080,11 @@ int main(int argc, char **argv) {
         if (!pos) { fputs("sublimation: quantile needs Q (0..1)\n", stderr); return 2; }
         double q = strtod(pos, NULL);
         if (q < 0.0 || q > 1.0) { fputs("sublimation: Q must be in 0..1\n", stderr); return 2; }
-        sublimation_f64(data.v, data.n);
-        size_t idx;
-        if (nearest) {
-            // Nearest-rank: the smallest value at or below which q of the data
-            // falls -- k = ceil(q*n) - 1, clamped. This is the exact convention
-            // the PANDEMONIUM suite's percentile() uses (k = ceil(pct/100*n)-1),
-            // so `quantile Q --nearest` is a bit-exact drop-in. The default
-            // (estimator) path is unchanged for existing callers.
-            double kk = ceil(q * (double)data.n) - 1.0;
-            if (kk < 0.0) kk = 0.0;
-            idx = (size_t)kk;
-        } else {
-            idx = (size_t)(q * (double)data.n);
-        }
-        if (idx >= data.n) idx = data.n - 1;
-        montauk_sink_appendf(&g_out, "%.12g\n", data.v[idx]);
+        // --nearest is nearest-rank (k = ceil(q*n)-1), the exact convention the
+        // PANDEMONIUM suite's percentile() uses, so it is a bit-exact drop-in;
+        // the default estimator path is unchanged for existing callers.
+        montauk_sink_appendf(&g_out, "%.12g\n",
+            sublimation_quantile_f64(data.v, data.n, q, nearest));
 
     } else if (!strcmp(cmd, "select")) {
         if (!pos) { fputs("sublimation: select needs K (0-based)\n", stderr); return 2; }
@@ -2013,7 +2113,7 @@ int main(int argc, char **argv) {
         sub_disorder_t target;
         if (!pos || !parse_class(pos, &target)) {
             fputs("sublimation: locate needs CLASS (sorted reversed nearly-sorted "
-                  "few-unique random phased spectral)\n", stderr);
+                  "few-unique random phased)\n", stderr);
             return 2;
         }
         if (window > data.n) {
@@ -2021,12 +2121,12 @@ int main(int argc, char **argv) {
             return 2;
         }
         size_t cap = data.n / stride + 2;
-        sub_match_t *m = (sub_match_t *)malloc(cap * sizeof(sub_match_t));
+        sub_match_t *m = (sub_match_t *)xmalloc(cap * sizeof(sub_match_t));
         size_t k = sublimation_locate_f64(data.v, data.n, window, stride, target, m, cap);
         if (values) {
             // select-by-structure: emit the VALUES any matching window covers, each
             // once in input order -- "the part of the stream that IS this class".
-            char *cov = (char *)calloc(data.n, 1);
+            char *cov = (char *)xcalloc(data.n, 1);
             for (size_t i = 0; i < k; i++)
                 for (size_t j = m[i].start; j < m[i].start + m[i].len && j < data.n; j++) cov[j] = 1;
             for (size_t j = 0; j < data.n; j++)

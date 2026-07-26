@@ -233,10 +233,10 @@ fn sublimation_grep_missing_text_is_an_error() {
     assert_eq!(err.0, -32602);
 }
 
-// sublimation stat/stream ops route through the sublimation CLI. The q check
-// for quantile fails before any spawn (binary-independent); the live ops skip
-// gracefully when the binary isn't on PATH (the mcp layer runs cargo test with
-// no build/ on PATH).
+// sublimation stat ops run over direct FFI; only the stream-shaped verbs spawn
+// the sublimation CLI. The q check for quantile fails before either path
+// (binary-independent); the CLI-backed ops skip gracefully when the binary
+// isn't on PATH (the mcp layer runs cargo test with no build/ on PATH).
 
 #[test]
 fn sublimation_quantile_without_q_is_an_error() {
@@ -250,38 +250,93 @@ fn sublimation_quantile_without_q_is_an_error() {
 }
 
 #[test]
-fn sublimation_mean_routes_through_the_cli() {
+fn sublimation_mean_returns_a_structured_value() {
+    // Direct FFI into the stats lane -- no subprocess, so this never skips.
     let args = Value::obj(vec![
         ("op", Value::String("mean".to_string())),
         ("values", Value::Array(
             vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)])),
     ]);
-    match tool_call("sublimation", args) {
-        Ok(r) => assert_eq!(tool_text(&r).trim(), "2"),
-        Err((_, msg)) if msg.contains("failed to spawn") => {
-            eprintln!("skip: sublimation not on PATH");
-        }
-        Err(e) => panic!("unexpected error: {e:?}"),
-    }
+    let r = tool_call("sublimation", args).unwrap();
+    let parsed = vector::json::parse(tool_text(&r)).expect("mean output must parse");
+    assert_eq!(parsed.get("mean").and_then(Value::as_f64), Some(2.0));
 }
 
 #[test]
-fn sublimation_tally_counts_text_lines() {
+fn sublimation_describe_returns_the_full_summary() {
+    let vals: Vec<Value> = (1..=4).map(|i| Value::Number(i as f64)).collect();
+    let args = Value::obj(vec![
+        ("op", Value::String("describe".to_string())),
+        ("values", Value::Array(vals)),
+    ]);
+    let r = tool_call("sublimation", args).unwrap();
+    let p = vector::json::parse(tool_text(&r)).expect("describe output must parse");
+    assert_eq!(p.get("count").and_then(Value::as_f64), Some(4.0));
+    assert_eq!(p.get("mean").and_then(Value::as_f64), Some(2.5));
+    assert_eq!(p.get("min").and_then(Value::as_f64), Some(1.0));
+    assert_eq!(p.get("max").and_then(Value::as_f64), Some(4.0));
+}
+
+#[test]
+fn sublimation_quantile_honors_nearest_rank() {
+    let vals: Vec<Value> = (1..=4).map(|i| Value::Number(i as f64)).collect();
+    let args = Value::obj(vec![
+        ("op", Value::String("quantile".to_string())),
+        ("q", Value::Number(0.5)),
+        ("values", Value::Array(vals)),
+    ]);
+    let r = tool_call("sublimation", args).unwrap();
+    let p = vector::json::parse(tool_text(&r)).expect("quantile output must parse");
+    // Estimator index floor(0.5*4) = 2 -> the third smallest.
+    assert_eq!(p.get("value").and_then(Value::as_f64), Some(3.0));
+}
+
+#[test]
+fn sublimation_quantile_rejects_q_out_of_range() {
+    let args = Value::obj(vec![
+        ("op", Value::String("quantile".to_string())),
+        ("q", Value::Number(1.5)),
+        ("values", Value::Array(vec![Value::Number(1.0), Value::Number(2.0)])),
+    ]);
+    let err = tool_call("sublimation", args).unwrap_err();
+    assert_eq!(err.0, -32602);
+}
+
+#[test]
+fn sublimation_tally_returns_structured_counts() {
+    // Direct FFI (sublimation_tally) -- structured, high-to-low, never skips.
     let args = Value::obj(vec![
         ("op", Value::String("tally".to_string())),
-        ("text", Value::String("a\nb\na".to_string())),
+        ("text", Value::String("a\nb\na\nc\na\nb".to_string())),
     ]);
-    match tool_call("sublimation", args) {
-        Ok(r) => {
-            let out = tool_text(&r);
-            assert!(out.contains("2 a"), "got: {out}");
-            assert!(out.contains("1 b"), "got: {out}");
-        }
-        Err((_, msg)) if msg.contains("failed to spawn") => {
-            eprintln!("skip: sublimation not on PATH");
-        }
-        Err(e) => panic!("unexpected error: {e:?}"),
-    }
+    let r = tool_call("sublimation", args).unwrap();
+    let p = vector::json::parse(tool_text(&r)).expect("tally output must parse");
+    let arr = p.get("tally").and_then(Value::as_array).expect("tally array");
+    // a:3, b:2, c:1 -- descending by count.
+    let pair = |v: &Value| {
+        (v.get("token").and_then(Value::as_str).unwrap_or("").to_string(),
+         v.get("count").and_then(Value::as_f64).unwrap_or(0.0) as u64)
+    };
+    assert_eq!(pair(&arr[0]), ("a".to_string(), 3));
+    assert_eq!(pair(&arr[1]), ("b".to_string(), 2));
+    assert_eq!(pair(&arr[2]), ("c".to_string(), 1));
+}
+
+#[test]
+fn sublimation_count_and_distinct_over_text() {
+    let count = tool_call("sublimation", Value::obj(vec![
+        ("op", Value::String("count".to_string())),
+        ("text", Value::String("x\ny\nx\nz".to_string())),
+    ])).unwrap();
+    let cp = vector::json::parse(tool_text(&count)).unwrap();
+    assert_eq!(cp.get("count").and_then(Value::as_f64), Some(4.0));
+
+    let distinct = tool_call("sublimation", Value::obj(vec![
+        ("op", Value::String("distinct".to_string())),
+        ("text", Value::String("x\ny\nx\nz".to_string())),
+    ])).unwrap();
+    let dp = vector::json::parse(tool_text(&distinct)).unwrap();
+    assert_eq!(dp.get("distinct").and_then(Value::as_f64), Some(3.0));
 }
 
 // montauk_analyze_report / montauk_digest: argument validation fails before
@@ -374,4 +429,41 @@ fn subprocess_backed_tools_happy_paths() {
         assert!(parsed.get("cpu").is_some());
         assert!(parsed.get("memory").is_some());
     }
+}
+
+#[test]
+fn montauk_anomalies_computes_the_fusion_over_the_feature_matrix() {
+    // Synthetic `montauk --json`: pid 100 is a pure CPU outlier against a quiet
+    // population (rss/threads normal), so the in-process fusion must rank it
+    // first and name cpu as its axis. >= 8 rows so the population gate passes.
+    // Exercises the real learn-lane FFI (sublimation_anomaly_fuse), no subprocess.
+    let json = r#"{"processes":{
+        "top":[{"pid":100,"cmd":"hog"}],
+        "anomaly_features":[
+          {"pid":100,"cpu_pct":98.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1},
+          {"pid":101,"cpu_pct":0.5,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1},
+          {"pid":102,"cpu_pct":0.4,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1},
+          {"pid":103,"cpu_pct":0.3,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":2},
+          {"pid":104,"cpu_pct":0.6,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1},
+          {"pid":105,"cpu_pct":0.2,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1},
+          {"pid":106,"cpu_pct":0.5,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":2},
+          {"pid":107,"cpu_pct":0.4,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1},
+          {"pid":108,"cpu_pct":0.3,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1}
+        ]}}"#;
+    let result = vector::tools::anomalies_reduce(json, 3).expect("anomalies_reduce ok");
+    let inner = vector::json::parse(tool_text(&result)).expect("inner json parses");
+    let anomalies = inner.get("anomalies").and_then(Value::as_array).expect("anomalies array");
+    assert!(!anomalies.is_empty(), "expected ranked anomalies");
+    let top = &anomalies[0];
+    assert_eq!(top.get("pid").and_then(Value::as_f64), Some(100.0), "the CPU hog ranks first");
+    assert_eq!(top.get("axis").and_then(Value::as_str), Some("cpu"), "dominant axis is cpu");
+    assert_eq!(top.get("cmd").and_then(Value::as_str), Some("hog"), "named from the top set");
+}
+
+#[test]
+fn montauk_anomalies_errors_when_the_feature_matrix_is_absent() {
+    // No anomaly_features block -> a contract break, surfaced as an error rather
+    // than a silent all-zero ranking.
+    let json = r#"{"processes":{"top":[{"pid":1,"cmd":"x"}]}}"#;
+    assert!(vector::tools::anomalies_reduce(json, 5).is_err());
 }

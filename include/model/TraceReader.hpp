@@ -63,7 +63,9 @@ public:
     for (;;) {
       TraceRecordLen len = 0;
       if (std::fread(&len, sizeof(len), 1, f_) != 1) return TraceReadStatus::Ok;
-      if (len == 0 || len > kTraceMaxRecordLen) {
+      // A record must carry at least the 4-byte type read below; len < 4 (incl.
+      // 0) would make that memcpy over-read the resized buffer.
+      if (len < sizeof(uint32_t) || len > kTraceMaxRecordLen) {
         corrupt_len_ = len;
         return TraceReadStatus::CorruptLength;
       }

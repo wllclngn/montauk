@@ -178,7 +178,7 @@ void Chart::rasterize_single(std::span<const float> samples,
 
   for (int x = x_start_px; x < x_end_px; ++x) {
     // Map pixel x → sample-space position s ∈ [0, n_segments]
-    double s = (double(x) / double(w_ - 1)) * n_segments;
+    double s = (double(x) / double(w_ > 1 ? w_ - 1 : 1)) * n_segments;
     if (s < 0.0) s = 0.0;
     if (s > n_segments) s = n_segments;
 
@@ -270,7 +270,7 @@ void Chart::update_dual(std::span<const float> primary,
     const double n_segments = double(secondary.size() - 1);
     if (n_segments > 0.0) {
       for (int x = 0; x < w_; ++x) {
-        double s = (double(x) / double(w_ - 1)) * n_segments;
+        double s = (double(x) / double(w_ > 1 ? w_ - 1 : 1)) * n_segments;
         size_t i = static_cast<size_t>(std::floor(s));
         if (i >= secondary.size() - 1) i = secondary.size() - 2;
         double t = s - double(i);

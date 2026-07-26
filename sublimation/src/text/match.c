@@ -1,7 +1,7 @@
 // match.c -- tri-face text matcher (sublimation_search.h face of sublimation_text.h).
 // Ported from the proven research prototype (sublimation/tests/search/search_research.c):
 // the data-relative anchor scan (exact face), the Glushkov bit-parallel position-NFA
-// with its lazy-DFA reach cache and literal prefilter (regex face) and the brute plus
+// with its reach-closure memo and literal prefilter (regex face) and the brute plus
 // pigeonhole-prefiltered k-mismatch scans (fuzzy face). Byte-parity with the reference
 // oracles is the gate: every count here is byte-identical to the un-prefiltered path.
 #include "sublimation_text.h"
@@ -108,10 +108,11 @@ static size_t off_second_by_data(const uint8_t *pat, size_t m, size_t avoid,
     return best;
 }
 
-// Exact face: the classify dispatcher's winning path. Read the sampled histogram,
-// name the regime, dispatch. No rare byte -> bmh; one rare byte -> data-relative
-// anchor; two decorrelated rare bytes -> two-anchor. Every path yields the same
-// overlapping count (the parity gate proves this); the choice is speed only.
+// Exact face: rare-byte regime pick (a byte-frequency read, NOT the disorder
+// classifier). Read the sampled histogram, name the regime, pick the scan. No
+// rare byte -> bmh; one rare byte -> data-relative anchor; two decorrelated rare
+// bytes -> two-anchor. Every path yields the same overlapping count (the parity
+// gate proves this); the choice is speed only.
 static size_t exact_count(const uint8_t *hay, size_t n, const uint8_t *pat, size_t m) {
     if (m == 0 || m > n) return 0;
     uint32_t hist[256]; byte_hist(hay, n, hist);
@@ -257,9 +258,24 @@ typedef struct { const char *p; gnfa_t *g; } gpar_t;
 
 static gattr_t g_alt(gpar_t *x);
 
+// Set byte b in the position set, plus its ASCII case-swap under icase. Case is
+// folded into the class SET at compile time (before any negation), so a negated
+// class like (?i)[^a] correctly excludes both 'a' and 'A' -- folding at match
+// time instead would leave 'A' matching, since it is present in the negated set.
+static inline void gset_byte(uint8_t *S, unsigned char b, int icase) {
+    S[b>>3] |= (uint8_t)(1u<<(b&7));
+    if (icase) {
+        unsigned char sw = b;
+        if (b >= 'a' && b <= 'z') sw = (unsigned char)(b - 32);
+        else if (b >= 'A' && b <= 'Z') sw = (unsigned char)(b + 32);
+        if (sw != b) S[sw>>3] |= (uint8_t)(1u<<(sw&7));
+    }
+}
+
 static gattr_t g_atom(gpar_t *x) {
     gattr_t a = {0, 0, 0};
     char c = *x->p;
+    int icase = x->g->icase;
     if (c == '(') {
         x->p++; a = g_alt(x);
         if (*x->p == ')') x->p++; else x->g->ok = 0;
@@ -276,16 +292,16 @@ static gattr_t g_atom(gpar_t *x) {
             unsigned char lo = (unsigned char)*x->p;
             if (x->p[1] == '-' && x->p[2] && x->p[2] != ']') {
                 unsigned char hi = (unsigned char)x->p[2];
-                for (unsigned v = lo; v <= hi; v++) S[v>>3] |= (uint8_t)(1u<<(v&7));
+                for (unsigned v = lo; v <= hi; v++) gset_byte(S, (unsigned char)v, icase);
                 x->p += 3;
-            } else { S[lo>>3] |= (uint8_t)(1u<<(lo&7)); x->p++; }
+            } else { gset_byte(S, lo, icase); x->p++; }
         }
         if (*x->p == ']') x->p++; else x->g->ok = 0;
         if (neg) for (int kk = 0; kk < 32; kk++) S[kk] = (uint8_t)~S[kk];
     } else {
         if (c == '\\' && x->p[1]) { x->p++; c = *x->p; }
         unsigned char b = (unsigned char)c;
-        S[b>>3] |= (uint8_t)(1u<<(b&7)); x->p++;
+        gset_byte(S, b, icase); x->p++;
     }
     a.nullable = 0; a.first = (1ull<<pos); a.last = (1ull<<pos);
     return a;
@@ -313,6 +329,14 @@ static gattr_t g_repeat(gpar_t *x) {
         } else hi = lo;
         if (!haslo || *x->p != '}' || hi == -1 || hi > 60) { x->g->ok = 0; return a; }
         x->p++;
+        if (hi == 0) {
+            // {0} / {0,0}: zero copies. Reclaim the atom's single position so it
+            // contributes nothing -- leaving it nullable-but-present let it still
+            // match one copy.
+            x->g->npos = pos_before;
+            a.first = 0; a.last = 0; a.nullable = 1;
+            return a;
+        }
         uint8_t setcopy[32]; memcpy(setcopy, x->g->setb[pos_before], 32);
         if (lo == 0) a.nullable = 1;
         for (int ci = 1; ci < hi; ci++) {
@@ -356,8 +380,8 @@ static gattr_t g_alt(gpar_t *x) {
     return a;
 }
 
-static int build_gnfa(const char *pat, gnfa_t *g) {
-    memset(g, 0, sizeof(*g)); g->ok = 1;
+static int build_gnfa(const char *pat, gnfa_t *g, int icase) {
+    memset(g, 0, sizeof(*g)); g->ok = 1; g->icase = icase;
     char buf[1024];
     size_t len = strlen(pat), s = 0, e = len;
     if (e > 0 && pat[0] == '^') { g->anchored_start = 1; s = 1; }
@@ -379,26 +403,20 @@ static int build_gnfa(const char *pat, gnfa_t *g) {
     return 1;
 }
 
-// Build the per-byte position map. Under icase, a byte matches a position if the
-// byte OR its ASCII case-swap is in that position's set.
-static void build_imap(const gnfa_t *g, int icase, uint64_t I[256]) {
+// Build the per-byte position map. Case-insensitivity is already folded into
+// each position's set at compile time (see gset_byte), so this is a plain map.
+static void build_imap(const gnfa_t *g, uint64_t I[256]) {
     for (int c = 0; c < 256; c++) {
         uint64_t m = 0;
-        int sw = -1;
-        if (icase) {
-            if (c >= 'a' && c <= 'z') sw = c - 32;
-            else if (c >= 'A' && c <= 'Z') sw = c + 32;
-        }
         for (int i = 0; i < g->npos; i++) {
-            int in = (g->setb[i][c>>3] >> (c&7)) & 1;
-            if (!in && sw >= 0) in = (g->setb[i][sw>>3] >> (sw&7)) & 1;
-            if (in) m |= (1ull << i);
+            if ((g->setb[i][c>>3] >> (c&7)) & 1) m |= (1ull << i);
         }
         I[c] = m;
     }
 }
 
-// Lazy-DFA reach cache. reach(D) = first | union(follow[i], i in D), memoized.
+// Reach-closure memo. reach(D) = first | union(follow[i], i in D), memoized --
+// the position-NFA's transition closure cached on the fly, keyed by state set.
 typedef struct { uint64_t key, reach; } reach_ent;
 #define REACH_BITS 13
 #define REACH_CAP  (1u << REACH_BITS)
@@ -406,7 +424,18 @@ typedef struct { uint64_t key, reach; } reach_ent;
 static inline uint64_t reach_of(uint64_t D, const gnfa_t *g, reach_ent *cache) {
     if (D == 0) return g->first;
     size_t h = (size_t)((D * 0x9E3779B97F4A7C15ull) >> (64 - REACH_BITS));
-    while (cache[h].key && cache[h].key != D) h = (h + 1) & (REACH_CAP - 1);
+    size_t probes = 0;
+    while (cache[h].key && cache[h].key != D) {
+        h = (h + 1) & (REACH_CAP - 1);
+        // A pathological pattern can produce more than REACH_CAP distinct state
+        // sets and fill the table; compute the reach without memoizing rather
+        // than probe forever.
+        if (++probes >= REACH_CAP) {
+            uint64_t r = g->first, tt = D;
+            while (tt) { int i = __builtin_ctzll(tt); r |= g->follow[i]; tt &= tt - 1; }
+            return r;
+        }
+    }
     if (cache[h].key == D) return cache[h].reach;
     uint64_t reach = g->first, t = D;
     while (t) { int i = __builtin_ctzll(t); reach |= g->follow[i]; t &= t - 1; }
@@ -638,10 +667,14 @@ void sublimation_search_compile(sublimation_search *out, const char *pattern,
         out->valid = (len > 0);
     } else {
         out->mode = MODE_REGEX;
-        out->valid = build_gnfa(out->pattern, &out->g);
+        // Regex compiles from the NUL-terminated pattern copy, so an embedded NUL
+        // truncates the expression there -- unlike the literal/fuzzy paths above,
+        // which honor `len` byte-for-byte. Threading `len` through the whole regex
+        // parser is deferred; regex patterns are C strings in every current caller.
+        out->valid = build_gnfa(out->pattern, &out->g, out->icase);
         // The per-byte position map depends only on (pattern, icase): build it
         // once here so match/count calls never rebuild it.
-        if (out->valid) build_imap(&out->g, out->icase, out->imap);
+        if (out->valid) build_imap(&out->g, out->imap);
     }
 }
 
@@ -686,10 +719,12 @@ long sublimation_search_find_from(const sublimation_search *s, const char *input
     const uint8_t *pat = (const uint8_t *)s->pattern;
 
     if (s->mode == MODE_REGEX) {
-        int start_limit = s->g.anchored_start ? 1 : (int)n + 1;
-        for (int start = (int)from; start < start_limit; ++start) {
-            long e = gnfa_start_longest(&s->g, s->imap, hay, n, (size_t)start);
-            if (e >= 0) { if (end_out) *end_out = e; return start; }
+        // size_t, not int: a multi-GB haystack (montauk analyzes them) overflows
+        // an int start/limit and breaks the scan.
+        size_t start_limit = s->g.anchored_start ? 1 : n + 1;
+        for (size_t start = from; start < start_limit; ++start) {
+            long e = gnfa_start_longest(&s->g, s->imap, hay, n, start);
+            if (e >= 0) { if (end_out) *end_out = e; return (long)start; }
         }
         return -1;
     }

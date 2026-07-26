@@ -151,8 +151,10 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
     return {};
   };
 
-  // Detect MIG mode via nvidia-smi when NVML path did not set it
-  if (!s.nvml.mig_enabled) {
+  // Detect MIG mode via nvidia-smi only when NVML is unavailable -- when NVML is
+  // up it authoritatively reports mig state, so forking nvidia-smi every enrich
+  // (the common non-MIG case) was pure overhead.
+  if (!nvml_available() && !s.nvml.mig_enabled) {
     std::string smi = find_smi();
     if (!smi.empty()) {
       std::string cmd = smi + " --query-gpu=mig.mode.current --format=csv,noheader 2>/dev/null";

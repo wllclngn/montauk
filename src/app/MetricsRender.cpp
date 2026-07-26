@@ -80,6 +80,9 @@ void render_cpu(MetricsSink& sink, const MetricsSnapshot& s) {
   sink.f64({"iowait_pct", "montauk_cpu_iowait_percent", "CPU I/O wait percent"}, s.cpu.pct_iowait);
   sink.f64({"irq_pct", "montauk_cpu_irq_percent", "CPU IRQ handling percent"}, s.cpu.pct_irq);
   sink.f64({"steal_pct", "montauk_cpu_steal_percent", "CPU steal percent"}, s.cpu.pct_steal);
+  sink.f64({"changepoint_score", "montauk_cpu_changepoint_score",
+            "Machine load-regime changepoint (fast vs slow EWMA divergence over aggregate-CPU history)"},
+           s.cpu.changepoint_score);
   if (s.cpu.has_freq)
     sink.f64({"freq_mhz_avg", "montauk_cpu_frequency_mhz_avg",
               "Average current CPU frequency across online cores (MHz)"}, s.cpu.freq_avg_mhz);
@@ -413,6 +416,26 @@ void render_processes(MetricsSink& sink, const MetricsSnapshot& s) {
       if (p.has_gpu_util) sink.labeled_f64(gpu_util_desc, l, p.gpu_util_pct);
       if (p.has_gpu_mem) sink.labeled_u64(gpu_mem_desc, l, p.gpu_mem_kb * 1024ULL);
       sink.labeled_f64(anom_desc, l, p.anomaly_score);
+      sink.entry_end();
+    }
+    sink.collection_end();
+  }
+
+  // The full population the anomaly fusion ran over, features only, JSON-only
+  // (null prom_name -> Prometheus emits nothing; it keeps the per-process
+  // anomaly_score gauge above). This is what lets vector's montauk_anomalies
+  // reproduce montauk's population-relative score by feeding the same matrix to
+  // sublimation_anomaly_fuse -- the score is judged against exactly this set.
+  if (!s.anomaly_features.empty()) {
+    sink.collection_begin("anomaly_features", Shape::Objects);
+    for (const auto& r : s.anomaly_features) {
+      sink.entry_begin();
+      sink.i64({"pid", nullptr, nullptr}, r.pid);
+      sink.f64({"cpu_pct", nullptr, nullptr}, r.cpu_pct);
+      sink.f64({"rss_kb", nullptr, nullptr}, r.rss_kb);
+      sink.f64({"gpu_util_pct", nullptr, nullptr}, r.gpu_util_pct);
+      sink.f64({"fault_delta", nullptr, nullptr}, r.fault_delta);
+      sink.f64({"thread_count", nullptr, nullptr}, r.thread_count);
       sink.entry_end();
     }
     sink.collection_end();

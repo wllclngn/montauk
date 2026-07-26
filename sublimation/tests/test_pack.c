@@ -273,6 +273,101 @@ static void test_f64(size_t n, bool desc, const char *name) {
     free(keys); free(indices); free(ref);
 }
 
+// Structured shapes exercise the adaptive 64-bit index path's MERGE arm (the
+// value sort's own dispatch: structure -> the keyed R_eff spectral merge, random
+// -> the LSD radix). Random keys above route to radix; these route to the merge.
+// Both arms are stable, so both must match the qsort oracle exactly -- the merge
+// only changes speed, never the permutation.
+typedef enum { SHP_SORTED, SHP_NEARLY, SHP_REVERSED, SHP_PHASED } shape_t;
+
+static void fill_u64_shape(uint64_t *keys, size_t n, shape_t s) {
+    const uint64_t base = 0x100000000ull, step = 65537;   // high bits live
+    if (s == SHP_REVERSED) {
+        for (size_t i = 0; i < n; i++) keys[i] = base + (uint64_t)(n - 1 - i) * step;
+    } else if (s == SHP_PHASED) {
+        size_t mid = n * 3 / 5;                            // prefix sorted, then a drop
+        for (size_t i = 0; i < mid; i++) keys[i] = base + (uint64_t)i * step;
+        for (size_t i = mid; i < n; i++) keys[i] = base + (uint64_t)(i - mid) * step;
+    } else {
+        for (size_t i = 0; i < n; i++) keys[i] = base + (uint64_t)i * step;
+        if (s == SHP_NEARLY)                               // perturb ~2% of positions
+            for (size_t k = 0; k < n / 50; k++) {
+                size_t i = (size_t)(lcg_next() % n), j = (size_t)(lcg_next() % n);
+                uint64_t t = keys[i]; keys[i] = keys[j]; keys[j] = t;
+            }
+    }
+}
+
+static void test_u64_shape(size_t n, bool desc, shape_t s, const char *name) {
+    uint64_t *keys = (uint64_t *)malloc(n * sizeof(uint64_t));
+    uint32_t *indices = (uint32_t *)malloc(n * sizeof(uint32_t));
+    u64_pair_t *ref = (u64_pair_t *)malloc(n * sizeof(u64_pair_t));
+    fill_u64_shape(keys, n, s);
+    for (size_t i = 0; i < n; i++) {
+        indices[i] = (uint32_t)i; ref[i].key = keys[i]; ref[i].index = (uint32_t)i;
+    }
+    qsort(ref, n, sizeof(u64_pair_t), desc ? u64_pair_desc : u64_pair_asc);
+    sublimation_pack_sort_u64(keys, indices, n, desc);
+    int ok = 1;
+    for (size_t i = 0; i < n; i++)
+        if (indices[i] != ref[i].index) {
+            fprintf(stderr, "  [FAIL] %s: pos %zu got idx %u; expected %u\n",
+                    name, i, indices[i], ref[i].index);
+            ok = 0; break;
+        }
+    if (ok) { printf("  %-50s PASS\n", name); _pass++; } else { _fail++; }
+    free(keys); free(indices); free(ref);
+}
+
+// i64/f64 shape coverage proves the signed/float key mapping survives the merge;
+// keys ascend through the type's own domain.
+static void test_i64_shape(size_t n, bool desc, shape_t s, const char *name) {
+    int64_t *keys = (int64_t *)malloc(n * sizeof(int64_t));
+    uint32_t *indices = (uint32_t *)malloc(n * sizeof(uint32_t));
+    i64_pair_t *ref = (i64_pair_t *)malloc(n * sizeof(i64_pair_t));
+    int64_t o = -(int64_t)(n / 2);                         // span negative and positive
+    if (s == SHP_REVERSED) for (size_t i = 0; i < n; i++) keys[i] = o + (int64_t)(n - 1 - i);
+    else                   for (size_t i = 0; i < n; i++) keys[i] = o + (int64_t)i;
+    if (s == SHP_NEARLY)
+        for (size_t k = 0; k < n / 50; k++) {
+            size_t i = (size_t)(lcg_next() % n), j = (size_t)(lcg_next() % n);
+            int64_t t = keys[i]; keys[i] = keys[j]; keys[j] = t;
+        }
+    for (size_t i = 0; i < n; i++) {
+        indices[i] = (uint32_t)i; ref[i].key = keys[i]; ref[i].index = (uint32_t)i;
+    }
+    qsort(ref, n, sizeof(i64_pair_t), desc ? i64_pair_desc : i64_pair_asc);
+    sublimation_pack_sort_i64(keys, indices, n, desc);
+    int ok = 1;
+    for (size_t i = 0; i < n; i++)
+        if (indices[i] != ref[i].index) { ok = 0; break; }
+    if (ok) { printf("  %-50s PASS\n", name); _pass++; } else { printf("  [FAIL] %s\n", name); _fail++; }
+    free(keys); free(indices); free(ref);
+}
+
+static void test_f64_shape(size_t n, bool desc, shape_t s, const char *name) {
+    double *keys = (double *)malloc(n * sizeof(double));
+    uint32_t *indices = (uint32_t *)malloc(n * sizeof(uint32_t));
+    f64_pair_t *ref = (f64_pair_t *)malloc(n * sizeof(f64_pair_t));
+    if (s == SHP_REVERSED) for (size_t i = 0; i < n; i++) keys[i] = (double)(n - 1 - i) * 1.5 - 1000.0;
+    else                   for (size_t i = 0; i < n; i++) keys[i] = (double)i * 1.5 - 1000.0;
+    if (s == SHP_NEARLY)
+        for (size_t k = 0; k < n / 50; k++) {
+            size_t i = (size_t)(lcg_next() % n), j = (size_t)(lcg_next() % n);
+            double t = keys[i]; keys[i] = keys[j]; keys[j] = t;
+        }
+    for (size_t i = 0; i < n; i++) {
+        indices[i] = (uint32_t)i; ref[i].key = keys[i]; ref[i].index = (uint32_t)i;
+    }
+    qsort(ref, n, sizeof(f64_pair_t), desc ? f64_pair_desc : f64_pair_asc);
+    sublimation_pack_sort_f64(keys, indices, n, desc);
+    int ok = 1;
+    for (size_t i = 0; i < n; i++)
+        if (indices[i] != ref[i].index) { ok = 0; break; }
+    if (ok) { printf("  %-50s PASS\n", name); _pass++; } else { printf("  [FAIL] %s\n", name); _fail++; }
+    free(keys); free(indices); free(ref);
+}
+
 int main(void) {
     lcg_seed(0xC0DEFEEDull);
     test_u32(100, false, "u32_asc_100");
@@ -309,6 +404,24 @@ int main(void) {
     test_f64(100, true,  "f64_desc_100");
     test_f64(10000, false, "f64_asc_10k");
     test_f64(10000, true,  "f64_desc_10k");
+
+    // Structured 64-bit shapes (n=2000, above the adaptivity gate): the MERGE
+    // arm of the adaptive index path. Must match the qsort oracle exactly.
+    lcg_seed(0x5ADE00ull);
+    test_u64_shape(2000, false, SHP_SORTED,   "u64_sorted_asc_2k");
+    test_u64_shape(2000, true,  SHP_SORTED,   "u64_sorted_desc_2k");
+    test_u64_shape(2000, false, SHP_NEARLY,   "u64_nearly_asc_2k");
+    test_u64_shape(2000, true,  SHP_NEARLY,   "u64_nearly_desc_2k");
+    test_u64_shape(2000, false, SHP_REVERSED, "u64_reversed_asc_2k");
+    test_u64_shape(2000, true,  SHP_REVERSED, "u64_reversed_desc_2k");
+    test_u64_shape(2000, false, SHP_PHASED,   "u64_phased_asc_2k");
+    test_u64_shape(2000, true,  SHP_PHASED,   "u64_phased_desc_2k");
+    test_i64_shape(2000, false, SHP_SORTED,   "i64_sorted_asc_2k");
+    test_i64_shape(2000, true,  SHP_REVERSED, "i64_reversed_desc_2k");
+    test_i64_shape(2000, false, SHP_NEARLY,   "i64_nearly_asc_2k");
+    test_f64_shape(2000, false, SHP_SORTED,   "f64_sorted_asc_2k");
+    test_f64_shape(2000, true,  SHP_NEARLY,   "f64_nearly_desc_2k");
+    test_f64_shape(2000, false, SHP_REVERSED, "f64_reversed_asc_2k");
 
     // Narrow-range 64-bit keys: constant high bytes make the LSD radix skip
     // those passes (identity permutation), including the odd-executed-pass

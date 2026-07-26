@@ -90,7 +90,7 @@ std::vector<int> FlexLayout::compute_main_axis_sizes(int available_space) {
                                    : items_[i].constraints.flex.flex_shrink;
             if (flex <= 0.0f) continue;
 
-            const double share = dist * (static_cast<double>(flex) / total_flex);
+            const double share = dist * (static_cast<double>(flex) / static_cast<double>(total_flex));
             const int delta = static_cast<int>(std::round(share));
             const int tentative = sizes[i] + delta;
             const int min_s = get_min_size(items_[i].constraints.size, is_width);

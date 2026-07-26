@@ -27,10 +27,6 @@ constexpr char kB64[] =
 std::string read_with_timeout(int timeout_ms) {
   std::string out;
   char buf[256];
-  auto remaining = [start = -1, timeout_ms]() mutable -> int {
-    if (start < 0) start = 0;
-    return timeout_ms;
-  };
   pollfd pfd{STDIN_FILENO, POLLIN, 0};
   // Poll up to `timeout_ms`, draining whatever is available.
   for (;;) {
@@ -43,7 +39,6 @@ std::string read_with_timeout(int timeout_ms) {
     out.append(buf, buf + n);
     // Keep draining quickly; shorter timeout for follow-up bytes.
     timeout_ms = 20;
-    (void)remaining;
   }
   return out;
 }
@@ -310,9 +305,6 @@ std::string GraphicsEmitter::emit_full(uint32_t chart_id,
     for (int band_y = 0; band_y < h_px; band_y += 6) {
       int band_h = std::min(6, h_px - band_y);
       for (int p = 0; p < 216; ++p) {
-        int r_target = (p / 36) * 255 / 5;
-        int g_target = ((p / 6) % 6) * 255 / 5;
-        int b_target = (p % 6) * 255 / 5;
         bool any = false;
         std::string row;
         row.reserve(static_cast<size_t>(w_px));
@@ -324,7 +316,6 @@ std::string GraphicsEmitter::emit_full(uint32_t chart_id,
             int pg = (px[1] + 25) / 51;
             int pb = (px[2] + 25) / 51;
             int qidx = pr * 36 + pg * 6 + pb;
-            (void)r_target; (void)g_target; (void)b_target;
             if (qidx == p) sixel_bits |= (1u << dy);
           }
           if (sixel_bits) any = true;

@@ -58,6 +58,7 @@ def build():
             sys.stdout.write(r.stderr)
             return False
         objs.append(str(obj))
+    LIB.unlink(missing_ok=True)  # ar rcs appends; a removed source must not linger
     subprocess.run(["ar", "rcs", str(LIB)] + objs, check=True)
     r = subprocess.run([cc, std, "-O2", "-march=native",
                         "-I", str(SRC_DIR / "include"), "-I", str(SRC_DIR),

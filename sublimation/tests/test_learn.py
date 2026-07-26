@@ -56,6 +56,10 @@ def build():
             sys.stdout.write(r.stderr)
             return False
         objs.append(str(obj))
+    # Rebuild the archive from scratch: `ar rcs` only ADDS/replaces members, so
+    # a source removed since the last run would linger as a stale member and
+    # collide (multiple definition) with wherever its symbols moved.
+    LIB.unlink(missing_ok=True)
     subprocess.run(["ar", "rcs", str(LIB)] + objs, check=True)
     r = subprocess.run([cc, std, "-O2", "-march=native",
                         "-I", str(SRC_DIR / "include"), "-I", str(SRC_DIR),

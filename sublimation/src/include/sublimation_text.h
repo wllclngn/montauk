@@ -1,8 +1,9 @@
 // sublimation_text.h -- text search: the tri-face matcher (sublimation_search).
-// One engine, three faces (exact/anchor, regex, fuzzy k-mismatch) under a
-// classify-dispatch front end with a data-relative rare-byte prefilter. This is
-// sublimation's text search/match side, the counterpart to the sort core's
-// order/structure side; the two under one roof make sublimation montauk's single
+// One engine, three faces (exact/anchor, regex, fuzzy k-mismatch), each with a
+// rare-byte prefilter -- the exact face reads the byte rarity from the data, the
+// regex and fuzzy faces from a fixed byte-frequency model. This is sublimation's
+// text search/match side, the counterpart to the sort core's order/structure
+// side; the two under one roof make sublimation montauk's single
 // search/match/order core.
 #ifndef SUBLIMATION_TEXT_H
 #define SUBLIMATION_TEXT_H
@@ -20,8 +21,8 @@ extern "C" {
 // faces, selected at compile time: exact/anchor (FIXED), regex (Glushkov
 // bit-parallel field, the default) and fuzzy k-mismatch (k > 0). The program is a
 // value object -- stack- or static-allocate one, compile once, match/count many.
-// Per-call scratch (the field's reach cache, the fuzzy dedup array) is allocated
-// and freed inside find/count; the program itself never heap-allocates.
+// Per-call scratch (the field's reach-closure memo, the fuzzy dedup array) is
+// allocated and freed inside find/count; the program itself never heap-allocates.
 #define SUBLIMATION_SEARCH_MAX_PATTERN 1023
 #define SUBLIMATION_SEARCH_MAX_POS     64    // Glushkov positions (bits in the field)
 
@@ -39,6 +40,7 @@ typedef struct {
     uint64_t first, last;                           // start / accept position sets
     int npos, nullable_all, ok;
     int anchored_start, anchored_end;               // leading ^ / trailing $
+    int icase;                                      // fold ASCII case into setb[]
 } sublimation_search_gnfa;
 
 typedef struct {
@@ -86,6 +88,20 @@ SUB_API long sublimation_search_find_from(const sublimation_search *s, const cha
 // end positions. Fuzzy: windows within k mismatches. Optimizations (regex literal
 // prefilter, fuzzy pigeonhole prefilter) are internal and never change the count.
 SUB_API size_t sublimation_search_count(const sublimation_search *s, const char *input, size_t n);
+
+// One distinct newline-separated record and its occurrence count, as an offset
+// and length into the caller's buffer (no copy). Backs the tally/distinct/count
+// verbs for a bounded FFI caller; the CLI keeps its own streaming interner for
+// unbounded stdin.
+typedef struct { size_t offset; size_t length; uint64_t count; } sub_tally_t;
+
+// Tally distinct newline-separated records in data[0..n): fill out[] with up to
+// out_cap distinct records (offset, length, count) sorted by count descending
+// then first-seen. Returns the number of DISTINCT records (may exceed out_cap;
+// out is filled only up to it). *total, if non-NULL, gets the total record
+// count. A trailing record without a newline still counts.
+SUB_API size_t sublimation_tally(const char *data, size_t n, sub_tally_t *out,
+                                 size_t out_cap, uint64_t *total);
 
 #ifdef __cplusplus
 }

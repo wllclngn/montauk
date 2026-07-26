@@ -127,3 +127,23 @@ fn integer_valued_numbers_serialize_without_a_decimal_point() {
     assert_eq!(Value::Number(-7.0).to_string(), "-7");
     assert_eq!(Value::Number(2.5).to_string(), "2.5");
 }
+
+#[test]
+fn non_finite_numbers_serialize_as_null() {
+    // JSON has no NaN/Infinity literal; the writer emits null (matching the C
+    // writer in include/util/json.h) so a non-finite metric never produces
+    // output that fails a strict parser.
+    assert_eq!(Value::Number(f64::INFINITY).to_string(), "null");
+    assert_eq!(Value::Number(f64::NEG_INFINITY).to_string(), "null");
+    assert_eq!(Value::Number(f64::NAN).to_string(), "null");
+}
+
+#[test]
+fn deeply_nested_input_errors_instead_of_overflowing() {
+    // Adversarial nesting must be rejected with an error, not recurse until the
+    // stack overflows and aborts the whole server.
+    let deep = "[".repeat(10_000) + &"]".repeat(10_000);
+    assert!(parse(&deep).is_err());
+    // A legitimately shallow document still parses.
+    assert!(parse("[[[[1]]]]").is_ok());
+}

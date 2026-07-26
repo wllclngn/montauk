@@ -63,17 +63,29 @@ pub fn run_with_io<R: BufRead, W: Write>(dispatcher: &mut dyn Dispatcher, input:
 
         // A notification (no "id") gets no response, per JSON-RPC 2.0.
         let Some(id) = id else {
-            let _ = dispatcher.dispatch(&method, params.as_ref());
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                dispatcher.dispatch(&method, params.as_ref())
+            }));
             continue;
         };
 
-        let response = match dispatcher.dispatch(&method, params.as_ref()) {
-            Ok(result) => Value::obj(vec![
+        // A tool handler that panics (e.g. an unwrap on malformed montauk
+        // output) must not take the whole server down; catch it and answer with
+        // JSON-RPC Internal error so the connection survives.
+        let dispatched = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            dispatcher.dispatch(&method, params.as_ref())
+        }));
+        let response = match dispatched {
+            Ok(Ok(result)) => Value::obj(vec![
                 ("jsonrpc", Value::String("2.0".to_string())),
                 ("id", id),
                 ("result", result),
             ]),
-            Err((code, message)) => error_response(id, code, &message),
+            Ok(Err((code, message))) => error_response(id, code, &message),
+            Err(_) => {
+                eprintln!("vector: handler panicked for method '{method}'");
+                error_response(id, -32603, "Internal error")
+            }
         };
 
         emit(&mut stdout, response);

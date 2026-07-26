@@ -40,16 +40,27 @@
 #define SUB_NORETURN
 #endif
 
-// [[reproducible]] / [[unsequenced]]
-#if SUB_HAVE_C23
-#define SUB_PURE [[reproducible]]
-#define SUB_CONST [[unsequenced]]
-#elif defined(__GNUC__)
-#define SUB_PURE __attribute__((pure))
-#define SUB_CONST __attribute__((const))
-#else
-#define SUB_PURE
-#define SUB_CONST
+// [[reproducible]] / [[unsequenced]] -- C23, but newer than most C23 modes
+// implement, so a compiler can advertise C23 yet still lack them. Consult
+// __has_c_attribute before use; fall back to the equivalent GNU hints otherwise
+// (a bare -std=c23 clang warns -Wunknown-attributes on the C23 spelling). The
+// __has_c_attribute test is nested, not on the same #if line, so C++ TUs that
+// pull this header -- where __has_c_attribute is undefined -- never try to parse
+// its argument list.
+#if SUB_HAVE_C23 && defined(__has_c_attribute)
+#  if __has_c_attribute(reproducible) && __has_c_attribute(unsequenced)
+#    define SUB_PURE [[reproducible]]
+#    define SUB_CONST [[unsequenced]]
+#  endif
+#endif
+#ifndef SUB_PURE
+#  if defined(__GNUC__)
+#    define SUB_PURE __attribute__((pure))
+#    define SUB_CONST __attribute__((const))
+#  else
+#    define SUB_PURE
+#    define SUB_CONST
+#  endif
 #endif
 
 // nullptr

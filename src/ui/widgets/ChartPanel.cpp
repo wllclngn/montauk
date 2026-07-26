@@ -1,6 +1,7 @@
 #include "ui/widgets/ChartPanel.hpp"
 #include "ui/Config.hpp"
 #include "ui/widget/GraphicsProtocol.hpp"
+#include "app/ChartHistories.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -186,12 +187,17 @@ void ChartPanel::render(widget::Canvas& canvas,
     }
   };
 
-  // Fetch samples under the history mutex, rasterize, then release.
-  // Chart::update_dual normalizes separately by caller for NETWORK.
+  // Copy samples under the history mutex (the producer writes these buffers under
+  // the same lock), then rasterize after release. Chart::update_dual normalizes
+  // separately by caller for NETWORK.
   if (sources_.secondary != nullptr && sources_.primary != nullptr) {
     // Dual-curve path (NETWORK RX + TX). Normalize by shared window max.
-    std::vector<float> rx = sources_.primary->recent(sources_.primary->capacity());
-    std::vector<float> tx = sources_.secondary->recent(sources_.secondary->capacity());
+    std::vector<float> rx, tx;
+    {
+      std::lock_guard<std::mutex> lock(montauk::app::chart_histories().mu);
+      rx = sources_.primary->recent(sources_.primary->capacity());
+      tx = sources_.secondary->recent(sources_.secondary->capacity());
+    }
     float peak = 1024.0f;
     for (float v : rx) if (v > peak) peak = v;
     for (float v : tx) if (v > peak) peak = v;
@@ -201,7 +207,11 @@ void ChartPanel::render(widget::Canvas& canvas,
     ema_smooth(tx, 0.4f);
     chart_.update_dual(rx, tx, style);
   } else if (sources_.primary != nullptr) {
-    std::vector<float> samples = sources_.primary->recent(sources_.primary->capacity());
+    std::vector<float> samples;
+    {
+      std::lock_guard<std::mutex> lock(montauk::app::chart_histories().mu);
+      samples = sources_.primary->recent(sources_.primary->capacity());
+    }
     // Samples are already normalized to [0, 1] by ChartHistories (for pct metrics).
     ema_smooth(samples, 0.4f);
     chart_.update(samples, style);

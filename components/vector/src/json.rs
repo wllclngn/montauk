@@ -62,7 +62,12 @@ fn write_value(v: &Value, out: &mut String) {
         Value::Null => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Value::Number(n) => {
-            if n.fract() == 0.0 && n.abs() < 1e15 {
+            if !n.is_finite() {
+                // JSON has no NaN/Infinity literal; emit null, matching the C
+                // writer (include/util/json.h) so a non-finite metric never
+                // produces output that fails a strict parser.
+                out.push_str("null");
+            } else if n.fract() == 0.0 && n.abs() < 1e15 {
                 let _ = write!(out, "{}", *n as i64);
             } else {
                 let _ = write!(out, "{n}");
@@ -112,8 +117,13 @@ fn write_json_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
+// Cap on container nesting depth. Montauk's own JSON is shallow (a handful of
+// levels); this only bounds adversarial input so `[[[[...` cannot overflow the
+// stack and abort the whole server. Recursive-descent depth, not sibling count.
+const MAX_DEPTH: u32 = 64;
+
 pub fn parse(input: &str) -> Result<Value, String> {
-    let mut p = Parser { bytes: input.as_bytes(), pos: 0 };
+    let mut p = Parser { bytes: input.as_bytes(), pos: 0, depth: 0 };
     p.skip_ws();
     let v = p.parse_value()?;
     p.skip_ws();
@@ -126,6 +136,7 @@ pub fn parse(input: &str) -> Result<Value, String> {
 struct Parser<'a> {
     bytes: &'a [u8],
     pos: usize,
+    depth: u32,
 }
 
 impl<'a> Parser<'a> {
@@ -155,8 +166,24 @@ impl<'a> Parser<'a> {
     fn parse_value(&mut self) -> Result<Value, String> {
         self.skip_ws();
         match self.peek() {
-            Some(b'{') => self.parse_object(),
-            Some(b'[') => self.parse_array(),
+            Some(b'{') => {
+                self.depth += 1;
+                if self.depth > MAX_DEPTH {
+                    return Err(format!("nesting past {MAX_DEPTH} at byte {}", self.pos));
+                }
+                let v = self.parse_object();
+                self.depth -= 1;
+                v
+            }
+            Some(b'[') => {
+                self.depth += 1;
+                if self.depth > MAX_DEPTH {
+                    return Err(format!("nesting past {MAX_DEPTH} at byte {}", self.pos));
+                }
+                let v = self.parse_array();
+                self.depth -= 1;
+                v
+            }
             Some(b'"') => Ok(Value::String(self.parse_string()?)),
             Some(b't') => {
                 self.expect_literal("true")?;

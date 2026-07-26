@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 8.3.0 LANGUAGES C CXX)
+project(montauk VERSION 8.4.0 LANGUAGES C CXX)
 # (7.17.0: kick-capture honesty -- the storm report no longer manufactures a
 #  false kick/s=0 when the scx storm probes are unattached, and kick-latency
 #  surfaces the KICK_ISSUE->RESCHED pairing (availability, unanswered share,
@@ -40,8 +40,43 @@ add_compile_options(-g)
 # repeating the flags per target keeps the policy from drifting between
 # targets (it had been copy-pasted onto nine of them). Third-party or
 # generated sources that cannot meet -Werror simply do not link it.
+# The security-relevant extras were each measured under -Werror before adoption.
+# -Wformat-security is portable (GCC and clang) and stays on always.
+# -Warray-bounds=2 and -Wrestrict are GCC-only spellings (clang rejects them as
+# unknown options under -Werror), so they are gated to GNU and a clang build gets
+# the common subset. Deliberately NOT adopted, each for a measured reason:
+# -Wconversion/-Wsign-conversion/-Wcast-qual fire in bulk across numeric code
+# (churn, not signal); -Wnull-dereference's only hits are false positives in
+# liburing.h (third-party) and paths GCC cannot prove across a range-for;
+# -Wdouble-promotion is GCC-clean but under clang flags idiomatic NAN/INFINITY
+# (float macros) in double context and deliberate float-storage/double-math, not
+# portably clean without uglifying those idioms (its one real hit, FlexLayout, is
+# fixed regardless); -Wcast-align is a no-op on GCC/x86 (it warns only on
+# strict-alignment targets) yet clang flags the correctly-aligned netlink parse
+# through the system NLMSG_NEXT macro -- no value on the shipped compiler, a false
+# positive on the other.
 add_library(montauk_warnings INTERFACE)
-target_compile_options(montauk_warnings INTERFACE -Wall -Wextra -Werror -Wshadow)
+target_compile_options(montauk_warnings INTERFACE
+    -Wall -Wextra -Werror -Wshadow -Wformat-security
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Warray-bounds=2>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wrestrict>
+    $<$<COMPILE_LANG_AND_ID:C,GNU>:-Warray-bounds=2>
+    $<$<COMPILE_LANG_AND_ID:C,GNU>:-Wrestrict>)
+
+# Security hardening for the C++ binaries. sublimation already carries the
+# codegen set on its own C sources; this brings montauk's C++ targets to the
+# same floor and adds the link-time hardening (full RELRO, non-exec stack) the
+# safety reference recommends. INTERFACE compile+link options: linked PUBLIC
+# into montauk_core so they propagate to montauk, PRIVATE into the standalone
+# executables. _FORTIFY_SOURCE needs -O1+, so it is Release-gated; -U guards a
+# toolchain that predefines it.
+add_library(montauk_hardening INTERFACE)
+target_compile_options(montauk_hardening INTERFACE
+    -fstack-protector-strong -fstack-clash-protection -fcf-protection
+    $<$<CONFIG:Release>:-U_FORTIFY_SOURCE>
+    $<$<CONFIG:Release>:-D_FORTIFY_SOURCE=3>)
+target_link_options(montauk_hardening INTERFACE
+    -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack)
 
 # Build options
 option(MONTAUK_BUILD_TESTS "Build unit tests" OFF)
@@ -57,18 +92,23 @@ add_library(sublimation STATIC
     sublimation/src/classify.c
     sublimation/src/merge.c
     sublimation/src/pack.c
+    sublimation/src/radix.c
     sublimation/src/randomness.c
     sublimation/src/search.c
     sublimation/src/select.c
     sublimation/src/small.c
     sublimation/src/sort.c
-    sublimation/src/spectral.c
+    sublimation/src/spectral_kernel.c
+    sublimation/src/spectral_typed.c
+    sublimation/src/stats.c
+    sublimation/src/tally.c
     sublimation/src/text/match.c
-    sublimation/src/parallel/pool.c
+    sublimation/src/parallel/wsdeque.c
+    sublimation/src/parallel/dfspool.c
+    sublimation/src/parallel/radix_par.c
     sublimation/src/strings/msd_radix.c
     sublimation/src/strings/sort_strings.c
     sublimation/src/learn/detect.c
-    sublimation/src/learn/spectral.c
     sublimation/src/learn/signal.c
 )
 set_target_properties(sublimation PROPERTIES
@@ -147,6 +187,7 @@ target_include_directories(montauk_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inclu
 target_compile_definitions(montauk_core PUBLIC _GNU_SOURCE)
 target_compile_definitions(montauk_core PUBLIC MONTAUK_VERSION="${PROJECT_VERSION}")
 target_link_libraries(montauk_core PRIVATE montauk_warnings)
+target_link_libraries(montauk_core PUBLIC montauk_hardening)
 
 # Always attempt NVML (NVIDIA) support by default; if not found, build continues without it.
 # Try common locations for NVML headers. On Arch/others, CUDA installs nvml.h under /opt/cuda/include.
@@ -270,6 +311,7 @@ target_link_libraries(montauk_analyze PRIVATE sublimation)
 # Stamp the project version into the analysis .prom _info metric (house style).
 target_compile_definitions(montauk_analyze PRIVATE MONTAUK_VERSION="${PROJECT_VERSION}")
 target_link_libraries(montauk_analyze PRIVATE montauk_warnings)
+target_link_libraries(montauk_analyze PRIVATE montauk_hardening)
 set_target_properties(montauk_analyze PROPERTIES OUTPUT_NAME montauk_analyze)
 
 # Binary trace-log decoder (no external deps, no BPF link). Reads --trace-out
@@ -282,6 +324,7 @@ target_include_directories(montauk_trace_decode PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/bpf)
 target_link_libraries(montauk_trace_decode PRIVATE montauk_warnings)
+target_link_libraries(montauk_trace_decode PRIVATE montauk_hardening)
 
 # ── sublimation CLI ─────────────────────────────────────────────────────────
 # The command-line front door to the sort sub-system: pipe a numeric stream in,
@@ -294,6 +337,7 @@ set_target_properties(sublimation_cli PROPERTIES
 # First-party, hot-edited C: the same wall every C++ target carries. The old
 # "third-party warnings" exemption never described this file.
 target_link_libraries(sublimation_cli PRIVATE montauk_warnings)
+target_link_libraries(sublimation_cli PRIVATE montauk_hardening)
 # montauk's include/ for the shared output sink (util/sink.h); the CLI's data
 # output drains through it like the rest of montauk.
 target_include_directories(sublimation_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -361,11 +405,73 @@ if(MONTAUK_BUILD_TESTS)
   target_link_libraries(montauk_stats_test PRIVATE montauk_warnings)
   target_link_libraries(montauk_stats_test PRIVATE sublimation)
 
+  # Seeded differential fuzzer for the sort core: multiset preservation + order
+  # vs std::sort across every shipped type, heavy on the few-unique / NaN /
+  # signed-zero region a value-corruption bug once lived in. Runs in the unit
+  # layer so the sort is differentially guarded on every build.
+  add_executable(sublimation_fuzz_diff sublimation/tests/fuzz_sort_diff.cpp)
+  target_include_directories(sublimation_fuzz_diff PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src/include)
+  target_link_libraries(sublimation_fuzz_diff PRIVATE montauk_warnings)
+  target_link_libraries(sublimation_fuzz_diff PRIVATE sublimation)
+
+  # Work-stealing DFS engine (Pillar A). Plain targets prove correctness (deque
+  # exactly-once, executor sort vs oracle, all-type parallel sort differential);
+  # the _tsan variants prove race-freedom and must COMPILE the engine sources
+  # directly (not link the un-instrumented libsublimation) so ThreadSanitizer
+  # sees the deque/pool atomics.
+  set(SUB_INC ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src/include)
+  # The sublimation sort/search/core C tests. Formerly run only by the separate
+  # sublimation/tests/test.py "second engine"; folded here as first-class CMake
+  # targets so run.py is the ONE runner and no correctness test hides off to the
+  # side. Each is a single .c linking libsublimation, like the engine tests above.
+  foreach(t
+      test_wsdeque test_dfspool test_radix test_radix_par test_smerge_par test_pack
+      test_basic test_tier1 test_tier2 test_tier4 test_tier5
+      test_adversarial test_adversarial_types test_bentley_mcilroy test_antiqsort
+      test_types test_sorted_perturbed test_zipfian test_saw_mixed
+      test_strings test_randomness test_profile_contract test_search test_affinity)
+    add_executable(${t} sublimation/tests/${t}.c)
+    set_target_properties(${t} PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
+    target_include_directories(${t} PRIVATE ${SUB_INC})
+    target_link_libraries(${t} PRIVATE sublimation)
+  endforeach()
+
+  # Sort core under AddressSanitizer + UBSan. The engine's race-freedom is gated
+  # by the _tsan targets below; this catches memory/UB faults in the serial and
+  # value paths. test_types (all six types, every disorder class) and test_tier5
+  # (the parallel path + spectral allocations) are the broadest-coverage cores,
+  # so they carry the sanitized pass; they COMPILE the lib sources directly so the
+  # sanitizer instruments sublimation, not just the test.
+  file(GLOB_RECURSE SUB_LIB_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src/*.c)
+  foreach(t test_types test_tier5)
+    add_executable(${t}_asan sublimation/tests/${t}.c ${SUB_LIB_SRCS})
+    set_target_properties(${t}_asan PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
+    target_include_directories(${t}_asan PRIVATE ${SUB_INC} ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src)
+    target_compile_options(${t}_asan PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g -O1 -pthread)
+    target_link_options(${t}_asan PRIVATE -fsanitize=address,undefined -pthread)
+    target_link_libraries(${t}_asan PRIVATE m)
+  endforeach()
+
+  add_executable(test_wsdeque_tsan sublimation/tests/test_wsdeque.c
+      sublimation/src/parallel/wsdeque.c)
+  add_executable(test_dfspool_tsan sublimation/tests/test_dfspool.c
+      sublimation/src/parallel/wsdeque.c sublimation/src/parallel/dfspool.c)
+  add_executable(test_radix_par_tsan sublimation/tests/test_radix_par.c
+      sublimation/src/parallel/wsdeque.c sublimation/src/parallel/dfspool.c
+      sublimation/src/parallel/radix_par.c)
+  foreach(t test_wsdeque_tsan test_dfspool_tsan test_radix_par_tsan)
+    set_target_properties(${t} PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
+    target_include_directories(${t} PRIVATE ${SUB_INC})
+    target_compile_options(${t} PRIVATE -fsanitize=thread -g -O1 -pthread)
+    target_link_options(${t} PRIVATE -fsanitize=thread -pthread)
+  endforeach()
+
   # One entry point for the whole suite -- tests/run.py orchestrates the unit
   # (C++ montauk_tests + C23 sink test), gate (Python byte-identical) and trace
   # (root-gated, skipped without root) layers. --no-build because the DEPENDS
   # below already builds the binaries run.py invokes.
   add_custom_target(check
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/run.py --no-build
-    DEPENDS montauk montauk_tests montauk_sink_c_test montauk_json_test montauk_stats_test montauk_analyze montauk_trace_decode sublimation_cli)
+    DEPENDS montauk montauk_tests montauk_sink_c_test montauk_json_test montauk_stats_test sublimation_fuzz_diff test_wsdeque test_dfspool test_radix test_radix_par test_smerge_par test_pack test_basic test_tier1 test_tier2 test_tier4 test_tier5 test_adversarial test_adversarial_types test_bentley_mcilroy test_antiqsort test_types test_sorted_perturbed test_zipfian test_saw_mixed test_strings test_randomness test_profile_contract test_search test_affinity test_types_asan test_tier5_asan test_wsdeque_tsan test_dfspool_tsan test_radix_par_tsan montauk_analyze montauk_trace_decode sublimation_cli)
 endif()

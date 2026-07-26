@@ -31,6 +31,7 @@ struct ProcSample {
   int      thread_count{1}; // /proc/PID/stat num_threads
   // Cross-sectional anomaly enrichment (AnomalyEnrichment): fused score over the
   // live process population, higher = more anomalous, with the dominant feature.
+  double  fault_delta{0.0};   // per-frame page-fault increase (feature 3); stateful, set in enrichment
   double  anomaly_score{0.0};
   int8_t  anomaly_axis{-1};   // 0=cpu 1=rss 2=gpu 3=faults 4=threads; -1 = none
 };

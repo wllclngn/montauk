@@ -1,13 +1,18 @@
-// The four-tool dispatch surface -- moved out of main.rs into the library
+// The seven-tool dispatch surface -- moved out of main.rs into the library
 // so it's reachable from tests/test_mcp_tools.rs the same way ffi/json/rpc
 // already are. main.rs is now a thin wrapper: parse --version, then
 // rpc::run(&mut ToolServer).
 //
-// Three subprocess tools (montauk_snapshot, montauk_analyze_report,
-// montauk_digest) wrap standalone one-shot processes -- nothing to link
-// into, so language choice is inert there. `sublimation` is direct FFI into
-// libsublimation.a instead, since an agent calling it repeatedly in a
-// debugging loop would otherwise pay full process-spawn cost per call.
+// montauk_snapshot relays `montauk --json` verbatim. montauk_anomalies and
+// montauk_similar shell out to `montauk --json` for the feature data, then
+// compute their conclusion IN-PROCESS via FFI into sublimation's learn/spectral
+// lanes (the anomaly fusion and effective resistance -- the same primitives
+// montauk's own C++ calls, so the numbers agree by construction); montauk_regime
+// samples /proc/stat directly and runs the spectral residual over FFI;
+// montauk_analyze_report and montauk_digest shell out to `montauk_analyze`. `sublimation` runs the sort/match/stat ops -- including
+// count/distinct/tally -- through direct FFI into libsublimation.a (an agent
+// looping on it would otherwise pay a full process spawn per call), and shells
+// out to the `sublimation` CLI for only one verb, `characterize`.
 
 use crate::ffi;
 use crate::json::Value;
@@ -23,15 +28,15 @@ pub const TOOLS_LIST: &[(&str, &str)] = &[
     ),
     (
         "montauk_anomalies",
-        "What is anomalous on the system right now, ranked and explained. Fuses MAD and Mahalanobis over the live process population (CPU, RSS, GPU, page-fault rate, thread count) into a per-process anomaly score, and returns the top processes with the dominant feature axis and a plain-language note. Read-only, wraps `montauk --json`. Arguments: top (number, optional, how many to return, default 5).",
+        "What is anomalous on the system right now, ranked and explained. Fuses three spatial detectors -- MAD (per-axis outlier), Mahalanobis (odd combination of axes) and Half-Space Trees (density/isolation, no shape assumption) -- rank-averaged over the live process population (CPU, RSS, GPU, page-fault rate, thread count) into a per-process anomaly score, and returns the top processes with the dominant feature axis and a plain-language note. Read-only: reads the feature matrix from `montauk --json` and computes the fusion in-process over sublimation's learn lane (the same primitive montauk itself uses). Arguments: top (number, optional, how many to return, default 5).",
     ),
     (
         "montauk_similar",
-        "Processes behaving like a given one, by effective-resistance (commute-time) distance over an RBF affinity graph of the live process population (CPU, RSS, GPU). Read-only, wraps `montauk --json` plus a direct FFI into sublimation's spectral core. Arguments: pid (number, required), top (number, optional, default 5).",
+        "Processes behaving like a given one, by effective-resistance (commute-time) distance over a self-tuning (local-scaling) affinity graph of the live process population (CPU, RSS, GPU). Read-only, wraps `montauk --json` plus a direct FFI into sublimation's spectral core. Arguments: pid (number, required), top (number, optional, default 5).",
     ),
     (
         "montauk_regime",
-        "Did the machine's load regime shift recently, and when. Samples aggregate CPU utilization over a short window and runs sublimation's Spectral Residual (direct FFI) to locate shifts, returning each flagged point with how many seconds ago it happened. Read-only, an active measurement (about 6s). Arguments: samples (number, optional, rounded to a power of two, default 64, sampled 100ms apart).",
+        "Did the machine's load regime shift recently, and when. Samples aggregate CPU utilization over a short window and runs sublimation's Spectral Residual (direct FFI) to locate shifts, returning each flagged point with how many seconds ago it happened. Read-only, an active measurement (about 6s). Arguments: samples (number, optional, clamped to 16-256 then rounded to a power of two, default 64, sampled 100ms apart).",
     ),
     (
         "montauk_analyze_report",
@@ -43,7 +48,7 @@ pub const TOOLS_LIST: &[(&str, &str)] = &[
     ),
     (
         "sublimation",
-        "Read-only call into sublimation's engines over a bounded input. The hot matcher/sort ops are direct FFI (no subprocess): \"sort\"|\"classify\" over values, \"grep\"|\"contains\" over pattern+text. The stat and stream ops route through the sublimation CLI, which owns those computations: over values -- \"sum\"|\"mean\"|\"stdev\"|\"variance\"|\"min\"|\"max\"|\"quantile\" (needs q in 0..1)|\"describe\"|\"outliers\"|\"histogram\"|\"characterize\"; over text (newline-separated lines) -- \"count\"|\"distinct\"|\"tally\". Arguments: op (required), values (number array), q (number, quantile only), pattern/text (strings), icase (bool, optional). For large or piped streams use the sublimation CLI directly; this tool is for bounded in-conversation analysis.",
+        "Read-only call into sublimation's engines over a bounded input, returning structured values. Direct FFI (no subprocess) for every op but characterize: \"sort\"|\"classify\" over values, \"grep\"|\"contains\" over pattern+text, and the statistics lane over values -- \"sum\"|\"mean\"|\"stdev\"|\"variance\"|\"min\"|\"max\" (returns the named scalar), \"quantile\" (needs q in 0..1, optional nearest bool for nearest-rank), \"describe\" (count/mean/stdev/min/q25/q50/q75/max), \"outliers\" (Tukey IQR fences plus the values outside them), \"histogram\" (10 bins with start and count); and over text (newline-separated lines) -- \"count\" (record total), \"distinct\" (number of distinct records), \"tally\" (each distinct record with its count, high to low). Rendered as a formatted report over the CLI: \"characterize\" over values. Arguments: op (required), values (number array), q and nearest (quantile only), pattern/text (strings), icase (bool, optional). For large or piped streams use the sublimation CLI directly; this tool is for bounded in-conversation analysis.",
     ),
 ];
 
@@ -119,6 +124,7 @@ pub fn input_schema_for(name: &str) -> Value {
                 ])),
                 ("values", schema_number_array()),
                 ("q", schema_prop("number")),
+                ("nearest", schema_prop("boolean")),
                 ("pattern", schema_prop("string")),
                 ("text", schema_prop("string")),
                 ("icase", schema_prop("boolean")),
@@ -215,28 +221,67 @@ pub fn call_montauk_anomalies(args: &Value) -> Result<Value, (i64, String)> {
         .unwrap_or(5)
         .clamp(1, 50);
     let out = run_subprocess("montauk", &["--json"])?;
-    let snap = crate::json::parse(&out).map_err(|e| (-32000, format!("parse montauk --json: {e}")))?;
+    anomalies_reduce(&out, top_n)
+}
+
+// The parse-and-fuse half, split from the subprocess spawn so it is unit-testable
+// against a synthetic `montauk --json` snapshot without the montauk binary.
+pub fn anomalies_reduce(out: &str, top_n: usize) -> Result<Value, (i64, String)> {
+    let snap = crate::json::parse(out).map_err(|e| (-32000, format!("parse montauk --json: {e}")))?;
     let procs = snap
         .get("processes")
-        .and_then(|p| p.get("top"))
+        .ok_or((-32000, "montauk --json missing processes".to_string()))?;
+    // The FULL fused population's feature matrix -- the same set montauk judged
+    // against -- so the score computed here equals montauk's, not a relayed copy.
+    let feats = procs
+        .get("anomaly_features")
         .and_then(Value::as_array)
-        .ok_or((-32000, "montauk --json missing processes.top".to_string()))?;
-    let mut rows: Vec<(f64, i64, String, i64, f64, f64)> = procs
-        .iter()
-        .map(|p| {
-            (
-                p.get("anomaly_score").and_then(Value::as_f64).unwrap_or(0.0),
-                p.get("pid").and_then(Value::as_f64).unwrap_or(0.0) as i64,
-                p.get("cmd").and_then(Value::as_str).unwrap_or("").to_string(),
-                p.get("anomaly_axis").and_then(Value::as_f64).unwrap_or(-1.0) as i64,
-                p.get("cpu_pct").and_then(Value::as_f64).unwrap_or(0.0),
-                p.get("rss_kb").and_then(Value::as_f64).unwrap_or(0.0),
-            )
-        })
+        .ok_or((-32000, "montauk --json missing processes.anomaly_features".to_string()))?;
+    let n = feats.len();
+    if n < 8 {
+        return Err((-32000, "too few processes for a population anomaly".to_string()));
+    }
+    // pid -> cmd from the displayed top set (feature rows carry pid only, to keep
+    // the snapshot copy heap-light); an anomaly outside the displayed set reports
+    // its pid without a name.
+    let mut cmd_by_pid: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    if let Some(top) = procs.get("top").and_then(Value::as_array) {
+        for p in top {
+            if let (Some(pid), Some(cmd)) =
+                (p.get("pid").and_then(Value::as_f64), p.get("cmd").and_then(Value::as_str))
+            {
+                cmd_by_pid.insert(pid as i64, cmd.to_string());
+            }
+        }
+    }
+    // Build the n*5 matrix in the primitive's column order. A missing feature is a
+    // contract break -> error, never a silent 0 that would skew the population.
+    const D: usize = 5;
+    let field = |row: &Value, k: &str| -> Result<f64, (i64, String)> {
+        row.get(k)
+            .and_then(Value::as_f64)
+            .ok_or((-32000, format!("anomaly_features row missing {k}")))
+    };
+    let mut x = vec![0.0f64; n * D];
+    let mut pids = vec![0i64; n];
+    for (i, row) in feats.iter().enumerate() {
+        pids[i] = field(row, "pid")? as i64;
+        x[i * D] = field(row, "cpu_pct")?;
+        x[i * D + 1] = field(row, "rss_kb")?;
+        x[i * D + 2] = field(row, "gpu_util_pct")?;
+        x[i * D + 3] = field(row, "fault_delta")?;
+        x[i * D + 4] = field(row, "thread_count")?;
+    }
+    // The conclusion, computed IN-PROCESS over the learn core -- the same
+    // sublimation_anomaly_fuse montauk's enrichment calls.
+    let (scores, axes) = crate::ffi::anomaly_fuse(&x, n, D)
+        .ok_or((-32000, "anomaly fusion failed".to_string()))?;
+    let mut rows: Vec<(f64, i64, i8, f64, f64)> = (0..n)
+        .map(|i| (scores[i], pids[i], axes[i], x[i * D], x[i * D + 1]))
         .collect();
     rows.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     rows.truncate(top_n);
-    let axis_name = |a: i64| -> &'static str {
+    let axis_name = |a: i8| -> &'static str {
         match a {
             0 => "cpu",
             1 => "rss",
@@ -248,7 +293,7 @@ pub fn call_montauk_anomalies(args: &Value) -> Result<Value, (i64, String)> {
     };
     let items: Vec<Value> = rows
         .iter()
-        .map(|(score, pid, cmd, axis, cpu, rss)| {
+        .map(|(score, pid, axis, cpu, rss)| {
             let an = axis_name(*axis);
             let val = match *axis {
                 0 => format!("{cpu:.0}% CPU"),
@@ -258,11 +303,12 @@ pub fn call_montauk_anomalies(args: &Value) -> Result<Value, (i64, String)> {
                 4 => "elevated thread count".to_string(),
                 _ => "no dominant feature".to_string(),
             };
+            let cmd = cmd_by_pid.get(pid).cloned().unwrap_or_default();
             let note =
                 format!("{an} is this process's dominant deviation from the population ({val})");
             Value::obj(vec![
                 ("pid", Value::Number(*pid as f64)),
-                ("cmd", Value::String(cmd.clone())),
+                ("cmd", Value::String(cmd)),
                 ("anomaly_score", Value::Number((score * 1000.0).round() / 1000.0)),
                 ("axis", Value::String(an.to_string())),
                 ("cpu_pct", Value::Number((cpu * 10.0).round() / 10.0)),
@@ -278,8 +324,9 @@ pub fn call_montauk_anomalies(args: &Value) -> Result<Value, (i64, String)> {
         (
             "basis",
             Value::String(
-                "fused MAD, Mahalanobis and Half-Space Trees over the live process \
-                 population (cpu, rss, gpu); higher score is more anomalous"
+                "fused MAD, Mahalanobis and Half-Space Trees (rank-averaged), computed \
+                 in-process over the full live process population (cpu, rss, gpu, \
+                 page-fault rate, thread count); higher score is more anomalous"
                     .to_string(),
             ),
         ),
@@ -323,39 +370,16 @@ pub fn call_montauk_similar(args: &Value) -> Result<Value, (i64, String)> {
         .iter()
         .position(|&p| p == query_pid)
         .ok_or((-32602, format!("pid {query_pid} not in the top process list")))?;
-    for j in 0..3 {                                   // standardize each column
-        let mean = (0..n).map(|i| feat[i * 3 + j]).sum::<f64>() / n as f64;
-        let var = (0..n).map(|i| (feat[i * 3 + j] - mean).powi(2)).sum::<f64>() / n as f64;
-        let sd = var.sqrt();
-        for i in 0..n {
-            feat[i * 3 + j] = if sd > 0.0 { (feat[i * 3 + j] - mean) / sd } else { 0.0 };
-        }
-    }
-    let mut d2 = vec![0.0f64; n * n];                 // pairwise squared distance
-    let mut nz = Vec::new();
-    for i in 0..n {
-        for k in (i + 1)..n {
-            let s: f64 = (0..3).map(|j| (feat[i * 3 + j] - feat[k * 3 + j]).powi(2)).sum();
-            d2[i * n + k] = s;
-            d2[k * n + i] = s;
-            if s > 0.0 {
-                nz.push(s);
-            }
-        }
-    }
-    nz.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let sigma2 = if nz.is_empty() { 1.0 } else { nz[nz.len() / 2].max(1e-12) };
-    // RBF affinity, zero diagonal, with a small floor so the graph stays
-    // connected: on a mostly-idle population the raw RBF isolates the few active
-    // outliers, and effective resistance to a disconnected node is degenerate.
-    let mut w = vec![0.0f64; n * n];
-    for i in 0..n {
-        for k in 0..n {
-            if i != k {
-                w[i * n + k] = (-d2[i * n + k] / (2.0 * sigma2)).exp() + 1e-3;
-            }
-        }
-    }
+    // The affinity graph is sublimation's algorithm, not vector's: the learn/
+    // spectral core standardizes the columns and builds a SELF-TUNING (local-
+    // scaling) RBF affinity, each node scaled by the distance to its knn-th
+    // neighbor. That local scale keeps an outlier query's nearest neighbors
+    // connected where a single global bandwidth would collapse every one of its
+    // edges to the floor and make the commute-time distances saturate. knn = 7
+    // is the Zelnik-Manor default, clamped to the population by the core.
+    let knn = 7u32.min((n - 1) as u32);
+    let w = ffi::self_tuning_affinity(&feat, n, 3, knn)
+        .ok_or((-32000, "self-tuning affinity failed".to_string()))?;
     let reff = ffi::effective_resistance(&w, n)
         .ok_or((-32000, "effective resistance failed (degenerate graph)".to_string()))?;
     let mut order: Vec<usize> = (0..n).filter(|&j| j != qi).collect();
@@ -387,9 +411,9 @@ pub fn call_montauk_similar(args: &Value) -> Result<Value, (i64, String)> {
         (
             "basis",
             Value::String(
-                "effective-resistance (commute-time) nearest over an RBF affinity \
-                 graph of the live processes (cpu, rss, gpu); lower resistance is \
-                 more similar"
+                "effective-resistance (commute-time) nearest over a self-tuning \
+                 (local-scaling) affinity graph of the live processes (cpu, rss, \
+                 gpu); lower resistance is more similar"
                     .to_string(),
             ),
         ),
@@ -555,32 +579,123 @@ pub fn call_sublimation(args: &Value) -> Result<Value, (i64, String)> {
                 None => Value::obj(vec![("matched", Value::Bool(false))]),
             }
         }
-        // Numeric-stream stat verbs: route the values through the sublimation
-        // CLI (which owns these computations), returning its text verbatim.
-        "sum" | "mean" | "stdev" | "variance" | "min" | "max" | "describe"
-        | "outliers" | "histogram" | "characterize" => {
+        // Numeric stat ops: direct FFI into sublimation's stats lane, returning
+        // structured values. No subprocess -- these are library entry points.
+        "sum" | "mean" | "stdev" | "variance" | "min" | "max" => {
+            let values = values_as_f64(args)?;
+            if values.is_empty() {
+                return Err((-32602, format!("'{op}' needs a non-empty 'values' array")));
+            }
+            let (key, r): (&'static str, f64) = match op {
+                "sum" => ("sum", ffi::sum(&values)),
+                "mean" => ("mean", ffi::mean(&values)),
+                "stdev" => ("stdev", ffi::stdev(&values)),
+                "variance" => ("variance", ffi::variance(&values)),
+                "min" => ("min", ffi::min(&values)),
+                _ => ("max", ffi::max(&values)),
+            };
+            Value::obj(vec![(key, Value::Number(r))])
+        }
+        "quantile" => {
+            let mut values = values_as_f64(args)?;
+            if values.is_empty() {
+                return Err((-32602, "quantile needs a non-empty 'values' array".to_string()));
+            }
+            let q = args
+                .get("q")
+                .and_then(Value::as_f64)
+                .ok_or((-32602, "quantile requires 'q' (a probability in 0..1)".to_string()))?;
+            if !(0.0..=1.0).contains(&q) {
+                return Err((-32602, "quantile 'q' must be in 0..1".to_string()));
+            }
+            let nearest = arg_bool(args, "nearest");
+            Value::obj(vec![
+                ("q", Value::Number(q)),
+                ("value", Value::Number(ffi::quantile(&mut values, q, nearest))),
+            ])
+        }
+        "describe" => {
+            let mut values = values_as_f64(args)?;
+            if values.is_empty() {
+                return Err((-32602, "describe needs a non-empty 'values' array".to_string()));
+            }
+            let d = ffi::describe(&mut values);
+            Value::obj(vec![
+                ("count", Value::Number(d.n as f64)),
+                ("mean", Value::Number(d.mean)),
+                ("stdev", Value::Number(d.stdev)),
+                ("min", Value::Number(d.min)),
+                ("q25", Value::Number(d.q25)),
+                ("q50", Value::Number(d.q50)),
+                ("q75", Value::Number(d.q75)),
+                ("max", Value::Number(d.max)),
+            ])
+        }
+        "outliers" => {
+            let mut values = values_as_f64(args)?;
+            if values.is_empty() {
+                return Err((-32602, "outliers needs a non-empty 'values' array".to_string()));
+            }
+            let (lo, hi) = ffi::tukey_fences(&mut values);  // sorts in place
+            let out: Vec<Value> = values.iter().copied()
+                .filter(|x| *x < lo || *x > hi)
+                .map(Value::Number)
+                .collect();
+            Value::obj(vec![
+                ("lower_fence", Value::Number(lo)),
+                ("upper_fence", Value::Number(hi)),
+                ("outliers", Value::Array(out)),
+            ])
+        }
+        "histogram" => {
+            let values = values_as_f64(args)?;
+            if values.is_empty() {
+                return Err((-32602, "histogram needs a non-empty 'values' array".to_string()));
+            }
+            const NBINS: usize = 10;
+            let (counts, mn, bw) = ffi::histogram(&values, NBINS);
+            let bins: Vec<Value> = counts.iter().enumerate().map(|(i, c)| {
+                Value::obj(vec![
+                    ("start", Value::Number(mn + (i as f64) * bw)),
+                    ("count", Value::Number(*c as f64)),
+                ])
+            }).collect();
+            Value::obj(vec![
+                ("min", Value::Number(mn)),
+                ("bin_width", Value::Number(bw)),
+                ("bins", Value::Array(bins)),
+            ])
+        }
+        // characterize is the randomness battery's own verdict; it still reads
+        // as a formatted report, so it rides the CLI like the text verbs below.
+        "characterize" => {
             let values = values_as_f64(args)?;
             let stdin = numbers_to_stdin(&values);
             let out = run_subprocess_stdin("sublimation", &[op], &stdin)?;
             return Ok(text_content(out));
         }
-        "quantile" => {
-            let values = values_as_f64(args)?;
-            let q = args
-                .get("q")
-                .and_then(Value::as_f64)
-                .ok_or((-32602, "quantile requires 'q' (a probability in 0..1)".to_string()))?;
-            let stdin = numbers_to_stdin(&values);
-            let qs = q.to_string();
-            let out = run_subprocess_stdin("sublimation", &["quantile", &qs], &stdin)?;
-            return Ok(text_content(out));
-        }
-        // Text-line verbs: the input is arbitrary newline-separated lines.
+        // Text-line verbs: direct FFI into the library tally, returning
+        // structured values -- no subprocess.
         "count" | "distinct" | "tally" => {
             let text = arg_str(args, "text")
                 .ok_or((-32602, format!("'{op}' requires 'text' (newline-separated lines)")))?;
-            let out = run_subprocess_stdin("sublimation", &[op], text)?;
-            return Ok(text_content(out));
+            let (distinct, total, entries) = ffi::tally(text);
+            match op {
+                "count" => Value::obj(vec![("count", Value::Number(total as f64))]),
+                "distinct" => Value::obj(vec![("distinct", Value::Number(distinct as f64))]),
+                _ => {
+                    let arr = entries
+                        .into_iter()
+                        .map(|(tok, c)| {
+                            Value::obj(vec![
+                                ("token", Value::String(tok)),
+                                ("count", Value::Number(c as f64)),
+                            ])
+                        })
+                        .collect();
+                    Value::obj(vec![("tally", Value::Array(arr))])
+                }
+            }
         }
         other => {
             return Err((-32602, format!(

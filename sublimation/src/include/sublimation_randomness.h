@@ -114,6 +114,11 @@ typedef struct {
 SUB_API sub_randomness_t sublimation_randomness_u64(const uint64_t *arr, size_t n);
 SUB_API sub_randomness_t sublimation_randomness_i64(const int64_t  *arr, size_t n);
 SUB_API sub_randomness_t sublimation_randomness_f64(const double   *arr, size_t n);
+// 32-bit types widen to 64-bit internally (order-preserving) and reuse the same
+// battery, so the full entropy detector covers all six key types.
+SUB_API sub_randomness_t sublimation_randomness_i32(const int32_t  *arr, size_t n);
+SUB_API sub_randomness_t sublimation_randomness_u32(const uint32_t *arr, size_t n);
+SUB_API sub_randomness_t sublimation_randomness_f32(const float    *arr, size_t n);
 
 #ifdef __cplusplus
 }

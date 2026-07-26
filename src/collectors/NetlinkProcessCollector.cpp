@@ -200,6 +200,12 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
 
   out.total_processes = out.processes.size();
   out.running_processes = out.state_running;
+  // Baseline EVERY scanned pid before reducing to the top-K (see
+  // ProcessCollector): capturing only the survivors made a process outside the
+  // initial top-K read 0% forever and never surface.
+  std::unordered_map<int32_t, uint64_t> next_last;
+  next_last.reserve(out.processes.size());
+  for (const auto& p : out.processes) next_last[p.pid] = p.total_time;
   top_k_by_cpu_pct(out.processes, max_procs_);
 
   // Enrich survivors only: exe_path for every kept row (Security scans the
@@ -241,10 +247,8 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     out.total_threads += (out.processes.size() - enrich_n);
   }
 
-  // Update last maps for cpu% deltas next cycle and remember the last published top-K
-  std::unordered_map<int32_t, uint64_t> next_last;
-  next_last.reserve(out.processes.size());
-  for (const auto& p : out.processes) next_last[p.pid] = p.total_time;
+  // The cpu% baseline (next_last) was captured over the full scan above; here
+  // just remember the last published top-K for the active-set re-scan.
   std::vector<int32_t> next_top;
   next_top.reserve(out.processes.size());
   for (const auto& p : out.processes) next_top.push_back(p.pid);

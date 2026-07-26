@@ -99,9 +99,9 @@ static size_t utf8_char_len(char c) {
     return 1; // Invalid or continuation; advance by 1
 }
 
-static int parse_int(const char*& p) {
+static int parse_int(const char*& p, const char* end) {
     int v = 0;
-    while (*p >= '0' && *p <= '9') {
+    while (p < end && *p >= '0' && *p <= '9') {
         v = v * 10 + (*p - '0');
         p++;
     }
@@ -121,9 +121,10 @@ int Canvas::draw_text(int x, int y, std::string_view text, Style initial_style) 
         // ANSI SGR escape sequence: ESC [ params m
         if (text[i] == '\033' && i + 1 < text.length() && text[i+1] == '[') {
             const char* p = text.data() + i + 2; // Skip ESC [
+            const char* end = text.data() + text.length();  // bound all SGR reads
 
             while (true) {
-                int code = parse_int(p);
+                int code = parse_int(p, end);
 
                 switch (code) {
                     case 0: current_style = Style{}; break;
@@ -148,13 +149,13 @@ int Canvas::draw_text(int x, int y, std::string_view text, Style initial_style) 
                     case 96: current_style.fg = Color::BrightCyan; break;
                     case 97: current_style.fg = Color::BrightWhite; break;
                     case 38: // Extended fg: 38;2;R;G;B (truecolor)
-                        if (*p == ';') {
+                        if (p < end && *p == ';') {
                             p++;
-                            int mode = parse_int(p);
-                            if (mode == 2 && *p == ';') {
-                                p++; int r = parse_int(p);
-                                if (*p == ';') { p++; int g = parse_int(p);
-                                    if (*p == ';') { p++; int b = parse_int(p);
+                            int mode = parse_int(p, end);
+                            if (mode == 2 && p < end && *p == ';') {
+                                p++; int r = parse_int(p, end);
+                                if (p < end && *p == ';') { p++; int g = parse_int(p, end);
+                                    if (p < end && *p == ';') { p++; int b = parse_int(p, end);
                                         current_style.fg = rgb_color(
                                             static_cast<uint8_t>(r),
                                             static_cast<uint8_t>(g),
@@ -165,13 +166,13 @@ int Canvas::draw_text(int x, int y, std::string_view text, Style initial_style) 
                         }
                         break;
                     case 48: // Extended bg: 48;2;R;G;B (truecolor)
-                        if (*p == ';') {
+                        if (p < end && *p == ';') {
                             p++;
-                            int mode = parse_int(p);
-                            if (mode == 2 && *p == ';') {
-                                p++; int r = parse_int(p);
-                                if (*p == ';') { p++; int g = parse_int(p);
-                                    if (*p == ';') { p++; int b = parse_int(p);
+                            int mode = parse_int(p, end);
+                            if (mode == 2 && p < end && *p == ';') {
+                                p++; int r = parse_int(p, end);
+                                if (p < end && *p == ';') { p++; int g = parse_int(p, end);
+                                    if (p < end && *p == ';') { p++; int b = parse_int(p, end);
                                         current_style.bg = rgb_color(
                                             static_cast<uint8_t>(r),
                                             static_cast<uint8_t>(g),
@@ -184,7 +185,7 @@ int Canvas::draw_text(int x, int y, std::string_view text, Style initial_style) 
                     default: break;
                 }
 
-                if (*p == ';') {
+                if (p < end && *p == ';') {
                     p++;
                 } else {
                     break;
@@ -192,8 +193,8 @@ int Canvas::draw_text(int x, int y, std::string_view text, Style initial_style) 
             }
 
             // Skip until 'm' or end
-            while (*p && *p != 'm') p++;
-            if (*p == 'm') p++;
+            while (p < end && *p != 'm') p++;
+            if (p < end && *p == 'm') p++;
 
             i = static_cast<size_t>(p - text.data());
             continue;
@@ -285,7 +286,7 @@ Style parse_sgr_style(std::string_view sgr) {
     const char* p = sgr.data() + 2;
     const char* end = sgr.data() + sgr.size();
     while (p < end && *p != 'm') {
-        int code = parse_int(p);
+        int code = parse_int(p, end);
         switch (code) {
             case 0: s = Style{}; break;
             case 1: s.attr = s.attr | Attribute::Bold; break;
@@ -309,13 +310,13 @@ Style parse_sgr_style(std::string_view sgr) {
             case 96: s.fg = Color::BrightCyan; break;
             case 97: s.fg = Color::BrightWhite; break;
             case 38:
-                if (p < end && *p == ';') {
+                if (p < end && p < end && *p == ';') {
                     p++;
-                    int mode = parse_int(p);
-                    if (mode == 2 && p < end && *p == ';') {
-                        p++; int r = parse_int(p);
-                        if (p < end && *p == ';') { p++; int g = parse_int(p);
-                            if (p < end && *p == ';') { p++; int b = parse_int(p);
+                    int mode = parse_int(p, end);
+                    if (mode == 2 && p < end && p < end && *p == ';') {
+                        p++; int r = parse_int(p, end);
+                        if (p < end && p < end && *p == ';') { p++; int g = parse_int(p, end);
+                            if (p < end && p < end && *p == ';') { p++; int b = parse_int(p, end);
                                 s.fg = rgb_color(
                                     static_cast<uint8_t>(r),
                                     static_cast<uint8_t>(g),
@@ -326,13 +327,13 @@ Style parse_sgr_style(std::string_view sgr) {
                 }
                 break;
             case 48:
-                if (p < end && *p == ';') {
+                if (p < end && p < end && *p == ';') {
                     p++;
-                    int mode = parse_int(p);
-                    if (mode == 2 && p < end && *p == ';') {
-                        p++; int r = parse_int(p);
-                        if (p < end && *p == ';') { p++; int g = parse_int(p);
-                            if (p < end && *p == ';') { p++; int b = parse_int(p);
+                    int mode = parse_int(p, end);
+                    if (mode == 2 && p < end && p < end && *p == ';') {
+                        p++; int r = parse_int(p, end);
+                        if (p < end && p < end && *p == ';') { p++; int g = parse_int(p, end);
+                            if (p < end && p < end && *p == ';') { p++; int b = parse_int(p, end);
                                 s.bg = rgb_color(
                                     static_cast<uint8_t>(r),
                                     static_cast<uint8_t>(g),
@@ -344,7 +345,7 @@ Style parse_sgr_style(std::string_view sgr) {
                 break;
             default: break;
         }
-        if (p < end && *p == ';') p++;
+        if (p < end && p < end && *p == ';') p++;
         else break;
     }
     return s;

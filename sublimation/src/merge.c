@@ -2,6 +2,7 @@
 //
 // Type-generic via macro template instantiation.
 #include "internal/sort_internal.h"
+#include "internal/dfspool.h"     // work-stealing engine for the parallel structured sort
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>

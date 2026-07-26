@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <thread>
@@ -23,6 +24,13 @@ class GpuAttributor; // forward decl
 
 class Producer {
 public:
+  // Per-process sampling cadence. Public because a per-process cpu_pct is a
+  // delta over this window and is only meaningful once a full one has closed:
+  // the hot-start warm-up pre-samples a few ticks apart, and at that width the
+  // whole-jiffy quantization dominates (one jiffy of error is most of the
+  // window), which is what makes a one-shot read far above 100% per core.
+  static constexpr std::chrono::milliseconds kProcessInterval{1000};
+
   explicit Producer(SnapshotBuffers& buffers);
   void start();
   void stop();
@@ -34,6 +42,17 @@ public:
   // plain TUI must never demand. main.cpp calls this only when --trace
   // is active. Must be called before start().
   void enable_pmu() { pmu_enabled_ = true; }
+
+  // Count of completed per-process samples. The hot-start warm-up fires
+  // several only a kernel tick apart, so a delta taken across them is
+  // quantized noise (most processes accrue no jiffy at all and read 0, an
+  // unlucky one catches a whole jiffy and reads far above 100% per core). A
+  // consumer that needs a trustworthy per-process cpu_pct -- the --json
+  // one-shot -- waits for this to advance past its post-warm-up value, which
+  // only a steady-loop sample a full kProcessInterval later can do.
+  uint64_t process_samples() const noexcept {
+    return process_samples_.load(std::memory_order_acquire);
+  }
 
 #ifdef MONTAUK_TESTING
   // Test-only helper: apply a set of per-process GPU samples (pid->util%)
@@ -52,6 +71,7 @@ private:
   montauk::collectors::CpuCollector cpu_{};
   montauk::collectors::PmuCollector pmu_{};
   bool pmu_enabled_{false};  // see enable_pmu()
+  std::atomic<uint64_t> process_samples_{0};  // see process_samples()
   montauk::collectors::MemoryCollector mem_{};
   montauk::collectors::GpuCollector gpu_{};
   montauk::collectors::NetCollector net_{};

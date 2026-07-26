@@ -2,9 +2,15 @@
 """montauk test runner -- one entry point for the whole suite.
 
 Five layers, one command, a clear split:
-  unit   -- the C++ montauk_tests aggregate + the C23 montauk_sink_c_test
+  unit   -- the C++ montauk_tests aggregate, the C23 montauk_sink_c_test,
+            sublimation_fuzz_diff (seeded sort differential vs std::sort, all
+            types, multiset + order, heavy on few-unique / NaN / signed-zero),
+            and the work-stealing DFS engine tests: test_wsdeque / test_dfspool
+            / test_psort (correctness) plus the _tsan variants (race-freedom
+            under ThreadSanitizer)
   gate   -- the Python byte-identical output gate (corpus_check.py): analyzer /
-            decoder / sublimation CLI stdout vs frozen goldens
+            decoder / sublimation CLI stdout vs frozen goldens, plus the
+            search/learn/spectral/signal numpy-parity gates
   perf   -- the performance envelopes (perf_gate.py): CPU-time ceilings, a
             growth bound and the sort-vs-sort oracle
   trace  -- the live BPF trace harness (trace_loadtest.py); needs root, so it is
@@ -29,9 +35,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build"
+# The sublimation sort/search/core C tests (folded from the retired second
+# engine, sublimation/tests/test.py).
+SUB_CORE_TESTS = ["test_basic", "test_tier1", "test_tier2", "test_tier4",
+                  "test_tier5", "test_adversarial", "test_adversarial_types",
+                  "test_bentley_mcilroy", "test_antiqsort", "test_types",
+                  "test_sorted_perturbed", "test_zipfian", "test_saw_mixed",
+                  "test_strings", "test_randomness", "test_profile_contract",
+                  "test_search", "test_affinity"]
+
 TARGETS = ["montauk", "montauk_tests", "montauk_sink_c_test",
-           "montauk_json_test", "montauk_stats_test", "montauk_analyze",
-           "montauk_trace_decode", "sublimation_cli"]
+           "montauk_json_test", "montauk_stats_test", "sublimation_fuzz_diff",
+           "test_wsdeque", "test_dfspool", "test_radix", "test_radix_par",
+           "test_smerge_par", "test_pack",
+           *SUB_CORE_TESTS, "test_types_asan", "test_tier5_asan",
+           "test_wsdeque_tsan", "test_dfspool_tsan", "test_radix_par_tsan",
+           "montauk_analyze", "montauk_trace_decode", "sublimation_cli"]
 
 
 def run(cmd):
@@ -62,13 +81,44 @@ def build():
 def layer_unit():
     ok = True
     for exe in ("montauk_tests", "montauk_sink_c_test", "montauk_json_test",
-                "montauk_stats_test"):
+                "montauk_stats_test", "sublimation_fuzz_diff",
+                "test_wsdeque", "test_dfspool", "test_radix", "test_radix_par",
+                "test_smerge_par", "test_pack", *SUB_CORE_TESTS):
         p = BUILD / exe
         if not p.exists():
             print(f"[run] unit: missing {exe} -- build first (drop --no-build)")
             ok = False
             continue
         ok = (run([str(p)]) == 0) and ok
+    # Sort core under ASan + UBSan (broadest-coverage cores compiled WITH the lib
+    # so the sanitizer instruments sublimation itself). Leak detection off: the
+    # tests exercise sort paths, not allocation lifecycle, and montauk's own leak
+    # posture is covered elsewhere.
+    asan_env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0:halt_on_error=1")
+    for exe in ("test_types_asan", "test_tier5_asan"):
+        p = BUILD / exe
+        if not p.exists():
+            print(f"[run] unit: missing {exe} -- build first (drop --no-build)")
+            ok = False
+            continue
+        print(f"  $ {p}")
+        ok = (subprocess.run([str(p)], env=asan_env).returncode == 0) and ok
+    # Work-stealing DFS engine race gate (ThreadSanitizer). A smaller size is
+    # deliberate: a data race shows at any concurrency, and TSan's ~15x slowdown
+    # makes full-size runs wasteful. test_psort's correctness is covered plain
+    # above; its executor's race-freedom is covered by test_dfspool_tsan.
+    tsan_env = dict(os.environ, TSAN_OPTIONS="halt_on_error=1")
+    for exe in ("test_wsdeque_tsan", "test_dfspool_tsan", "test_radix_par_tsan"):
+        p = BUILD / exe
+        if not p.exists():
+            print(f"[run] unit: missing {exe} -- build first (drop --no-build)")
+            ok = False
+            continue
+        # test_radix_par_tsan takes an N arg; a small size still exercises the
+        # parallel frames and keeps TSan's ~15x slowdown bounded.
+        cmd = [str(p)] + (["40000"] if exe == "test_radix_par_tsan" else [])
+        print(f"  $ {' '.join(cmd)}")
+        ok = (subprocess.run(cmd, env=tsan_env).returncode == 0) and ok
     return ok
 
 

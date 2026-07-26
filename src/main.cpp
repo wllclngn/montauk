@@ -39,6 +39,25 @@ using montauk::ui::on_atexit_restore;
 using montauk::ui::tty_stdout;
 using montauk::ui::config;
 
+// A crash (SIGSEGV/SIGABRT/SIGBUS/SIGQUIT) skips the RAII terminal guards and
+// atexit, leaving the terminal in raw mode + alt screen + hidden cursor.
+// Restore what is async-signal-safe to restore, then re-raise with the default
+// disposition so the core dump / abort still happens.
+static void on_fatal_signal(int sig) {
+  restore_terminal_minimal();
+  std::signal(sig, SIG_DFL);
+  std::raise(sig);
+}
+
+// Parse an integer CLI argument, returning `fallback` on non-numeric input
+// instead of throwing (std::stoi on e.g. `--iterations abc` would escape main
+// as std::invalid_argument and std::terminate the process).
+static int parse_int_arg(const char* s, int fallback) {
+  char* end = nullptr;
+  long v = std::strtol(s, &end, 10);
+  if (end == s || *end != '\0') return fallback;
+  return static_cast<int>(v);
+}
 
 int main(int argc, char** argv) {
   std::setlocale(LC_ALL, "");  // Required for wcwidth() to work correctly
@@ -47,6 +66,12 @@ int main(int argc, char** argv) {
   // final drop-snapshot flush and the trace-pattern liveness WARN -- rather
   // than a hard kill that skips the whole run-loop teardown.
   std::signal(SIGTERM, on_sigint);
+  // Fatal-crash signals: restore the terminal before the default action runs so
+  // a segfault mid-render does not leave the user's shell in raw/alt-screen.
+  std::signal(SIGSEGV, on_fatal_signal);
+  std::signal(SIGABRT, on_fatal_signal);
+  std::signal(SIGBUS,  on_fatal_signal);
+  std::signal(SIGQUIT, on_fatal_signal);
   montauk_sink_init(&g_out, 1);
   std::atexit(drain_out);
   // Text-only UI is the default and only mode. Ctrl+C to exit.
@@ -69,12 +94,12 @@ int main(int argc, char** argv) {
   bool json_once = false;      // --json: one-shot structured snapshot to stdout, then exit
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
-    if (a == "--iterations" && i + 1 < argc) iterations = std::stoi(argv[++i]);
+    if (a == "--iterations" && i + 1 < argc) iterations = parse_int_arg(argv[++i], iterations);
     else if (a == "--json") json_once = true;
-    else if (a == "--self-test-seconds" && i + 1 < argc) self_test_secs = std::stoi(argv[++i]);
-    else if (a == "--metrics" && i + 1 < argc) metrics_port = static_cast<uint16_t>(std::stoi(argv[++i]));
+    else if (a == "--self-test-seconds" && i + 1 < argc) self_test_secs = parse_int_arg(argv[++i], self_test_secs);
+    else if (a == "--metrics" && i + 1 < argc) metrics_port = static_cast<uint16_t>(parse_int_arg(argv[++i], metrics_port));
     else if (a == "--log" && i + 1 < argc) log_dir = argv[++i];
-    else if (a == "--log-interval-ms" && i + 1 < argc) log_interval_ms = std::stoi(argv[++i]);
+    else if (a == "--log-interval-ms" && i + 1 < argc) log_interval_ms = parse_int_arg(argv[++i], log_interval_ms);
     else if (a == "--headless") headless = true;
     else if (a == "--trace" && i + 1 < argc) trace_pattern = argv[++i];
     else if (a == "--trace-out" && i + 1 < argc) trace_out = argv[++i];
@@ -226,6 +251,27 @@ int main(int argc, char** argv) {
     if (json_once) {
       for (int spins = 0; buffers.seq() < 2 && !g_stop.load() && spins < 4000; ++spins)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      // The warm-up above only guarantees the deltas EXIST, not that they span
+      // a usable window: it fires several process samples a kernel tick apart,
+      // and a cpu_pct diffed across those is quantized noise -- most processes
+      // accrue no jiffy at all and read 0 (so top-K by cpu_pct ranks
+      // arbitrarily and misses the real burners), while an unlucky one catches
+      // a whole jiffy and reads far above 100% per core. Wait for a
+      // steady-loop sample, which only lands a full kProcessInterval later,
+      // then for the publish that carries it. The TUI needs none of this; it
+      // resamples and settles on its own.
+      {
+        const uint64_t warm_samples = producer.process_samples();
+        for (int spins = 0; !g_stop.load() && spins < 8000; ++spins) {
+          if (producer.process_samples() > warm_samples) break;
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const auto settled_seq = buffers.seq();
+        for (int spins = 0; !g_stop.load() && spins < 2000; ++spins) {
+          if (buffers.seq() > settled_seq) break;
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+      }
       montauk::app::MetricsSnapshot ms = montauk::app::read_metrics_snapshot(buffers);
       std::string js = montauk::app::snapshot_to_json(ms);
       montauk_sink_append(&g_out, js.data(), js.size());
@@ -344,13 +390,9 @@ int main(int argc, char** argv) {
         if (renderer.should_quit()) g_stop.store(true);
       }
     }
-    // Concurrency hardening: atomic snapshot capture with sequence validation.
-    uint64_t seq_before, seq_after;
-    do {
-      seq_before = buffers.seq();
-      s_copy = buffers.front();
-      seq_after = buffers.seq();
-    } while (seq_before != seq_after);
+    // Concurrency hardening: copy the front snapshot under the buffer's reuse
+    // guard so the writer cannot recycle it (freeing its vectors) mid-copy.
+    s_copy = buffers.read([](const montauk::model::Snapshot& s) { return s; });
     renderer.render(s_copy);
   }
 #ifdef MONTAUK_HAVE_BPF

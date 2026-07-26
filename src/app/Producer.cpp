@@ -5,8 +5,6 @@
 #include <unistd.h>
 #include <cstdio>
 #include <cstring>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #include "app/GpuAttributor.hpp"
 #include "ui/Config.hpp"
@@ -20,6 +18,34 @@
 using namespace std::chrono;
 
 namespace montauk::app {
+
+namespace {
+// Machine load-regime changepoint: the divergence between a FAST and a SLOW
+// exponential moving average of the aggregate-CPU history montauk already keeps
+// in ChartHistories. ~0 when steady (fast tracks slow), rising and HOLDING while
+// the regime shifts (fast jumps, slow lags), decaying once slow catches the new
+// level. A z-score residual (sublimation_ewma_scores) was tried first and
+// rejected: A sustained shift inflates its own variance and hides itself, and
+// low-variance idle jitter reads as noise -- verified backwards end to end.
+// Read in the Producer thread (the sole writer) just before this frame is pushed
+// (recent() sees the prior frames; the current point is folded in last); zero
+// until eight frames of history have accrued.
+double cpu_changepoint(const montauk::model::Snapshot& s) {
+  auto hist = chart_histories().cpu_total.recent(64);  // oldest->newest fractions
+  if (hist.size() < 8) return 0.0;
+  const double a_fast = 0.40, a_slow = 0.06;
+  double fast = hist[0], slow = hist[0];
+  for (size_t i = 1; i < hist.size(); ++i) {
+    fast += a_fast * (static_cast<double>(hist[i]) - fast);
+    slow += a_slow * (static_cast<double>(hist[i]) - slow);
+  }
+  const double cur = s.cpu.usage_pct / 100.0;          // current, cpu_total's units
+  fast += a_fast * (cur - fast);
+  slow += a_slow * (cur - slow);
+  const double div = fast - slow;
+  return div < 0.0 ? -div : div;
+}
+}  // namespace
 
 Producer::Producer(SnapshotBuffers& buffers) : buffers_(buffers) {
   const auto& pcfg = montauk::ui::config().process;
@@ -120,7 +146,7 @@ void Producer::run(std::stop_token st) {
   const auto net_interval = 1000ms;
   const auto disk_interval = 1000ms;
   const auto fs_interval = 5000ms;
-  const auto proc_interval = 1000ms;
+  const auto proc_interval = Producer::kProcessInterval;
   const auto therm_interval = 2000ms;
   // Provider scrapes hit unix sockets with a bounded timeout; keep them off
   // the fast path
@@ -135,7 +161,7 @@ void Producer::run(std::stop_token st) {
 
   // HOT start warm-up: take fast pre-samples so first publish has real deltas
   {
-    auto& s = buffers_.back();
+    auto& s = buffers_.begin_write();
     // Seed with an initial read for all.
     // Return values intentionally ignored: collectors may fail transiently
     // (e.g., /proc unavailable), but we continue with stale data for resilience.
@@ -148,7 +174,7 @@ void Producer::run(std::stop_token st) {
     (void)disk_.sample(s.disk);
     (void)fs_.sample(s.fs);
     (void)providers_.sample(s.providers);
-    if (proc_) (void)proc_->sample(s.procs);
+    if (proc_) { (void)proc_->sample(s.procs); process_samples_.fetch_add(1, std::memory_order_release); }
     (void)thermal_.sample(s.thermal);
 
     // Time budget for warm-up (~180ms max)
@@ -162,7 +188,7 @@ void Producer::run(std::stop_token st) {
       auto nap = milliseconds(std::min<int>(tick_ms, static_cast<int>(rem.count())));
       if (nap.count() > 0) std::this_thread::sleep_for(nap);
       (void)cpu_.sample(s.cpu);
-      if (proc_) (void)proc_->sample(s.procs);
+      if (proc_) { (void)proc_->sample(s.procs); process_samples_.fetch_add(1, std::memory_order_release); }
     }
 
     // Net + Disk: short spaced reads for non-zero bps/util
@@ -190,6 +216,7 @@ void Producer::run(std::stop_token st) {
       for (auto& it : a) s.alerts.push_back(montauk::model::AlertItem{it.severity, it.message});
     }
     montauk::app::enrich_anomalies(s.procs, anomaly_prev_faults_);
+    s.cpu.changepoint_score = cpu_changepoint(s);  // before push: reads prior frames
     chart_histories().push_snapshot(s);
     buffers_.publish();
   }
@@ -198,7 +225,7 @@ void Producer::run(std::stop_token st) {
   while (!st.stop_requested()) {
     auto now = steady_clock::now();
     bool ran = false;
-    auto& s = buffers_.back();
+    auto& s = buffers_.begin_write();
     if (now >= next_cpu) { (void)cpu_.sample(s.cpu); next_cpu = now + cpu_interval; ran = true; }
     if (now >= next_pmu) { if (pmu_enabled_) { (void)pmu_.sample(s.pmu); ran = true; } next_pmu = now + pmu_interval; }
     if (now >= next_mem) { (void)mem_.sample(s.mem); next_mem = now + mem_interval; ran = true; }
@@ -206,7 +233,7 @@ void Producer::run(std::stop_token st) {
     if (now >= next_net) { (void)net_.sample(s.net); next_net = now + net_interval; ran = true; }
     if (now >= next_disk){ (void)disk_.sample(s.disk); next_disk = now + disk_interval; ran = true; }
     if (now >= next_fs)  { (void)fs_.sample(s.fs);     next_fs  = now + fs_interval; ran = true; }
-    if (now >= next_proc){ if (proc_) (void)proc_->sample(s.procs); next_proc = now + proc_interval; ran = true; }
+    if (now >= next_proc){ if (proc_) { (void)proc_->sample(s.procs); process_samples_.fetch_add(1, std::memory_order_release); } next_proc = now + proc_interval; ran = true; }
     if (now >= next_therm){ (void)thermal_.sample(s.thermal); next_therm = now + therm_interval; ran = true; }
     if (now >= next_prov){ (void)providers_.sample(s.providers); next_prov = now + prov_interval; ran = true; }
     bool time_to_publish = false;
@@ -231,6 +258,7 @@ void Producer::run(std::stop_token st) {
         next_nvml = now + nvml_interval;
       }
       montauk::app::enrich_anomalies(s.procs, anomaly_prev_faults_);
+      s.cpu.changepoint_score = cpu_changepoint(s);  // before push: reads prior frames
       chart_histories().push_snapshot(s);
       buffers_.publish();
     }

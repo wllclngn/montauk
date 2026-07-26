@@ -26,9 +26,9 @@ extern "C" {
 
 // Release version (source-of-truth for the library tag, pkgbuild, tests).
 #define SUBLIMATION_VERSION_MAJOR  3
-#define SUBLIMATION_VERSION_MINOR  0
+#define SUBLIMATION_VERSION_MINOR  1
 #define SUBLIMATION_VERSION_PATCH  0
-#define SUBLIMATION_VERSION_STRING "3.0.0"
+#define SUBLIMATION_VERSION_STRING "3.1.0"
 
 // ABI version. Bumped only when the library ABI breaks; independent from
 // the release version above. Readers should compare this value at runtime
@@ -48,7 +48,6 @@ typedef enum {
     SUB_FEW_UNIQUE   = 3,   // small distinct count, partition-based
     SUB_RANDOM       = 4,   // no exploitable structure
     SUB_PHASED       = 5,   // phase boundary detected (sorted + random)
-    SUB_SPECTRAL     = 6,   // spectral seriation path was used
 } sub_disorder_t;
 
 // Classification profile (the initial level graph)
@@ -220,13 +219,14 @@ SUB_API size_t sublimation_searchsorted_f64(const double   *sorted, size_t n, do
     double *:   sublimation_searchsorted_f64             \
 )(sorted, n, value, side)
 
-// Parallel sort (explicit thread count). i64-only in v1.2.0 -- the IPS4o
-// bucket pool is hard-coded for int64_t. Other types will be added in a
-// later release; for now use the serial `sublimation_<T>` entries.
+// Parallel sort (explicit thread count). Classifies, then routes large random
+// through the work-stealing parallel radix and everything else through the
+// serial adaptive path. The serial `sublimation_<T>` entries auto-parallelize
+// large random the same way, using the hardware thread count.
 SUB_API void sublimation_i64_parallel(int64_t *SUB_RESTRICT arr, size_t n, size_t num_threads);
 
 // Version queries. `sublimation_api_version()` returns SUBLIMATION_API_VERSION
-// (ABI). `sublimation_version()` returns the release string (e.g. "1.2.0").
+// (ABI). `sublimation_version()` returns the release string (e.g. "3.1.0").
 SUB_API int sublimation_api_version(void) SUB_CONST;
 SUB_API const char *sublimation_version(void) SUB_CONST;
 

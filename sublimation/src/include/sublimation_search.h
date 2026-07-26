@@ -1,6 +1,12 @@
 // sublimation_search.h -- structural search: locate where a disorder pattern
 // occurs in a numeric stream.
 //
+// Name note: this header is the STRUCTURAL search over numeric streams
+// (sublimation_profile / sublimation_locate). It is distinct from the TEXT
+// matcher type `sublimation_search`, which lives in sublimation_text.h -- same
+// word, different lane (numbers vs bytes). The two never mix; a full rename to
+// retire the overlap is deferred as its own breaking-change pass.
+//
 // This is the third primitive alongside the sort (ordering) and the classifier
 // (what an input *is*). Where grep finds the positions of a TEXT pattern,
 // sublimation_locate finds the positions of a STRUCTURAL pattern: it slides the
@@ -42,10 +48,19 @@ typedef struct {
 // arr[0..n), classify each, and write the per-window profile to out[] (caller-
 // allocated, capacity out_cap). Returns the number of windows written (the scan
 // stops early if out_cap is reached). window>n, window==0, or stride==0 -> 0.
-SUB_API size_t sublimation_profile_u64(const uint64_t *arr, size_t n,
+SUB_API size_t sublimation_profile_i32(const int32_t *arr, size_t n,
                                        size_t window, size_t stride,
                                        sub_match_t *out, size_t out_cap);
 SUB_API size_t sublimation_profile_i64(const int64_t *arr, size_t n,
+                                       size_t window, size_t stride,
+                                       sub_match_t *out, size_t out_cap);
+SUB_API size_t sublimation_profile_u32(const uint32_t *arr, size_t n,
+                                       size_t window, size_t stride,
+                                       sub_match_t *out, size_t out_cap);
+SUB_API size_t sublimation_profile_u64(const uint64_t *arr, size_t n,
+                                       size_t window, size_t stride,
+                                       sub_match_t *out, size_t out_cap);
+SUB_API size_t sublimation_profile_f32(const float *arr, size_t n,
                                        size_t window, size_t stride,
                                        sub_match_t *out, size_t out_cap);
 SUB_API size_t sublimation_profile_f64(const double *arr, size_t n,
@@ -54,11 +69,23 @@ SUB_API size_t sublimation_profile_f64(const double *arr, size_t n,
 
 // The grep-analog. Same scan, but only the windows whose disorder class equals
 // `target` are written to out[]. Returns the match count.
-SUB_API size_t sublimation_locate_u64(const uint64_t *arr, size_t n,
+SUB_API size_t sublimation_locate_i32(const int32_t *arr, size_t n,
                                       size_t window, size_t stride,
                                       sub_disorder_t target,
                                       sub_match_t *out, size_t out_cap);
 SUB_API size_t sublimation_locate_i64(const int64_t *arr, size_t n,
+                                      size_t window, size_t stride,
+                                      sub_disorder_t target,
+                                      sub_match_t *out, size_t out_cap);
+SUB_API size_t sublimation_locate_u32(const uint32_t *arr, size_t n,
+                                      size_t window, size_t stride,
+                                      sub_disorder_t target,
+                                      sub_match_t *out, size_t out_cap);
+SUB_API size_t sublimation_locate_u64(const uint64_t *arr, size_t n,
+                                      size_t window, size_t stride,
+                                      sub_disorder_t target,
+                                      sub_match_t *out, size_t out_cap);
+SUB_API size_t sublimation_locate_f32(const float *arr, size_t n,
                                       size_t window, size_t stride,
                                       sub_disorder_t target,
                                       sub_match_t *out, size_t out_cap);

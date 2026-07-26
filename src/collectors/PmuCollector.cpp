@@ -339,6 +339,12 @@ void PmuCollector::close_all() {
 }
 
 uint64_t PmuCollector::read_delta(Counter& c) {
+  // Reads the raw counter value only (default perf read format). It does NOT
+  // request PERF_FORMAT_TOTAL_TIME_ENABLED/RUNNING, so when more events are
+  // programmed than the hardware has counters and the kernel multiplexes them,
+  // the value is the un-rescaled running count and under-reports by
+  // time_running/time_enabled. Correcting it means the scaled read format plus a
+  // per-counter rescale; deferred until a consumer needs multiplex-accurate PMU.
   if (c.fd < 0) return 0;
   uint64_t val = 0;
   ssize_t n = ::read(c.fd, &val, sizeof(val));

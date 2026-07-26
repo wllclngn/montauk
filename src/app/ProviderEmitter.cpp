@@ -88,7 +88,9 @@ void ProviderEmitter::serve(std::stop_token st) {
     }
     size_t off = 0;
     while (off < data.size()) {
-      ssize_t n = ::write(conn, data.data() + off, data.size() - off);
+      // send(MSG_NOSIGNAL), not write(): a reader that closed early would
+      // otherwise raise SIGPIPE and kill the whole process.
+      ssize_t n = ::send(conn, data.data() + off, data.size() - off, MSG_NOSIGNAL);
       if (n <= 0) {
         if (n < 0 && errno == EINTR) continue;
         break;

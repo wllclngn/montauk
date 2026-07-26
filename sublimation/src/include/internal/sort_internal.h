@@ -10,12 +10,19 @@
 
 #include "c23_compat.h"
 #include "../sublimation.h"
-#include "spectral.h"
+#include "spectral_kernel.h"
 
 // Thresholds (analogues of flow solver constants)
 SUB_CONSTEXPR size_t SUB_SMALL_THRESHOLD     = 32;   // base case: insertion sort / SIMD network
 SUB_CONSTEXPR size_t SUB_MEDIUM_THRESHOLD    = 128;   // switch from simple to block partition
-SUB_CONSTEXPR size_t SUB_PARALLEL_THRESHOLD  = 250000; // spawn parallel workers (below this, serial PCF/adaptive is faster than thread spin-up)
+SUB_CONSTEXPR size_t SUB_PARALLEL_THRESHOLD  = 250000; // structured pole: spawn parallel workers (below this the serial merge/adaptive path beats thread spin-up)
+// Random pole: the serial LSD radix is cache-resident and fast, so the parallel
+// American Flag radix only amortizes its overhead well above SUB_PARALLEL_
+// THRESHOLD. Measured on the Ryzen 5 3600 (random int64): the serial radix wins
+// through ~1.3M, the parallel radix pulls clear only past ~1.5M. So the radix
+// pole engages parallelism later than the merge pole -- one shared threshold
+// pessimizes 300K-1.5M random inputs, paying thread spin-up for a loss.
+SUB_CONSTEXPR size_t SUB_RADIX_PARALLEL_MIN  = 1500000;
 SUB_CONSTEXPR size_t SUB_CLASSIFY_SAMPLE     = 128;   // sample size for inversion estimation
 SUB_CONSTEXPR size_t SUB_PATIENCE_THRESHOLD  = 256;   // minimum n for patience sorting in classify
 SUB_CONSTEXPR size_t SUB_TABLEAU_MAX_N      = 10000;  // max n for full Young tableau computation
@@ -52,6 +59,18 @@ SUB_CONSTEXPR float  SUB_OSC_ENERGY_RELEASE = 0.25f;      // 2 * PARK
 #define SUB_CONCAT2(a, b) a ## b
 #define SUB_CONCAT(a, b) SUB_CONCAT2(a, b)
 #define SUB_TYPED(name) SUB_CONCAT(name, SUB_SUFFIX)
+
+// glibc-style 48-bit LCG. One deterministic index-stream primitive for the
+// samplers that need cheap uniform indices in [0, n): the classifier's inversion
+// sample and the spectral comparison-graph builder both seeded it verbatim
+// before this. Seed as `0x5DEECE66D ^ <source>` at the call site.
+SUB_INLINE uint64_t sub_lcg_next(uint64_t *s) {
+    *s = *s * 6364136223846793005ull + 1442695040888963407ull;
+    return *s;
+}
+SUB_INLINE size_t sub_lcg_index(uint64_t *s, size_t n) {
+    return (size_t)(sub_lcg_next(s) >> 33) % n;
+}
 
 // Damped-oscillator regime detector. One primitive serves both detection
 // sites (partition-quality degradation in the sort, phase boundaries in the
@@ -100,48 +119,20 @@ SUB_INLINE bool sub_osc_detect(sub_osc_t *o, float sample) {
 
 // Adaptive state tracked across recursion levels
 typedef struct sub_adaptive_tag {
-    sub_osc_t partition_osc;       // partition-badness regime detector
     size_t levels_built;           // total level constructions
     size_t gap_prunes;             // empty-region prunes
     size_t rescans;                // full reclassification rescans
     int    depth;                  // current recursion depth
     uint64_t comparisons;
     uint64_t swaps;
-    bool     spectral_attempted;   // has spectral path been tried this sort?
-    float    last_spectral_gap;    // last observed spectral gap ratio
-    // equal element tracking
-    int64_t  last_pivot;           // pivot value from previous partition
-    bool     has_last_pivot;       // whether last_pivot is valid
 } sub_adaptive_t;
 
 // Initialize adaptive state
 SUB_INLINE void sub_adaptive_init(sub_adaptive_t *a, size_t n) {
     memset(a, 0, sizeof(*a));
-    // Seed the badness level at the balanced midpoint rather than priming
-    // from the first partition, so one early bad pivot reads as
-    // displacement, not as the baseline.
-    a->partition_osc.position = 0.5f;
-    a->partition_osc.primed = true;
     (void)n;
 }
 
-// AVX2 random-data sort path (i64 only).
-//
-// sub_random_sort_i64 is the production SUB_RANDOM entry point: a
-// linear-PCF top-level bucketer (Sato-Matsui 2024, static B per workload)
-// feeding AVX2 quicksort with sort-network leaves.
-// sub_avx2_random_quicksort_i64 is the underlying engine, exported because
-// sub_random_sort_i64 also calls it to sort its training sample.
-#ifdef __AVX2__
-void sub_random_sort_i64(int64_t *arr, size_t n);
-void sub_avx2_random_quicksort_i64(int64_t *arr, size_t n);
-
-// BMI2 PEXT-based in-place block partition (Edelkamp-Weiss + AVX2/PEXT).
-// Partitions arr[lo..hi) around `pivot`. Returns p such that
-// arr[lo..p) < pivot and arr[p..hi) >= pivot. Output is a permutation of input.
-// Exposed for standalone unit testing in tests/test_pext_partition.c.
-size_t sub_block_partition_pext_i64(int64_t *arr, size_t lo, size_t hi, int64_t pivot);
-#endif
 
 // Internal sort functions -- all types
 // Names follow template pattern: base_name + type suffix
@@ -182,5 +173,14 @@ void sub_spectral_merge_u32(uint32_t *arr, size_t n, uint64_t *comparisons);
 void sub_spectral_merge_u64(uint64_t *arr, size_t n, uint64_t *comparisons);
 void sub_spectral_merge_f32(float *arr, size_t n, uint64_t *comparisons);
 void sub_spectral_merge_f64(double *arr, size_t n, uint64_t *comparisons);
+
+// Parallel structured sort (the structured pole) -- fork chunks on the
+// work-stealing engine, close with the R_eff spectral merge. All types.
+void sub_smerge_par_i32(int32_t  *restrict arr, size_t n, size_t workers);
+void sub_smerge_par_i64(int64_t  *restrict arr, size_t n, size_t workers);
+void sub_smerge_par_u32(uint32_t *restrict arr, size_t n, size_t workers);
+void sub_smerge_par_u64(uint64_t *restrict arr, size_t n, size_t workers);
+void sub_smerge_par_f32(float    *restrict arr, size_t n, size_t workers);
+void sub_smerge_par_f64(double   *restrict arr, size_t n, size_t workers);
 
 #endif // SUB_SORT_INTERNAL_H

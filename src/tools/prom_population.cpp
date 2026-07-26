@@ -778,7 +778,6 @@ const char* traj_class_name(sub_disorder_t d) {
     case SUB_NEARLY_SORTED: return "nearly-sorted";
     case SUB_FEW_UNIQUE: return "few-unique";
     case SUB_PHASED: return "phased";
-    case SUB_SPECTRAL: return "spectral";
     case SUB_RANDOM: default: return "random";
   }
 }

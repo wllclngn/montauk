@@ -151,6 +151,13 @@ inline montauk::app::MetricsSnapshot make_fixture_snapshot() {
     p1.gpu_mem_kb = 54984;
   }
 
+  // Anomaly feature matrix over the fused population, exercising the JSON-only
+  // anomaly_features block (columns: cpu%, rss, gpu%, fault delta, threads).
+  s.anomaly_features = {
+    {805, 1.5, 45548.0, 0.0, 0.0, 1.0},
+    {939, 0.5, 267992.0, 9.0, 0.0, 1.0},
+  };
+
   return s;
 }
 

@@ -128,11 +128,11 @@ int main(void) {
         check(sorted_ok, "stats: reversed input sorted");
     }
 
-    // U64 MID-SORT FEW-UNIQUE GATE: 50% duplicates of one hot value forced
-    // down the partition path (SUB_SPECTRAL routes push() without the AVX2
-    // random shortcut). Without the sign-agnostic last-pivot gate the
-    // duplicate block degrades quadratically (>= 25M comparisons at this n);
-    // with it the three-way collapse keeps the count orders below that.
+    // U64 DUPLICATE-HEAVY GATE: 50% duplicates of one hot value above INT64_MAX,
+    // forced through the random arm. Radix is distribution-agnostic and
+    // comparison-free, so the duplicate block that once risked a quadratic
+    // partition now sorts in bounded, near-linear work -- the check both keeps
+    // correctness and holds the comparison estimate well under the old ceiling.
     {
         enum { GN = 20000 };
         const uint64_t HOT = 0x9000000000001234ull;  // above INT64_MAX: cast must stay bit-exact
@@ -142,7 +142,7 @@ int main(void) {
 
         sub_profile_t forced = {0};
         forced.n = GN;
-        forced.disorder = SUB_SPECTRAL;   // routes to push(), the gated path
+        forced.disorder = SUB_RANDOM;   // duplicate-heavy random -> the radix arm
 
         sub_adaptive_t state;
         sub_adaptive_init(&state, GN);
@@ -164,7 +164,7 @@ int main(void) {
         sub_adaptive_init(&state2, GN);
         sub_profile_t forced2 = {0};
         forced2.n = GN;
-        forced2.disorder = SUB_SPECTRAL;
+        forced2.disorder = SUB_RANDOM;
         sub_sort_internal_i64(a64, GN, &state2, &forced2);
         check(state2.comparisons < 5000000ull,
               "i64 gate baseline: comparisons bounded");

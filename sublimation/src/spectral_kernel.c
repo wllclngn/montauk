@@ -1,25 +1,36 @@
-// spectral.c -- sublimation spectral lane: the graph-spectral core.
+// spectral_kernel.c -- the shared spectral kernel.
 //
-// Ported from the proven research prototype (tests/research/learn/
-// spectral_research.c), whose oracle (tests/test_spectral.py) proves the
-// eigenvalues, the reconstruction, the effective resistance and the Fiedler
-// value against numpy, and the clustering behaviorally.
+// One home for the graph-spectral math every caller needs: the cyclic-Jacobi
+// eigensolver, the graph Laplacian, effective resistance, the Fiedler vector
+// and spectral clustering, over double matrices. Callers -- the learn lane
+// (montauk_similar, clustering), the randomness battery (comparison-Laplacian
+// spectral-flatness lens) -- all link this one implementation; the int64
+// front-end that builds a comparison Laplacian from an array lives in
+// spectral_typed.c and feeds this core. (The sort's spectral merge uses the
+// closed-form path R_eff directly, not this core.)
+//
+// The double core is the research-proven code (tests/test_spectral.py gates the
+// eigenvalues, reconstruction, effective resistance and Fiedler value against
+// numpy to 1e-8, the clustering behaviorally). The cyclic-sweep Jacobi is the
+// single eigensolver -- the sort's old classical-pivot variant is retired.
+#include "internal/spectral_kernel.h"
 #include "sublimation_spectral.h"
+#include "sublimation.h"          // sublimation_select_f64 for the knn scale
 
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
-static inline uint64_t sm_next(uint64_t *s) {
+uint64_t sub_sm_next(uint64_t *s) {
     uint64_t z = (*s += 0x9E3779B97F4A7C15ULL);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
     return z ^ (z >> 31);
 }
 
-// Cyclic symmetric Jacobi. A (n*n, destroyed) -> eval[n], V (n*n eigenvectors as
-// columns), sorted ascending by eigenvalue.
-static void jacobi(double *A, size_t n, double *eval, double *V) {
+// Cyclic symmetric Jacobi. A (n*n, destroyed) -> eval[n], V (n*n eigenvectors
+// as columns), sorted ascending by eigenvalue.
+void sub_spectral_jacobi(double *A, size_t n, double *eval, double *V) {
     for (size_t i = 0; i < n * n; i++) V[i] = 0.0;
     for (size_t i = 0; i < n; i++) V[i * n + i] = 1.0;
     for (int sweep = 0; sweep < 100; sweep++) {
@@ -64,7 +75,7 @@ static void jacobi(double *A, size_t n, double *eval, double *V) {
 }
 
 // L = D - W into L (n*n), from a symmetric non-negative adjacency W.
-static void laplacian(const double *W, size_t n, double *L) {
+void sub_spectral_laplacian(const double *W, size_t n, double *L) {
     for (size_t i = 0; i < n; i++) {
         double deg = 0.0;
         for (size_t j = 0; j < n; j++) if (j != i) deg += W[i * n + j];
@@ -73,13 +84,75 @@ static void laplacian(const double *W, size_t n, double *L) {
     }
 }
 
+// Public face of the Laplacian builder (see sublimation_spectral.h).
+void sublimation_laplacian(const double *W, size_t n, double *L) {
+    sub_spectral_laplacian(W, n, L);
+}
+
 int sublimation_eigh(const double *A, size_t n, double *eval, double *V) {
     if (n == 0) return 1;
     double *work = malloc(n * n * sizeof(double));
     if (!work) return 1;
     memcpy(work, A, n * n * sizeof(double));
-    jacobi(work, n, eval, V);
+    sub_spectral_jacobi(work, n, eval, V);
     free(work);
+    return 0;
+}
+
+int sublimation_self_tuning_affinity(const double *x, size_t n, size_t d,
+                                     unsigned knn, double *W) {
+    if (n == 0 || d == 0) return 1;
+    double *z = malloc(n * d * sizeof(double));
+    double *d2 = malloc(n * n * sizeof(double));
+    double *sigma = malloc(n * sizeof(double));
+    double *row = malloc(n * sizeof(double));
+    if (!z || !d2 || !sigma || !row) { free(z); free(d2); free(sigma); free(row); return 1; }
+    memcpy(z, x, n * d * sizeof(double));
+
+    // Standardize each feature column (z-score) so no raw scale dominates.
+    for (size_t j = 0; j < d; j++) {
+        double mean = 0.0;
+        for (size_t i = 0; i < n; i++) mean += z[i * d + j];
+        mean /= (double)n;
+        double var = 0.0;
+        for (size_t i = 0; i < n; i++) { double e = z[i * d + j] - mean; var += e * e; }
+        double sd = sqrt(var / (double)n);
+        for (size_t i = 0; i < n; i++)
+            z[i * d + j] = sd > 0.0 ? (z[i * d + j] - mean) / sd : 0.0;
+    }
+
+    // Pairwise squared distances over the standardized rows.
+    for (size_t i = 0; i < n; i++) {
+        d2[i * n + i] = 0.0;
+        for (size_t k = i + 1; k < n; k++) {
+            double s = 0.0;
+            for (size_t j = 0; j < d; j++) { double e = z[i * d + j] - z[k * d + j]; s += e * e; }
+            d2[i * n + k] = d2[k * n + i] = s;
+        }
+    }
+
+    // Local bandwidth per node: distance to its knn-th nearest neighbor. Large
+    // for an outlier, so the outlier's nearest neighbors keep real affinity
+    // rather than every edge collapsing to ~0 under one global sigma.
+    unsigned kk = knn == 0 ? 1 : knn;
+    if ((size_t)kk > n - 1) kk = (unsigned)(n - 1);
+    for (size_t i = 0; i < n; i++) {
+        size_t m = 0;
+        for (size_t k = 0; k < n; k++) if (k != i) row[m++] = d2[i * n + k];
+        double kth = m ? sublimation_select_f64(row, m, (size_t)kk - 1) : 0.0;
+        double sig = sqrt(kth);
+        sigma[i] = sig > 0.0 ? sig : 1.0;   // guard an all-identical neighborhood
+    }
+
+    // Local-scaled affinity, zero diagonal, with a small connectivity floor.
+    for (size_t i = 0; i < n; i++) {
+        W[i * n + i] = 0.0;
+        for (size_t k = 0; k < n; k++) {
+            if (i == k) continue;
+            W[i * n + k] = exp(-d2[i * n + k] / (sigma[i] * sigma[k])) + 1e-3;
+        }
+    }
+    free(z); free(d2); free(sigma); free(row);
     return 0;
 }
 
@@ -90,8 +163,8 @@ int sublimation_effective_resistance(const double *W, size_t n, double *reff) {
     double *V = malloc(n * n * sizeof(double));
     double *Lp = calloc(n * n, sizeof(double));
     if (!L || !eval || !V || !Lp) { free(L); free(eval); free(V); free(Lp); return 1; }
-    laplacian(W, n, L);
-    jacobi(L, n, eval, V);
+    sub_spectral_laplacian(W, n, L);
+    sub_spectral_jacobi(L, n, eval, V);
     double emax = eval[n - 1] > 0.0 ? eval[n - 1] : 1.0;
     double tol = emax * (double)n * 1e-12;          // drop the near-zero null mode
     for (size_t k = 0; k < n; k++) {
@@ -115,8 +188,8 @@ int sublimation_fiedler(const double *W, size_t n, double *lambda2,
     double *eval = malloc(n * sizeof(double));
     double *V = malloc(n * n * sizeof(double));
     if (!L || !eval || !V) { free(L); free(eval); free(V); return 1; }
-    laplacian(W, n, L);
-    jacobi(L, n, eval, V);
+    sub_spectral_laplacian(W, n, L);
+    sub_spectral_jacobi(L, n, eval, V);
     if (lambda2) *lambda2 = n > 1 ? eval[1] : 0.0;
     if (partitions) {
         size_t gap_at = 1;
@@ -136,7 +209,7 @@ static void kmeans(const double *U, size_t n, size_t K, size_t d,
     double *cent = malloc(K * d * sizeof(double));
     double *dist = malloc(n * sizeof(double));
     uint64_t rng = seed;
-    size_t first = (size_t)(sm_next(&rng) % (uint64_t)n);
+    size_t first = (size_t)(sub_sm_next(&rng) % (uint64_t)n);
     memcpy(cent, U + first * d, d * sizeof(double));
     for (size_t c = 1; c < K; c++) {                // k-means++ seeding
         double tot = 0.0;
@@ -151,7 +224,7 @@ static void kmeans(const double *U, size_t n, size_t K, size_t d,
             }
             dist[i] = best; tot += best;
         }
-        double target = (double)(sm_next(&rng) >> 11) * (1.0 / 9007199254740992.0) * tot;
+        double target = (double)(sub_sm_next(&rng) >> 11) * (1.0 / 9007199254740992.0) * tot;
         size_t pick = n - 1;
         double acc = 0.0;
         for (size_t i = 0; i < n; i++) { acc += dist[i]; if (acc >= target) { pick = i; break; } }
@@ -204,7 +277,7 @@ int sublimation_spectral_cluster(const double *W, size_t n, size_t k,
     for (size_t i = 0; i < n; i++)                  // normalized Laplacian I - D^-1/2 W D^-1/2
         for (size_t j = 0; j < n; j++)
             Ls[i * n + j] = (i == j ? 1.0 : 0.0) - deg[i] * W[i * n + j] * deg[j];
-    jacobi(Ls, n, eval, V);
+    sub_spectral_jacobi(Ls, n, eval, V);
     for (size_t i = 0; i < n; i++) {                // k smallest eigenvectors, row-normalized
         double norm = 0.0;
         for (size_t c = 0; c < k; c++) { double v = V[i * n + c]; U[i * k + c] = v; norm += v * v; }

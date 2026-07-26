@@ -17,11 +17,12 @@ static void SUB_TYPED(reverse)(SUB_TYPE *arr, size_t n) {
 #define COUNTING_SORT_MAX_K 64
 #endif
 
-// AC-3 constraint propagation: O(1) bucket resolution
+// COMPARISON RANK: branchless bucket resolution, O(k) with k <= 8
 //
-// For k <= 8: branchless comparison chain.
-// Returns the sorted rank of val among the k distinct values.
-// Compiles to CMOVcc/ADD — zero branch mispredictions, pipeline never stalls.
+// Returns the sorted rank of val among the k distinct values -- how many are
+// strictly less, which is its bucket index. A flat comparison chain, no
+// constraint solver: compiles to CMOVcc/ADD, zero branch mispredictions, the
+// pipeline never stalls.
 static size_t SUB_TYPED(find_bucket_small)(SUB_TYPE val, const SUB_TYPE *uniq, size_t k) {
     size_t idx = 0;
     for (size_t j = 0; j < k; j++) {
@@ -138,7 +139,17 @@ static bool SUB_TYPED(counting_sort_few_unique)(SUB_TYPE *arr, size_t n,
     // Phase 2: Histogram (O(1) per element)
     memset(histogram, 0, k * sizeof(size_t));
 
-    if (k <= 8) {
+    // find_bucket_small ranks by value comparison (`>`), which disagrees with
+    // discovery's bitwise key_eq for NaN and signed zero: a single NaN then
+    // mis-buckets even finite values, silently corrupting the multiset. The hash
+    // bucket is bitwise-consistent with discovery, so float types always take it.
+    // Integers (value-compare == bitwise) keep the faster branchless path.
+#ifdef SUB_TYPE_IS_FLOAT
+    const bool use_small = false;
+#else
+    const bool use_small = (k <= 8);
+#endif
+    if (use_small) {
         // Branchless comparison chain: zero branch mispredictions.
         // For k=8, that's 8 comparisons per element compiled to ADD —
         // the CPU pipeline never stalls.
@@ -273,302 +284,7 @@ static void SUB_TYPED(binary_isort)(SUB_TYPE *arr, size_t n) {
     }
 }
 
-// PARTITION PRIMITIVES
-static size_t SUB_TYPED(median_of_three)(SUB_TYPE *arr, size_t a, size_t b, size_t c,
-                                          uint64_t *comparisons) {
-    *comparisons += 3;
-    if (arr[a] > arr[b]) SUB_SWAP(SUB_TYPE, arr[a], arr[b]);
-    if (arr[b] > arr[c]) SUB_SWAP(SUB_TYPE, arr[b], arr[c]);
-    if (arr[a] > arr[b]) SUB_SWAP(SUB_TYPE, arr[a], arr[b]);
-    return b;
-}
 
-static size_t SUB_TYPED(choose_pivot)(SUB_TYPE *arr, size_t lo, size_t hi,
-                                       uint64_t *comparisons) {
-    size_t n = hi - lo + 1;
-    size_t mid = lo + n / 2;
-
-    if (n <= SUB_MEDIUM_THRESHOLD) {
-        return SUB_TYPED(median_of_three)(arr, lo, mid, hi, comparisons);
-    }
-
-    size_t step = n / 8;
-    SUB_TYPED(median_of_three)(arr, lo, lo + step, lo + 2 * step, comparisons);
-    SUB_TYPED(median_of_three)(arr, mid - step, mid, mid + step, comparisons);
-    SUB_TYPED(median_of_three)(arr, hi - 2 * step, hi - step, hi, comparisons);
-    return SUB_TYPED(median_of_three)(arr, lo + step, mid, hi - step, comparisons);
-}
-
-// LOMCYC PARTITION (cyclic permutation Lomuto, Voultapher / Orson Peters)
-//
-// Maintains a "gap" — one array slot whose contents are logically held in a
-// register. Each iteration does 2 stores: one fills the gap (arr[gap_pos] =
-// arr[left]), one places the current element (arr[left] = arr[right]). The
-// gap then moves to the position we just read.
-//
-// The key win over standard branchless Lomuto: the second store (gap fill)
-// depends on the PREVIOUS iteration's read pointer (sequential), NOT on the
-// write pointer. The serial dependency chain on num_lt is broken, allowing
-// the CPU to pipeline iterations.
-//
-// ipnsort uses this. LLVM libc qsort adopted it for ~2.5x speedup.
-static size_t SUB_TYPED(partition_block)(SUB_TYPE *arr, size_t lo, size_t hi,
-                                          uint64_t *comparisons, uint64_t *swaps) {
-    size_t n = hi - lo + 1;
-    if (n < 2) return lo;
-
-    size_t pivot_idx = SUB_TYPED(choose_pivot)(arr, lo, hi, comparisons);
-    SUB_TYPE pivot = arr[pivot_idx];
-
-    // Move pivot to end
-    SUB_SWAP(SUB_TYPE, arr[pivot_idx], arr[hi]);
-    (*swaps)++;
-
-    // Lomcyc over arr[lo..hi-1]. Lift arr[lo] as the initial gap value.
-    // Comparison counter is batched at the end to avoid memory dep in hot loop.
-    SUB_TYPE gap_val = arr[lo];
-    size_t gap_pos = lo;
-    size_t num_lt = lo;
-    size_t loop_count = 0;
-
-    for (size_t right = lo + 1; right < hi; right++) {
-        SUB_TYPE val = arr[right];
-        size_t left = num_lt;
-        size_t is_lt = (size_t)(val < pivot);
-
-        arr[gap_pos] = arr[left];   // fill gap with arr[left] (no dep on num_lt chain)
-        arr[left] = val;             // place current element
-        gap_pos = right;             // gap follows sequential read pointer
-        num_lt += is_lt;             // commit
-        loop_count++;
-    }
-    *comparisons += loop_count + 1;
-
-    // Finalize: place gap_val (the original arr[lo]) based on its pivot comparison.
-    if (gap_val < pivot) {
-        arr[gap_pos] = arr[num_lt];
-        arr[num_lt] = gap_val;
-        num_lt++;
-    } else {
-        arr[gap_pos] = gap_val;
-    }
-
-    // Place pivot at its final position
-    SUB_SWAP(SUB_TYPE, arr[num_lt], arr[hi]);
-    (*swaps)++;
-
-    return num_lt;
-}
-
-// THREE-WAY PARTITION
-static void SUB_TYPED(partition_three_way)(SUB_TYPE *arr, size_t lo, size_t hi,
-                                            size_t *out_lt, size_t *out_gt,
-                                            uint64_t *comparisons, uint64_t *swaps) {
-    size_t pivot_idx = SUB_TYPED(choose_pivot)(arr, lo, hi, comparisons);
-    SUB_TYPE pivot = arr[pivot_idx];
-
-    size_t lt = lo;
-    size_t i = lo;
-    size_t gt = hi;
-
-    while (i <= gt) {
-        (*comparisons)++;
-        if (arr[i] < pivot) {
-            SUB_SWAP(SUB_TYPE, arr[lt], arr[i]);
-            (*swaps)++;
-            lt++;
-            i++;
-        } else if (arr[i] > pivot) {
-            SUB_SWAP(SUB_TYPE, arr[i], arr[gt]);
-            (*swaps)++;
-            if (gt == 0) break;
-            gt--;
-        } else {
-            i++;
-        }
-    }
-
-    *out_lt = lt;
-    *out_gt = gt;
-}
-
-// DFS FRAME
-typedef struct {
-    size_t        lo;
-    size_t        hi;
-    sub_disorder_t disorder;
-} SUB_TYPED(sub_dfs_frame_t);
-
-// PARTITION + ADAPTIVE MONITOR
-static size_t SUB_TYPED(partition_one_level)(SUB_TYPE *arr, size_t lo, size_t hi,
-                                              sub_adaptive_t *state, sub_disorder_t *disorder,
-                                              size_t *out_lt, size_t *out_gt) {
-    size_t n = hi - lo + 1;
-
-    // EQUAL ELEMENT DETECTION
-    // Sign-agnostic equality: u64 shares the gate via a bit-exact cast into
-    // the int64_t last_pivot slot. 32-bit and float types stay out: the gate
-    // only pays off where the mid-sort duplicate collapse is the production
-    // path (the 64-bit types montauk sorts run on), and floats cannot round-
-    // trip through the int64_t slot without bit-punning NaN/-0.0 semantics.
-#if defined(SUB_TYPE_IS_I64) || defined(SUB_TYPE_IS_U64)
-    if (*disorder != SUB_FEW_UNIQUE && state->has_last_pivot) {
-        size_t mid = lo + n / 2;
-        if ((int64_t)arr[mid] == state->last_pivot) {
-            *disorder = SUB_FEW_UNIQUE;
-        }
-    }
-#endif
-
-    if (*disorder == SUB_FEW_UNIQUE) {
-        SUB_TYPED(partition_three_way)(arr, lo, hi, out_lt, out_gt,
-                                       &state->comparisons, &state->swaps);
-        state->levels_built++;
-        if (*out_lt > lo + 1) state->gap_prunes++;
-        return SIZE_MAX;
-    }
-
-    size_t pivot_pos = SUB_TYPED(partition_block)(arr, lo, hi,
-                                                   &state->comparisons, &state->swaps);
-    state->levels_built++;
-
-#if defined(SUB_TYPE_IS_I64) || defined(SUB_TYPE_IS_U64)
-    state->last_pivot = (int64_t)arr[pivot_pos];
-    state->has_last_pivot = true;
-#endif
-
-    float quality = (float)(pivot_pos - lo) / (float)n;
-    if (quality > 0.5f) quality = 1.0f - quality;
-    quality *= 2.0f;
-    // The oscillator tracks partition BADNESS (1 - quality): a sustained run
-    // of pathological pivots holds the displacement above the dead band and
-    // pumps the energy reservoir past release. The EWMA+CUSUM pair this
-    // replaced accumulated quality rising above a depressed baseline, i.e.
-    // it fired on the recovery AFTER a bad stretch; the oscillator fires
-    // DURING it, while the spectral fallback can still help.
-    bool degraded = sub_osc_detect(&state->partition_osc, 1.0f - quality);
-
-    if (sub_unlikely(degraded)) {
-        state->rescans++;
-
-        // spectral fallback (only for i64 currently)
-#ifdef SUB_TYPE_IS_I64
-        if (!state->spectral_attempted
-            && n >= SUB_SPECTRAL_MIN_N && n <= SUB_SPECTRAL_MAX_N) {
-            sub_spectral_ws_t *ws = sub_spectral_ws_alloc(n);
-            if (ws) {
-                sub_spectral_result_t sr = sub_spectral_sort_i64(
-                    arr + lo, n, ws, state);
-                sub_spectral_ws_free(ws);
-                state->spectral_attempted = true;
-                if (sr.gap_sufficient && sr.converged) {
-                    return pivot_pos;
-                }
-            }
-        }
-#endif
-    }
-
-    return pivot_pos;
-}
-
-// RECURSIVE DFS
-static void SUB_TYPED(push_recursive)(SUB_TYPE *arr, size_t lo, size_t hi,
-                                       sub_adaptive_t *state, sub_disorder_t disorder,
-                                       int depth) {
-    size_t n = hi - lo + 1;
-
-    if (n <= SUB_SMALL_THRESHOLD) {
-        SUB_TYPED(sub_small_sort)(arr + lo, n, &state->comparisons, &state->swaps);
-        return;
-    }
-
-    if (sub_unlikely(depth >= SUB_STACK_LIMIT)) {
-        goto SUB_TYPED(iterative);
-    }
-
-    {
-        sub_disorder_t local_disorder = disorder;
-        if (depth > 0 && depth % SUB_RECLASSIFY_INTERVAL == 0 && n > SUB_SMALL_THRESHOLD * 4) {
-            sub_profile_t sub = SUB_TYPED(sub_classify_internal)(arr + lo, n);
-            if (sub.disorder != disorder) {
-                local_disorder = sub.disorder;
-                state->rescans++;
-            }
-        }
-
-        size_t lt, gt;
-        size_t pivot = SUB_TYPED(partition_one_level)(arr, lo, hi, state, &local_disorder, &lt, &gt);
-
-        if (pivot == SIZE_MAX) {
-            if (lt > lo) SUB_TYPED(push_recursive)(arr, lo, lt - 1, state, local_disorder, depth + 1);
-            if (gt < hi) SUB_TYPED(push_recursive)(arr, gt + 1, hi, state, local_disorder, depth + 1);
-        } else {
-            if (pivot > lo + 1) SUB_TYPED(push_recursive)(arr, lo, pivot - 1, state, local_disorder, depth + 1);
-            if (pivot + 1 < hi) SUB_TYPED(push_recursive)(arr, pivot + 1, hi, state, local_disorder, depth + 1);
-        }
-        return;
-    }
-
-SUB_TYPED(iterative):
-    {
-        SUB_CONSTEXPR size_t MAX_FRAMES = 128;
-        SUB_TYPED(sub_dfs_frame_t) stack[128];
-        size_t sp = 0;
-
-        stack[sp++] = (SUB_TYPED(sub_dfs_frame_t)){lo, hi, disorder};
-
-        while (sp > 0) {
-            SUB_TYPED(sub_dfs_frame_t) frame = stack[--sp];
-            size_t fn = frame.hi - frame.lo + 1;
-
-            if (fn <= SUB_SMALL_THRESHOLD) {
-                SUB_TYPED(sub_small_sort)(arr + frame.lo, fn,
-                                          &state->comparisons, &state->swaps);
-                continue;
-            }
-
-            size_t lt, gt;
-            sub_disorder_t fd = frame.disorder;
-            size_t pivot = SUB_TYPED(partition_one_level)(arr, frame.lo, frame.hi,
-                                                           state, &fd, &lt, &gt);
-
-            if (pivot == SIZE_MAX) {
-                if (gt < frame.hi && sp < MAX_FRAMES) {
-                    stack[sp++] = (SUB_TYPED(sub_dfs_frame_t)){gt + 1, frame.hi, fd};
-                }
-                if (lt > frame.lo && sp < MAX_FRAMES) {
-                    stack[sp++] = (SUB_TYPED(sub_dfs_frame_t)){frame.lo, lt - 1, fd};
-                }
-            } else {
-                size_t left_n = pivot > frame.lo ? pivot - frame.lo : 0;
-                size_t right_n = pivot < frame.hi ? frame.hi - pivot : 0;
-
-                if (left_n > right_n) {
-                    if (left_n > 1 && sp < MAX_FRAMES) {
-                        stack[sp++] = (SUB_TYPED(sub_dfs_frame_t)){frame.lo, pivot - 1, fd};
-                    }
-                    if (right_n > 1 && sp < MAX_FRAMES) {
-                        stack[sp++] = (SUB_TYPED(sub_dfs_frame_t)){pivot + 1, frame.hi, fd};
-                    }
-                } else {
-                    if (right_n > 1 && sp < MAX_FRAMES) {
-                        stack[sp++] = (SUB_TYPED(sub_dfs_frame_t)){pivot + 1, frame.hi, fd};
-                    }
-                    if (left_n > 1 && sp < MAX_FRAMES) {
-                        stack[sp++] = (SUB_TYPED(sub_dfs_frame_t)){frame.lo, pivot - 1, fd};
-                    }
-                }
-            }
-        }
-    }
-}
-
-// HYBRID DFS SORT
-static void SUB_TYPED(push)(SUB_TYPE *arr, size_t lo, size_t hi,
-                             sub_adaptive_t *state, sub_disorder_t disorder) {
-    SUB_TYPED(push_recursive)(arr, lo, hi, state, disorder, 0);
-}
 
 // PHASED SORT
 static void SUB_TYPED(sort_phased)(SUB_TYPE *arr, size_t n, size_t boundary,
@@ -581,12 +297,14 @@ static void SUB_TYPED(sort_phased)(SUB_TYPE *arr, size_t n, size_t boundary,
             if (arr[i] < arr[i - 1]) { prefix_sorted = false; break; }
         }
         if (!prefix_sorted) {
-            SUB_TYPED(push)(arr, 0, boundary - 1, state, SUB_RANDOM);
+            SUB_TYPED(sub_radix_sort)(arr, boundary);
+            state->comparisons += boundary;
         }
     }
 
     if (suffix_len > 1) {
-        SUB_TYPED(push)(arr, boundary, n - 1, state, SUB_RANDOM);
+        SUB_TYPED(sub_radix_sort)(arr + boundary, suffix_len);
+        state->comparisons += suffix_len;
     }
 
     if (arr[boundary - 1] <= arr[boundary]) return;
@@ -661,6 +379,30 @@ static void SUB_TYPED(fix_rotation)(SUB_TYPE *arr, size_t n, size_t rot, uint64_
     }
 }
 
+// NEARLY_SORTED routing, shared by sub_sort_internal and fast_path_dispatch:
+// rotation -> O(n) fix, few runs -> spectral merge, otherwise a gap-sized
+// insertion vs light sort. cmp/swp receive the work counts (fast_path_dispatch
+// discards them into locals; the full sort folds them into state).
+static void SUB_TYPED(sort_nearly_sorted)(SUB_TYPE *arr, size_t n,
+                                          const sub_profile_t *profile,
+                                          uint64_t *cmp, uint64_t *swp) {
+    if (profile->rotation_point > 0) {
+        SUB_TYPED(fix_rotation)(arr, n, profile->rotation_point, swp);
+        return;
+    }
+    if (profile->run_count <= 16) {
+        SUB_TYPED(sub_spectral_merge)(arr, n, cmp);
+    } else {
+        size_t sqrt_n = 1;
+        while (sqrt_n * sqrt_n < n) sqrt_n++;
+        if (profile->max_descent_gap <= (int64_t)sqrt_n) {
+            SUB_TYPED(binary_isort)(arr, n);
+        } else {
+            SUB_TYPED(light_sort)(arr, n);
+        }
+    }
+}
+
 // INTERNAL SORT ENTRY
 // `profile_in`: the caller's classification of arr (NULL = classify here).
 // Threading the profile through keeps classification at once per public sort
@@ -686,53 +428,25 @@ void SUB_TYPED(sub_sort_internal)(SUB_TYPE *restrict arr, size_t n, sub_adaptive
         return;
 
     case SUB_NEARLY_SORTED:
-        // Rotated sorted array: O(n) fix
-        if (profile.rotation_point > 0) {
-            SUB_TYPED(fix_rotation)(arr, n, profile.rotation_point, &state->swaps);
-            return;
-        }
-        if (profile.run_count <= 16) {
-            SUB_TYPED(sub_spectral_merge)(arr, n, &state->comparisons);
-        } else {
-            size_t sqrt_n = 1;
-            while (sqrt_n * sqrt_n < n) sqrt_n++;
-            if (profile.max_descent_gap <= (int64_t)sqrt_n) {
-                SUB_TYPED(binary_isort)(arr, n);
-            } else {
-                SUB_TYPED(light_sort)(arr, n);
-            }
-        }
+        SUB_TYPED(sort_nearly_sorted)(arr, n, &profile, &state->comparisons, &state->swaps);
         return;
 
     case SUB_FEW_UNIQUE:
         if (SUB_TYPED(counting_sort_few_unique)(arr, n, &state->comparisons, &state->swaps)) {
             return;
         }
-        SUB_TYPED(push)(arr, 0, n - 1, state, profile.disorder);
+        // Too many distinct values for counting: radix (distribution-agnostic)
+        SUB_TYPED(sub_radix_sort)(arr, n);
+        state->comparisons += (uint64_t)n * 4;
         return;
 
     case SUB_RANDOM:
-#if defined(__AVX2__) && defined(SUB_TYPE_IS_I64)
-        // PCF Learned Sort + AVX2 sort-network leaves. See sort.c and
-        // research/RANDOM_EXPERIMENTS.md for the bench history.
-        if (n >= 64) {
-            sub_random_sort_i64(arr, n);
-            // Bookkeeping: estimate comparison count for stats consumers
-            state->comparisons += (uint64_t)n * 4;
-            return;
-        }
-#elif defined(__AVX2__) && defined(SUB_TYPE_IS_U64)
-        if (n >= 64) {
-            sub_random_sort_u64(arr, n);  // i64 PCF pipeline via sign flip
-            state->comparisons += (uint64_t)n * 4;
-            return;
-        }
-#endif
-        SUB_TYPED(push)(arr, 0, n - 1, state, profile.disorder);
-        return;
-
-    case SUB_SPECTRAL:
-        SUB_TYPED(push)(arr, 0, n - 1, state, SUB_RANDOM);
+        // Pure-random arm. The classifier found no structure to exploit, so the
+        // comparison model has no edge: distribute by radix (radix.c), the tuned
+        // LSD sort gated to exactly this regime. All types, distribution-
+        // agnostic (radix coarsens to insertion below n=32).
+        SUB_TYPED(sub_radix_sort)(arr, n);
+        state->comparisons += (uint64_t)n * 4;  // radix is comparison-free; estimate for stats
         return;
     }
 
@@ -760,95 +474,82 @@ static bool SUB_TYPED(fast_path_dispatch)(SUB_TYPE *restrict arr, size_t n,
         return true;
     }
 
+    // NEARLY_SORTED / PHASED: serial exploit below the parallel threshold; at
+    // scale, defer so the public entry routes to the parallel STRUCTURED sort
+    // (the structured pole -- fork chunks, close with the R_eff merge).
     if (out_profile->disorder == SUB_NEARLY_SORTED) {
-        if (out_profile->rotation_point > 0) {
-            uint64_t swp = 0;
-            SUB_TYPED(fix_rotation)(arr, n, out_profile->rotation_point, &swp);
-            return true;
-        }
-        if (out_profile->run_count <= 16) {
-            uint64_t cmp = 0;
-            SUB_TYPED(sub_spectral_merge)(arr, n, &cmp);
-        } else {
-            size_t sqrt_n = 1;
-            while (sqrt_n * sqrt_n < n) sqrt_n++;
-            if (out_profile->max_descent_gap <= (int64_t)sqrt_n) {
-                SUB_TYPED(binary_isort)(arr, n);
-            } else {
-                SUB_TYPED(light_sort)(arr, n);
-            }
-        }
+        if (n >= SUB_PARALLEL_THRESHOLD) return false;
+        uint64_t cmp = 0, swp = 0;
+        SUB_TYPED(sort_nearly_sorted)(arr, n, out_profile, &cmp, &swp);
         return true;
     }
 
     if (out_profile->disorder == SUB_PHASED) {
+        if (n >= SUB_PARALLEL_THRESHOLD) return false;
         sub_adaptive_t state;
         sub_adaptive_init(&state, n);
         SUB_TYPED(sort_phased)(arr, n, out_profile->phase_boundary, &state);
         return true;
     }
 
-#if defined(__AVX2__) && defined(SUB_TYPE_IS_I64)
-    // SUB_RANDOM SIMD fast path: skips re-classification in sub_sort_internal.
-    // Guarded at SUB_PARALLEL_THRESHOLD so large-n random falls through and
-    // the serial entry point can auto-dispatch to sublimation_i64_parallel
-    // when >=2 workers are available. The serial entry re-checks workers
-    // and falls back to sub_random_sort_i64 if only 1 worker is usable.
-    if (out_profile->disorder == SUB_RANDOM && n >= 64 && n < SUB_PARALLEL_THRESHOLD) {
-        sub_random_sort_i64(arr, n);
-        return true;
-    }
-#elif defined(__AVX2__) && defined(SUB_TYPE_IS_U64)
-    // u64 has no parallel entry point, so the PCF expert handles all random
-    // n >= 64 (no SUB_PARALLEL_THRESHOLD cap) -- this is the path that closes
-    // the u64<->i64 random gap for montauk's sorts.
-    if (out_profile->disorder == SUB_RANDOM && n >= 64) {
-        sub_random_sort_u64(arr, n);
-        return true;
-    }
-#endif
-
-    return false; // caller handles FEW_UNIQUE, SPECTRAL
+    // SUB_RANDOM (and deferred large structured) fall through so the public
+    // entry routes to the two parallel poles: random -> radix, structured ->
+    // the merge DFS.
+    return false; // caller handles RANDOM, deferred structured, FEW_UNIQUE, SPECTRAL
 }
 
 // PUBLIC API ENTRY POINT
 void SUB_TYPED(sublimation)(SUB_TYPE *restrict arr, size_t n) {
     if (n <= 1) return;
 
+#ifdef SUB_TYPE_IS_FLOAT
+    // A comparison sort cannot order NaN (every `<` against NaN is false), so an
+    // interspersed NaN acts as a poison pivot that scrambles the finite values
+    // around it. Partition NaNs to the tail (their bit-multiset is preserved;
+    // order among them is meaningless) and sort only the finite prefix --
+    // numpy's contract: sorted finite values, NaNs trailing.
+    {
+        size_t w = 0;
+        for (size_t i = 0; i < n; i++) {
+            if (!isnan(arr[i])) {
+                if (i != w) { SUB_SWAP(SUB_TYPE, arr[i], arr[w]); }
+                w++;
+            }
+        }
+        if (w <= 1) return;   // 0 or 1 finite value: nothing left to order
+        n = w;                // sort only the finite prefix; NaNs already trail
+    }
+#endif
+
     sub_profile_t profile;
     if (SUB_TYPED(fast_path_dispatch)(arr, n, &profile)) return;
 
-    // fast_path returned false. For i64, this means either SUB_RANDOM at
-    // n >= SUB_PARALLEL_THRESHOLD (fast-path guard lets large random fall
-    // through for auto-parallel dispatch), or FEW_UNIQUE past counting_sort,
-    // or SPECTRAL.
-#ifdef SUB_TYPE_IS_I64
+    // fast_path returned false: what remains at scale is SUB_RANDOM, a deferred
+    // large structured input (nearly-sorted / phased), FEW_UNIQUE past counting,
+    // or SPECTRAL. This is the TWO-POLE parallel dispatch -- axis 1 by the cheap
+    // classifier (Pillar B replaces it with the fused entropy scalar):
+    //   high-entropy / random -> parallel RADIX (American Flag MSD)
+    //   structured / anything else -> parallel MERGE DFS (fork chunks, R_eff close)
+    // both ride the one work-stealing engine. Below the threshold or with one
+    // worker it falls to the serial arm in sub_sort_internal.
     if (n >= SUB_PARALLEL_THRESHOLD) {
         size_t workers = sub_default_num_workers();
-        // Condition the pool dispatch on worker count. The IPS4o pool only beats
-        // the serial AVX2 PCF expert once there is enough work to amortize thread
-        // spin-up AND enough workers to parallelize over. Measured on random i64:
-        // at >=4 workers the pool wins from SUB_PARALLEL_THRESHOLD up, but at 2
-        // workers it loses to the serial PCF below ~1M (it ties at 1M). So a
-        // few-worker box needs ~4x the data before the pool pays off; below that
-        // the serial PCF expert is the faster path. (montauk sorts u64, which has
-        // no parallel entry -- this only affects direct i64 callers at scale.)
-        size_t par_threshold = (workers >= 4) ? SUB_PARALLEL_THRESHOLD
-                                              : (size_t)4 * SUB_PARALLEL_THRESHOLD;
-        if (workers >= 2 && n >= par_threshold) {
-            sublimation_i64_parallel(arr, n, workers);
-            return;
+        if (workers >= 2) {
+            if (profile.disorder != SUB_RANDOM) {
+                // Structured pole: the serial merge is slow, so the parallel
+                // merge DFS pays off from SUB_PARALLEL_THRESHOLD.
+                SUB_TYPED(sub_smerge_par)(arr, n, workers);
+                return;
+            }
+            if (n >= SUB_RADIX_PARALLEL_MIN) {
+                // Random pole: the serial LSD radix is cache-fast, so the
+                // parallel radix only wins well above the threshold; below
+                // SUB_RADIX_PARALLEL_MIN the serial tail below is faster.
+                SUB_TYPED(sub_radix_sort_par)(arr, n, workers);
+                return;
+            }
         }
-        // 1 worker (taskset/cgroup), or too few workers to beat serial at this n:
-        // the AVX2 PCF random expert, faster than the generic adaptive flow here.
-#if defined(__AVX2__)
-        if (profile.disorder == SUB_RANDOM && n >= 64) {
-            sub_random_sort_i64(arr, n);
-            return;
-        }
-#endif
     }
-#endif
 
     sub_adaptive_t state;
     sub_adaptive_init(&state, n);
