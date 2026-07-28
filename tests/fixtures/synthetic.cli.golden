@@ -225,3 +225,42 @@ gamma 30 z
 alpha 40 w
 $ sublimation search a --files-from -
 tests/fixtures/joinb.txt:a x
+$ sublimation tr a-z A-Z
+HELLO WORLD
+$ sublimation tr -d 0-9
+abc
+$ sublimation comm tests/fixtures/setb.txt
+a
+		b
+		c
+	d
+$ sublimation paste tests/fixtures/setb.txt tests/fixtures/joinb.txt
+b	a x
+c	b y
+d	d z
+$ sublimation sort --keyed --field 2,3
+b 30 1
+c 30 5
+a 30 9
+$ sublimation search -F alpha\ngamma
+alpha 10 x
+gamma 30 z
+alpha 40 w
+$ sublimation search -c SUBLIMATION_SEARCH_|sublimation_search_compile|sublimation_search_find_from|typedef struct
+4
+$ sublimation search -c -e SUBLIMATION_SEARCH_ -e sublimation_search_compile -e sublimation_search_find_from -e typedef struct
+4
+$ sublimation search -n SUBLIMATION_SEARCH_|sublimation_search_compile|sublimation_search_find_from|typedef struct
+1:#define SUBLIMATION_SEARCH_MAX_POS 64
+2:void sublimation_search_compile(sublimation_search *out);
+3:long sublimation_search_find_from(const sublimation_search *s);
+4:typedef struct { uint64_t key; } slot;
+$ sublimation search (cat|dog)x
+catx
+dogx
+$ sublimation search [a|b]x
+ax
+bx
+|x
+$ sublimation search a\|b
+a|b

@@ -23,8 +23,9 @@ public:
   const char* name() const override { return "Event-Driven Netlink"; }
 
 private:
-  // Netlink socket (Linux only)
-  int nl_sock_{-1};
+  // Netlink socket (Linux only). Atomic: shutdown() clears it from the main
+  // thread while event_loop() reads it in recv() on the event thread.
+  std::atomic<int> nl_sock_{-1};
 
   // Event processing thread
   std::thread event_thread_;

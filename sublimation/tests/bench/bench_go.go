@@ -16,7 +16,7 @@ func fillRandom(arr []int64, seed uint64) {
 	s := seed
 	for i := range arr {
 		s = s*6364136223846793005 + 1442695040888963407
-		arr[i] = int64(s >> 16)
+		arr[i] = int64(s) // full-width key: `>> 16` left the top two bytes zero
 	}
 }
 

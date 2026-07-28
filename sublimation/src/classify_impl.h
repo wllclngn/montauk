@@ -289,8 +289,18 @@ static SUB_TYPED(sub_run_info_t) SUB_TYPED(count_runs)(const SUB_TYPE *arr, size
         if (descending) {
             info.is_sorted = false;
             int64_t gap;
-            if (sizeof(SUB_TYPE) <= 4) {
-                gap = (int64_t)(arr[i - 1] - arr[i]);
+            // Narrow INTEGER types only. Written as (int64_t)(a - b) the
+            // subtraction happened in the narrow type first, so an int32 descent
+            // spanning zero (large positive minus large negative) overflowed int
+            // and was undefined -- caught by UBSan, 1576446187 - -1226179394.
+            // Widening both operands first is exact for any 4-byte integer.
+            // float is excluded even though it is 4 bytes: truncating each
+            // operand to int64_t before subtracting is undefined for a float
+            // past int64's range, so it takes the double path below, which
+            // subtracts in double and clamps.
+            if (_Generic((SUB_TYPE)0, float: 0, double: 0, default: 1)
+                && sizeof(SUB_TYPE) <= 4) {
+                gap = (int64_t)arr[i - 1] - (int64_t)arr[i];
             } else {
                 double d = (double)arr[i - 1] - (double)arr[i];
                 gap = (d >= 0.0 && d <= (double)INT64_MAX) ? (int64_t)d : INT64_MAX;

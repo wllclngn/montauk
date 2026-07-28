@@ -43,11 +43,14 @@ public:
   }
 
   void publish() {
-    // increment sequence before publish
-    back_->seq = front_.load(std::memory_order_acquire)->seq + 1;
+    // increment sequence before publish -- sourced from seq_, not a lockless
+    // dereference of the front pointer (see seq() below for why that would race)
+    uint64_t next = seq_.load(std::memory_order_relaxed) + 1;
+    back_->seq = next;
     // swap pointers
     auto* old_front = front_.load(std::memory_order_relaxed);
     front_.store(back_, std::memory_order_release);
+    seq_.store(next, std::memory_order_release);
     if (write_locked_) {  // release the just-published buffer for readers
       write_locked_ = false;
       mtx_for(back_).unlock();
@@ -72,7 +75,10 @@ public:
   [[nodiscard]] const T& front() const {
     return *front_.load(std::memory_order_acquire);
   }
-  [[nodiscard]] uint64_t seq() const { return front().seq; }
+  // Sourced from seq_, an atomic independent of the recyclable buffers -- the
+  // T-embedded seq field front() exposes is only safe to read under read()'s
+  // shared_lock (the reuse-window guard); this stays genuinely lock-free.
+  [[nodiscard]] uint64_t seq() const { return seq_.load(std::memory_order_acquire); }
 
 private:
   std::shared_mutex& mtx_for(const T* p) const { return p == &a_ ? m_a_ : m_b_; }
@@ -81,6 +87,7 @@ private:
   alignas(64) T b_{};
   std::atomic<T*> front_{&a_};
   T* back_{&b_};
+  std::atomic<uint64_t> seq_{0};
   bool write_locked_{false};
   mutable std::shared_mutex m_a_;
   mutable std::shared_mutex m_b_;

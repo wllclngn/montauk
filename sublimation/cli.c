@@ -35,6 +35,7 @@
 #include "sublimation_randomness.h"
 #include "sublimation_stats.h"
 #include "sublimation_text.h"
+#include "internal/dfspool.h"
 
 #include "util/sink.h"
 
@@ -44,6 +45,7 @@
 #include <ctype.h>
 #include <math.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 // Data output (stdout) drains through one buffered sink instead of a syscall
 // per printf; stderr diagnostics stay on stderr unchanged.
@@ -87,6 +89,8 @@ static void usage(FILE *out) {
         "  search PATTERN [FILE..] matching lines; one engine, three faces (literal -F,\n"
         "                        regex default, fuzzy -k N); stdin or FILE(s)\n"
         "                        search: -A N/-B N/-C N trailing/leading/both context lines\n"
+        "                        search: a bare PATTERN with embedded newlines is one\n"
+        "                        pattern PER LINE, OR'd (any face) -- like grep, no -e needed\n"
         "  replace PAT REPL      regex substitution, global per line (sed s/pat/repl/g; REPL literal)\n"
         "  field N[,M..] [FILE..] the N-th column, or a comma-list, of each line (awk '{print $N}')\n"
         "  where 'N OP V' [FILE] lines where field N OP V (awk '$N OP V'; OP: < <= > >= == !=)\n"
@@ -95,7 +99,14 @@ static void usage(FILE *out) {
         "  cut LO-HI [FILE]      character columns, 1-based inclusive (cut -c): N, lo-hi, lo-, -hi\n"
         "  column [FILE]         align delimited input into columns (column -t)\n"
         "  tac [FILE]            reverse line order\n"
-        "  paste -s [FILE]       serialize lines into one tab-joined line\n"
+        "  paste [FILE..]        one line per input, tab-joined side by side (zip-style);\n"
+        "                        ragged files pad with an empty field once exhausted\n"
+        "  paste -s [FILE]       serialize one file's lines into one tab-joined line\n"
+        "  tr SET1 SET2          translate SET1's characters to SET2's, positionally\n"
+        "                        (SET2 shorter: its last char repeats); X-Y ranges, \\n\\t\\r\\\\ escapes\n"
+        "  tr -d SET1            delete SET1's characters instead of translating\n"
+        "  comm FILE             sorted 3-column compare vs stdin (both pre-sorted): col 1\n"
+        "                        stdin-only, col 2 (1 tab) FILE-only, col 3 (2 tabs) common\n"
         "  intersect FILE        lines in both stdin and FILE (set intersection)\n"
         "  subtract FILE         lines in stdin but not in FILE (set difference)\n"
         "  union FILE            distinct lines from stdin and FILE (set union)\n"
@@ -115,7 +126,10 @@ static void usage(FILE *out) {
         "                        orders by real size -- coreutils' `sort -h`\n"
         "  --keyed               sort: keep the whole line, order by --field N (or\n"
         "                        the whole line) as the key -- a row-preserving\n"
-        "                        keyed sort, not just the extracted value\n"
+        "                        keyed sort, not just the extracted value; --field N,M,...\n"
+        "                        adds NUMERIC secondary keys, tie-breaking down the list\n"
+        "                        (one shared --desc direction; a non-numeric secondary\n"
+        "                        field is a defined 0, not a skip)\n"
         "  --window W            window size for locate (default 512)\n"
         "  --stride S            window stride for locate (default = window)\n"
         "  -v / -c / -n          search: invert match / count only (per file) / line number\n"
@@ -123,8 +137,9 @@ static void usage(FILE *out) {
         "  -q / -m N             search: quiet (exit status only) / stop after N matches per file\n"
         "  -F / -E               search: fixed string (literal) / extended regex (the default)\n"
         "                        regex is a bitset engine capped at 64 positions (one per\n"
-        "                        literal/class/metachar, summed across | branches); a longer\n"
-        "                        pattern is rejected as 'bad pattern' -- split it across -e or use -F\n"
+        "                        literal/class/metachar); an alternation past the cap is split\n"
+        "                        on its top-level | automatically, exactly as repeated -e would,\n"
+        "                        so only a single over-long branch is a 'bad pattern' -- use -F\n"
         "  -k N                  search: fuzzy, match within N mismatches (approximate)\n"
         "  -A N / -B N / -C N    search: N lines of trailing/leading/both context (-C = both);\n"
         "                        standalone tokens only, not bundleable with other short flags\n"
@@ -207,6 +222,30 @@ static void keyed_push(KeyedBuf *a, double key, char *line) {
     }
     a->keys[a->n] = key; a->lines[a->n] = line;
     a->n++;
+}
+
+// sort --keyed multi-key: stably refine a row-index permutation `order[]` (n
+// entries) by one more field, from least to most significant. Built entirely
+// from the existing single-key stable sort (sublimation_pack_sort_f64) -- no
+// new sort algorithm. Technique: gather each row's key in the CURRENT order,
+// sort with an identity payload (0..n-1, so ties fall back to the current
+// position, i.e. the order established by earlier, less-significant passes),
+// then scatter the row indices back through the resulting permutation. Applied
+// once per key, primary key last, composes into a full lexicographic sort.
+// Best-effort: leaves `order` unchanged on allocation failure.
+static void refine_order_by_key(uint32_t *order, const double *key_by_row, size_t n, int desc) {
+    double *gathered = (double *)malloc(n * sizeof(double));
+    uint32_t *idx = (uint32_t *)malloc(n * sizeof(uint32_t));
+    if (!gathered || !idx) { free(gathered); free(idx); return; }
+    for (size_t j = 0; j < n; j++) { gathered[j] = key_by_row[order[j]]; idx[j] = (uint32_t)j; }
+    sublimation_pack_sort_f64(gathered, idx, n, desc != 0);
+    uint32_t *scattered = (uint32_t *)malloc(n * sizeof(uint32_t));
+    if (scattered) {
+        for (size_t j = 0; j < n; j++) scattered[j] = order[idx[j]];
+        memcpy(order, scattered, n * sizeof(uint32_t));
+        free(scattered);
+    }
+    free(gathered); free(idx);
 }
 
 // Open-addressing string hash map, for the two-stream set ops, join, group
@@ -302,85 +341,6 @@ static int lines_equal_ci(const char *a, const char *b, size_t l, int icase) {
 // whole-line gating, the multi-pattern OR, prefixes, colors, the path list)
 // lives here in the CLI.
 
-// [A-Za-z0-9_], grep -w's word alphabet -- explicit ranges, not isalnum(), so
-// the locale can never shift the boundary set.
-static int word_byte(unsigned char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-           (c >= '0' && c <= '9') || c == '_';
-}
-
-// -w boundary test: span [s,e) of line[0..n) counts only when neither
-// neighbor is a word byte (a line edge counts as non-word).
-static int word_bounded(const char *line, size_t n, long s, long e) {
-    if (s > 0 && word_byte((unsigned char)line[s - 1])) return 0;
-    if ((size_t)e < n && word_byte((unsigned char)line[e])) return 0;
-    return 1;
-}
-
-// Next candidate span for ONE pattern at or after `from`, with the -w word
-// filter applied. A rejected candidate at start X resumes the scan at X + 1
-// (grep's rule -- skipping the rest of the line would drop later words).
-// regex_face: find_from reports only the LONGEST end per start, but grep -w
-// admits any match length ('a-|a' on "a-b" must still hit the word "a",
-// verified against /usr/bin/grep), so on rejection the shorter ends at the
-// same start are probed through full_match. ^ is already satisfied (the
-// start came from find_from); $-anchored patterns skip the probe since their
-// matches may only end at n.
-static long search_next_match(const sublimation_search *s, int regex_face,
-                              const char *line, size_t n, size_t from,
-                              int wword, long *end_out) {
-    size_t off = from;
-    while (off <= n) {
-        long e = -1;
-        long st = sublimation_search_find_from(s, line, n, off, &e);
-        if (st < 0) return -1;
-        if (!wword || word_bounded(line, n, st, e)) { *end_out = e; return st; }
-        if (regex_face && !s->g.anchored_end) {
-            for (long e2 = e - 1; e2 >= st; e2--) {
-                if (!word_bounded(line, n, st, e2)) continue;
-                if (sublimation_search_full_match(s, line + st, (size_t)(e2 - st))) {
-                    *end_out = e2;
-                    return st;
-                }
-            }
-        }
-        off = (size_t)st + 1;
-    }
-    return -1;
-}
-
-// Leftmost-longest next span across the WHOLE pattern set: -e/-f is one big
-// alternation to grep, so ties at one start go to the longest match across
-// all patterns (verified against /usr/bin/grep -o on overlapping patterns).
-static long search_next_any(const sublimation_search *set, int nset, int regex_face,
-                            const char *line, size_t n, size_t off,
-                            int wword, long *end_out) {
-    long bs = -1, be = -1;
-    for (int p = 0; p < nset; p++) {
-        long e = -1;
-        long st = search_next_match(&set[p], regex_face, line, n, off, wword, &e);
-        if (st < 0) continue;
-        if (bs < 0 || st < bs || (st == bs && e > be)) { bs = st; be = e; }
-    }
-    if (bs >= 0 && end_out) *end_out = be;
-    return bs;
-}
-
-// Line selection: does ANY pattern accept the line under -x / -w? -x is
-// grep's whole-line gate -- full_match covers all three faces (regex end to
-// end, fixed/fuzzy length-equal compare, fuzzy within k mismatches).
-static int search_selects(const sublimation_search *set, int nset, int regex_face,
-                          const char *line, size_t n, int xline, int wword) {
-    for (int p = 0; p < nset; p++) {
-        if (xline) {
-            if (sublimation_search_full_match(&set[p], line, n)) return 1;
-        } else {
-            long e = -1;
-            if (search_next_match(&set[p], regex_face, line, n, 0, wword, &e) >= 0) return 1;
-        }
-    }
-    return 0;
-}
 
 // grep's line prefix: "name:12:" for a match, "name-12-" for context. Colors
 // are GREP_COLORS' defaults (fn=35 filename, ln=32 line number, se=36
@@ -422,7 +382,7 @@ static void emit_colored_line(montauk_sink *out, const sublimation_search *set, 
     while (off <= mlen) {
         long s, e = -1;
         if (xline) { s = 0; e = (long)mlen; }   // -x: the whole line is the match
-        else s = search_next_any(set, nset, regex_face, line, mlen, off, wword, &e);
+        else s = sublimation_search_next_any(set, nset, regex_face, line, mlen, off, wword, &e);
         if (s < 0) break;
         if (e > s) {
             montauk_sink_append(out, line + cur, (size_t)s - cur);
@@ -439,6 +399,190 @@ static void emit_colored_line(montauk_sink *out, const sublimation_search *set, 
     montauk_sink_append(out, line + cur, rawlen - cur);
 }
 
+// Parallel multi-file search: file fan-out on the shared work-stealing deque.
+// Engaged only for the naturally per-file-independent output modes -- plain
+// match printing, -c, -l/-L -- gated OFF whenever -q, --tally or -A/-B/-C
+// context are in play, since those carry state across files that a private
+// per-file sink cannot capture.
+//
+// The gate is total BYTES, not file count: measured on this box (a worker
+// pool spawn+join costs roughly a millisecond, one-time, regardless of file
+// count), file count alone is a poor predictor -- a corpus of many tiny files
+// (~4KB each) does not pay for that cost until ~500KB-1MB of total input,
+// while a handful of large files (~1MB each) pays for it by ~2MB. The
+// threshold below is set past BOTH observed crossovers, so it is a safe,
+// conservative floor rather than a razor's-edge value tuned to one corpus
+// shape; sharpening it into a real two-factor (per-file + per-byte) cost
+// model is standing optimization-track work, not a blocker here. A lone file
+// (nsf == 1) never engages regardless of size -- fan-out needs more than one
+// frame to fan out; single-large-file line-chunking is a separate, deferred
+// item.
+//
+// The compiled search program is immutable during a scan (every scratch
+// allocation -- the regex reach memo, the fuzzy dedup set -- is malloc'd and
+// freed inside the call), so one const sublimation_search array is shared
+// read-only across workers with no lock: unlike ripgrep, nothing here needs
+// per-thread cloning.
+#define SEARCH_PAR_MIN_BYTES (2 * 1024 * 1024)
+
+// Cheap stat() pass (no opens, no reads) to size the corpus before deciding.
+static long long search_total_bytes(char **files, int n) {
+    long long total = 0;
+    struct stat st;
+    for (int i = 0; i < n; i++)
+        if (stat(files[i], &st) == 0 && S_ISREG(st.st_mode)) total += (long long)st.st_size;
+    return total;
+}
+
+typedef struct {
+    sublimation_occ_buf buf;   // the library's occurrence records + line arena
+    long       fmatches;
+    int        had_error;    // fopen failed
+    int        binary_hit;   // matched, but content suppressed as binary
+} ParFileResult;
+
+typedef struct {
+    char                     **files;
+    const sublimation_search  *srchs;
+    int   npat, regex_face, invert, count_only, number, names_only,
+          names_without, word_match, line_match, bin_text, bin_skip,
+          prefix, color;
+    long  max_count;
+    ParFileResult *results;   // one per file, indexed by file ordinal
+} ParSearchCtx;
+
+// Scans one file into its own record array. Renders nothing: the scan decides
+// WHICH lines are selected and where they are, search_render_one_file_par turns
+// that into bytes afterwards, in file order, with the same primitives the serial
+// loop uses (emit_prefix / emit_name / emit_colored_line).
+static void search_scan_one_file_par(const char *fname, ParSearchCtx *pc, ParFileResult *r) {
+    r->fmatches = 0;
+    r->had_error = 0;
+    r->binary_hit = 0;
+    FILE *in = fopen(fname, "r");
+    if (!in) { r->had_error = 1; return; }
+
+    int binary = 0, bin_announced = 0;
+    if (!pc->bin_text && lseek(fileno(in), 0, SEEK_CUR) != -1) {
+        char sniff[4096];
+        size_t seen = 0;
+        while (seen < (1u << 15)) {
+            size_t got = fread(sniff, 1, sizeof sniff, in);
+            if (got == 0) break;
+            if (memchr(sniff, 0, got)) { binary = 1; break; }
+            seen += got;
+        }
+        fseek(in, 0, SEEK_SET);
+    }
+    if (binary && pc->bin_skip) { fclose(in); return; }
+
+    char *line = NULL; size_t cap = 0; ssize_t len;
+    long fmatches = 0, lineno = 0;
+    int fdone = 0;
+    while (!fdone && (len = getline(&line, &cap, in)) != -1) {
+        lineno++;
+        size_t mlen = (size_t)len;
+        if (mlen && line[mlen - 1] == '\n') mlen--;
+        if (!pc->bin_text && !binary && memchr(line, 0, mlen)) binary = 1;
+        if (binary && pc->bin_skip) { fmatches = 0; r->buf.n = 0; break; }
+
+        int show = sublimation_search_selects(pc->srchs, pc->npat, pc->regex_face, line, mlen,
+                                  pc->line_match, pc->word_match);
+        if (pc->invert) show = !show;
+        if (show) {
+            fmatches++;
+            if (pc->names_only || pc->names_without) { fdone = 1; continue; }
+            if (!pc->count_only) {
+                if (binary) { r->binary_hit = 1; fdone = 1; }
+                else sublimation_occ_buf_push(&r->buf, (uint32_t)lineno, line, mlen, (size_t)len);
+            }
+            if (pc->max_count && fmatches >= pc->max_count) fdone = 1;
+        }
+    }
+    free(line);
+    fclose(in);
+    r->fmatches = fmatches;
+    (void)bin_announced;
+}
+
+// The rendering half: one pass over one file's records, in file order, on the
+// main thread. Byte-identical to the serial loop's output for the modes the
+// fan-out covers -- the same emit_* primitives, the same order, just driven by
+// positions the scan recorded instead of by the scan itself. The binary-file
+// notice is emitted here rather than in the worker so its stderr ordering is
+// deterministic instead of racing between threads.
+static void search_render_one_file_par(const char *fname, const ParSearchCtx *pc,
+                                       const ParFileResult *r, montauk_sink *out) {
+    if (pc->names_only) { if (r->fmatches > 0) emit_name(out, fname, pc->color); return; }
+    if (pc->names_without) { if (r->fmatches == 0) emit_name(out, fname, pc->color); return; }
+    if (pc->count_only) {
+        emit_prefix(out, pc->prefix ? fname : NULL, 0, 0, ':', pc->color);
+        montauk_sink_appendf(out, "%ld\n", r->fmatches);
+        return;
+    }
+    if (r->binary_hit) {
+        fprintf(stderr, "sublimation: %s: binary file matches\n", fname);
+        return;
+    }
+    for (size_t i = 0; i < r->buf.n; i++) {
+        const sublimation_search_occ *o = &r->buf.occ[i];
+        const char *line = r->buf.raw + o->off;
+        emit_prefix(out, pc->prefix ? fname : NULL, (long)o->line_no, pc->number, ':', pc->color);
+        if (pc->color)
+            emit_colored_line(out, pc->srchs, pc->npat, pc->regex_face,
+                              line, o->len, o->raw_len, pc->line_match, pc->word_match);
+        else
+            montauk_sink_append(out, line, o->raw_len);
+    }
+}
+
+static void search_par_frame(sub_dfs_frame_t f, sub_dfs_ctx_t *ctx, void *user) {
+    (void)user;
+    ParSearchCtx *pc = (ParSearchCtx *)f.base;
+    if (f.depth == 0) {   // distributor: fan every file out as its own leaf
+        for (size_t i = 0; i < f.n; i++)
+            sub_dfs_push(ctx, (sub_dfs_frame_t){ .base = pc, .n = i, .depth = 1 });
+        return;
+    }
+    size_t idx = f.n;
+    search_scan_one_file_par(pc->files[idx], pc, &pc->results[idx]);
+}
+
+// tr's SET syntax: literal bytes, X-Y ranges and backslash escapes (n t r a
+// b f v, or the escaped char itself) -- byte-domain only, no POSIX [:class:]
+// names, no multi-byte UTF-8 range expansion. Expands into out[] (caller-sized,
+// >=256 for a full-range SET); returns the expanded length.
+static size_t tr_expand_set(const char *set, unsigned char *out, size_t outcap) {
+    size_t n = 0;
+    for (const char *p = set; *p && n < outcap; ) {
+        unsigned char c;
+        if (*p == '\\' && p[1]) {
+            switch (p[1]) {
+                case 'n': c = '\n'; break;
+                case 't': c = '\t'; break;
+                case 'r': c = '\r'; break;
+                case 'a': c = '\a'; break;
+                case 'b': c = '\b'; break;
+                case 'f': c = '\f'; break;
+                case 'v': c = '\v'; break;
+                default:  c = (unsigned char)p[1]; break;   // \\ or any other char: itself, literally
+            }
+            p += 2;
+        } else {
+            c = (unsigned char)*p++;
+        }
+        if (*p == '-' && p[1] && p[1] != '\0') {   // X-Y range; Y taken literally (no escape at the range end)
+            unsigned char hi = (unsigned char)p[1];
+            p += 2;
+            if (hi >= c) { for (unsigned v = c; v <= hi && n < outcap; v++) out[n++] = (unsigned char)v; }
+            else out[n++] = c;   // reversed range: just the one char, not a POSIX-strict error
+        } else {
+            out[n++] = c;
+        }
+    }
+    return n;
+}
+
 // Grow-on-demand strdup'd string list (search's pattern set and file list).
 static void strlist_push(char ***v, int *n, int *cap, const char *s) {
     if (*n == *cap) {
@@ -447,6 +591,40 @@ static void strlist_push(char ***v, int *n, int *cap, const char *s) {
         if (!*v) { fputs("sublimation: out of memory\n", stderr); exit(1); }
     }
     (*v)[(*n)++] = strdup(s);
+}
+
+// Split a regex on its TOP-LEVEL `|` only -- not one inside a bracket
+// expression, behind a backslash, or nested in a group. Returns the branch
+// count when there are at least two (each strdup'd into *out, caller frees),
+// or 0 when the pattern is a single branch and nothing should change.
+static int split_top_alternation(const char *pat, char ***out, int *nout) {
+    char **br = NULL; int n = 0, cap = 0;
+    int depth = 0, inbr = 0;
+    const char *start = pat;
+    for (const char *p = pat; ; p++) {
+        if (*p == '\0') {
+            char *seg = strndup(start, (size_t)(p - start));
+            if (seg) { strlist_push(&br, &n, &cap, seg); free(seg); }
+            break;
+        }
+        if (inbr) {
+            // POSIX: a ']' directly after '[' or '[^' is a literal, not the close.
+            if (*p == ']' && !(p == start + 1 || (p[-1] == '^' && p > start + 1))) inbr = 0;
+            continue;
+        }
+        if (*p == '\\' && p[1]) { p++; continue; }
+        if (*p == '[') { inbr = 1; continue; }
+        if (*p == '(') { depth++; continue; }
+        if (*p == ')') { if (depth) depth--; continue; }
+        if (*p == '|' && depth == 0) {
+            char *seg = strndup(start, (size_t)(p - start));
+            if (seg) { strlist_push(&br, &n, &cap, seg); free(seg); }
+            start = p + 1;
+        }
+    }
+    if (n < 2) { for (int i = 0; i < n; i++) free(br[i]); free(br); return 0; }
+    *out = br; *nout = n;
+    return n;
 }
 
 // --files-from LIST: input file paths, newline- or NUL-delimited ('-' =
@@ -655,7 +833,7 @@ int main(int argc, char **argv) {
         "head", "tail", "distinct", "tally", "classify", "locate", "rand",
         "characterize", "search", "replace", "field", "where", "group", "uniq",
         "cut", "column", "tac", "paste", "intersect", "subtract", "union",
-        "join",
+        "join", "tr", "comm",
     };
     int known_cmd = 0;
     for (size_t vi = 0; vi < sizeof verbs / sizeof verbs[0]; vi++)
@@ -667,9 +845,13 @@ int main(int argc, char **argv) {
     }
 
     int field = 0;
+    const char *field_arg = NULL;  // --field's raw text; sort --keyed splits a comma-list from
+                                    // this for multi-key (secondary tie-break) sort. Every other
+                                    // verb keeps using the already-parsed single int unchanged.
     const char *delim = " \t";
     int delim_set = 0;  // true once --delim is explicitly given (join's output separator cares)
     int desc = 0;
+    int tr_delete = 0;  // tr -d: delete SET1's characters instead of translating to SET2
     int keyed = 0;                                // sort --keyed: preserve full lines, order by key
     int human = 0;                                // sort --keyed --human: K/M/G suffixed keys
     size_t window = 512, stride = 0;
@@ -709,6 +891,7 @@ int main(int argc, char **argv) {
     int is_uniq    = !strcmp(cmd, "uniq");
     int is_paste   = !strcmp(cmd, "paste");
     int is_replace = !strcmp(cmd, "replace");
+    int is_tr      = !strcmp(cmd, "tr");
 
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i];
@@ -719,12 +902,12 @@ int main(int argc, char **argv) {
             continue;
         }
         if (!strcmp(a, "--")) { endopts = 1; continue; }
-        if (!strcmp(a, "--field") && i + 1 < argc) field = atoi(argv[++i]);
+        if (!strcmp(a, "--field") && i + 1 < argc) { field_arg = argv[i + 1]; field = atoi(argv[++i]); }
         else if (!strcmp(a, "--delim") && i + 1 < argc) { delim = argv[++i]; delim_set = 1; }
         // -d is the --delim alias everywhere except uniq, which owns -d for its
         // dups-only toggle (same byte, different verb, the rule the short-flag
         // families already follow below).
-        else if (!is_uniq && !strcmp(a, "-d") && i + 1 < argc) { delim = argv[++i]; delim_set = 1; }
+        else if (!is_uniq && !is_tr && !strcmp(a, "-d") && i + 1 < argc) { delim = argv[++i]; delim_set = 1; }
         // A bare negative integer is a positional, not a bundled short flag --
         // this is what lets `field -1` mean the last column.
         else if (!pos && a[0] == '-' && isdigit((unsigned char)a[1])) pos = a;
@@ -817,6 +1000,11 @@ int main(int argc, char **argv) {
                         case 'i': icase = 1; break;        // replace -i: case-insensitive pattern
                         default: known = 0; break;
                     }
+                } else if (is_tr) {
+                    switch (*f) {
+                        case 'd': tr_delete = 1; break;    // tr -d: delete SET1's characters
+                        default: known = 0; break;
+                    }
                 } else {
                     known = 0;   // no other verb owns any short boolean flag
                 }
@@ -861,7 +1049,22 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "sublimation: search needs a PATTERN\n");
                 return 2;
             }
-            strlist_push(&pats, &npat, &patcap, pos);
+            // Bare PATTERNS (no -e/-f): real grep's own documented rule --
+            // "one or more patterns separated by newline characters" -- so
+            // `search $'apple\ncherry'` ORs apple and cherry exactly like
+            // `-e apple -e cherry`, in EITHER face (-F or regex), with no -e
+            // repetition needed. An empty segment matches every line, same as
+            // an empty line in a -f pattern file, above.
+            const char *start = pos;
+            for (const char *p = pos; ; p++) {
+                if (*p == '\n' || *p == '\0') {
+                    char *seg = strndup(start, (size_t)(p - start));
+                    strlist_push(&pats, &npat, &patcap, seg);
+                    free(seg);
+                    if (*p == '\0') break;
+                    start = p + 1;
+                }
+            }
             pos = NULL;   // consumed as the pattern, not an input file
         }
         // -S smart case (a ripgrep-ism, not in grep, and documented as such in
@@ -879,6 +1082,42 @@ int main(int argc, char **argv) {
         // compiled program per pattern; a line matches if ANY pattern does.
         unsigned sflags = (fixed ? SUBLIMATION_SEARCH_FIXED : 0u)
                         | (icase ? SUBLIMATION_SEARCH_ICASE : 0u);
+        // An over-long ALTERNATION is the one "bad pattern" that is not a typo:
+        // the regex face is a 64-position bitset summed across | branches, so
+        // `a|b|c|...` can blow the cap even though every branch fits it easily.
+        // grep treats `A|B` and `-e A -e B` as the same pattern set, so when a
+        // whole pattern will not compile, expand it into its top-level branches
+        // and carry on -- the caller never has to re-type it as repeated -e.
+        // Only the regex face has the cap (-F and -k take patterns literally),
+        // and only a pattern that ALREADY failed is touched, so nothing that
+        // compiles today changes shape.
+        if (!fixed && kval == 0) {
+            char **np = NULL; int nn = 0, ncap = 0, changed = 0;
+            for (int p = 0; p < npat; p++) {
+                char **br = NULL; int nbr = 0;
+                if (strchr(pats[p], '|')) {
+                    sublimation_search probe;
+                    sublimation_search_compile(&probe, pats[p], strlen(pats[p]), sflags, 0);
+                    if (!sublimation_search_valid(&probe))
+                        split_top_alternation(pats[p], &br, &nbr);
+                }
+                if (nbr >= 2) {
+                    for (int b = 0; b < nbr; b++) { strlist_push(&np, &nn, &ncap, br[b]); free(br[b]); }
+                    free(br);
+                    changed = 1;
+                } else {
+                    strlist_push(&np, &nn, &ncap, pats[p]);
+                }
+            }
+            if (changed) {
+                for (int p = 0; p < npat; p++) free(pats[p]);
+                free(pats);
+                pats = np; npat = nn; patcap = ncap;
+            } else {
+                for (int p = 0; p < nn; p++) free(np[p]);
+                free(np);
+            }
+        }
         sublimation_search *srchs =
             (sublimation_search *)malloc((size_t)npat * sizeof(sublimation_search));
         if (!srchs) { fputs("sublimation: out of memory\n", stderr); return 1; }
@@ -896,8 +1135,8 @@ int main(int argc, char **argv) {
                 // an over-long pattern is rejected here just like bad syntax --
                 // name both causes so a too-long pattern is not read as a typo.
                 if (pk == 0 && !fixed)
-                    fprintf(stderr, "sublimation: bad pattern '%s' -- invalid regex, or over "
-                            "the 64-position limit (split it across -e, or use -F)\n", pats[p]);
+                    fprintf(stderr, "sublimation: bad pattern '%s' -- invalid regex, or a single "
+                            "branch over the 64-position limit (use -F for a literal)\n", pats[p]);
                 else
                     fprintf(stderr, "sublimation: bad pattern '%s' (empty or too long)\n", pats[p]);
                 return 2;
@@ -963,6 +1202,41 @@ int main(int argc, char **argv) {
         // can never fire there on its own -- confirmed directly against
         // /usr/bin/grep with two files).
         int printed_any = 0;
+        // File fan-out on the shared work-stealing deque: more than one file,
+        // none of the cross-file-state modes in play, past the measured
+        // byte-total floor (see search_total_bytes above).
+        int want_parallel = !use_stdin && nsf >= 2 && !quiet
+                          && !tally_mode && !want_ctx && !only_match
+                          && search_total_bytes(sfiles, nsf) >= SEARCH_PAR_MIN_BYTES;
+        if (want_parallel) {
+            ParFileResult *results = (ParFileResult *)calloc((size_t)nsf, sizeof(ParFileResult));
+            if (!results) { fputs("sublimation: out of memory\n", stderr); return 1; }
+            ParSearchCtx pc = {
+                .files = sfiles, .srchs = srchs, .npat = npat, .regex_face = regex_face,
+                .invert = invert, .count_only = count_only, .number = number,
+                .names_only = names_only, .names_without = names_without,
+                .word_match = word_match, .line_match = line_match,
+                .bin_text = bin_text, .bin_skip = bin_skip, .prefix = prefix,
+                .color = color, .max_count = max_count, .results = results,
+            };
+            sub_dfs_frame_t root = { .base = &pc, .n = (size_t)nsf, .depth = 0 };
+            if (!sub_dfs_run(sub_default_num_workers(), root, search_par_frame, NULL))
+                for (int fi = 0; fi < nsf; fi++)          // engine OOM: same worker fn, serial
+                    search_scan_one_file_par(sfiles[fi], &pc, &results[fi]);
+            for (int fi = 0; fi < nsf; fi++) {
+                ParFileResult *r = &results[fi];
+                if (r->had_error) {
+                    had_error = 1;
+                    if (!suppress) fprintf(stderr, "sublimation: cannot open '%s'\n", sfiles[fi]);
+                    continue;
+                }
+                search_render_one_file_par(sfiles[fi], &pc, r, &g_out);
+                sublimation_occ_buf_free(&r->buf);
+                matches += r->fmatches;
+                if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
+            }
+            free(results);
+        } else {
         // Read each named file, or stdin when none were given. A single named file
         // is the common `grep PATTERN file` idiom -- sublimation serves it directly
         // now instead of treating the path as an unexpected argument. Native
@@ -1027,7 +1301,7 @@ int main(int argc, char **argv) {
                     if (invert) {
                         // grep -v -o prints nothing, but the line still
                         // selects: the exit code follows the lines.
-                        if (!search_selects(srchs, npat, regex_face, line, mlen, line_match, word_match)) {
+                        if (!sublimation_search_selects(srchs, npat, regex_face, line, mlen, line_match, word_match)) {
                             fmatches++;
                             if (quiet) q_done = 1;
                             else if (max_count && fmatches >= max_count) fdone = 1;
@@ -1042,14 +1316,14 @@ int main(int argc, char **argv) {
                     while (off <= mlen && !fdone && !q_done) {
                         long end = -1, s;
                         if (line_match) {
-                            if (!search_selects(srchs, npat, regex_face, line, mlen, 1, word_match)) break;
+                            if (!sublimation_search_selects(srchs, npat, regex_face, line, mlen, 1, word_match)) break;
                             s = 0; end = (long)mlen;
                         } else {
                             // find_from (inside search_next_*) keeps ^/$ anchored
                             // to the real line ends across restarts; a shifted
                             // `line + off` buffer would let ^ match again at
                             // every continuation offset.
-                            s = search_next_any(srchs, npat, regex_face, line, mlen, off, word_match, &end);
+                            s = sublimation_search_next_any(srchs, npat, regex_face, line, mlen, off, word_match, &end);
                             if (s < 0) break;
                         }
                         size_t mstart = (size_t)s;
@@ -1128,7 +1402,7 @@ int main(int argc, char **argv) {
                     continue;
                 }
 
-                int show = search_selects(srchs, npat, regex_face, line, mlen, line_match, word_match);
+                int show = sublimation_search_selects(srchs, npat, regex_face, line, mlen, line_match, word_match);
                 if (invert) show = !show;     // grep -v
                 if (show) {
                     fmatches++;
@@ -1218,6 +1492,7 @@ int main(int argc, char **argv) {
                 if (line_drain) montauk_sink_drain(&g_out);
             }
             matches += fmatches;
+        }
         }
         // --tally emit: highest count first, the same pack-and-sort the tally
         // verb uses (count << 32 | dense index, ordered by the u64 sort).
@@ -1705,17 +1980,63 @@ int main(int argc, char **argv) {
     // paste: -s serializes all input lines into ONE tab-joined line. (Side-by-side
     // multi-file paste is the join/set-ops two-stream lane.) stdin or one FILE,
     // like real paste -s FILE.
-    if (!strcmp(cmd, "paste")) {
+    if (!strcmp(cmd, "paste") && serial) {
         FILE *in = open_single_input(cmd, pos, nfiles ? files[0] : NULL);
         char *line = NULL; size_t lcap = 0; ssize_t len; int first = 1;
         while ((len = getline(&line, &lcap, in)) != -1) {
             size_t l = (len > 0 && line[len - 1] == '\n') ? (size_t)len - 1 : (size_t)len;
-            if (serial) { if (!first) montauk_sink_appendc(&g_out, '\t'); montauk_sink_append(&g_out, line, l); first = 0; }
-            else { montauk_sink_append(&g_out, line, l); montauk_sink_appendc(&g_out, '\n'); }
+            if (!first) montauk_sink_appendc(&g_out, '\t');
+            montauk_sink_append(&g_out, line, l); first = 0;
         }
-        if (serial && !first) montauk_sink_appendc(&g_out, '\n');
+        if (!first) montauk_sink_appendc(&g_out, '\n');
         if (in != stdin) fclose(in);
         free(line);
+        return 0;
+    }
+
+    // paste, positional (zip) mode: one line from EACH input per output line,
+    // tab-joined; a single file (or stdin alone) just passes through unchanged,
+    // matching the prior single-stream behavior. Ragged files pad with an empty
+    // field once exhausted, continuing until every stream is done -- real
+    // paste's multi-file semantics, which sublimation's paste never had before.
+    if (!strcmp(cmd, "paste")) {
+        enum { MAXIN = 257 };
+        FILE *ins[MAXIN]; int nin = 0;
+        if (!pos && nfiles == 0) { ins[nin++] = stdin; }
+        else {
+            const char *p0 = pos ? pos : files[0];
+            int start = pos ? 0 : 1;
+            ins[nin] = strcmp(p0, "-") ? fopen(p0, "r") : stdin;
+            if (!ins[nin]) { fprintf(stderr, "sublimation: cannot open '%s'\n", p0); return 2; }
+            nin++;
+            for (int i = start; i < nfiles && nin < MAXIN; i++) {
+                ins[nin] = strcmp(files[i], "-") ? fopen(files[i], "r") : stdin;
+                if (!ins[nin]) { fprintf(stderr, "sublimation: cannot open '%s'\n", files[i]); return 2; }
+                nin++;
+            }
+        }
+        char **bufs = (char **)calloc((size_t)nin, sizeof(char *));
+        size_t *caps = (size_t *)calloc((size_t)nin, sizeof(size_t));
+        int *done = (int *)calloc((size_t)nin, sizeof(int));
+        if (!bufs || !caps || !done) { fputs("sublimation: out of memory\n", stderr); return 1; }
+        for (;;) {
+            size_t row_start = g_out.len;
+            int any = 0;
+            for (int i = 0; i < nin; i++) {
+                if (i) montauk_sink_appendc(&g_out, '\t');
+                if (done[i]) continue;
+                ssize_t len = getline(&bufs[i], &caps[i], ins[i]);
+                if (len == -1) { done[i] = 1; continue; }
+                any = 1;
+                size_t l = (len > 0 && bufs[i][len - 1] == '\n') ? (size_t)len - 1 : (size_t)len;
+                montauk_sink_append(&g_out, bufs[i], l);
+            }
+            if (!any) { g_out.len = row_start; break; }   // every stream exhausted: no trailing empty row
+            montauk_sink_appendc(&g_out, '\n');
+            if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
+        }
+        for (int i = 0; i < nin; i++) { free(bufs[i]); if (ins[i] != stdin) fclose(ins[i]); }
+        free(bufs); free(caps); free(done);
         return 0;
     }
 
@@ -1857,6 +2178,73 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    // tr SET1 [SET2] / tr -d SET1: byte-domain translate or delete over stdin,
+    // reading and writing raw bytes (not line-oriented -- real tr has no
+    // notion of lines). No POSIX [:class:] names, no squeeze (-s); those are
+    // out of this scope, only translate/delete.
+    if (!strcmp(cmd, "tr")) {
+        if (!pos) { fputs("sublimation: tr needs SET1 [SET2] -- e.g. 'tr a-z A-Z' or 'tr -d 0-9'\n", stderr); return 2; }
+        if (!tr_delete && nfiles < 1) { fputs("sublimation: tr needs SET2 (or -d to delete SET1) -- e.g. 'tr a-z A-Z'\n", stderr); return 2; }
+        if (nfiles > 1) { fprintf(stderr, "sublimation: tr reads stdin; '%s' is an unexpected argument\n", files[1]); return 2; }
+        unsigned char set1[256];
+        size_t n1 = tr_expand_set(pos, set1, sizeof set1);
+        int ch;
+        if (tr_delete) {
+            unsigned char del[256] = {0};
+            for (size_t i = 0; i < n1; i++) del[set1[i]] = 1;
+            while ((ch = getchar()) != EOF) {
+                if (!del[(unsigned char)ch]) montauk_sink_appendc(&g_out, (char)ch);
+                if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
+            }
+        } else {
+            unsigned char set2[256];
+            size_t n2 = tr_expand_set(files[0], set2, sizeof set2);
+            unsigned char map[256];
+            for (int i = 0; i < 256; i++) map[i] = (unsigned char)i;
+            for (size_t i = 0; i < n1; i++)
+                map[set1[i]] = (n2 == 0) ? set1[i] : set2[(i < n2) ? i : n2 - 1];  // SET2 shorter: its last char repeats
+            while ((ch = getchar()) != EOF) {
+                montauk_sink_appendc(&g_out, (char)map[(unsigned char)ch]);
+                if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
+            }
+        }
+        return 0;
+    }
+
+    // comm FILE: sorted 3-column compare, stdin vs FILE (both assumed already
+    // sorted -- unsorted input gives comm's usual undefined-ish output, same
+    // as real comm). Column 1 = stdin-only, column 2 (1 tab) = FILE-only,
+    // column 3 (2 tabs) = common to both. No -1/-2/-3 column suppression yet.
+    if (!strcmp(cmd, "comm")) {
+        if (!pos) { fputs("sublimation: comm needs FILE -- e.g. 'comm sorted.txt' (stdin is the other stream, both pre-sorted)\n", stderr); return 2; }
+        if (nfiles > 0) { fprintf(stderr, "sublimation: comm takes one FILE; '%s' is an unexpected argument\n", files[0]); return 2; }
+        FILE *f2 = strcmp(pos, "-") ? fopen(pos, "r") : stdin;
+        if (!f2) { fprintf(stderr, "sublimation: cannot open '%s'\n", pos); return 2; }
+        char *l1 = NULL, *l2 = NULL; size_t c1 = 0, c2 = 0; ssize_t n1, n2;
+        n1 = getline(&l1, &c1, stdin); if (n1 > 0 && l1[n1 - 1] == '\n') l1[--n1] = '\0';
+        n2 = getline(&l2, &c2, f2);    if (n2 > 0 && l2[n2 - 1] == '\n') l2[--n2] = '\0';
+        while (n1 >= 0 || n2 >= 0) {
+            int cmp = (n1 < 0) ? 1 : (n2 < 0) ? -1 : strcmp(l1, l2);
+            if (cmp < 0) {
+                montauk_sink_append(&g_out, l1, (size_t)n1); montauk_sink_appendc(&g_out, '\n');
+                n1 = getline(&l1, &c1, stdin); if (n1 > 0 && l1[n1 - 1] == '\n') l1[--n1] = '\0';
+            } else if (cmp > 0) {
+                montauk_sink_appendc(&g_out, '\t');
+                montauk_sink_append(&g_out, l2, (size_t)n2); montauk_sink_appendc(&g_out, '\n');
+                n2 = getline(&l2, &c2, f2); if (n2 > 0 && l2[n2 - 1] == '\n') l2[--n2] = '\0';
+            } else {
+                montauk_sink_append(&g_out, "\t\t", 2);
+                montauk_sink_append(&g_out, l1, (size_t)n1); montauk_sink_appendc(&g_out, '\n');
+                n1 = getline(&l1, &c1, stdin); if (n1 > 0 && l1[n1 - 1] == '\n') l1[--n1] = '\0';
+                n2 = getline(&l2, &c2, f2);    if (n2 > 0 && l2[n2 - 1] == '\n') l2[--n2] = '\0';
+            }
+            if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
+        }
+        free(l1); free(l2);
+        if (f2 != stdin) fclose(f2);
+        return 0;
+    }
+
     // Numeric/structural commands read stdin only; a leftover positional here
     // is a mistake (the text verbs consumed theirs above). Error rather than
     // silently reading stdin and ignoring the path: `sublimation sum data.txt`
@@ -1953,12 +2341,45 @@ int main(int argc, char **argv) {
             fprintf(stderr, "sublimation: sort --keyed caps at 2^32 lines (got %zu)\n", kb.n);
             return 1;
         }
+        // Multi-key: --field takes a comma list, e.g. --field 1,2 -- secondary
+        // keys tie-break the primary, down the list. The primary (first token)
+        // is already `field`/kb.keys above; only the rest need parsing here.
+        // No comma: every other verb's single-int --field is untouched.
+        int keyfields[16], nkeyfields = 0;
+        if (field_arg && strchr(field_arg, ',')) {
+            char *fa = strdup(field_arg);
+            char *save = NULL; int first = 1;
+            for (char *tok = strtok_r(fa, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+                if (first) { first = 0; continue; }   // first token is the primary, already parsed
+                if (nkeyfields < 16) keyfields[nkeyfields++] = atoi(tok);
+            }
+            free(fa);
+        }
+
         uint32_t *order = NULL;
         if (kb.n > 0) {
             order = (uint32_t *)malloc(kb.n * sizeof(uint32_t));
             if (!order) { fputs("sublimation: out of memory\n", stderr); return 1; }
             for (size_t i = 0; i < kb.n; i++) order[i] = (uint32_t)i;
-            sublimation_pack_sort_f64(kb.keys, order, kb.n, desc != 0);
+            if (nkeyfields > 0) {
+                double *fieldvals = (double *)malloc(kb.n * sizeof(double));
+                if (!fieldvals) { fputs("sublimation: out of memory\n", stderr); free(order); return 1; }
+                for (int kx = nkeyfields - 1; kx >= 0; kx--) {   // least to most significant secondary
+                    int fld = keyfields[kx];
+                    for (size_t i = 0; i < kb.n; i++) {
+                        size_t rl = strlen(kb.lines[i]);
+                        size_t flen; const char *sp = field_span(kb.lines[i], rl, fld, delim, &flen);
+                        double v = 0.0;   // missing/non-numeric secondary field: a defined 0, not a skip
+                        if (sp) { char *end = NULL; double x = strtod(sp, &end); if (end != sp && !isnan(x)) v = x; }
+                        fieldvals[i] = v;
+                    }
+                    refine_order_by_key(order, fieldvals, kb.n, desc);
+                }
+                free(fieldvals);
+                refine_order_by_key(order, kb.keys, kb.n, desc);   // primary key: most significant, applied last
+            } else {
+                sublimation_pack_sort_f64(kb.keys, order, kb.n, desc != 0);
+            }
         }
         for (size_t i = 0; i < kb.n; i++) {
             char *row = kb.lines[order[i]];

@@ -89,6 +89,56 @@ SUB_API long sublimation_search_find_from(const sublimation_search *s, const cha
 // prefilter, fuzzy pigeonhole prefilter) are internal and never change the count.
 SUB_API size_t sublimation_search_count(const sublimation_search *s, const char *input, size_t n);
 
+// LINE SELECTION over a pattern SET -- grep's semantics, as the library's own
+// answer rather than a front-end's. `set`/`nset` is the -e/-f pattern set, which
+// grep treats as one alternation. `regex_face` is 1 when the set was compiled to
+// the regex face; it enables the shorter-end probe -w needs (find_from reports
+// only the longest end per start, and grep -w admits any match length).
+// `wword` is -w, `xline` is -x.
+
+// Leftmost-longest next span across the whole set at or after `off`: ties at one
+// start go to the longest match across all patterns. Returns the start offset
+// (or -1) and writes the end offset (exclusive) to *end_out.
+SUB_API long sublimation_search_next_any(const sublimation_search *set, int nset,
+                                         int regex_face, const char *line, size_t n,
+                                         size_t off, int wword, long *end_out);
+
+// Does ANY pattern in the set accept this line? 1 = yes, 0 = no.
+SUB_API int sublimation_search_selects(const sublimation_search *set, int nset,
+                                       int regex_face, const char *line, size_t n,
+                                       int xline, int wword);
+
+// THE OCCURRENCE RECORD -- one selected line as a POSITION plus the bytes needed
+// to render it, never as pre-rendered output. A scan decides WHICH lines are
+// selected and where; rendering is a separate pass over these records, which is
+// what lets one scan feed a text front-end, a parallel merge and (later) the
+// analysis instruments without any of them re-running the matcher.
+//
+// line_no is the 1-based line within the source; off/len index the buffer's own
+// arena, len excluding the trailing newline and raw_len including it. The match
+// SPAN joins this record when a consumer needs it (-o, capture groups); the
+// split between scanning and rendering is what keeps that a field addition
+// rather than a rewrite.
+typedef struct {
+    uint32_t line_no;
+    uint32_t off;       // byte offset into sublimation_occ_buf.raw
+    uint32_t len;       // line length WITHOUT the trailing newline
+    uint32_t raw_len;   // line length as read, newline included
+} sublimation_search_occ;
+
+// A growable pair of arrays: The records, and the arena their bytes live in.
+typedef struct {
+    sublimation_search_occ *occ; size_t n, cap;
+    char                   *raw; size_t raw_n, raw_cap;
+} sublimation_occ_buf;
+
+SUB_API void sublimation_occ_buf_init(sublimation_occ_buf *b);
+// Append one selected line. Best-effort: on allocation failure the record is
+// dropped rather than aborting, matching the rest of this library's output path.
+SUB_API void sublimation_occ_buf_push(sublimation_occ_buf *b, uint32_t line_no,
+                                      const char *line, size_t len, size_t raw_len);
+SUB_API void sublimation_occ_buf_free(sublimation_occ_buf *b);
+
 // One distinct newline-separated record and its occurrence count, as an offset
 // and length into the caller's buffer (no copy). Backs the tally/distinct/count
 // verbs for a bounded FFI caller; the CLI keeps its own streaming interner for

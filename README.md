@@ -7,13 +7,36 @@
 ╚═╝     ╚═╝  ╚═════╝  ╚═╝  ╚═══╝    ╚═╝    ╚═╝  ╚═╝  ╚═════╝  ╚═╝  ╚═╝
 ```
 
-montauk is a Linux observability platform in one statically-linked C++23 binary: An event-driven monitor, an eBPF flight recorder and an offline analyzer, built on sublimation, its in-tree sort, search and learn core.
-
 ## Overview
 
-The monitor attributes CPU, multi-vendor GPU, thermal and PMU cost to individual processes in real time and renders pixel-perfect area charts over the Kitty graphics protocol. The tracer (`--trace`) is an eBPF flight recorder over a whole process tree, event-driven discovery with no ptrace: Per-thread syscalls and scheduler decisions with wake-to-run latency, sync-object contention, heap traffic, signals, file I/O and hardware counters through `perf_event_open`, at near-zero overhead into a binary log. The analyzer (`montauk_analyze` / `montauk_trace_decode`) folds a 450 MB capture once into 27 single-pass diagnostic reports and cross-run population statistics, no live target and no privileges. Every surface, the TUI, the Prometheus endpoint and structured JSON, renders from one typed result, provably consistent and enforced by byte-identical golden gates: A script or an agent reads exactly the data the human report shows. That result is enriched, not just measured: The classical-ML core scores each process for anomaly on the live snapshot, and vector, montauk's agent-facing MCP server, serves it over stdio JSON-RPC through seven read-only tools, three that return conclusions rather than metrics.
+montauk is a Linux observability platform in one statically-linked C++23 binary: An event-driven system monitor, an eBPF flight recorder, an offline analyzer, built on sublimation, its in-tree sort, search, learn core and an MCP stdio JSON-RPC 2.0 server, vector.
 
-**sublimation** is montauk's in-tree sort, search and learn core: A disorder-classified sort that measures the structure an input already carries and routes it to the algorithm that structure earns, sorting structured data in a scan-to-linear pass and 100 million random int64 at ~24 ns/element (4–7× over glibc qsort, competitive with tuned in-place comparison sorts); a tri-face matcher (literal, regex, fuzzy k-mismatch) at or above the Rust regex crate on real corpora; and a classical-ML core in three lanes (anomaly detectors, a graph-spectral engine, an FFT and signal-residual lane), pure algorithm with zero downloaded weights. The process table's ordering, the analyzer's rankers, the latency-structure classification its reports read and all of montauk's text matching run through it; the `sublimation` CLI exposes the same engine as a shell command with grep-exact exit codes. No system packages, no fetch step, no libc qsort or std::sort in shipped code; NVML and liburing are auto-detected and optional, everything else lives in the repo.
+The system monitor attributes CPU, multi-vendor GPU, thermal, PMU cost to individual processes in real time and renders area charts over the Kitty graphics protocol. The tracer (`--trace`) is an eBPF flight recorder over a whole process tree, event-driven discovery with no ptrace: Per-thread syscalls and scheduler decisions with wake-to-run latency, sync-object contention, heap traffic, signals, file I/O and hardware counters through `perf_event_open`, at near-zero overhead into a binary log. The analyzer (`montauk_analyze` / `montauk_trace_decode`) folds a 450 MB capture once into 27 single-pass diagnostic reports and cross-run population statistics, no live target and no privileges.
+
+Every surface, the TUI, the Prometheus endpoint and structured JSON, renders from one typed result, provably consistent and enforced by byte-identical golden gates: A script or an agent reads exactly the data the human report shows. That result is enriched, not just measured: The classical-ML core scores each process for anomaly on the live snapshot, and vector, montauk's agent-facing MCP server, serves it over stdio JSON-RPC through seven read-only tools, three that return conclusions rather than metrics.
+
+The kernel module (`montauk-kernel`), the external-metrics provider sockets and `vector` are the only seams to the outside; everything else is one statically-linked C++23 binary.
+
+**sublimation** is montauk's in-tree, adaptive sort, search and learn core: A disorder-classified sort that measures what structure an input already carries (runs, rotation, sampled inversions, a distinct-value estimate, the phase boundary, the Young-tableau shape via patience sorting) and routes every input to the algorithm its structure earns, from a no-op through an O(n) reverse, counting sort, the spectral-merge run tree, a rotation fix and binary insertion, and a distribution radix for random data. Beside the sort is a text-matching engine with three faces (literal, regex, fuzzy k-mismatch), dispatched by pattern shape. Alongside search and sort is the the classical-ML core: Three lanes of pure-algorithm learning (anomaly detectors, a graph-spectral engine, an FFT/signal-residual lane) with zero downloaded weights that turn telemetry into conclusions. The process table's ordering, the analyzer's rankers, the latency-structure classification its reports read and all of montauk's text matching run through it; the `sublimation` CLI exposes the same engine as a shell command with grep-exact exit codes.
+
+**vector** is montauk's stdio JSON-RPC 2.0 server exposing montauk and sublimation to any MCP-speaking agent: A single static Rust binary, zero third-party crates, the same no-dependency stance as the rest of the tree.
+
+## Screenshots
+
+### Main Interface
+![Main](assets/screenshot-default.png)
+
+Default view. PROCESS MONITOR on the left; pixel-rendered area charts (PROCESSOR, GPU, VRAM, GPU MEM, ENC, DEC, MEMORY, NETWORK) stacked on the right. Charts emit through Kitty's `t=t` /dev/shm transport (Sixel fallback) and update at 1 Hz over a 60-second rolling window.
+
+### SYSTEM Focus (`s`)
+![SYSTEM](assets/screenshot-system.png)
+
+`s` swaps the right-column chart stack for a text panel: Identity (hostname, kernel, uptime), runtime (collector, scheduler, process states), CPU (model, threads, freq/governor, load avg, ctxt-sw rate), GPU (model, util, NVML, power, p-state), memory, disk I/O, network, thermal margins and process-security findings, severity-colored in place.
+
+### CPU Topology (`Shift+C`)
+![Topology](assets/screenshot-topology.png)
+
+`Shift+C` swaps PROCESS MONITOR for a dynamic grid of bordered boxes, one per logical CPU, each rendering a pixel-rasterized area chart of that core's recent utilization (60s default, `[chart] history_seconds`) with live util% centered on the top border. Grid columns auto-fit the rect; high-core-count systems fall into scroll mode at minimum cell height. Same monotone-cubic AA rasterizer and Kitty/Sixel emit path as the right-column charts; the right column is unaffected by the toggle.
 
 ## Components
 
@@ -22,19 +45,21 @@ The monitor attributes CPU, multi-vendor GPU, thermal and PMU cost to individual
 | **monitor** | `montauk` | Event-driven TUI. Per-process CPU and multi-vendor GPU attribution (NVIDIA NVML + `nvidia-smi` fallbacks, AMD sysfs, Intel fdinfo), thermal margins, security findings, live search (literal, regex, fuzzy) and disorder classification. Cell-clipped UI, pixel-rendered area charts (Kitty `t=t` /dev/shm transport, Sixel fallback), three column-swappable views. Optional Prometheus `/metrics` over io_uring, hourly `.prom` logging and a one-shot `--json` snapshot. |
 | **tracer** | `montauk --trace PATTERN` | eBPF flight recorder over a whole process tree: Event-driven discovery, no ptrace, no `/proc`. Per-thread state and syscalls, ntsync / futex / keyed-event sync, heap traffic, signals and aborts, file I/O, file-backed mmap, scheduler decisions with wake-to-run latency, CCX-bucketed migrations and hardware PMU counters via `perf_event_open`. Composes with `--metrics`, `--log` and a near-zero-overhead binary log (`--trace-out`). |
 | **analyzer** | `montauk_analyze`, `montauk_trace_decode` | Folds a capture once into single-pass diagnostic reports (27 of them, from `waits` and `doublefree` to `dispatch-stall` and `fractal`) over logs reaching 450 MB+, plus recording-directory digests and cross-run population statistics. No live target, no privileges. |
-| **sublimation** | in-tree core + `sublimation` CLI | montauk's sort, search and match core, used everywhere: The process table, every ordering the analyzer emits, the structure classification its reports read and all of montauk's text matching. The CLI exposes the same engine as a complete stream-processing surface: Statistics, structure, text and relational operations, with grep-exact exit codes. See [sublimation](#sublimation-an-adaptive-sort-search-and-learn-core). |
-| **vector** | `components/vector/target/release/vector` | Agent-facing MCP server: Stdio JSON-RPC 2.0, a separate static Rust binary, zero third-party crates. Seven read-only tools, three of them returning conclusions rather than metrics: `montauk_anomalies` (ranked, explained anomalies over the live process population), `montauk_similar` (behavioral nearest by effective resistance) and `montauk_regime` (did the load regime shift, and when), beside `montauk_snapshot`, `montauk_analyze_report`, `montauk_digest` and `sublimation` (direct FFI, no subprocess per call). See [vector](#vector-the-agent-facing-tool-surface). |
-
-The kernel module (`montauk-kernel`), the external-metrics provider sockets and `vector` are the only seams to the outside; everything else is one statically-linked C++23 binary. sublimation ships in the same tree with its own tests: One license, one README for both.
+| **sublimation** | `sublimation` CLI + in-tree core  | montauk's sort, search and match core, used everywhere: The process table, every ordering the analyzer emits, the structure classification its reports read and all of montauk's text matching. The CLI exposes the same engine as a complete stream-processing surface: Statistics, structure, text and relational operations, with grep-exact exit codes. |
+| **vector** | `components/vector/target/release/vector` | Agent-facing MCP server: Stdio JSON-RPC 2.0, a separate static Rust binary, zero third-party crates. Seven read-only tools, three of them returning conclusions rather than metrics: `montauk_anomalies` (ranked, explained anomalies over the live process population), `montauk_similar` (behavioral nearest by effective resistance) and `montauk_regime` (did the load regime shift, and when), beside `montauk_snapshot`, `montauk_analyze_report`, `montauk_digest` and `sublimation` (direct FFI, no subprocess per call). |
 
 ## sublimation: An adaptive sort, search and learn core
 
-sublimation is **an adaptive sort, search and learn core**, vendored in-tree under `montauk/sublimation/` (source, the `sublimation` CLI, tests). The sort is disorder-classified: It measures what structure an input already carries (runs, rotation, sampled inversions, a distinct-value estimate, the phase boundary, the Young-tableau shape via patience sorting) and routes every input to the algorithm its structure earns, from a no-op through an O(n) reverse, counting sort, the spectral-merge run tree, a rotation fix and binary insertion, and a distribution radix for random data. At 100 million random int64: **~24 ns/element** (4–7× over glibc qsort, a tie with tuned in-place comparison sorts; the radix is bandwidth-bound at scale), while sorted input costs a scan and equal keys stay stable by construction through a packed-index tiebreak. Beside the sort sits one text-matching engine with three faces (literal, regex, fuzzy k-mismatch), dispatched by pattern shape, its regex face **at or above the Rust `regex` crate on several corpora** (byte-parity-gated) and a fuzzy face no standard library ships. Beside both sits the classical-ML core: Three lanes of pure-algorithm learning (anomaly detectors, a graph-spectral engine, an FFT/signal-residual lane) that turn telemetry into conclusions. One core for everything montauk sorts, searches, measures or learns from.
+**sort core** The sort is a disorder classifier standing in front of six algorithms. One O(n) pass reads how much order an input already carries — run count, monotone runs, descent gaps — and the verdict picks the algorithm that order earns. Sorted input costs a scan. Reversed input costs a reverse. Few-unique goes to a counting sort, rotated data to an O(n) rotation fix, low-displacement data to binary insertion. Past those sit the two poles. Structured data takes a natural-run merge that closes with a spectral merge: Run joins ordered by effective resistance on the run-boundary path Laplacian, so the cheapest joins happen while the data is still hot. Random data takes a distribution radix — a tuned LSD with a combined-histogram scan, a write-combining scatter and a constant-byte skip — because once no order survives, comparison has no edge left to exploit. Equal keys never move, held by a packed-index tiebreak. Type-generic across i32/i64/u32/u64/f32/f64, and at scale both poles fork onto one Chase-Lev work-stealing deque, each at a threshold that was measured rather than assumed.
+
+**search core** The matcher is one engine wearing three faces, and the pattern picks which. The regex face is a Glushkov position-NFA compiled into a bitset field. Thompson's construction — the one this replaced in v8.0.0 — burns its time on epsilon-transitions and a closure computation over a live state set; Glushkov's is epsilon-free, so every state is a position in the pattern, the whole transition function precomputes into one bitmask per input byte, and a match step is a shift and an AND. The pattern fits in a machine word. Nothing backtracks, so a pathological pattern cannot blow up — runtime is linear in the input, always. The price of fitting in a word is a 64-position cap, so an over-long pattern is rejected outright instead of quietly degrading, and a long alternation splits into its branches. Above the field runs a prefilter ladder — a required literal, then a class field, then the alternation branches — each rung anchored on the rarest byte as measured in the data at hand, never a fixed English frequency table. The literal face is that anchor alone. The fuzzy face matches within N substitutions behind a pigeonhole prefilter, something no standard library ships.
+
+**classical-ML core** The learn core is three lanes of classical machine learning with nothing to download: No weights, no training step, no model file. The learn lane ranks every process in the live table — the full population, not a top-N sample — on three detectors chosen to be blind in different directions. MAD modified z-score catches one axis gone extreme. Mahalanobis, through a Cholesky, catches an odd combination of individually ordinary axes. Half-Space Trees catch density with no assumption about shape. They combine by rank rather than raw score, which is the only reason detectors on unrelated scales can be added at all. The spectral lane answers what behaves like this one: Effective resistance through the Laplacian pseudoinverse, a commute-time distance that counts every path between two processes instead of the shortest, so many weak similarities outweigh a single fluke edge. The signal lane is an FFT carrying Spectral Residual — subtract the log-amplitude spectrum's own smoothed average and what remains is the part of the signal that fails to explain itself, which is where a regime shifts. Each lane comes out as a conclusion rather than a number: Anomalies, neighbors, regime shifts.
 
 | Component | Function |
 |---|---|
-| **disorder classifier** | one O(n) pass → the verdict: `sorted` / `reversed` / `nearly-sorted` / `few-unique` / `phased` / `random`. The analyzer's `sched` report reads it to label a latency timeline's structure. |
-| **run-merge tree** | merges structured runs smallest-boundary-gap-first through a union-find, so the cheapest joins happen while the data is hottest |
+| **disorder classifier** | One O(n) pass → the verdict: `sorted` / `reversed` / `nearly-sorted` / `few-unique` / `phased` / `random`. The analyzer's `sched` report reads it to label a latency timeline's structure. |
+| **run-merge tree** | Merges structured runs smallest-boundary-gap-first through a union-find, so the cheapest joins happen while the data is hottest |
 | **index sorts** | order a `uint32_t` index array by a numeric key without moving rows (32-bit key packed with its index into one `uint64_t` and sorted adaptively; 64-bit key carried as a satellite, classified and routed to the radix or the spectral merge like the value sort) |
 | **string sort** | prefix-pack + MSD-radix, for the process-name column |
 | **structural locator** | slides the classifier across a stream to find *where* a disorder pattern sits (`locate`) |
@@ -46,11 +71,10 @@ sublimation is **an adaptive sort, search and learn core**, vendored in-tree und
 | **spectral lane** | a cyclic-Jacobi symmetric eigensolver, effective resistance (the commute-time graph distance) through the Laplacian pseudoinverse, the Fiedler value with a spectral-gap partition count and Ng-Jordan-Weiss spectral clustering over a  Lloyd k-means. Backs `montauk_similar`. |
 | **signal lane** | a  radix-2 FFT and the Spectral Residual saliency detector built on it, a weight-free shape-anomaly detector over a time series. Backs `montauk_regime`. |
 
-The matcher is byte-parity-gated against independent oracles on every face: Python `re` for regex, a brute k-mismatch reference for fuzzy, a position checksum for the anchor. It replaced the Boyer-Moore-Horspool + Thompson-NFA port in v8.0.0.
+**sublimation CLI** enables the full engine to be utilized via the shell for endusers directly. Numeric commands read a value stream (`--field N` pulls a delimited column, folding in awk's extraction): Order and quantiles, k-th selection and value lookup, the reductions (`sum`/`mean`/`min`/`max`/`count`, `stdev`/`variance`), disorder classification, a randomness verdict and `characterize`, the structural verdict that names a stream's disorder class, its randomness and its exploitable structure. `search`, `field` and `where` are the line tools; `group` is datamash / SQL `GROUP BY`, `describe` the one-shot pandas summary, `histogram` the shape, `outliers` the robust Tukey-fence flag; `replace` is `sed s/pat/repl/g` on the same matcher; `intersect`/`subtract`/`union`/`join` are the two-stream relational lane; `locate --values` is select-by-structure (keep the part of the stream that *is* sorted, random or phased); `uniq`/`cut`/`column`/`tac`/`paste`/`head`/`tail` fill out coreutils and `distinct`/`tally` are `sort | uniq [-c]`.
 
-**How it works.** Classification is one O(n) pass (run count, monotone runs, max descent gap); only ambiguous inputs pay for sampled inversions, distinct-value estimation and the full Young-tableau shape via patience sorting. The hook-length formula (Frame-Robinson-Thrall) gives the information-theoretic comparison bound, and the verdict routes on two axes at once, detection and scale. Detection picks the algorithm the structure earns: Counting sort for few-unique (k ≤ 64), an O(n) rotation fix for rotated-sorted, binary insertion for low-displacement nearly-sorted, and past those the two poles — a natural-run merge closed by the spectral merge for structured runs, and a distribution radix for high-entropy data, where no order remains to exploit so the comparison model has no edge. The serial radix is a tuned LSD (one combined-histogram scan, write-combining scatter, constant-byte skip); the parallel arm an in-place American Flag MSD. The classifier's phase-boundary detection runs a second-order critically-damped oscillator primitive: Damping 1/8, spring 1/128, zeta ≈ 0.707, a dead-banded energy reservoir and Schmitt park/release. EWMA and CUSUM survive only in tests, as oracles. The spectral merge is real spectral graph theory: It orders the natural-run merges by effective resistance on the run-boundary path Laplacian, whose closed form (1 + gap) was measured equivalent to a full cyclic-Jacobi eigensolver R_eff, for O(runs³) less work. Type-generic across i32/i64/u32/u64/f32/f64; scale is the second axis — small inputs stay serial, and at mass both poles fork onto one Chase-Lev work-stealing engine, each at its own threshold: The merge from n ≥ 250K (the serial merge is slow), the radix only past ~1.5M (the cache-resident serial LSD wins below that). The radix forks byte-buckets that come out ordered and need no close; the merge forks chunks and closes them with the same spectral merge. No libc qsort anywhere in the library or CLI: The generic qsort-compatible shim was removed at ABI v3, the keyed sort rides the stable pack index sort and the string-sort fallback paths run an in-house allocation-free introsort.
 
-**On the command line.** The `sublimation` CLI puts the engine a shell pipe away. Numeric commands read a value stream (`--field N` pulls a delimited column, folding in awk's extraction): Order and quantiles, k-th selection and value lookup, the reductions (`sum`/`mean`/`min`/`max`/`count`, `stdev`/`variance`), disorder classification, a randomness verdict and `characterize`, the structural verdict that names a stream's disorder class, its randomness and its exploitable structure. `search`, `field` and `where` are the line tools; `group` is datamash / SQL `GROUP BY`, `describe` the one-shot pandas summary, `histogram` the shape, `outliers` the robust Tukey-fence flag; `replace` is `sed s/pat/repl/g` on the same matcher; `intersect`/`subtract`/`union`/`join` are the two-stream relational lane; `locate --values` is select-by-structure (keep the part of the stream that *is* sorted, random or phased); `uniq`/`cut`/`column`/`tac`/`paste`/`head`/`tail` fill out coreutils and `distinct`/`tally` are `sort | uniq [-c]`.
+Nothing requires the pipe to name `sublimation` outright: A few `~/.bashrc` wrapper functions can route the stream forms of `grep`, `sort`, `wc`, `awk`, `cut`, `tac`, `paste`, `sed`, `head`, `tail` and `datamash` to it, so `awk '{print $1,$3}'`, `cut -f2 -d,` or `sed 's/foo/X/g'` resolve to `field`, `cut` or `replace`. The awk language proper (`BEGIN`/`END`, `NF`/`NR`, variables, `printf`, control flow) stays awk's; the wrappers route only the byte-for-byte idioms and rely on sublimation's grep-exact exit codes to keep shell conditionals correct.
 
 | Command | Operation |
 |---|---|
@@ -80,54 +104,59 @@ The matcher is byte-parity-gated against independent oracles on every face: Pyth
 
 For example: `cat dump | sublimation quantile 0.99 --field 2` for a column's 99th percentile, `ps aux | sublimation where '6 > 100000'` to keep the heavy processes, `seq 1 1000 | shuf | sublimation characterize` to name a stream's shape. The division is by **target**: sublimation owns the stream (the column, filter, reduce, order and structure idioms) while `grep`, `find` and `awk` keep filesystem traversal and the awk language itself.
 
-**On the shell.** Nothing requires the pipe to name `sublimation` outright: A few `~/.bashrc` wrapper functions can route the stream forms of `grep`, `sort`, `wc`, `awk`, `cut`, `tac`, `paste`, `sed`, `head`, `tail` and `datamash` to it, so `awk '{print $1,$3}'`, `cut -f2 -d,` or `sed 's/foo/X/g'` resolve to `field`, `cut` or `replace`. The awk language proper (`BEGIN`/`END`, `NF`/`NR`, variables, `printf`, control flow) stays awk's; the wrappers route only the byte-for-byte idioms and rely on sublimation's grep-exact exit codes to keep shell conditionals correct.
+**Performance**
 
-**Performance** (AMD Ryzen 5 3600, Zen 2, `-O2 -march=native`, ns/element, best of 5; the harness is in-tree at `sublimation/tests/bench/` with C, Rust and Go comparators).
+AMD Ryzen 5 3600, Zen 2, `-O2 -march=native`, ns/element, best of 5; the harness is in-tree at `sublimation/tests/bench/`, each language sorting the same seeded data with its own standard library: C `qsort`, an inline introsort, Rust `slice::sort_unstable` (ipnsort), Go `slices.Sort` and Python `sorted`. Keys are full-width — a narrower fill leaves the top bytes of a 64-bit key constant, which gives a radix a free pass skip that a comparison sort never gets.
 
-Structured data is where the adaptive routing pays: The sort reads the order an input already carries instead of rebuilding it, so a comparison sort's O(n log n) is work it never does. At 100K, versus glibc qsort:
+**Structured Sort Performance** (n = 100K)
 
-| Pattern | sublimation | qsort |
-|---|--:|--:|
-| sorted | 0.13 | 23.0 |
-| reversed | 0.41 | 29.5 |
-| equal | 0.12 | 22.9 |
-| pipe-organ | 3.1 | 26.8 |
-| nearly-sorted | 8.5 | 35.1 |
-| few-unique | 13.2 | 54.1 |
-| random | 29.8 | 103.8 |
+Where the adaptive routing pays: The sort reads the order an input already carries instead of rebuilding it, so a comparison sort's O(n log n) is work it never does.
 
-On **random** data there is no structure to exploit, so the radix competes head-on with tuned in-place comparison sorts (ns/element):
+| Pattern | sublimation | Rust | Go | introsort | qsort | Python |
+|---|--:|--:|--:|--:|--:|--:|
+| sorted | **0.1** | 0.2 | 0.5 | 4.6 | 21.8 | 3.3 |
+| equal | **0.1** | 0.3 | 0.5 | 8.5 | 22.8 | 2.6 |
+| reversed | 0.5 | **0.4** | 0.8 | 5.2 | 31.0 | 5.2 |
+| pipe-organ | **2.9** | 17.5 | 23.1 | 51.0 | 26.6 | 7.9 |
+| nearly-sorted | 10.3 | 15.9 | 13.8 | **8.0** | 39.9 | 17.1 |
+| few-unique | 13.7 | **2.2** | 8.3 | 17.6 | 53.7 | 57.2 |
+| phased | 35.3 | **13.2** | 30.0 | 51.2 | 102.0 | 37.3 |
+| random | 33.0 | **16.0** | 66.0 | 48.9 | 96.3 | 127.6 |
 
-| n | sublimation | pdqsort (Rust) | introsort (std::sort) | qsort |
-|---|--:|--:|--:|--:|
-| 100K | 30 | 15 | 58 | 104 |
-| 1M | 35 | 20 | 74 | 116 |
-| 10M | 21 | 19 | 69 | 140 |
-| 100M | 24 | 23 | 77 | 162 |
+Sorted and equal input costs a scan, and pipe-organ — one ascending run and one descending — is read as two runs and merged rather than partitioned, which is where the run-merge tree earns its keep. The honest losses are also here: Rust's pdqsort has a dedicated equal-elements partition that beats the counting sort on few-unique, and introsort wins nearly-sorted at this size.
 
-The honest read: On random int64 sublimation beats glibc qsort 4–7× and libstdc++ introsort 2–3× across the range, but it does **not** beat Rust's pdqsort (`slice::sort_unstable`, a tuned in-place comparison sort) — it trails on small-to-mid inputs and closes to a tie by 100M, where the parallel radix engages. The reason is structural: The LSD radix is memory-bandwidth-bound, making several full passes over the data, so once bandwidth saturates more cores stop helping and it cannot pull ahead of the best single-threaded in-place sort on pure random. Two known characteristics on this part, both flagged for a later cache-conscious pass-width tuning: A cache-cliff bump near 1M (the working set spills L3) and that bandwidth ceiling at scale. The random pole engages parallelism only above ~1.5M, where it beats the serial radix; below that the serial LSD is faster and the sort stays on it. String sort runs 2.0–4.5× over `qsort + strcmp`. Where sublimation wins outright is structured and low-entropy data — 3–200× here — which is most of what montauk actually sorts.
+**Random Sort Performance**
 
-**Search performance** (same machine, MB/s on 4 MB corpora, higher is better). The harness is in-tree at `sublimation/tests/search/bench/`: Seeded deterministic corpora, median-of-9, with C, C++, Go, Rust-std and Rust-regex comparators, byte-parity-gated against Python `re`, a brute k-mismatch oracle and a position checksum. The regex face against the Rust `regex` crate (ripgrep's engine, SIMD Teddy + lazy DFA) and Go `regexp` (RE2 lineage):
+Where there is no structure to exploit, so the radix competes head-on with tuned in-place comparison sorts.
 
-| Pattern | sublimation | Rust regex crate | Go regexp |
-|---|--:|--:|--:|
-| `MARK[A-Z]R` | **61.4k** | 56.9k | 52.9k |
-| `A[CG]TT` | **276** | 242 | 44 |
-| `str[a-z]ct` | 1.7k | 4.8k | 469 |
+| n | sublimation | Rust pdqsort | Go | introsort | qsort | Python |
+|---|--:|--:|--:|--:|--:|--:|
+| 100K | 33.0 | **16.0** | 66.0 | 48.9 | 96.3 | 127.6 |
+| 1M | **15.6** | 18.1 | 77.8 | 61.6 | 122.8 | 215.5 |
+| 10M | **15.6** | 20.6 | 89.5 | 68.9 | 139.7 | 348.8 |
+| 100M | **16.0** | 23.2 | 101.6 | 78.9 | 162.0 | 510.1 |
 
-A scalar bit-parallel field competitive with the Rust regex crate: Ahead of it where a rare byte lets the prefilter skip (`MARK[A-Z]R`) or the reach-closure memo carries a dense low-literal pattern (`A[CG]TT`), behind it only on common-literal `str[a-z]ct` where its SIMD literal prefilter beats the scalar anchor (the one standing gap, scalar vs SIMD, a stated non-goal). Ahead of Go `regexp` across the board, and well ahead of Python `re`, C++ `std::regex` and POSIX. **Fuzzy k-mismatch is a face no standard library ships**: `SIGKILL` k=1 at **10.8k MB/s**, 12× the brute baseline via the pigeonhole prefilter.
+Below the parallel threshold the radix is a serial LSD and Rust's pdqsort wins outright at 100K. From 1M up both poles fork onto the work-stealing deque and sublimation takes the lead, holding flat at 15.6-16.0 ns/element from 1M through 100M while every comparison sort degrades as the working set leaves cache — the crossover the thresholds exist to find. The margin widens with n: 1.2x over Rust at 1M, 1.5x at 100M; against C's `qsort` 8-10x, against Go 5-6x, against Python 14-32x.
 
-**The classical-ML core.** Beyond sort and search, sublimation contains a third face: Three lanes of classical machine learning, pure algorithm, zero downloaded weights. The learn lane scores anomalies over a feature matrix (MAD modified z-score, EWMA, Cholesky-based Mahalanobis, Half-Space Trees); the spectral lane runs a cyclic-Jacobi eigensolver, effective resistance through the Laplacian pseudoinverse and Ng-Jordan-Weiss clustering; the signal lane is a radix-2 FFT and the Spectral Residual detector on it. Every lane is byte-parity-gated against numpy the way the matcher is against GNU grep: Eigenvalues to 1e-8, effective resistance exact against the numpy pseudoinverse, Spectral Residual byte-exact, Half-Space Trees byte-identical to a splitmix64-shared reference. montauk reads them to conclude rather than report.
+**Search Performance**
 
-**Lineage.** Influenced by flow-model research (Kyng-Dinic maximum flow, spectral graph theory); the lineage survives in the spectral merge (effective resistance on the run-boundary path Laplacian), the graph-spectral learn lane (effective resistance as commute-time distance, Ng-Jordan-Weiss clustering) and the adaptive-control primitives. The rest of the family tree: Robinson-Schensted correspondence (sorting ↔ Young tableaux), TimSort (the run-adaptive lineage; the prior C++ TimSort/Powersort implementation is archived out of tree), Thompson's NFA construction (the prior regex engine, retired in v8.0.0 for the Glushkov field), Fiedler spectral seriation (Atkins-Boman-Hendrickson), the classical-ML detectors (Iglewicz-Hoaglin robust z, Tan-Ting-Liu Half-Space Trees, Ren et al. Spectral Residual), CoDel and damped-oscillator adaptive control, AlphaDev-shaped AVX2 sorting networks, and the radix arm (Wassenberg-Sanders write-combining, Skarupke's ska_sort and American Flag MSD, the eloj/radix-sorting notes). Full citations in [References](#references).
+AMD Ryzen 5 3600, Zen 2, MB/s on 4 MB corpora, higher is better. The harness is in-tree at `sublimation/tests/search/bench/`: Seeded deterministic corpora, median-of-9, with C, C++, Go, Rust-std and Rust-regex comparators, byte-parity-gated against Python `re`, a brute k-mismatch oracle and a position checksum. The regex face against the Rust `regex` crate (ripgrep's engine, SIMD Teddy + lazy DFA) and Go `regexp` (RE2 lineage):
+
+| Pattern | corpus | sublimation | Rust regex crate | Go regexp |
+|---|---|--:|--:|--:|
+| `A[CG]TT` | DNA | **273** | 234 | 39 |
+| `str[a-z]ct` | source | 1.6k | 4.7k | 484 |
+| `MARK[A-Z]R` | repetitive | 26.7k | 56.9k | 52.7k |
+
+A scalar bit-parallel field, measured against a SIMD one. It wins where the pattern is dense and literal-poor and the reach-closure memo does the work (`A[CG]TT`, ahead of every engine measured and 7x Go). It loses where a literal prefilter is the whole game and Rust's is vectorized: `str[a-z]ct` by 2.9x and `MARK[A-Z]R` by 2.1x. That is the one standing gap and it is a stated non-goal — Teddy/FDR-class multi-literal SIMD is deliberately not built, because chasing grep's throughput is not what sublimation is for. Against Python `re`, C++ `std::regex` and POSIX the margin is 3-500x on every pattern. **Fuzzy k-mismatch is a face no standard library ships at all**: `SIGKILL` k=1 at 8.8k MB/s, with no competitor to put in the column.
 
 **Build.** Compiled as a static library with montauk. Requires a Haswell-or-newer CPU (BMI2 + AVX2) and gcc 13+ (C23).
 
-**Where montauk uses it:** the process-table sort and the analyzer's orderings (latency quantiles, report rows, struct-by-key sorts via `sublimation_order_*`, value lookups via `searchsorted`); the `sched` report's structure classification and locator; and all of montauk's text matching (kernel-thread classification, the live `/`-search, `--trace` token matching). montauk's C++ carries zero `std::sort`, `std::stable_sort` or `std::nth_element` call sites; every ordering routes through sublimation.
+**Where montauk uses it:** The process-table sort and the analyzer's orderings (latency quantiles, report rows, struct-by-key sorts via `sublimation_order_*`, value lookups via `searchsorted`); the `sched` report's structure classification and locator; and all of montauk's text matching (kernel-thread classification, the live `/`-search, `--trace` token matching). montauk's C++ carries zero `std::sort`, `std::stable_sort` or `std::nth_element` call sites; every ordering routes through sublimation.
 
-## vector: The agent-facing tool surface
+## vector: An agent-facing tool surface
 
-vector is a stdio JSON-RPC 2.0 server exposing montauk and sublimation to any MCP-speaking agent: A single static Rust binary, zero third-party crates, the same no-dependency stance as the rest of the tree. It registers with an MCP client with no venv, no interpreter resolution and no PATH entry to go stale:
+montauk's Rust MCP server — where an agent interrogates the platform directly. Registration is one line, and nothing in it can go stale: No venv, no interpreter to resolve, no PATH entry pointing at a script that moved.
 
 ```
 claude mcp add --scope project montauk -- components/vector/target/release/vector
@@ -151,105 +180,30 @@ Four substantive source files plus glue: `rpc.rs` (a hand-rolled JSON-RPC 2.0 lo
 
 **Build.** `cd components/vector && cargo build --release`. No CMake target; a separate build tree beside the C++ binary, the same pattern the kernel module (`components/kernel`) uses.
 
-## Screenshots
-
-### Main Interface
-![Main](assets/screenshot-default.png)
-
-Default view. PROCESS MONITOR on the left; pixel-rendered area charts (PROCESSOR, GPU, VRAM, GPU MEM, ENC, DEC, MEMORY, NETWORK) stacked on the right. Charts emit through Kitty's `t=t` /dev/shm transport (Sixel fallback) and update at 1 Hz over a 60-second rolling window.
-
-### SYSTEM Focus (`s`)
-![SYSTEM](assets/screenshot-system.png)
-
-`s` swaps the right-column chart stack for a text panel: Identity (hostname, kernel, uptime), runtime (collector, scheduler, process states), CPU (model, threads, freq/governor, load avg, ctxt-sw rate), GPU (model, util, NVML, power, p-state), memory, disk I/O, network, thermal margins and process-security findings, severity-colored in place.
-
-### CPU Topology (`Shift+C`)
-![Topology](assets/screenshot-topology.png)
-
-`Shift+C` swaps PROCESS MONITOR for a dynamic grid of bordered boxes, one per logical CPU, each rendering a pixel-rasterized area chart of that core's recent utilization (60s default, `[chart] history_seconds`) with live util% centered on the top border. Grid columns auto-fit the rect; high-core-count systems fall into scroll mode at minimum cell height. Same monotone-cubic AA rasterizer and Kitty/Sixel emit path as the right-column charts; the right column is unaffected by the toggle.
-
-## Installation
-
-### Simple Install
-
-```bash
-./install.py
-```
-
-### Advanced Install (CMake)
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
-sudo cmake --install build   # optional
-```
-
-liburing is auto-detected at configure time and enables the Prometheus metrics endpoint; without it montauk builds normally with the endpoint disabled.
-
-### Other Commands
-
-```bash
-./install.py build      # Build only, don't install
-./install.py clean      # Clean build directory
-./install.py uninstall  # Remove installed binary
-./install.py test       # Run tests
-./install.py --kernel   # Build with kernel module support
-./install.py --debug    # Debug build
-```
-
-### Arch Linux Package
-
-```bash
-makepkg -si   # From the PKGBUILD at the repo root
-```
-
-### Process Collection
-
-montauk auto-detects the best available backend, in this priority:
-
-| backend | mechanism | requires | CPU overhead | event detection | syscalls per snapshot |
-|---|---|---|---|---|---|
-| **kernel module** | genetlink read of the in-kernel table; kprobes update it directly, workqueue refreshes CPU times at 1 Hz; zero `/proc` reads, zero netlink event traffic | `montauk.ko` loaded | ~0.1-0.2% | sub-millisecond | 1 |
-| **netlink proc_connector** | fork/exec/exit events from the kernel, `/proc/[pid]/*` reads for details | `CAP_NET_ADMIN` | ~0.5-1% | sub-millisecond | ~1 + N events |
-| **/proc polling** | scans `/proc` each cycle; identical functionality and UI | nothing | ~2-5% | ~1s | ~3 per process |
-
-To enable netlink proc_connector when the kernel module isn't loaded:
-```bash
-sudo setcap cap_net_admin=ep /usr/local/bin/montauk
-```
-
-Force a backend for testing:
-```bash
-MONTAUK_COLLECTOR=kernel ./montauk       # requires montauk.ko
-MONTAUK_COLLECTOR=netlink ./montauk      # requires the capability
-MONTAUK_COLLECTOR=traditional ./montauk  # /proc polling
-```
-
-## Operating Modes
+## montauk's CLI Operating Modes
 
 montauk composes its modes from CLI flags:
 
-```bash
-montauk                                # TUI only (default)
-montauk --metrics 9101                 # TUI + Prometheus endpoint on :9101
-montauk --log /var/log/montauk         # TUI + Prometheus-format log files
-montauk --log /var/log/montauk --log-interval-ms 5000  # Custom write interval (default: 1000ms)
-montauk --headless --metrics 9101      # Daemon mode: Prometheus only, no TUI
-montauk --headless --log /var/log/montauk              # Daemon mode: logging only
-montauk --headless --metrics 9101 --log /var/log/montauk  # Daemon mode: both
-montauk --headless                     # Error: requires --metrics or --log
-montauk --trace firefox                # Trace mode: per-thread diagnostics for process group
-montauk --trace myapp --metrics 9101   # Trace mode + Prometheus endpoint
-montauk --trace myapp --log /tmp/trace # Trace mode + flight recorder
-montauk --trace myapp --trace-out t.bin # Trace mode + raw binary event log
-montauk --trace myapp --trace-out t.bin --sched-detail  # + per-switch scheduler detail
-montauk --trace myapp --stream-out /dev/ttyS1  # Second binary stream to a character device
-montauk_trace_decode t.bin             # Decode a binary log to text (--csv for CSV)
-montauk_analyze t.bin --report waits   # Run an analysis report over a binary log
-montauk --json                         # One-shot structured system snapshot (JSON), then exit
-montauk_analyze t.bin --json           # Emit the diagnostic reports as one JSON envelope
-montauk --init-theme                   # Detect terminal palette, write config.toml
-```
+| Command | Operation |
+|---|---|
+| `montauk` | TUI only |
+| `montauk --log /var/log/montauk` | TUI + Prometheus-format log files |
+| `montauk --log /var/log/montauk --log-interval-ms 5000` | Custom write interval (default: 1000ms) |
+| `montauk --metrics 9101` | TUI + Prometheus endpoint on :9101 |
+| `montauk --headless --metrics 9101` | Daemon mode: Prometheus only, no TUI |
+| `montauk --headless --metrics 9101 --log /var/log/montauk` | Daemon mode: both |
+| `montauk --headless --log /var/log/montauk` | Daemon mode: logging only |
+| `montauk --headless` | Error: requires --metrics or --log |
+| `montauk --trace firefox` | Trace mode: per-thread diagnostics for process group |
+| `montauk --trace myapp --metrics 9101` | Trace mode + Prometheus endpoint |
+| `montauk --trace myapp --log /tmp/trace` | Trace mode + flight recorder |
+| `montauk --trace myapp --trace-out FILE.bin` | Trace mode + raw binary event log |
+| `montauk --trace myapp --stream-out /dev/ttyS1` | Second binary stream to a character device |
+| `montauk --json` | One-shot structured system snapshot (JSON), then exit. |
+| `montauk_trace_decode FILE.bin` | Decode a binary log to text (--csv for CSV) |
+| `montauk_analyze FILE.bin --json`  | Emit the diagnostic reports as one JSON envelope. |
+| `montauk_analyze FILE.bin --report waits` | Run an analysis report over a binary log |
+| `montauk --init-theme` | Detect terminal palette, write config.toml |
 
 **Prometheus Metrics Endpoint:**
 
@@ -300,7 +254,116 @@ PMU sampling requires `kernel.perf_event_paranoid <= 0` or `CAP_PERFMON` and is 
 
 montauk ingests external programs' own metrics. `ProviderCollector` scrapes unix sockets named `<name>.sock` in `$XDG_RUNTIME_DIR/montauk/providers/` (fallback `/run/montauk/providers/`): Connect, read one full Prometheus-text snapshot to EOF. Providers self-identify by socket filename; montauk names none in source, and a missing directory or unreachable provider is a silent per-scrape no-op. Provider text passes through montauk's Prometheus exposition verbatim and embeds into the binary trace stream as provider-snapshot records, so a capture carries the external program's self-reported state inline with the kernel events. Export-only: Not shown in the TUI.
 
-## UI Controls
+## Trace Analysis Tools
+
+Two standalone tools consume a binary trace log (`--trace-out`) offline: No privileges, no live target, no external dependencies. Both share one length-authoritative record walk (validate magic+version; an older decoder skips newer event types cleanly) and build without a `montauk_core` or BPF link, so they decode a capture anywhere. They install alongside `montauk` and must track its version (`montauk_analyze --version` prints it), since a newer `montauk` emits event types an older decoder would silently drop.
+
+**`montauk_trace_decode`** renders a log to a human-readable event stream:
+
+```bash
+montauk_trace_decode trace.bin          # one line per event, elapsed + wall timestamps
+montauk_trace_decode trace.bin --csv    # CSV for tooling
+```
+
+**`montauk_analyze`** runs single-pass diagnostic reports over a log:
+
+```bash
+montauk_analyze trace.bin                       # all reports
+montauk_analyze trace.bin --report doublefree   # one report
+montauk_analyze trace.bin --report waits,spins  # several
+montauk_analyze trace.bin --json                # all reports as one JSON envelope
+montauk_analyze RECORDING_DIR --digest          # one-call shareable digest
+montauk_analyze --version                       # print version, exit
+```
+
+Each report folds the file once, so analysis scales to captures of 450 MB+. Generic row qualifiers (`--sig`, `--comm`, `--pid`, `--tid`, `--window`) narrow a report to one signal, task or time window. The suite, by domain:
+
+- **`summary`**: Header, duration, throughput, per type+subtype event counts and the trace-derived dispatch/preempt rates.
+- **Sync**: `waits` (per `(tid,fd)` ntsync wait-completion stats), `spins` (livelock detector: Streaks of sub-tick wait completions sustained past a threshold, with a verdict), `pairing` (per object fd, waits vs signal-side ops, to find a signal that never reaches a waiter), `endstate` (who was parked in what wait when the trace ended, and for how long), `futex` (per-uaddr wait/wake stats and who is still blocked), `keyedevt` (keyed-event waits vs releases by critical-section address).
+- **Heap**: `heapstk` (unique allocation sites of a size-filtered `malloc`/`calloc`, ranked by count), `doublefree` (an address freed while not live, with both freeing tids/comms; realloc moves tracked so a moved chunk isn't mis-flagged), `abortpm` (per-abort arena post-mortem: Replays the heap stream up to each abort and names the glibc top-chunk overrun victim allocation).
+- **Signals**: `signals` (every delivered signal decomposed, with the row qualifiers).
+- **I/O**: `iolat` (per-syscall I/O completion latency), `iowait` (who sat parked in a blocking I/O-wait syscall).
+- **Scheduler**: `sched` (wake-to-run latency distribution with percentiles, plus a structure classification of the latency sequence through sublimation), `slice` (per-CPU dispatched-slice length between consecutive picks, p50/p90/p99/worst/mean, idle strands excluded), `service` (per-PID CPU service from dispatched slices), `wakers` (localizes request-level latency to the waker's critical path), `work-conservation` (per-CPU idle strands and how each ended), `placement-race` and `dispatch-stall` (decompose tick-floored wakeups into their mechanism), `kick-latency` (kick-issue to response), `storm` (sched_ext cpu_release kick storms), `kstrand` (per-CPU kernel-thread dispatch strands), `locality` (CCX locality of each placement migration), `classmix` (per-class distribution of enqueued tasks), `field-persist` (an adaptive scheduler's structural-reclassification gate over time), `fractal` (self-similarity of the dispatch and migration timeline). The placement, slice and stall reports need a capture taken with `--sched-detail`.
+
+`--json` emits the same reports as one structured envelope, rendered from the same typed results (see Structured JSON above).
+
+**Over a recording directory**, `montauk_analyze` reads a whole `--trace` recording, the `montauk_*.prom` scrapes beside the sibling `.events`:
+
+- `RECORDING_DIR --digest [--redact]` is the one-call shareable report: A SCHEDULER STABILITY block (ejection and clean-room state, what invalidates every number under it) leads above SYSTEM specs, then the ranked POORLY-BEHAVING ITEMS (a consolidated `montauk_offender{}` view over the spin / pairing / idle-strand detectors and the L2 hot-CPU), CROSS-CCX PLACEMENT, THERMAL/POWER (temperature, fan, package power, window-integral energy, clock, idle residency, scheduler churn) and KEY METRICS (the wake-to-run verdict and the dispatch-stall mechanism). Stability-first and KB-scale; `--redact` swaps process comms for stable FNV-1a hash handles for public sharing. With no `.events` present it still reports stability, specs, thermal/power and the offenders derivable from the scrapes.
+- `RECORDING_DIR --l2-by-cpu` localizes L2 misses per CPU over the busy window: Which cores eat the misses, and how concentrated.
+- `DIR | *.prom [--by LABEL] [--metric SUBSTR] [--full]` computes population statistics across many runs: Cross-version / cross-scheduler inference (Cliff's delta, permutation tests, Monte-Carlo run-count power) over the `.prom` archives, the inferential unit being one run. The `capture` axis splits by filename timestamp, so an uncommitted A/B on the same version still separates instead of folding into one cell.
+
+## Installation
+
+### Simple Install
+
+```bash
+./install.py
+```
+
+### Advanced Install (CMake)
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+sudo cmake --install build   # optional
+```
+
+liburing is auto-detected at configure time and enables the Prometheus metrics endpoint; without it montauk builds normally with the endpoint disabled.
+
+### Other Commands
+
+```bash
+./install.py build      # Build only, don't install
+./install.py clean      # Clean build directory
+./install.py uninstall  # Remove installed binary
+./install.py test       # Run tests
+./install.py --kernel   # Build with kernel module support
+./install.py --debug    # Debug build
+```
+
+### Arch Linux Package
+
+```bash
+makepkg -si   # From the PKGBUILD at the repo root
+```
+
+## Uninstall (CMake)
+
+```bash
+sudo xargs rm -v < build/install_manifest.txt
+```
+
+## Packaging (Arch Linux)
+
+- PKGBUILD at the repo root; `makepkg -si` installs to `/usr/bin/montauk`
+- Build deps: `cmake`, `gcc`, `make`
+- Optional build: `liburing` (Prometheus endpoint); optional runtime: `nvidia-utils`
+- NVML auto-detected at build time; tests off by default
+
+### TUI Process Collection
+
+montauk auto-detects the best available backend, in this priority:
+
+| backend | mechanism | requires | CPU overhead | event detection | syscalls per snapshot |
+|---|---|---|---|---|---|
+| **kernel module** | genetlink read of the in-kernel table; kprobes update it directly, workqueue refreshes CPU times at 1 Hz; zero `/proc` reads, zero netlink event traffic | `montauk.ko` loaded | ~0.1-0.2% | sub-millisecond | 1 |
+| **netlink proc_connector** | fork/exec/exit events from the kernel, `/proc/[pid]/*` reads for details | `CAP_NET_ADMIN` | ~0.5-1% | sub-millisecond | ~1 + N events |
+| **/proc polling** | scans `/proc` each cycle; identical functionality and UI | nothing | ~2-5% | ~1s | ~3 per process |
+
+To enable netlink proc_connector when the kernel module isn't loaded:
+```bash
+sudo setcap cap_net_admin=ep /usr/local/bin/montauk
+```
+
+Force a backend for testing:
+```bash
+MONTAUK_COLLECTOR=kernel ./montauk       # requires montauk.ko
+MONTAUK_COLLECTOR=netlink ./montauk      # requires the capability
+MONTAUK_COLLECTOR=traditional ./montauk  # /proc polling
+```
+
+## TUI Controls
 
 **Navigation:** `q` quits; `↑/↓` scrolls the process list; `PgUp/PgDn` pages.
 
@@ -387,136 +450,6 @@ sublimation carries its own standalone suite under `sublimation/tests/` (843k ch
 
 Tests are disabled by default in packaging builds (`MONTAUK_BUILD_TESTS=OFF`).
 
-## Trace Analysis Tools
-
-Two standalone tools consume a binary trace log (`--trace-out`) offline: No privileges, no live target, no external dependencies. Both share one length-authoritative record walk (validate magic+version; an older decoder skips newer event types cleanly) and build without a `montauk_core` or BPF link, so they decode a capture anywhere. They install alongside `montauk` and must track its version (`montauk_analyze --version` prints it), since a newer `montauk` emits event types an older decoder would silently drop.
-
-**`montauk_trace_decode`** renders a log to a human-readable event stream:
-
-```bash
-montauk_trace_decode trace.bin          # one line per event, elapsed + wall timestamps
-montauk_trace_decode trace.bin --csv    # CSV for tooling
-```
-
-**`montauk_analyze`** runs single-pass diagnostic reports over a log:
-
-```bash
-montauk_analyze trace.bin                       # all reports
-montauk_analyze trace.bin --report doublefree   # one report
-montauk_analyze trace.bin --report waits,spins  # several
-montauk_analyze trace.bin --json                # all reports as one JSON envelope
-montauk_analyze RECORDING_DIR --digest          # one-call shareable digest
-montauk_analyze --version                       # print version, exit
-```
-
-Each report folds the file once, so analysis scales to captures of 450 MB+. Generic row qualifiers (`--sig`, `--comm`, `--pid`, `--tid`, `--window`) narrow a report to one signal, task or time window. The suite, by domain:
-
-- **`summary`**: Header, duration, throughput, per type+subtype event counts and the trace-derived dispatch/preempt rates.
-- **Sync**: `waits` (per `(tid,fd)` ntsync wait-completion stats), `spins` (livelock detector: Streaks of sub-tick wait completions sustained past a threshold, with a verdict), `pairing` (per object fd, waits vs signal-side ops, to find a signal that never reaches a waiter), `endstate` (who was parked in what wait when the trace ended, and for how long), `futex` (per-uaddr wait/wake stats and who is still blocked), `keyedevt` (keyed-event waits vs releases by critical-section address).
-- **Heap**: `heapstk` (unique allocation sites of a size-filtered `malloc`/`calloc`, ranked by count), `doublefree` (an address freed while not live, with both freeing tids/comms; realloc moves tracked so a moved chunk isn't mis-flagged), `abortpm` (per-abort arena post-mortem: Replays the heap stream up to each abort and names the glibc top-chunk overrun victim allocation).
-- **Signals**: `signals` (every delivered signal decomposed, with the row qualifiers).
-- **I/O**: `iolat` (per-syscall I/O completion latency), `iowait` (who sat parked in a blocking I/O-wait syscall).
-- **Scheduler**: `sched` (wake-to-run latency distribution with percentiles, plus a structure classification of the latency sequence through sublimation), `slice` (per-CPU dispatched-slice length between consecutive picks, p50/p90/p99/worst/mean, idle strands excluded), `service` (per-PID CPU service from dispatched slices), `wakers` (localizes request-level latency to the waker's critical path), `work-conservation` (per-CPU idle strands and how each ended), `placement-race` and `dispatch-stall` (decompose tick-floored wakeups into their mechanism), `kick-latency` (kick-issue to response), `storm` (sched_ext cpu_release kick storms), `kstrand` (per-CPU kernel-thread dispatch strands), `locality` (CCX locality of each placement migration), `classmix` (per-class distribution of enqueued tasks), `field-persist` (an adaptive scheduler's structural-reclassification gate over time), `fractal` (self-similarity of the dispatch and migration timeline). The placement, slice and stall reports need a capture taken with `--sched-detail`.
-
-`--json` emits the same reports as one structured envelope, rendered from the same typed results (see Structured JSON above).
-
-**Over a recording directory**, `montauk_analyze` reads a whole `--trace` recording, the `montauk_*.prom` scrapes beside the sibling `.events`:
-
-- `RECORDING_DIR --digest [--redact]` is the one-call shareable report: A SCHEDULER STABILITY block (ejection and clean-room state, what invalidates every number under it) leads above SYSTEM specs, then the ranked POORLY-BEHAVING ITEMS (a consolidated `montauk_offender{}` view over the spin / pairing / idle-strand detectors and the L2 hot-CPU), CROSS-CCX PLACEMENT, THERMAL/POWER (temperature, fan, package power, window-integral energy, clock, idle residency, scheduler churn) and KEY METRICS (the wake-to-run verdict and the dispatch-stall mechanism). Stability-first and KB-scale; `--redact` swaps process comms for stable FNV-1a hash handles for public sharing. With no `.events` present it still reports stability, specs, thermal/power and the offenders derivable from the scrapes.
-- `RECORDING_DIR --l2-by-cpu` localizes L2 misses per CPU over the busy window: Which cores eat the misses, and how concentrated.
-- `DIR | *.prom [--by LABEL] [--metric SUBSTR] [--full]` computes population statistics across many runs: Cross-version / cross-scheduler inference (Cliff's delta, permutation tests, Monte-Carlo run-count power) over the `.prom` archives, the inferential unit being one run. The `capture` axis splits by filename timestamp, so an uncommitted A/B on the same version still separates instead of folding into one cell.
-
-> The old live `/proc` CPU-attribution analyzer was removed in v6.5.0; `montauk_analyze` is trace-only.
-
-## Uninstall (CMake)
-
-```bash
-sudo xargs rm -v < build/install_manifest.txt
-```
-
-## Packaging (Arch Linux)
-
-- PKGBUILD at the repo root; `makepkg -si` installs to `/usr/bin/montauk`
-- Build deps: `cmake`, `gcc`, `make`
-- Optional build: `liburing` (Prometheus endpoint); optional runtime: `nvidia-utils`
-- NVML auto-detected at build time; tests off by default
-
-## Architecture
-
-**Collectors:**
-- `CpuCollector`: Per-core usage, freq, model, governor, turbo status
-- `MemoryCollector`: RAM, swap, buffers, cache, available memory
-- `KernelProcessCollector`: Kernel-module backend via genetlink (preferred)
-- `NetlinkProcessCollector`: Event-driven via proc_connector + /proc reads (fallback 1)
-- `ProcessCollector`: Traditional /proc scanning (fallback 2)
-- `GpuCollector`: VRAM, temps, power, utilization (multi-vendor)
-- `GpuAttributor`: Per-process GPU util/mem with fallback chains
-- `NetCollector`: Interface stats and throughput
-- `DiskCollector`: I/O stats, throughput, per-device utilization
-- `ThermalCollector`: Multi-sensor temps with vendor thresholds
-- `FsCollector`: Filesystem usage per mountpoint
-- `FdinfoProcessCollector`: Per-process GPU metrics via /proc/*/fdinfo (DRM)
-- `PmuCollector`: Hardware PMU counters via perf_event_open (trace-gated)
-- `ProviderCollector`: External programs' Prometheus text over unix sockets
-- `BpfTraceCollector`: The eBPF tracepoint/uprobe instrumentation behind `--trace`
-
-**Core Components:**
-- `Security`: Process security analysis (privilege escalation, suspicious patterns)
-- `Churn`: Real-time /proc and /sysfs churn event tracking
-- `Alerts`: Process-based alerting
-- `SnapshotBuffers`: Lock-free snapshot management
-- `Producer`: Coordinated data-collection pipeline
-- `Filter`: Process filtering and sorting
-- `sublimation_search`: montauk's text matching, reached directly through sublimation's C API (`sublimation/src/text/match.c`)
-- `AsciiLower`: constexpr 256-byte ASCII lowercase table (branchless, no locale)
-- `SortDispatch`: Typed adapters onto sublimation: Pack-key index sort for numerics, prefix-pack + MSD radix for strings
-- `LogWriter`: Prometheus snapshot logging with hourly rotation
-- `MetricsServer`: io_uring HTTP server for the Prometheus endpoint (requires liburing)
-- `PrometheusSerializer`: Serializes MetricsSnapshot to Prometheus text via `std::to_chars()` (system + trace + PMU families, provider passthrough)
-- `TraceReader`: Shared open/validate/iterate over a binary `--trace-out` log; linked by `montauk_trace_decode` and `montauk_analyze` with no BPF dependency
-
-**UI Components (cell-based, OUROBOROS-derived):**
-- `widget::Canvas`: Cell-grid rendering surface with structural clipping and image-mask support
-- `widget::Component`: Base class; subclasses implement `render` and `handle_input`
-- `widget::FlexLayout`: Flexbox-style constraint solver for hierarchical layout
-- `widget::Panel`: Bordered panel drawing structured `Row`s cell-by-cell
-- `widget::Chart`: Monotone cubic Hermite area-chart rasterizer with anti-aliased line + fill
-- `widget::GraphicsEmitter`: Kitty (`a=T,t=t` /dev/shm) and Sixel emit paths
-- `widget::InputEvent` + `parse_input_bytes`: Stdin → typed key events
-- `widgets::ProcessTable`: Left-column PROCESS MONITOR; owns sort/scroll/filter/search/columns/scale state
-- `widgets::ChartPanel`: One pixel-rendered area chart per metric
-- `Panels`: Builds the right-column SYSTEM panel as `vector<Row>`
-- `HelpOverlay`: Manpage-driven scrollable help with its own input handler
-- `Renderer`: Owns ProcessTable + HelpOverlay + RightColumnState; runs input dispatch and frame composition
-- `Terminal`: TTY detection, color support, cursor control
-- `Formatting`: Domain helpers (`smooth_value`, hostname/kernel/freq readers, `format_size`, severity)
-- `Config`: Unified TOML configuration (TOML → env var → compiled default)
-- `TomlReader`: Header-only TOML subset parser (portable across sibling projects)
-
-**Snapshot Pipeline:**
-1. Collectors sample independently
-2. Atomic snapshot publication via lock-free double buffer
-3. GpuAttributor enriches with per-process GPU data
-4. TUI renders from a stable snapshot (seqlock copy)
-5. MetricsServer reads the same SnapshotBuffers via selective seqlock (bounded, fixed-size copy)
-6. LogWriter reads via seqlock and writes Prometheus snapshots to disk
-
-**GPU Attribution Logic:**
-1. NVML per-process queries (preferred)
-2. `nvidia-smi pmon` parsing
-3. `/proc/*/fdinfo` DRM stats
-4. Heuristic distribution from device metrics
-5. Residual VRAM attribution to clear GPU processes
-6. `/proc/*/fd` device inspection for decode workloads
-
-## Runtime Cost
-
-montauk's own footprint. Per-backend overhead, detection latency and syscall counts live in the [Process Collection](#process-collection) table; the sort and search benchmarks live in the [sublimation](#sublimation-an-adaptive-sort-search-and-learn-core) section.
-
-- **Sampling:** 250ms default (`+`/`-` to adjust).
-- **Process table:** 256 default, up to 4096 (top by CPU), all cmdline-enriched for GPU attribution.
-- **Memory:** ~10MB resident.
-
 ## Policy
 
 Vendoring is enforced, not aspirational: CMake poisons `FetchContent_Declare` and `ExternalProject_Add` with `FATAL_ERROR` at configure time, so a third-party fetch cannot enter the build. NVML and liburing are auto-detected and gracefully disabled when unavailable.
@@ -524,6 +457,8 @@ Vendoring is enforced, not aspirational: CMake poisons `FetchContent_Declare` an
 ## References
 
 The work the algorithms descend from. Source-comment attributions and the [Lineage](#sublimation-an-adaptive-sort-search-and-learn-core) paragraph resolve here; sibling-project lineage (the OUROBOROS-derived UI, PANDEMONIUM's oscillator envelope) is in-house.
+
+**Lineage.** Influenced by flow-model research (Kyng-Dinic maximum flow, spectral graph theory); the lineage survives in the spectral merge (effective resistance on the run-boundary path Laplacian), the graph-spectral learn lane (effective resistance as commute-time distance, Ng-Jordan-Weiss clustering) and the adaptive-control primitives. The rest of the family tree: Robinson-Schensted correspondence (sorting ↔ Young tableaux), TimSort (the run-adaptive lineage; the prior C++ TimSort/Powersort implementation is archived out of tree), Thompson's NFA construction (the prior regex engine, retired in v8.0.0 for the Glushkov field), Fiedler spectral seriation (Atkins-Boman-Hendrickson), the classical-ML detectors (Iglewicz-Hoaglin robust z, Tan-Ting-Liu Half-Space Trees, Ren et al. Spectral Residual), CoDel and damped-oscillator adaptive control, AlphaDev-shaped AVX2 sorting networks, and the radix arm (Wassenberg-Sanders write-combining, Skarupke's ska_sort and American Flag MSD, the eloj/radix-sorting notes).
 
 **Sorting and structure**
 - G. de B. Robinson, "On the Representations of the Symmetric Group", American Journal of Mathematics 60, 1938. C. Schensted, "Longest increasing and decreasing subsequences", Canadian Journal of Mathematics 13, 1961.

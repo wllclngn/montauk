@@ -286,6 +286,12 @@ def build_c_bench():
             return None
         a_objs.append(str(a_o))
         so_objs.append(str(so_o))
+    # `ar rcs` REPLACES named members but keeps every other member already in the
+    # archive, so a stale object from an earlier source layout survives forever
+    # and collides at link time (pool.o vs dfspool.a.o both defining
+    # sub_default_num_workers). Remove the archive first so it is rebuilt from
+    # exactly the sources that exist now.
+    (BUILD_DIR / "libsublimation.a").unlink(missing_ok=True)
     ret, _, stderr = run_cmd(["ar", "rcs", str(BUILD_DIR / "libsublimation.a")] + a_objs)
     if ret != 0:
         log_error(f"ar (static lib) failed: {stderr[-300:]}")
@@ -408,6 +414,11 @@ def run_bench(binary, size, pattern, runs, perf_mode=False):
     try:
         env = {**os.environ, "LD_LIBRARY_PATH": str(BUILD_DIR)}
         cmd = [str(binary), str(size), pattern, str(runs)]
+        # Every published table is int64. bench_c otherwise measures all six
+        # types against qsort, which at 100M is minutes of wall clock producing
+        # columns no table shows. Other binaries ignore a 4th argument.
+        if binary.name == "bench_c":
+            cmd.append(os.environ.get("BENCH_TYPES", "i64"))
 
         if perf_mode:
             cmd = [
@@ -417,8 +428,15 @@ def run_bench(binary, size, pattern, runs, perf_mode=False):
                 "--",
             ] + cmd
 
+        # Scale with input size: one bench_c invocation runs every type variant
+        # (6 qsort + 6 sublimation + introsort) x `runs` at the requested n, so
+        # cost is linear in n and a fixed ceiling silently drops the largest
+        # tier. A flat 300s lost 100M random / few_unique / phased entirely --
+        # the rows the README headlines -- and burned the full timeout before
+        # giving up on each. 20s per million elements, floored at the old 300s.
+        size_timeout = max(300, int(size / 1_000_000) * 20)
         result = subprocess.run(cmd, capture_output=True, text=True,
-                                timeout=300, env=env)
+                                timeout=size_timeout, env=env)
         if result.returncode != 0:
             if perf_mode and "perf_event" in result.stderr:
                 log_warn("perf stat failed (try: sysctl kernel.perf_event_paranoid=-1)")

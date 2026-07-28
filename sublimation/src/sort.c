@@ -58,6 +58,25 @@ static uint64_t now_ns(void) {
 #define SUB_TYPE float
 #define SUB_SUFFIX _f32
 #define SUB_TYPE_IS_FLOAT
+// f32 is the one type the shared 250K threshold serves badly. Measured through
+// this entry point, serial against parallel, FULL-WIDTH random keys, best-of-N:
+// 1.25x slower at 250K, 1.24x at 1M, still 1.22x at 2M, parity around 5M
+// (1.01x) and a first win only at 20M (0.97x, barely outside noise). The 4-byte
+// serial LSD stays cache-resident where the 8-byte types spill L3, so there is
+// less for the parallel arm to win back and its fixed dispatch cost is never
+// repaid at any size a montauk workload reaches.
+//
+// Key width in the BENCHMARK matters as much as element width in the code: an
+// earlier pass filled with values under 2^27, which leaves the top bytes of an
+// 8-byte type constant, hands the serial LSD its constant-byte skip for free
+// and starves the parallel MSD's first pass. That fill reported u64 LOSING 25%
+// at every size; measured full-width, u64 WINS by 2x at every size. It also put
+// this constant at 2M, where f32 is in fact still losing 22%. Any future
+// re-measurement here must use full-width keys.
+//
+// The other five types win at the shared 250K under both fills, so this stays a
+// per-type exception rather than a move of the shared constant.
+#define SUB_RADIX_PAR_MIN_T ((size_t)20000000)
 #include "sort_impl.h"
 #undef SUB_TYPE_IS_FLOAT
 #undef SUB_TYPE

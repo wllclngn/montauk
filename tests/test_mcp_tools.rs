@@ -323,6 +323,63 @@ fn sublimation_tally_returns_structured_counts() {
 }
 
 #[test]
+fn sublimation_characterize_zeros_below_the_minimum_n() {
+    // Direct FFI (sublimation_randomness_f64) -- n < 2 is a documented zeroed
+    // result (confidence 0, verdict structured), the one deterministic case
+    // that doesn't depend on the battery's own internal thresholds.
+    let args = Value::obj(vec![
+        ("op", Value::String("characterize".to_string())),
+        ("values", Value::Array(vec![Value::Number(1.0)])),
+    ]);
+    let r = tool_call("sublimation", args).unwrap();
+    let p = vector::json::parse(tool_text(&r)).expect("characterize output must parse");
+    assert_eq!(p.get("confidence").and_then(Value::as_f64), Some(0.0));
+    assert_eq!(p.get("verdict").and_then(Value::as_str), Some("structured"));
+    assert_eq!(p.get("lens_count").and_then(Value::as_f64), Some(0.0));
+    assert_eq!(p.get("agree_count").and_then(Value::as_f64), Some(0.0));
+    let lenses = p.get("lenses").and_then(Value::as_array).expect("lenses array");
+    assert_eq!(lenses.len(), 8);
+    for lens in lenses {
+        assert_eq!(lens.get("available").and_then(Value::as_bool), Some(false));
+    }
+}
+
+#[test]
+fn sublimation_characterize_names_every_lens() {
+    // A real-sized input, so every lens name/score/available shape is
+    // exercised even though the fused verdict itself is the C battery's own
+    // call (already covered by sublimation/tests/test_randomness.c).
+    let vals: Vec<Value> = (0..300)
+        .map(|i| Value::Number(((i * 2654435761u32 as u64) % 1000) as f64))
+        .collect();
+    let args = Value::obj(vec![
+        ("op", Value::String("characterize".to_string())),
+        ("values", Value::Array(vals)),
+    ]);
+    let r = tool_call("sublimation", args).unwrap();
+    let p = vector::json::parse(tool_text(&r)).expect("characterize output must parse");
+    let verdict = p.get("verdict").and_then(Value::as_str).expect("verdict string");
+    assert!(["structured", "mixed", "consistent", "max_entropy"].contains(&verdict));
+    let confidence = p.get("confidence").and_then(Value::as_f64).expect("confidence number");
+    assert!((0.0..1.0).contains(&confidence));
+    let lenses = p.get("lenses").and_then(Value::as_array).expect("lenses array");
+    let names: Vec<&str> = lenses.iter()
+        .map(|l| l.get("name").and_then(Value::as_str).expect("lens name"))
+        .collect();
+    assert_eq!(names, vec![
+        "hook", "lis", "inversion", "distinct", "hvg", "bandt_pompe", "rqa", "spectral",
+    ]);
+}
+
+#[test]
+fn sublimation_characterize_missing_values_is_an_error() {
+    let err = tool_call("sublimation", Value::obj(vec![
+        ("op", Value::String("characterize".to_string())),
+    ])).unwrap_err();
+    assert_eq!(err.0, -32602);
+}
+
+#[test]
 fn sublimation_count_and_distinct_over_text() {
     let count = tool_call("sublimation", Value::obj(vec![
         ("op", Value::String("count".to_string())),

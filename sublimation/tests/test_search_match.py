@@ -265,6 +265,11 @@ def main() -> int:
         ("[0-9][0-9]ax", b"11ax 2ax 33ax 4a5ax " * 200),
         ("th[aeiou]", b"the tha thi tho thx th  " * 200),
         ("wo[a-z]d", b"word wold wobd wox wo1d " * 200),
+        # 2- and 3-branch pure-literal alternation: the memchr2/3 rung
+        # (regex_alt_prefiltered), a different code path than the single
+        # required-literal prefilter above -- needs its own large-corpus proof.
+        ("cat|dog", b"the cat sat the dog ran a catdog cot dot " * 200),
+        ("cat|dog|bird", b"cat dog bird catdog dogbird birdcat cot " * 200),
     ]
     real = next((d for nm, d, p, e in corpora if nm == "real_src"), None)
     if real is not None:

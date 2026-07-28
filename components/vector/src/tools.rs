@@ -9,10 +9,10 @@
 // lanes (the anomaly fusion and effective resistance -- the same primitives
 // montauk's own C++ calls, so the numbers agree by construction); montauk_regime
 // samples /proc/stat directly and runs the spectral residual over FFI;
-// montauk_analyze_report and montauk_digest shell out to `montauk_analyze`. `sublimation` runs the sort/match/stat ops -- including
-// count/distinct/tally -- through direct FFI into libsublimation.a (an agent
-// looping on it would otherwise pay a full process spawn per call), and shells
-// out to the `sublimation` CLI for only one verb, `characterize`.
+// montauk_analyze_report and montauk_digest shell out to `montauk_analyze`. `sublimation` runs the sort/match/stat/characterize ops --
+// including count/distinct/tally -- through direct FFI into libsublimation.a
+// (an agent looping on it would otherwise pay a full process spawn per call);
+// no verb shells out anymore.
 
 use crate::ffi;
 use crate::json::Value;
@@ -48,7 +48,7 @@ pub const TOOLS_LIST: &[(&str, &str)] = &[
     ),
     (
         "sublimation",
-        "Read-only call into sublimation's engines over a bounded input, returning structured values. Direct FFI (no subprocess) for every op but characterize: \"sort\"|\"classify\" over values, \"grep\"|\"contains\" over pattern+text, and the statistics lane over values -- \"sum\"|\"mean\"|\"stdev\"|\"variance\"|\"min\"|\"max\" (returns the named scalar), \"quantile\" (needs q in 0..1, optional nearest bool for nearest-rank), \"describe\" (count/mean/stdev/min/q25/q50/q75/max), \"outliers\" (Tukey IQR fences plus the values outside them), \"histogram\" (10 bins with start and count); and over text (newline-separated lines) -- \"count\" (record total), \"distinct\" (number of distinct records), \"tally\" (each distinct record with its count, high to low). Rendered as a formatted report over the CLI: \"characterize\" over values. Arguments: op (required), values (number array), q and nearest (quantile only), pattern/text (strings), icase (bool, optional). For large or piped streams use the sublimation CLI directly; this tool is for bounded in-conversation analysis.",
+        "Read-only call into sublimation's engines over a bounded input, returning structured values. Direct FFI, no subprocess, for every op: \"sort\"|\"classify\" over values, \"grep\"|\"contains\" over pattern+text, the statistics lane over values -- \"sum\"|\"mean\"|\"stdev\"|\"variance\"|\"min\"|\"max\" (returns the named scalar), \"quantile\" (needs q in 0..1, optional nearest bool for nearest-rank), \"describe\" (count/mean/stdev/min/q25/q50/q75/max), \"outliers\" (Tukey IQR fences plus the values outside them), \"histogram\" (10 bins with start and count); \"characterize\" (the fused eight-lens randomness battery over values -- confidence, verdict, and each lens's name/score/availability); and over text (newline-separated lines) -- \"count\" (record total), \"distinct\" (number of distinct records), \"tally\" (each distinct record with its count, high to low). Arguments: op (required), values (number array), q and nearest (quantile only), pattern/text (strings), icase (bool, optional). For large or piped streams use the sublimation CLI directly; this tool is for bounded in-conversation analysis.",
     ),
 ];
 
@@ -147,48 +147,6 @@ pub fn run_subprocess(bin: &str, args: &[&str]) -> Result<String, (i64, String)>
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-// A subprocess variant that feeds a bounded input over stdin, for the
-// sublimation CLI's stream verbs (the stat/reduce/structure ops the C library
-// computes only inside cli.c, not through the FFI surface). stdin is written in
-// full and closed before stdout is drained; safe for the bounded results this
-// tool is scoped to, not for streaming large output.
-pub fn run_subprocess_stdin(bin: &str, args: &[&str], stdin_data: &str)
-    -> Result<String, (i64, String)> {
-    use std::io::Write;
-    use std::process::Stdio;
-    let mut child = Command::new(bin)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| (-32000, format!("failed to spawn {bin}: {e}")))?;
-    child
-        .stdin
-        .take()
-        .ok_or((-32000, format!("{bin}: no stdin handle")))?
-        .write_all(stdin_data.as_bytes())
-        .map_err(|e| (-32000, format!("write to {bin} stdin: {e}")))?;
-    let output = child
-        .wait_with_output()
-        .map_err(|e| (-32000, format!("wait for {bin}: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err((-32000, format!("{bin} exited with {}: {stderr}", output.status)));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-// f64 slice -> newline-separated stdin. Rust's default f64 formatting is the
-// shortest round-trippable decimal, so no precision is lost feeding the CLI.
-fn numbers_to_stdin(values: &[f64]) -> String {
-    let mut s = String::new();
-    for v in values {
-        s.push_str(&v.to_string());
-        s.push('\n');
-    }
-    s
-}
 
 pub fn text_content(text: String) -> Value {
     Value::obj(vec![(
@@ -666,13 +624,36 @@ pub fn call_sublimation(args: &Value) -> Result<Value, (i64, String)> {
                 ("bins", Value::Array(bins)),
             ])
         }
-        // characterize is the randomness battery's own verdict; it still reads
-        // as a formatted report, so it rides the CLI like the text verbs below.
+        // characterize: the fused eight-lens randomness battery, direct FFI --
+        // the tally/distinct/count interning lift landed in v8.4.0, leaving
+        // this the last verb still shelling out; now bound like the rest.
         "characterize" => {
             let values = values_as_f64(args)?;
-            let stdin = numbers_to_stdin(&values);
-            let out = run_subprocess_stdin("sublimation", &[op], &stdin)?;
-            return Ok(text_content(out));
+            if values.is_empty() {
+                return Err((-32602, "characterize needs a non-empty 'values' array".to_string()));
+            }
+            let r = ffi::characterize_f64(&values);
+            let lenses: Vec<Value> = ffi::RAND_LENS_NAMES
+                .iter()
+                .zip(r.lens.iter())
+                .zip(r.lens_available.iter())
+                .map(|((name, score), available)| {
+                    Value::obj(vec![
+                        ("name", Value::String(name.to_string())),
+                        ("score", Value::Number(*score as f64)),
+                        ("available", Value::Bool(*available)),
+                    ])
+                })
+                .collect();
+            Value::obj(vec![
+                ("confidence", Value::Number(r.confidence as f64)),
+                ("verdict", Value::String(
+                    ffi::RAND_VERDICT_NAMES[r.verdict as usize].to_string(),
+                )),
+                ("lens_count", Value::Number(r.lens_count as f64)),
+                ("agree_count", Value::Number(r.agree_count as f64)),
+                ("lenses", Value::Array(lenses)),
+            ])
         }
         // Text-line verbs: direct FFI into the library tally, returning
         // structured values -- no subprocess.

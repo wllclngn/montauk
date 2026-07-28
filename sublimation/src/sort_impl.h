@@ -2,6 +2,17 @@
 //
 // Requires SUB_TYPE and SUB_SUFFIX to be defined before inclusion.
 
+// Per-type parallel-radix threshold. Defaults to the shared
+// SUB_RADIX_PARALLEL_MIN, so a type that says nothing behaves exactly as it did
+// when the constant was read directly. A type whose serial radix has a
+// different cache profile defines SUB_RADIX_PAR_MIN_T before including this
+// template; it is #undef'd at the bottom so each inclusion re-derives it and
+// one type's override cannot leak into the next.
+#ifndef SUB_RADIX_PAR_MIN_T
+#define SUB_RADIX_PAR_MIN_T SUB_RADIX_PARALLEL_MIN
+#define SUB_RADIX_PAR_MIN_T_DEFAULTED
+#endif
+
 // Reverse an array in-place
 static void SUB_TYPED(reverse)(SUB_TYPE *arr, size_t n) {
     size_t lo = 0, hi = n - 1;
@@ -541,10 +552,13 @@ void SUB_TYPED(sublimation)(SUB_TYPE *restrict arr, size_t n) {
                 SUB_TYPED(sub_smerge_par)(arr, n, workers);
                 return;
             }
-            if (n >= SUB_RADIX_PARALLEL_MIN) {
+            if (n >= SUB_RADIX_PAR_MIN_T) {
                 // Random pole: the serial LSD radix is cache-fast, so the
-                // parallel radix only wins well above the threshold; below
-                // SUB_RADIX_PARALLEL_MIN the serial tail below is faster.
+                // parallel radix only wins once the serial arm stops fitting
+                // cache; below SUB_RADIX_PAR_MIN_T the serial tail is faster.
+                // Per-TYPE, because that crossover is a function of the element
+                // width: an 8-byte type spills L3 at a smaller n than a 4-byte
+                // one, so they do not cross over at the same place.
                 SUB_TYPED(sub_radix_sort_par)(arr, n, workers);
                 return;
             }
@@ -555,3 +569,9 @@ void SUB_TYPED(sublimation)(SUB_TYPE *restrict arr, size_t n) {
     sub_adaptive_init(&state, n);
     SUB_TYPED(sub_sort_internal)(arr, n, &state, &profile);
 }
+
+// Clear the per-type threshold so the next inclusion starts from the default.
+#undef SUB_RADIX_PAR_MIN_T
+#ifdef SUB_RADIX_PAR_MIN_T_DEFAULTED
+#undef SUB_RADIX_PAR_MIN_T_DEFAULTED
+#endif

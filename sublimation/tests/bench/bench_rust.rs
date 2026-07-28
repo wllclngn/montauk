@@ -56,7 +56,7 @@ fn fill_random(arr: &mut [i64], seed: u64) {
     let mut s = seed;
     for v in arr.iter_mut() {
         s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        *v = (s >> 16) as i64;
+        *v = s as i64;   // full-width key: `>> 16` left the top two bytes zero
     }
 }
 

@@ -40,6 +40,13 @@ CLI_GOLDEN = ROOT / "tests" / "fixtures" / "synthetic.cli.golden"
 _NUMS = "5\n3\n8\n1\n9\n2\n7\n4\n6\n0\n3\n8\n"
 _ROWS = "alpha 10 x\nbeta 20 y\ngamma 30 z\nalpha 40 w\n"
 _FREQ = "a\nb\na\nc\na\nb\n"
+_LONG_ALT = ("SUBLIMATION_SEARCH_|sublimation_search_compile|"
+             "sublimation_search_find_from|typedef struct")
+_ALT_IN = ("#define SUBLIMATION_SEARCH_MAX_POS 64\n"
+           "void sublimation_search_compile(sublimation_search *out);\n"
+           "long sublimation_search_find_from(const sublimation_search *s);\n"
+           "typedef struct { uint64_t key; } slot;\n"
+           "static inline unsigned char fold(unsigned char c);\n")
 CLI_CASES = [
     (["sort"], _NUMS),
     (["sort", "--desc"], _NUMS),
@@ -109,6 +116,29 @@ CLI_CASES = [
     (["search", "-x", "-F", "beta"], "beta\nbetax\nbeta\n"),
     (["search", "-e", "alpha", "-e", "gamma"], _ROWS),
     (["search", "a", "--files-from", "-"], "tests/fixtures/joinb.txt\ntests/fixtures/setb.txt\n"),
+    # v8.5.0 CLI completeness batch: tr, comm, positional paste, sort --keyed
+    # multi-key, and the newline-separated bare-PATTERNS OR (grep's own
+    # documented "one or more patterns separated by newline characters" rule).
+    (["tr", "a-z", "A-Z"], "hello world\n"),
+    (["tr", "-d", "0-9"], "a1b2c3\n"),
+    (["comm", "tests/fixtures/setb.txt"], "a\nb\nc\n"),
+    (["paste", "tests/fixtures/setb.txt", "tests/fixtures/joinb.txt"], ""),
+    (["sort", "--keyed", "--field", "2,3"], "a 30 9\nb 30 1\nc 30 5\n"),
+    (["search", "-F", "alpha\ngamma"], _ROWS),
+    # Over-long top-level alternation. The regex face is a 64-position bitset
+    # summed across | branches, so this whole pattern cannot compile; it is
+    # split on its top-level | into exactly the pattern set repeated -e builds.
+    # The two cases below MUST produce identical output -- that equality is the
+    # gate, and it is what stops the "split it across -e by hand" workaround
+    # from coming back.
+    (["search", "-c", _LONG_ALT], _ALT_IN),
+    (["search", "-c", "-e", "SUBLIMATION_SEARCH_", "-e", "sublimation_search_compile",
+      "-e", "sublimation_search_find_from", "-e", "typedef struct"], _ALT_IN),
+    (["search", "-n", _LONG_ALT], _ALT_IN),
+    # A | that is NOT top-level must never split: grouped, bracketed, escaped.
+    (["search", "(cat|dog)x"], "catx\ndogx\ncat\ndogy\n"),
+    (["search", "[a|b]x"], "ax\nbx\n|x\ncx\n"),
+    (["search", "a\\|b"], "a|b\nab\na\n"),
 ]
 
 note = harness.logger("corpus")
@@ -196,7 +226,8 @@ def cli_blob() -> str:
     for argv, stdin in CLI_CASES:
         # cwd=ROOT so relative fixture paths (set-ops/join FILE args) resolve.
         proc = harness.run_text([str(SUBLIMATION), *argv], input=stdin, cwd=ROOT)
-        parts.append(f"$ sublimation {' '.join(argv)}\n{proc.stdout}")
+        shown = " ".join(a.replace("\n", "\\n") for a in argv)
+        parts.append(f"$ sublimation {shown}\n{proc.stdout}")
     return "".join(parts)
 
 

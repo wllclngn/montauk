@@ -16,13 +16,19 @@
 SUB_CONSTEXPR size_t SUB_SMALL_THRESHOLD     = 32;   // base case: insertion sort / SIMD network
 SUB_CONSTEXPR size_t SUB_MEDIUM_THRESHOLD    = 128;   // switch from simple to block partition
 SUB_CONSTEXPR size_t SUB_PARALLEL_THRESHOLD  = 250000; // structured pole: spawn parallel workers (below this the serial merge/adaptive path beats thread spin-up)
-// Random pole: the serial LSD radix is cache-resident and fast, so the parallel
-// American Flag radix only amortizes its overhead well above SUB_PARALLEL_
-// THRESHOLD. Measured on the Ryzen 5 3600 (random int64): the serial radix wins
-// through ~1.3M, the parallel radix pulls clear only past ~1.5M. So the radix
-// pole engages parallelism later than the merge pole -- one shared threshold
-// pessimizes 300K-1.5M random inputs, paying thread spin-up for a loss.
-SUB_CONSTEXPR size_t SUB_RADIX_PARALLEL_MIN  = 1500000;
+// Random pole: re-measured 2026-07-26 on the same Ryzen 5 3600 this threshold
+// was originally set on. The prior value (1.5M) pessimized every random input
+// from 250K to 1.5M, paying the serial LSD's full cache-cliff cost (~37-40
+// ns/elem here) when the parallel American Flag radix is already flat at
+// ~14-15 ns/elem starting at the SAME point the structured pole already
+// crosses over -- confirmed via the real sublimation_i64 entry point (paying
+// full classify cost on both sides of the comparison, not a bare radix-vs-
+// radix microbenchmark) at fine granularity across 220K-300K: ns/elem drops
+// from ~37 to ~14 in the single 10K-wide step spanning SUB_PARALLEL_THRESHOLD
+// itself, with no further ramp. No measured reason remains for the random pole
+// to engage later than the structured one, so it now shares the one threshold;
+// re-diverge only if a future measurement demonstrates it should.
+SUB_CONSTEXPR size_t SUB_RADIX_PARALLEL_MIN  = SUB_PARALLEL_THRESHOLD;
 SUB_CONSTEXPR size_t SUB_CLASSIFY_SAMPLE     = 128;   // sample size for inversion estimation
 SUB_CONSTEXPR size_t SUB_PATIENCE_THRESHOLD  = 256;   // minimum n for patience sorting in classify
 SUB_CONSTEXPR size_t SUB_TABLEAU_MAX_N      = 10000;  // max n for full Young tableau computation

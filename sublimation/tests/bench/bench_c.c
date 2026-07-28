@@ -29,12 +29,26 @@ static uint64_t bench_lcg_next(void) {
 
 // PATTERN FILL (macro-generated per type)
 
+// FULL-WIDTH random keys. This was `>> 16`, which left the top TWO BYTES of
+// every 8-byte key zero -- and a constant key byte is not neutral: the serial
+// LSD radix skips it (two passes of eight, free), while the parallel MSD's
+// first pass sorts on a byte carrying no information. Comparison sorts are
+// indifferent to key width, so the shift quietly tilted every radix-vs-
+// comparison row. Integers now take the raw PRNG word truncated to their own
+// width; floats take a signed 32-bit value, which spreads the exponent over a
+// wide finite range without collapsing into duplicates the way a 64-bit
+// integer cast into a 24-bit float mantissa would.
+#define BENCH_RAND_KEY(T) _Generic((T)0,                                       \
+        float:   (T)(int32_t)bench_lcg_next(),                                 \
+        double:  (T)(int32_t)bench_lcg_next(),                                 \
+        default: (T)bench_lcg_next())
+
 #define DEFINE_FILL(T, SUFFIX)                                                 \
                                                                                \
 static void fill_random_##SUFFIX(T *arr, size_t n, uint64_t seed) {            \
     bench_lcg_seed(seed);                                                      \
     for (size_t i = 0; i < n; i++)                                             \
-        arr[i] = (T)(bench_lcg_next() >> 16);                                 \
+        arr[i] = BENCH_RAND_KEY(T);                                            \
 }                                                                              \
                                                                                \
 static void fill_sorted_##SUFFIX(T *arr, size_t n) {                           \
@@ -308,7 +322,9 @@ DEFINE_BENCH(double,   f64, sublimation_f64, cmp_f64)
 
 int main(int argc, char **argv) {
     if (argc < 4) {
-        fprintf(stderr, "Usage: %s <size> <pattern> <runs>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <size> <pattern> <runs> [types]\n"
+                        "  types: 'all' (default) or a comma list of "
+                        "i32,i64,u32,u64,f32,f64\n", argv[0]);
         return 1;
     }
 
@@ -316,6 +332,15 @@ int main(int argc, char **argv) {
     const char *pattern = argv[2];
     int runs = atoi(argv[3]);
     if (runs < 1) runs = 1;
+
+    // Optional type filter. Every published table is int64, but a run without
+    // this measured all six types x qsort x `runs` -- at 100M that is 10-15s
+    // per qsort run, five type variants of which appear in no table, and it is
+    // what made the largest tier take ~9 minutes and blow the old timeout.
+    // The legacy i64 block below always runs (it is what the tables read).
+    const char *types = (argc > 4) ? argv[4] : "all";
+    int want_all = !strcmp(types, "all");
+    #define WANT(t) (want_all || strstr(types, t) != NULL)
 
     // i64 legacy output (sublimation + qsort + introsort) for backward compat
     {
@@ -381,12 +406,12 @@ int main(int argc, char **argv) {
     }
 
     // Per-type benchmarks: sublimation_T vs qsort for all 6 types
-    run_bench_i32(n, pattern, runs);
-    run_bench_i64(n, pattern, runs);
-    run_bench_u32(n, pattern, runs);
-    run_bench_u64(n, pattern, runs);
-    run_bench_f32(n, pattern, runs);
-    run_bench_f64(n, pattern, runs);
+    if (WANT("i32")) run_bench_i32(n, pattern, runs);
+    if (WANT("i64")) run_bench_i64(n, pattern, runs);
+    if (WANT("u32")) run_bench_u32(n, pattern, runs);
+    if (WANT("u64")) run_bench_u64(n, pattern, runs);
+    if (WANT("f32")) run_bench_f32(n, pattern, runs);
+    if (WANT("f64")) run_bench_f64(n, pattern, runs);
 
     return 0;
 }

@@ -299,6 +299,38 @@ pub fn api_version() -> i32 {
     unsafe { sublimation_api_version() }
 }
 
+// sublimation_randomness: the fused eight-lens randomness-confidence battery
+// (sublimation_randomness.h). A direct field-for-field mirror of
+// sub_randomness_t, the same idiom as SubProfile/SubDescribe above -- a plain
+// C struct of scalars and fixed arrays, no opaque buffer, so no runtime size
+// check is needed (contrast SubSearch, which hides internal layout).
+pub const RAND_LENS_NAMES: [&str; 8] = [
+    "hook", "lis", "inversion", "distinct", "hvg", "bandt_pompe", "rqa", "spectral",
+];
+
+pub const RAND_VERDICT_NAMES: [&str; 4] = [
+    "structured", "mixed", "consistent", "max_entropy",
+];
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SubRandomness {
+    pub confidence: f32,
+    pub verdict: c_int, // sub_rand_verdict_t
+    pub lens: [f32; 8],
+    pub lens_available: [bool; 8],
+    pub lens_count: u32,
+    pub agree_count: u32,
+}
+
+extern "C" {
+    fn sublimation_randomness_f64(arr: *const f64, n: usize) -> SubRandomness;
+}
+
+pub fn characterize_f64(values: &[f64]) -> SubRandomness {
+    unsafe { sublimation_randomness_f64(values.as_ptr(), values.len()) }
+}
+
 /// Returns the byte offset of the first regex match, and its length; Ok(None)
 /// on a genuine no-match. A pattern that fails to compile is an ERROR, never a
 /// no-match: mapping it to false would hand the caller a silent wrong answer.

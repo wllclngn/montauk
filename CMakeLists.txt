@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 8.4.0 LANGUAGES C CXX)
+project(montauk VERSION 8.5.0 LANGUAGES C CXX)
 # (7.17.0: kick-capture honesty -- the storm report no longer manufactures a
 #  false kick/s=0 when the scx storm probes are unattached, and kick-latency
 #  surfaces the KICK_ISSUE->RESCHED pairing (availability, unanswered share,
@@ -131,7 +131,7 @@ target_compile_options(sublimation PRIVATE
     -fstack-protector-strong -fstack-clash-protection -fcf-protection)
 target_link_libraries(sublimation PUBLIC pthread m)
 
-add_library(montauk_core
+set(MONTAUK_CORE_SRCS
     src/util/Procfs.cpp
     src/util/Churn.cpp
     src/util/SortDispatch.cpp
@@ -183,6 +183,7 @@ add_library(montauk_core
     src/ui/widgets/RightColumn.cpp
     src/ui/widgets/SystemPanel.cpp
 )
+add_library(montauk_core ${MONTAUK_CORE_SRCS})
 target_include_directories(montauk_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(montauk_core PUBLIC _GNU_SOURCE)
 target_compile_definitions(montauk_core PUBLIC MONTAUK_VERSION="${PROJECT_VERSION}")
@@ -467,11 +468,32 @@ if(MONTAUK_BUILD_TESTS)
     target_link_options(${t} PRIVATE -fsanitize=thread -pthread)
   endforeach()
 
+  # App-level concurrency stress harness under ThreadSanitizer: test_stress.cpp
+  # already hammers the real Producer/SnapshotBuffers lock-free double-buffer
+  # handoff with a concurrent mutator thread; this proves race-freedom directly
+  # instead of just progress. SnapshotBuffers is header-only (DoubleBuffer.hpp),
+  # so its atomics live inlined in Producer.cpp's object code -- same reasoning
+  # as the sublimation _tsan targets above, this compiles montauk_core's sources
+  # directly rather than linking the unsanitized library. NVML/BPF/io_uring are
+  # optional additions to montauk_core (target_sources calls further below,
+  # never touching MONTAUK_CORE_SRCS) and are skipped here: MONTAUK_GPU_DISABLE_NATIVE
+  # already keeps the GPU path off at runtime (the untested "NVML not found"
+  # build configuration this mirrors is already proven working), and BPF/io_uring
+  # sit outside Producer's dependency chain entirely.
+  add_executable(test_stress_tsan tests/test_main.cpp tests/test_stress.cpp ${MONTAUK_CORE_SRCS})
+  target_include_directories(test_stress_tsan PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+  target_compile_definitions(test_stress_tsan PRIVATE _GNU_SOURCE
+      MONTAUK_VERSION="${PROJECT_VERSION}" MONTAUK_TESTING=1)
+  target_compile_options(test_stress_tsan PRIVATE -fsanitize=thread -g -O1 -pthread)
+  target_link_options(test_stress_tsan PRIVATE -fsanitize=thread -pthread)
+  target_link_libraries(test_stress_tsan PRIVATE sublimation)
+
   # One entry point for the whole suite -- tests/run.py orchestrates the unit
   # (C++ montauk_tests + C23 sink test), gate (Python byte-identical) and trace
   # (root-gated, skipped without root) layers. --no-build because the DEPENDS
   # below already builds the binaries run.py invokes.
   add_custom_target(check
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/run.py --no-build
-    DEPENDS montauk montauk_tests montauk_sink_c_test montauk_json_test montauk_stats_test sublimation_fuzz_diff test_wsdeque test_dfspool test_radix test_radix_par test_smerge_par test_pack test_basic test_tier1 test_tier2 test_tier4 test_tier5 test_adversarial test_adversarial_types test_bentley_mcilroy test_antiqsort test_types test_sorted_perturbed test_zipfian test_saw_mixed test_strings test_randomness test_profile_contract test_search test_affinity test_types_asan test_tier5_asan test_wsdeque_tsan test_dfspool_tsan test_radix_par_tsan montauk_analyze montauk_trace_decode sublimation_cli)
+    DEPENDS montauk montauk_tests montauk_sink_c_test montauk_json_test montauk_stats_test sublimation_fuzz_diff test_wsdeque test_dfspool test_radix test_radix_par test_smerge_par test_pack test_basic test_tier1 test_tier2 test_tier4 test_tier5 test_adversarial test_adversarial_types test_bentley_mcilroy test_antiqsort test_types test_sorted_perturbed test_zipfian test_saw_mixed test_strings test_randomness test_profile_contract test_search test_affinity test_types_asan test_tier5_asan test_wsdeque_tsan test_dfspool_tsan test_radix_par_tsan test_stress_tsan montauk_analyze montauk_trace_decode sublimation_cli)
 endif()

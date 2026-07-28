@@ -16,17 +16,10 @@ static inline unsigned char fold(unsigned char c, int icase) {
     return (icase && c >= 'A' && c <= 'Z') ? (unsigned char)(c + 32) : c;
 }
 
-// Fixed English byte-frequency model, HIGHER = more common. Used only to choose
-// WHICH byte to anchor on; the choice never affects correctness, only skip.
-static uint32_t english_freq(uint8_t b) {
-    static const uint8_t f[26] = {
-        82, 15, 28, 43, 127, 22, 20, 61, 70, 2, 8, 40, 24,
-        67, 75, 19, 1, 60, 63, 91, 28, 10, 24, 2, 20, 1 };
-    uint8_t c = b | 0x20;
-    if (c >= 'a' && c <= 'z') return f[c - 'a'] + 1u;
-    if (b == ' ') return 200;
-    return 1;
-}
+// Input size at or above which find_from's exact face pays for a data-relative
+// rare-byte anchor; below it the histogram costs more than the better anchor
+// returns. Measured, see sublimation_search_find_from.
+#define SEARCH_ANCHOR_HIST_MIN (1u << 20)
 
 // Sample the first <=256 KiB into a byte histogram (sublinear, the online sample).
 static void byte_hist(const uint8_t *hay, size_t n, uint32_t hist[256]) {
@@ -168,13 +161,16 @@ static size_t scan_kmismatch_pre(const uint8_t *hay, size_t n, const uint8_t *pa
     if (!seen) return (size_t)-1;
     size_t count = 0;
     const uint8_t *end = hay + n;
+    // Data-relative rarest byte per piece, same live histogram exact_count reads
+    // -- was the static english_freq table, unified 2026-07-27.
+    uint32_t hist[256]; byte_hist(hay, n, hist);
     for (int pc = 0; pc < pieces; pc++) {
         size_t ps = (size_t)pc * m / (size_t)pieces;
         size_t pe = (size_t)(pc + 1) * m / (size_t)pieces;
         if (pe == ps) continue;
-        size_t roff = ps; uint32_t bf = english_freq(pat[ps]);
+        size_t roff = ps; uint32_t bf = hist[pat[ps]];
         for (size_t i = ps + 1; i < pe; i++) {
-            uint32_t f = english_freq(pat[i]);
+            uint32_t f = hist[pat[i]];
             if (f < bf) { bf = f; roff = i; }
         }
         unsigned char probe = pat[roff];
@@ -566,12 +562,15 @@ static size_t regex_prefiltered(const uint8_t *hay, size_t n, const char *pat,
     uint8_t lit[64];
     int litlen = extract_literal(pat, lit, 64);
     if (litlen < 2) return 0;
-    int probe_off = 0; uint32_t bestf = english_freq(lit[0]);
+    // Data-relative rarest byte in the literal, same live histogram exact_count
+    // reads -- was the static english_freq table, unified 2026-07-27.
+    uint32_t hist[256]; byte_hist(hay, n, hist);
+    int probe_off = 0; uint32_t bestf = hist[lit[0]];
     for (int i = 1; i < litlen; i++) {
-        uint32_t f = english_freq(lit[i]);
+        uint32_t f = hist[lit[i]];
         if (f < bestf) { bestf = f; probe_off = i; }
     }
-    if (probe_off != 0 && bestf * 2 >= english_freq(lit[0])) probe_off = 0;
+    if (probe_off != 0 && bestf * 2 >= hist[lit[0]]) probe_off = 0;
     unsigned char probe = lit[probe_off];
     reach_ent *cache = calloc(REACH_CAP, sizeof(reach_ent));
     if (!cache) return 0;
@@ -742,17 +741,41 @@ long sublimation_search_find_from(const sublimation_search *s, const char *input
         return -1;
     }
 
-    // Exact: leftmost occurrence at or after `from`.
+    // Exact: leftmost occurrence at or after `from`. The rare-byte anchor is
+    // DATA-relative, so choosing it costs a byte_hist pass over the input on
+    // every call -- and this is the line-oriented path the CLI grep loop rides
+    // once per line. Measured on this box (one find_from per buffer, a pattern
+    // with a common first byte and a rare interior byte, no match so both scan
+    // the whole input): the histogram LOSES at every size through 256KB (1.9x
+    // slower at 1-16KB, 1.5x at 64KB, parity at 256KB) and first WINS at 1MB
+    // (3.6x), widening to 11x by 4MB, because byte_hist samples at most 256KB
+    // so past that its cost is fixed while the scan it shortens keeps growing.
+    // Gate at the first MEASURED win rather than an interpolated crossover;
+    // below it the plain first-byte memchr is never worse. The histogram cannot
+    // be cached on `s` instead: the parallel file fan-out shares one const
+    // sublimation_search read-only across workers, so a lazily filled cache
+    // would be a write into a structure other threads are reading.
     if (!s->icase) {
-        const uint8_t *base = hay + from, *end = hay + n;
-        while (base + m <= end) {
-            const uint8_t *hit = memchr(base, pat[0], (size_t)(end - base) - m + 1);
+        size_t aoff = 0;   // 0 == anchor on pat[0], the plain memchr scan
+        if (n >= SEARCH_ANCHOR_HIST_MIN) {
+            uint32_t hist[256]; byte_hist(hay, n, hist);
+            aoff = off_min_by_data(pat, m, hist);
+        }
+        unsigned char abyte = pat[aoff];
+        if (from + m > n) return -1;   // no room for a match at or after `from`
+        // The last anchor position that can still begin a whole match: a match
+        // starting at s needs s + m <= n, and the anchor sits at s + aoff, so
+        // the scan stops at n - m + aoff and never walks the final m-1 bytes.
+        const uint8_t *end = hay + (n - m) + aoff + 1;
+        for (const uint8_t *p = hay + from + aoff; p < end;) {
+            const uint8_t *hit = memchr(p, abyte, (size_t)(end - p));
             if (!hit) break;
-            if (memcmp(hit, pat, m) == 0) {
-                if (end_out) *end_out = (long)((hit - hay) + m);
-                return (long)(hit - hay);
+            size_t start = (size_t)(hit - hay) - aoff;
+            if (memcmp(hay + start, pat, m) == 0) {
+                if (end_out) *end_out = (long)(start + m);
+                return (long)start;
             }
-            base = hit + 1;
+            p = hit + 1;
         }
         return -1;
     }
@@ -766,6 +789,122 @@ long sublimation_search_find_from(const sublimation_search *s, const char *input
 
 long sublimation_search_find(const sublimation_search *s, const char *input, size_t n, long *end_out) {
     return sublimation_search_find_from(s, input, n, 0, end_out);
+}
+
+// LINE SELECTION SEMANTICS. These were the CLI's private helpers until 2026-07-27
+// and moved here unchanged: They decide what counts as a match for a whole line
+// and for a pattern SET, which has to be one answer the library gives, not one
+// the CLI keeps to itself. vector reaching the matcher over FFI has to agree
+// with `sublimation search` on -w and -x, and the occurrence field is built on
+// exactly these spans. Every behavioral comment below was verified against
+// /usr/bin/grep and the corpus gate holds them to it.
+
+// [A-Za-z0-9_], grep -w's word alphabet -- explicit ranges, not isalnum(), so
+// the locale can never shift the boundary set.
+static int word_byte(unsigned char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+// -w boundary test: span [s,e) of line[0..n) counts only when neither
+// neighbor is a word byte (a line edge counts as non-word).
+static int word_bounded(const char *line, size_t n, long s, long e) {
+    if (s > 0 && word_byte((unsigned char)line[s - 1])) return 0;
+    if ((size_t)e < n && word_byte((unsigned char)line[e])) return 0;
+    return 1;
+}
+
+// Next candidate span for ONE pattern at or after `from`, with the -w word
+// filter applied. A rejected candidate at start X resumes the scan at X + 1
+// (grep's rule -- skipping the rest of the line would drop later words).
+// regex_face: find_from reports only the LONGEST end per start, but grep -w
+// admits any match length ('a-|a' on "a-b" must still hit the word "a",
+// verified against /usr/bin/grep), so on rejection the shorter ends at the
+// same start are probed through full_match. ^ is already satisfied (the
+// start came from find_from); $-anchored patterns skip the probe since their
+// matches may only end at n.
+static long search_next_match(const sublimation_search *s, int regex_face,
+                              const char *line, size_t n, size_t from,
+                              int wword, long *end_out) {
+    size_t off = from;
+    while (off <= n) {
+        long e = -1;
+        long st = sublimation_search_find_from(s, line, n, off, &e);
+        if (st < 0) return -1;
+        if (!wword || word_bounded(line, n, st, e)) { *end_out = e; return st; }
+        if (regex_face && !s->g.anchored_end) {
+            for (long e2 = e - 1; e2 >= st; e2--) {
+                if (!word_bounded(line, n, st, e2)) continue;
+                if (sublimation_search_full_match(s, line + st, (size_t)(e2 - st))) {
+                    *end_out = e2;
+                    return st;
+                }
+            }
+        }
+        off = (size_t)st + 1;
+    }
+    return -1;
+}
+
+long sublimation_search_next_any(const sublimation_search *set, int nset, int regex_face,
+                                 const char *line, size_t n, size_t off,
+                                 int wword, long *end_out) {
+    long bs = -1, be = -1;
+    for (int p = 0; p < nset; p++) {
+        long e = -1;
+        long st = search_next_match(&set[p], regex_face, line, n, off, wword, &e);
+        if (st < 0) continue;
+        if (bs < 0 || st < bs || (st == bs && e > be)) { bs = st; be = e; }
+    }
+    if (bs >= 0 && end_out) *end_out = be;
+    return bs;
+}
+
+int sublimation_search_selects(const sublimation_search *set, int nset, int regex_face,
+                               const char *line, size_t n, int xline, int wword) {
+    for (int p = 0; p < nset; p++) {
+        if (xline) {
+            if (sublimation_search_full_match(&set[p], line, n)) return 1;
+        } else {
+            long e = -1;
+            if (search_next_match(&set[p], regex_face, line, n, 0, wword, &e) >= 0) return 1;
+        }
+    }
+    return 0;
+}
+
+void sublimation_occ_buf_init(sublimation_occ_buf *b) {
+    b->occ = NULL; b->n = b->cap = 0;
+    b->raw = NULL; b->raw_n = b->raw_cap = 0;
+}
+
+void sublimation_occ_buf_push(sublimation_occ_buf *b, uint32_t line_no,
+                              const char *line, size_t len, size_t raw_len) {
+    if (b->raw_n + raw_len > b->raw_cap) {
+        size_t ncap = b->raw_cap ? b->raw_cap * 2 : 4096;
+        while (ncap < b->raw_n + raw_len) ncap *= 2;
+        char *nd = (char *)realloc(b->raw, ncap);
+        if (!nd) return;
+        b->raw = nd; b->raw_cap = ncap;
+    }
+    if (b->n == b->cap) {
+        size_t ncap = b->cap ? b->cap * 2 : 64;
+        sublimation_search_occ *no =
+            (sublimation_search_occ *)realloc(b->occ, ncap * sizeof(*no));
+        if (!no) return;
+        b->occ = no; b->cap = ncap;
+    }
+    memcpy(b->raw + b->raw_n, line, raw_len);
+    b->occ[b->n++] = (sublimation_search_occ){ .line_no = line_no,
+                                               .off = (uint32_t)b->raw_n,
+                                               .len = (uint32_t)len,
+                                               .raw_len = (uint32_t)raw_len };
+    b->raw_n += raw_len;
+}
+
+void sublimation_occ_buf_free(sublimation_occ_buf *b) {
+    free(b->occ); free(b->raw);
+    sublimation_occ_buf_init(b);
 }
 
 size_t sublimation_search_count(const sublimation_search *s, const char *input, size_t n) {
