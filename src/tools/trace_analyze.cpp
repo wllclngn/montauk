@@ -571,6 +571,26 @@ double ms(uint64_t ns) { return static_cast<double>(ns) / 1e6; }
 // Raw quantile over a pre-sorted vector -- the one indexing convention every
 // report uses; q_us/q_ms wrap it for the two common units, unitless counts
 // (e.g. dispatch-stall pass-overs) read it directly.
+//
+// ONE OF THREE PERCENTILE CONVENTIONS IN THIS BINARY, and the divergence is
+// deliberate rather than an oversight, so it is stated here instead of being
+// left for the next reader to rediscover:
+//   1. this q_at            -- floor(q*n), clamped. NEAREST-RANK: returns a
+//                              value that is actually IN the data.
+//   2. sublimation_quantile_f64 with nearest==0 -- floor(q*n). AGREES with this
+//      exactly; tests/test_percentile_agreement.cpp asserts it, because today
+//      they agree only by shared authorship and a silent drift would move every
+//      p99 in every report.
+//   3. montauk::stats::percentile (prom_stats.cpp) -- numpy method="linear",
+//      INTERPOLATING. Does NOT agree, and must not: the cross-run population
+//      path is validated for scipy parity and needs the interpolating
+//      estimator. See the note at its definition.
+// Reports use the nearest-rank form because a report's p99 should be an
+// observed latency, not an average of two that never happened.
+//
+// DO NOT route this through sublimation_quantile_f64: its vectors are uint64_t
+// already sorted by sublimation_u64, so the swap would add a u64->double
+// conversion AND a redundant in-place re-sort for an identical answer.
 uint64_t q_at(const std::vector<uint64_t>& v, double f) {
   if (v.empty()) return 0;
   size_t i = static_cast<size_t>(static_cast<double>(v.size()) * f);
@@ -1381,6 +1401,12 @@ struct AbortPostmortemReport final : Report {
   std::unordered_map<uint32_t, uint64_t> last_alloc_; // tid -> last alloc addr
   std::unordered_map<uint32_t, Ring> rings_;          // tid -> recent events
   std::vector<std::string> findings_;
+  // Structured twin of findings_: the text above is for a human, this is what
+  // the ranked-offender view and the JSON envelope read. An abort is a crash,
+  // so it is always sev=2; the victim is the top-adjacent chunk when one was
+  // attributable.
+  struct AbortHit { uint32_t tid; uint64_t victim_addr, victim_size; bool have_victim; };
+  std::vector<AbortHit> hits_;
 
   const char* name() const override { return "abortpm"; }
 
@@ -1434,6 +1460,7 @@ struct AbortPostmortemReport final : Report {
                   "ABORT @%.3fs pid=%u tid=%u comm='%s'\n",
                   a->timestamp_ns / 1e9, a->pid, a->tid, redact_comm(a->comm).c_str());
     f += buf;
+    AbortHit hit{a->tid, 0, 0, false};
     auto la = last_alloc_.find(a->tid);
     if (la == last_alloc_.end()) {
       f += "  no allocations recorded for this tid — no arena attribution\n";
@@ -1447,6 +1474,11 @@ struct AbortPostmortemReport final : Report {
                     "  arena window 0x%" PRIx64 " (+64MB): %zu live chunks; top-adjacent first:\n",
                     base, in.size());
       f += buf;
+      if (!in.empty()) {
+        hit.victim_addr = in[0].first;
+        hit.victim_size = in[0].second->size;
+        hit.have_victim = true;
+      }
       for (size_t i = 0; i < in.size() && i < kTopChunks; ++i) {
         std::snprintf(buf, sizeof(buf),
                       "    %s addr=0x%" PRIx64 " size=%-8" PRIu64 " tid=%u comm='%s'%s\n",
@@ -1483,6 +1515,20 @@ struct AbortPostmortemReport final : Report {
       }
     }
     findings_.push_back(std::move(f));
+    hits_.push_back(hit);
+  }
+
+  // An abort is a crash post-mortem, not a tuning finding: sev=2, always.
+  void offenders(std::vector<Offender>& out) override {
+    for (const auto& h : hits_) {
+      char idb[16];
+      std::snprintf(idb, sizeof(idb), "%u", h.tid);
+      char addrb[32];
+      if (h.have_victim) std::snprintf(addrb, sizeof(addrb), "0x%016" PRIx64, h.victim_addr);
+      else               std::snprintf(addrb, sizeof(addrb), "unattributed");
+      out.push_back({"abort", idb, addrb, "victim_bytes",
+                     static_cast<double>(h.victim_size), 2});
+    }
   }
 
   void emit(const montauk::model::TraceReader&) override {
@@ -2233,14 +2279,45 @@ struct DoubleFreeReport final : Report {
     }
   }
 
+  size_t cross_ = 0;   // of hits_, how many were freed by two different tids
+
+  void compute() override {
+    cross_ = 0;
+    for (const auto& h : hits_) if (h.first_tid != h.second_tid) ++cross_;
+  }
+
+  void prom(std::vector<PromMetric>& out) override {
+    out.push_back({"montauk_analysis_doublefree_total", "",
+                   static_cast<double>(hits_.size())});
+    out.push_back({"montauk_analysis_doublefree_cross_thread_total", "",
+                   static_cast<double>(cross_)});
+    out.push_back({"montauk_analysis_frees_total", "",
+                   static_cast<double>(total_frees_)});
+  }
+
+  // A double-free is memory corruption, not a tuning finding: severity is not a
+  // judgment call, so every hit is sev=2 unconditionally. Cross-thread means two
+  // different threads freed the same live-then-dead chunk -- a heap RACE, which
+  // is the more urgent of the two, but both are bugs.
+  void offenders(std::vector<Offender>& out) override {
+    for (const auto& h : hits_) {
+      char idb[16];
+      std::snprintf(idb, sizeof(idb), "%u", h.second_tid);
+      char addrb[32];
+      std::snprintf(addrb, sizeof(addrb), "0x%016" PRIx64, h.addr);
+      out.push_back({h.first_tid != h.second_tid ? "doublefree-race"
+                                                 : "doublefree-logic",
+                     idb, addrb, "bytes", static_cast<double>(h.size), 2});
+    }
+  }
+
   void emit(const montauk::model::TraceReader&) override {
     header();
     if (hits_.empty()) {
       montauk_sink_appendf(&g_out, "VERDICT: no double-frees in %" PRIu64 " frees\n", total_frees_);
       return;
     }
-    size_t cross = 0;
-    for (const auto& h : hits_) if (h.first_tid != h.second_tid) ++cross;
+    const size_t cross = cross_;
     montauk_sink_appendf(&g_out, "VERDICT: %zu double-free(s) in %" PRIu64 " frees — %zu cross-thread (race), %zu same-thread (logic)\n",
                 hits_.size(), total_frees_, cross, hits_.size() - cross);
     montauk_sink_appendf(&g_out, "addr               size     freed_by_1            freed_by_2           kind\n");
@@ -2688,7 +2765,11 @@ struct SchedLatencyReport final : Report {
     result_.worst = us(lat_.back());
     result_.fastpct = 100.0 * static_cast<double>(fast) / dn;
     result_.tickpct = 100.0 * static_cast<double>(tick) / dn;
-    result_.midpct = 100.0 - result_.fastpct - result_.tickpct;
+    // From the COUNT, not as 100 - fast - tick. The three buckets partition
+    // lat_, so the residual form is algebraically the same and numerically
+    // worse: it printed "-0.0% mid" once the fixture gained enough wakes for
+    // the two subtractions to land a few ulps past 100.
+    result_.midpct = 100.0 * static_cast<double>(lat_.size() - fast - tick) / dn;
     result_.crosspct = 100.0 * static_cast<double>(cross_lat_.size()) / dn;
 
     if (!cross_lat_.empty()) {
@@ -3336,19 +3417,106 @@ struct CpuHolderLedger {
   }
 };
 
+// SHARED SCHED SUBSTRATE. Both of these fold the whole sched stream and were
+// instantiated TWICE -- DispatchStallReport and KStrandReport each held a
+// private copy and folded independently, doubling the work and the memory for
+// two structures whose own comment already said both reports query them. Folded
+// once by the driver (see for_each below), queried by both. The fold conditions
+// were byte-identical in the two reports before this, which is what makes the
+// share safe: holder unconditionally, idle on SCHED_OP_CPU_IDLE only.
+// The per-CPU pick timeline, held ONCE. dispatch-stall buffered these as full
+// records and slice buffered a timestamp-only copy of the same stream -- the
+// ~6x peak RAM on a 450MB trace. One buffer now; slice reads .ts off the same
+// records.
+struct CpuPickTimeline {
+  // ts, picked pid, LANE (sub_idx: 0=primary, >0=steal), dispatch score. The
+  // class occupies the score's high bits; within a class the oldest waiter
+  // sorts highest, so cls = score>>48.
+  struct Pk { uint64_t ts; int pid; uint32_t lane; uint64_t score; };
+  std::unordered_map<uint32_t, std::vector<Pk>> picks;         // native PICK
+  std::unordered_map<uint32_t, std::vector<Pk>> switch_picks;  // SWITCH_IN fallback
+
+  void fold(const montauk_sched_event* s) {
+    if (s->op == SCHED_OP_PICK)
+      picks[s->cpu].push_back({s->timestamp_ns, s->pid, s->sub_idx, s->score});
+    else if (s->op == SCHED_OP_SWITCH_IN)
+      // Reconstructed pick: switch-in = pick; lane/score unavailable (zeroed).
+      switch_picks[s->cpu].push_back({s->timestamp_ns, s->pid, 0, 0});
+  }
+
+  // Prefer the scheduler's own PICK stream; fall back to the SWITCH_IN
+  // reconstruction when no pick tracepoint was bound (stock EEVDF, scx modes
+  // without pick). Both callers spelled this rule differently before -- one as
+  // `picks.empty() && !switch.empty()`, one as `!picks.empty() ? picks : switch`
+  // -- which agree in every case; this is the single statement of it.
+  [[nodiscard]] bool reconstructed() const {
+    return picks.empty() && !switch_picks.empty();
+  }
+  [[nodiscard]] const std::unordered_map<uint32_t, std::vector<Pk>>& active() const {
+    return reconstructed() ? switch_picks : picks;
+  }
+
+  // Sort the ACTIVE stream per CPU by timestamp. Only the active one, because
+  // only it is ever read -- sorting both would be work nobody consumes.
+  void finalize() {
+    auto& src = reconstructed() ? switch_picks : picks;
+    for (auto& kv : src)
+      sublimation_order_u64(kv.second, false, [](const Pk& e) { return e.ts; });
+  }
+};
+
+// Bin a timestamp stream into a rate series over [t0, t0 + w*nbins). Shared by
+// fractal and matrix-profile, which both turn the same SCHED stream into a rate
+// series and each carried a private copy of this loop.
+//
+// The RESOLUTION stays the caller's: fractal asks for ~120k bins because DFA
+// needs several decades of scale to be rigorous (its predecessor ran on ~340
+// .prom points, under one decade, and its own author marked it INDICATIVE
+// ONLY), while matrix profile asks for 128 because STOMP's cost scales with
+// window count. Sharing the loop is right; unifying the bin counts would break
+// one of the two algorithms.
+// The tail CLAMPS into the last bin rather than being dropped. That is
+// matrix-profile's existing behaviour and a no-op for fractal, which sizes
+// nbins as span/w + 1 so its largest index is already exactly nbins-1 -- which
+// is what lets one helper serve both without moving either's numbers.
+static std::vector<double> bin_rate_series(const std::vector<uint64_t>& ts,
+                                           uint64_t t0, uint64_t w, size_t nbins) {
+  std::vector<double> r(nbins, 0.0);
+  if (w == 0 || nbins == 0) return r;
+  for (uint64_t t : ts) {
+    if (t < t0) continue;
+    size_t i = static_cast<size_t>((t - t0) / w);
+    if (i >= nbins) i = nbins - 1;
+    r[i] += 1.0;
+  }
+  return r;
+}
+
+static CpuIdleIntervals g_sched_idle;
+static CpuHolderLedger  g_sched_holder;
+static CpuPickTimeline  g_sched_picks;
+// finalize() sorts the per-CPU timelines and must run once, after the last
+// fold and before the first query. Reports call ensure_sched_substrate() from
+// their own compute(); the flag makes the second and later calls free.
+static bool g_sched_substrate_ready = false;
+static void ensure_sched_substrate() {
+  if (g_sched_substrate_ready) return;
+  g_sched_substrate_ready = true;
+  g_sched_idle.finalize();
+  g_sched_holder.finalize();
+  g_sched_picks.finalize();
+}
+
 struct DispatchStallReport final : Report {
   static constexpr uint64_t kTickFloorNs = 900000ULL;
   // pick on a CPU: timestamp, picked pid, LANE (sub_idx: 0=primary, >0=steal), and
   // the dispatch score. The class occupies the high bits; within a class the
   // oldest waiter sorts highest, so a higher class outranks age. cls = score>>48.
-  struct Pk { uint64_t ts; int pid; uint32_t lane; uint64_t score; };
-  std::unordered_map<uint32_t, std::vector<Pk>> picks_;  // cpu -> picks
-  // Fallback pick stream reconstructed from SWITCH_IN when no native PICK
-  // tracepoint is bound (stock EEVDF): a switch-in is a pick. Lane and score
-  // are unavailable there, so the class/lane sub-analysis is suppressed in
-  // reconstructed mode; the preempt-vs-order split (pass-over count) holds
-  // from either stream.
-  std::unordered_map<uint32_t, std::vector<Pk>> switch_picks_;
+  // The pick stream is the SHARED substrate (CpuPickTimeline). In reconstructed
+  // mode a switch-in stands in for a pick, so lane and score are unavailable
+  // and the class/lane sub-analysis is suppressed; the preempt-vs-order split
+  // (pass-over count) holds from either stream.
+  using Pk = CpuPickTimeline::Pk;
   bool reconstructed_ = false;
   static uint64_t cls_of(uint64_t score) { return score >> 48; }
   // floored wake: (wake_ts, run_ts, run_cpu, wakee_pid)
@@ -3364,31 +3532,23 @@ struct DispatchStallReport final : Report {
   std::unordered_map<uint32_t, uint64_t> offender_;
   // Per-CPU idle intervals -- see CpuIdleIntervals. Separates a HELD CPU (busy
   // hog, real preempt gap) from a DARK CPU (idle, no tick -- the strand bug)
-  // inside PREEMPT-STARVED.
-  CpuIdleIntervals idle_;
-  CpuHolderLedger holder_;
+  // inside PREEMPT-STARVED. Both are the SHARED substrate now, folded once by
+  // the driver rather than privately per report.
+  CpuIdleIntervals& idle_ = g_sched_idle;
+  CpuHolderLedger&  holder_ = g_sched_holder;
   std::unordered_map<uint32_t, uint64_t> held_by_;  // tid -> ns held across HELD floored wakes
 
   const char* name() const override { return "dispatch-stall"; }
 
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
-    holder_.fold(type, data, len);
+    // holder_/idle_ are the shared substrate and are folded by the driver, not
+    // here -- folding them again would double-count every event.
     if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
     const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
     if (s->timestamp_ns > max_ts_) max_ts_ = s->timestamp_ns;  // trace end, for censored strands
-    if (s->op == SCHED_OP_PICK) {
-      picks_[s->cpu].push_back({s->timestamp_ns, s->pid, s->sub_idx, s->score});
-      return;
-    }
-    if (s->op == SCHED_OP_SWITCH_IN) {
-      // Reconstructed pick: switch-in = pick; lane/score unavailable (zeroed).
-      switch_picks_[s->cpu].push_back({s->timestamp_ns, s->pid, 0, 0});
-      return;
-    }
-    if (s->op == SCHED_OP_CPU_IDLE) {
-      idle_.fold(s->cpu, s->sub_idx, s->timestamp_ns);
-      return;
-    }
+    if (s->op == SCHED_OP_PICK || s->op == SCHED_OP_SWITCH_IN ||
+        s->op == SCHED_OP_CPU_IDLE)
+      return;  // all shared substrate, folded by the driver
     if (s->op != SCHED_OP_WAKE2RUN) return;
     uint64_t wait = s->runtime_ns;
     if (wait < kTickFloorNs) return;
@@ -3437,15 +3597,10 @@ struct DispatchStallReport final : Report {
       }
     }
     if (floored_.empty()) return;
-    // Prefer the native PICK stream; fall back to the SWITCH_IN reconstruction
-    // so the preempt-vs-order split works on schedulers that emit no PICK.
-    reconstructed_ = picks_.empty() && !switch_picks_.empty();
-    auto& src = reconstructed_ ? switch_picks_ : picks_;
-    for (auto& kv : src)
-      sublimation_order_u64(kv.second, false, [](const Pk& e) { return e.ts; });
-    idle_.finalize();
+    ensure_sched_substrate();   // shared: folded and sorted once, not per report
+    reconstructed_ = g_sched_picks.reconstructed();
+    const auto& src = g_sched_picks.active();
     have_idle_ = !idle_.empty();
-    holder_.finalize();
 
     uint64_t preempt = 0, order = 0, inter_sum = 0;
     uint64_t held = 0;  // PREEMPT-STARVED with the run-CPU busy through the wait
@@ -3764,6 +3919,29 @@ struct DispatchStallReport final : Report {
                 ceiling_remains_pct_, 100.0 - ceiling_remains_pct_);
   }
 
+  // The two culprit maps compute() already builds, published into the ranked
+  // view. Until now offender_ -- the map whose own comment says it "names WHO
+  // the concentration ratio was counting" -- rendered only inside emit(), so the
+  // flagship stall diagnostic contributed nothing to the digest. Top 3 of each,
+  // the same cut emit() prints.
+  void offenders(std::vector<Offender>& out) override {
+    auto top3 = [&](const std::unordered_map<uint32_t, uint64_t>& m,
+                    const char* kind, const char* metric, double scale, int sev) {
+      if (m.empty()) return;
+      std::vector<std::pair<uint32_t, uint64_t>> v(m.begin(), m.end());
+      sublimation_order_u64(v, true,
+                            [](const std::pair<uint32_t, uint64_t>& p) { return p.second; });
+      for (size_t i = 0; i < v.size() && i < 3; ++i)
+        out.push_back({kind, holder_.name_of(v[i].first), "", metric,
+                       static_cast<double>(v[i].second) * scale, sev});
+    };
+    // Order-starved: the tasks a CPU re-picked while a woken thread waited.
+    top3(offender_, "order-starved", "passover_picks", 1.0,
+         order_pct_ >= 50.0 ? 2 : 1);
+    // Preempt-starved HELD: the task that ran the CPU through the whole wait.
+    top3(held_by_, "held-cpu", "held_ms", 1e-6, held_pct_ >= 50.0 ? 2 : 1);
+  }
+
   void prom(std::vector<PromMetric>& out) override {
     // Before the n_ guard: a wedged host has n_==0 but is the whole point.
     if (censored_n_) {
@@ -3860,9 +4038,11 @@ struct KickLatencyReport final : Report {
         uint64_t kick_ts = ks[i].ts;
         uint64_t bound = (i + 1 < ks.size()) ? ks[i + 1].ts : last_ts_;
         ++total_;
-        auto it = std::lower_bound(rs.begin(), rs.end(), kick_ts);
-        if (it != rs.end() && *it <= bound) {
-          latencies_ns_.push_back(*it - kick_ts);
+        // rs was ordered by sublimation_u64 above; searchsorted is the library's
+        // documented 1:1 lower_bound (side 0), same array, no conversion.
+        size_t ri = sublimation_searchsorted_u64(rs.data(), rs.size(), kick_ts, 0);
+        if (ri < rs.size() && rs[ri] <= bound) {
+          latencies_ns_.push_back(rs[ri] - kick_ts);
           continue;
         }
         ++unanswered_;
@@ -3945,8 +4125,8 @@ struct KickLatencyReport final : Report {
 // running a long slice," this is the per-slice multiplier: tail ~ pass-overs x
 // slice. Idle strands (gap > 10ms) are excluded -- those are not slices.
 struct SliceReport final : Report {
-  std::unordered_map<uint32_t, std::vector<uint64_t>> pick_ts_;    // cpu -> custom PICK ts
-  std::unordered_map<uint32_t, std::vector<uint64_t>> switch_ts_;  // cpu -> sched_switch fallback ts
+  // No private pick buffer: this read a timestamp-only copy of the very stream
+  // dispatch-stall already held in full. Both now read CpuPickTimeline.
   std::vector<uint64_t> slices_;
   std::vector<std::pair<uint64_t, uint64_t>> tl_;  // (slice start ts, duration) for the wall-clock trajectory
   std::vector<uint64_t> seg_med_;  // per-segment median slice (us), for the TRAJECTORY line
@@ -3956,29 +4136,23 @@ struct SliceReport final : Report {
 
   const char* name() const override { return "slice"; }
 
-  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
-    if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
-    const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
-    if (s->op == SCHED_OP_PICK)           pick_ts_[s->cpu].push_back(s->timestamp_ns);
-    else if (s->op == SCHED_OP_SWITCH_IN) switch_ts_[s->cpu].push_back(s->timestamp_ns);
+  void fold(uint32_t, const uint8_t*, uint32_t) override {
+    // The pick stream is the shared substrate; nothing private to fold here.
   }
-
 
   // Derive the slice distribution (sorted) and the wall-clock trajectory once,
   // so prom()/json() are correct without emit() having run. emit() renders.
   void compute() override {
     static constexpr uint64_t kStrandNs = 10000000ULL;  // >10ms gap = idle, not a slice
-    // Prefer the scheduler's own PICK stream; fall back to the sched_switch-derived
-    // SWITCH_IN when no pick tracepoint was bound (EEVDF / scx modes without pick).
-    auto& src = !pick_ts_.empty() ? pick_ts_ : switch_ts_;
-    for (auto& kv : src) {
-      auto& v = kv.second;
-      sublimation_u64(v.data(), v.size());
+    ensure_sched_substrate();   // sorted per CPU by ts, once for every consumer
+    const auto& src = g_sched_picks.active();
+    for (const auto& kv : src) {
+      const auto& v = kv.second;
       for (size_t i = 1; i < v.size(); ++i) {
-        uint64_t d = v[i] - v[i - 1];
+        uint64_t d = v[i].ts - v[i - 1].ts;
         if (d > 0 && d < kStrandNs) {
           slices_.push_back(d);
-          tl_.push_back({v[i - 1], d});
+          tl_.push_back({v[i - 1].ts, d});
         }
       }
     }
@@ -4049,9 +4223,11 @@ struct SliceReport final : Report {
     // preempt should chop any slice whose CPU holds a waiter past ~1ms. Slices that
     // ran far past it uninterrupted are hogs the preempt never touched -- the mass
     // of the lat-critical/ctxless preempt-exemption strand. Over the sorted stream.
+    // slices_ is sorted by sublimation_u64; searchsorted(side 0) is the library's
+    // documented lower_bound, so the count past `ns` is n minus that index.
     auto over = [&](uint64_t ns) {
-      size_t k = (size_t)(slices_.end() -
-                          std::lower_bound(slices_.begin(), slices_.end(), ns));
+      size_t k = slices_.size() -
+                 sublimation_searchsorted_u64(slices_.data(), slices_.size(), ns, 0);
       return std::make_pair(k, 100.0 * (double)k / (double)slices_.size());
     };
     auto o2 = over(2000000ULL), o5 = over(5000000ULL), o8 = over(8000000ULL);
@@ -4289,45 +4465,94 @@ struct WakersReport final : Report {
   }
 
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
-    if (wake_count_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no waker edges (pre-v7.9.0 trace -- sched_wakeup did "
-                  "not stamp the waker); re-capture to resolve\n\n");
-      return;
-    }
-    // Hot waker = messenger: wake-issue count >= 8x the mean waker's count.
+  // Everything the report concludes, computed once so prom()/json()/offenders()
+  // do not depend on emit() having run. This report's whole job is naming a
+  // culprit -- the hot waker whose own dispatch delay every wakee inherits --
+  // and until now it published none of it: prom() was an empty override.
+  std::vector<uint32_t> hot_;          // messenger pids, by descending wake count
+  std::vector<uint64_t> hot_wakes_;    // parallel: wakes each hot waker issued
+  std::vector<uint64_t> msg_, wrk_;    // wake2run samples, sorted, by class
+  uint64_t thresh_ = 0;
+  bool have_ = false;
+
+  void compute() override {
+    if (wake_count_.empty()) return;
     uint64_t sum = 0; for (auto& kv : wake_count_) sum += kv.second;
     double mean = (double)sum / (double)wake_count_.size();
-    uint64_t thresh = (uint64_t)(mean * 8.0); if (thresh < 8) thresh = 8;
-    std::unordered_set<int> hot;
-    for (auto& kv : wake_count_) if (kv.second >= thresh) hot.insert(kv.first);
+    thresh_ = (uint64_t)(mean * 8.0); if (thresh_ < 8) thresh_ = 8;
 
-    std::vector<uint64_t> msg, wrk;
+    std::vector<std::pair<uint32_t, uint64_t>> hv;
+    std::unordered_set<int> hot;
+    for (auto& kv : wake_count_)
+      if (kv.second >= thresh_) {
+        hot.insert(kv.first);
+        hv.emplace_back(static_cast<uint32_t>(kv.first), kv.second);
+      }
+    sublimation_order_u64(hv, true,
+                          [](const std::pair<uint32_t, uint64_t>& p) { return p.second; });
+    for (const auto& p : hv) { hot_.push_back(p.first); hot_wakes_.push_back(p.second); }
+
     for (auto& kv : w2r_by_pid_) {
-      auto& dst = hot.count(kv.first) ? msg : wrk;
+      auto& dst = hot.count(kv.first) ? msg_ : wrk_;
       for (uint64_t v : kv.second) dst.push_back(v);
     }
     // q_us indexes a pre-sorted vector (the shared hoisted helper); sort once
     // here -- the per-class q_us this replaced sorted internally on each call.
-    sublimation_u64(msg.data(), msg.size());
-    sublimation_u64(wrk.data(), wrk.size());
+    sublimation_u64(msg_.data(), msg_.size());
+    sublimation_u64(wrk_.data(), wrk_.size());
+    have_ = true;
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (!have_) {
+      montauk_sink_appendf(&g_out, "VERDICT: no waker edges (pre-v7.9.0 trace -- sched_wakeup did "
+                  "not stamp the waker); re-capture to resolve\n\n");
+      return;
+    }
     montauk_sink_appendf(&g_out, "VERDICT: %s waker pids, %s hot (messengers, >=%llu wakes); "
                 "%s total wakes\n",
                 fmt_count((double)wake_count_.size()).c_str(),
-                fmt_count((double)hot.size()).c_str(),
-                (unsigned long long)thresh, fmt_count((double)total_wakes_).c_str());
+                fmt_count((double)hot_.size()).c_str(),
+                (unsigned long long)thresh_, fmt_count((double)total_wakes_).c_str());
     montauk_sink_appendf(&g_out, "  MESSENGER wake2run (%s samples): p50 %.0fus p99 %.0fus "
-                "p999 %.0fus\n", fmt_count((double)msg.size()).c_str(),
-                q_us(msg, 0.50), q_us(msg, 0.99), q_us(msg, 0.999));
+                "p999 %.0fus\n", fmt_count((double)msg_.size()).c_str(),
+                q_us(msg_, 0.50), q_us(msg_, 0.99), q_us(msg_, 0.999));
     montauk_sink_appendf(&g_out, "  WORKER    wake2run (%s samples): p50 %.0fus p99 %.0fus "
-                "p999 %.0fus\n", fmt_count((double)wrk.size()).c_str(),
-                q_us(wrk, 0.50), q_us(wrk, 0.99), q_us(wrk, 0.999));
+                "p999 %.0fus\n", fmt_count((double)wrk_.size()).c_str(),
+                q_us(wrk_, 0.50), q_us(wrk_, 0.99), q_us(wrk_, 0.999));
     montauk_sink_appendf(&g_out, "  (messenger tail >> worker tail -> the cliff is the waker "
                 "critical path; protect the wakers, don't deprioritize them)\n\n");
   }
 
-  void prom(std::vector<PromMetric>&) override {}
+  void prom(std::vector<PromMetric>& out) override {
+    if (!have_) return;
+    out.push_back({"montauk_analysis_waker_pids", "", (double)wake_count_.size()});
+    out.push_back({"montauk_analysis_waker_hot_pids", "", (double)hot_.size()});
+    out.push_back({"montauk_analysis_waker_wakes_total", "", (double)total_wakes_});
+    out.push_back({"montauk_analysis_waker_hot_threshold", "", (double)thresh_});
+    push_quantile_gauges(out, "montauk_analysis_waker_messenger_wake2run_us",
+                         {{"0.5", q_us(msg_, 0.50)}, {"0.99", q_us(msg_, 0.99)},
+                          {"0.999", q_us(msg_, 0.999)}});
+    push_quantile_gauges(out, "montauk_analysis_waker_worker_wake2run_us",
+                         {{"0.5", q_us(wrk_, 0.50)}, {"0.99", q_us(wrk_, 0.99)},
+                          {"0.999", q_us(wrk_, 0.999)}});
+  }
+
+  // A hot waker is only an offender when its own dispatch tail is the one being
+  // inherited: messenger p99 clearly above worker p99 is the signature the
+  // report's closing line describes. Below that it is just a busy messenger.
+  void offenders(std::vector<Offender>& out) override {
+    if (!have_ || hot_.empty() || msg_.empty()) return;
+    const double mp99 = q_us(msg_, 0.99), wp99 = q_us(wrk_, 0.99);
+    if (!(mp99 > wp99 * 1.5)) return;
+    for (size_t i = 0; i < hot_.size() && i < 3; ++i) {
+      char idb[16];
+      std::snprintf(idb, sizeof(idb), "%u", hot_[i]);
+      out.push_back({"hot-waker", idb, "", "wakes_issued",
+                     static_cast<double>(hot_wakes_[i]), mp99 > wp99 * 4.0 ? 2 : 1});
+    }
+  }
 };
 
 // REPORT fractal: self-similarity of the dispatch + migration timeline.
@@ -4360,16 +4585,6 @@ struct FractalReport final : Report {
     }
   }
 
-  static std::vector<double> bin_rate(const std::vector<uint64_t>& ts,
-                                      uint64_t t0, uint64_t w, size_t nbins) {
-    std::vector<double> r(nbins, 0.0);
-    for (uint64_t t : ts) {
-      size_t i = static_cast<size_t>((t - t0) / w);
-      if (i < nbins) r[i] += 1.0;
-    }
-    return r;
-  }
-
   SeriesOut analyze_series(const char* nm, const std::vector<double>& rate) {
     SeriesOut o{nm, NAN, NAN, NAN, NAN, 0.0, false};
     if (rate.size() < 32) return o;
@@ -4380,19 +4595,17 @@ struct FractalReport final : Report {
     return o;
   }
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
-    if (disp_ts_.empty() && mig_ts_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no SCHED events in trace -- nothing to analyze\n\n");
-      return;
-    }
+  // Everything renders from these, so compute once rather than inside emit():
+  // prom()/json()/offenders() must not depend on the text renderer having run.
+  double secs_ = 0.0, binw_ = 0.0;
+  bool have_ = false;
+
+  void compute() override {
+    if (disp_ts_.empty() && mig_ts_.empty()) return;
     uint64_t t0 = UINT64_MAX, t1 = 0;
     for (uint64_t t : disp_ts_) { t0 = std::min(t0, t); t1 = std::max(t1, t); }
     for (uint64_t t : mig_ts_)  { t0 = std::min(t0, t); t1 = std::max(t1, t); }
-    if (t1 <= t0) {
-      montauk_sink_appendf(&g_out, "VERDICT: zero-duration timeline -- nothing to analyze\n\n");
-      return;
-    }
+    if (t1 <= t0) return;
     // Target ~120k bins so the DFA scale range spans ~3-4 decades; clamp the
     // bin width to [10us, 10ms] so neither tiny nor huge traces degenerate.
     const uint64_t span = t1 - t0;
@@ -4400,14 +4613,50 @@ struct FractalReport final : Report {
     if (w < 10000) w = 10000;
     if (w > 10000000) w = 10000000;
     nbins_ = static_cast<size_t>(span / w) + 1;
-    const double secs = static_cast<double>(span) / 1e9;
+    secs_ = static_cast<double>(span) / 1e9;
+    binw_ = static_cast<double>(w) / 1000.0;
 
-    std::vector<double> disp = bin_rate(disp_ts_, t0, w, nbins_);
-    std::vector<double> mig = bin_rate(mig_ts_, t0, w, nbins_);
+    std::vector<double> disp = bin_rate_series(disp_ts_, t0, w, nbins_);
+    std::vector<double> mig = bin_rate_series(mig_ts_, t0, w, nbins_);
     out_.clear();
     out_.push_back(analyze_series("dispatch-rate", disp));
     out_.push_back(analyze_series("migration-rate", mig));
     avalanches_ = montauk::stats::avalanche_tail(mig, &aval_slope_);
+    have_ = true;
+  }
+
+  // A timeline that is provably NOT uncorrelated is a structural finding: a
+  // persistent (long-range dependent) dispatch rate means bursts beget bursts,
+  // and an avalanche tail is the self-organized-criticality signature. Only
+  // series whose Hurst is 2 standard errors clear of 0.5 promote -- an
+  // "indistinguishable from uncorrelated" verdict is not an offender.
+  void offenders(std::vector<Offender>& out) override {
+    if (!have_) return;
+    for (const SeriesOut& o : out_) {
+      if (!o.ok) continue;
+      const bool persistent = (o.h - 2 * o.se) > 0.5;
+      const bool anti = (o.h + 2 * o.se) < 0.5;
+      if (!persistent && !anti) continue;
+      out.push_back({persistent ? "long-range-dependent" : "mean-reverting",
+                     o.name, "", "hurst", o.h, o.decades >= 2.0 ? 1 : 0});
+    }
+    if (avalanches_ >= 5)
+      out.push_back({"migration-avalanche", "migration-rate", "", "runs",
+                     static_cast<double>(avalanches_), 1});
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (disp_ts_.empty() && mig_ts_.empty()) {
+      montauk_sink_appendf(&g_out, "VERDICT: no SCHED events in trace -- nothing to analyze\n\n");
+      return;
+    }
+    if (!have_) {
+      montauk_sink_appendf(&g_out, "VERDICT: zero-duration timeline -- nothing to analyze\n\n");
+      return;
+    }
+    const double secs = secs_;
+    const double w = binw_ * 1000.0;
 
     montauk_sink_appendf(&g_out, "TIMELINE: %s dispatches, %s cross-domain over %.1fs; "
                 "bin %.0fus -> %zu bins\n",
@@ -4473,25 +4722,20 @@ struct KStrandReport final : Report {
     uint64_t worst_run_ts = 0;  // run_ts of the max strand, for holder attribution
   };
   std::unordered_map<std::string, Agg> by_comm_;
-  CpuHolderLedger holder_;
+  CpuHolderLedger& holder_ = g_sched_holder;   // shared substrate, see above
   // strands buffered until compute() so CPU_IDLE intervals are complete first.
   // comm stays the raw TASK_COMM_LEN bytes (no per-event heap string in the
   // fold hot path); redaction happens at render.
   struct Ev { uint32_t cpu; uint64_t run_ts, lat; char comm[16]; };
   std::vector<Ev> evs_;
-  CpuIdleIntervals idle_;
+  CpuIdleIntervals& idle_ = g_sched_idle;      // shared substrate, see above
   uint64_t total_ = 0, worst_held_ns_ = 0;
 
   const char* name() const override { return "kstrand"; }
 
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
-    holder_.fold(type, data, len);
-    if (type == TRACE_EVT_SCHED && len >= sizeof(montauk_sched_event)) {
-      const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
-      if (s->op != SCHED_OP_CPU_IDLE) return;
-      idle_.fold(s->cpu, s->sub_idx, s->timestamp_ns);
-      return;
-    }
+    // holder_/idle_ are folded by the driver now, not per report.
+    if (type == TRACE_EVT_SCHED) return;
     if (type != TRACE_EVT_KSTRAND || len < sizeof(montauk_kstrand_event)) return;
     const auto* k = reinterpret_cast<const montauk_kstrand_event*>(data);
     Ev e{k->cpu, k->timestamp_ns, k->latency_ns, {}};
@@ -4505,7 +4749,7 @@ struct KStrandReport final : Report {
   // WITHOUT ever calling emit() for this report, so the aggregation cannot live
   // in emit().
   void compute() override {
-    idle_.finalize();
+    ensure_sched_substrate();   // shared: finalize once, not per report
     for (const auto& e : evs_) {
       Agg& a = by_comm_[std::string(e.comm, strnlen(e.comm, sizeof(e.comm)))];
       a.cpu = e.cpu;
@@ -4517,7 +4761,6 @@ struct KStrandReport final : Report {
       if (idle * 2 >= e.lat) a.dark++;
       else { a.held++; if (e.lat > worst_held_ns_) worst_held_ns_ = e.lat; }
     }
-    holder_.finalize();
   }
 
   void emit(const montauk::model::TraceReader&) override {
@@ -4786,12 +5029,12 @@ class LocalityReport : public Report {
                   static_cast<double>(migrations_) / span_s, span_s);
     if (!intervals_.empty()) {
       sublimation_u64(intervals_.data(), intervals_.size());
-      auto iq = [&](double p) {
-        size_t i = static_cast<size_t>(p * static_cast<double>(intervals_.size() - 1));
-        return static_cast<double>(intervals_[i]) / 1000.0;  // us
-      };
+      // q_us, not a local lambda: the private one here indexed p*(n-1), which is
+      // a DIFFERENT estimator from the floor(p*n) every other quantile in this
+      // file uses via q_at -- so this family disagreed with its own siblings.
       montauk_sink_appendf(&g_out, "inter-migration interval us: p50=%.1f p99=%.1f min=%.1f (n=%zu)\n",
-                  iq(0.50), iq(0.99), static_cast<double>(intervals_.front()) / 1000.0,
+                  q_us(intervals_, 0.50), q_us(intervals_, 0.99),
+                  static_cast<double>(intervals_.front()) / 1000.0,
                   intervals_.size());
     }
     if (have_lane_) {
@@ -4845,13 +5088,19 @@ class LocalityReport : public Report {
     out.push_back({"montauk_analysis_locality_migration_rate_hz", "",
                    span_s > 0.0 ? static_cast<double>(migrations_) / span_s : 0.0});
     if (!intervals_.empty()) {
+      // THE SECOND SORT STAYS, and the ROADMAP entry calling it redundant was
+      // wrong. It is redundant only on the TEXT path, where emit() sorted
+      // intervals_ first. The --json path calls json() -> prom() and returns
+      // without ever calling emit(), so on that path this is the ONLY sort and
+      // removing it silently corrupts every quantile in the JSON envelope.
+      // It hits the classifier's sorted fast path when emit() did run, so the
+      // duplicate costs a scan, not a sort.
       sublimation_u64(intervals_.data(), intervals_.size());
-      auto iq = [&](double p) {
-        size_t i = static_cast<size_t>(p * static_cast<double>(intervals_.size() - 1));
-        return static_cast<double>(intervals_[i]) / 1000.0;
-      };
-      out.push_back({"montauk_analysis_locality_intermigration_us", "quantile=\"p50\"", iq(0.50)});
-      out.push_back({"montauk_analysis_locality_intermigration_us", "quantile=\"p99\"", iq(0.99)});
+      // Same estimator as emit() and as every other quantile in this file.
+      out.push_back({"montauk_analysis_locality_intermigration_us", "quantile=\"p50\"",
+                     q_us(intervals_, 0.50)});
+      out.push_back({"montauk_analysis_locality_intermigration_us", "quantile=\"p99\"",
+                     q_us(intervals_, 0.99)});
     }
   }
 };
@@ -5262,12 +5511,12 @@ struct MatrixProfileReport final : Report {
     uint64_t t0 = ts_.front(), t1 = ts_.back();
     if (t1 <= t0) return;
     uint64_t span = t1 - t0;
-    std::vector<double> series(NBINS, 0.0);
-    for (uint64_t t : ts_) {
-      size_t b = static_cast<size_t>(((t - t0) * NBINS) / span);
-      if (b >= NBINS) b = NBINS - 1;
-      series[b] += 1.0;
-    }
+    // NBINS bins over the whole span. Asked for at this resolution, not
+    // fractal's ~120k, because STOMP's cost scales with window count -- the
+    // shared helper takes the resolution, it does not impose one.
+    uint64_t w = span / NBINS;
+    if (w == 0) w = 1;
+    std::vector<double> series = bin_rate_series(ts_, t0, w, NBINS);
     size_t L = NBINS - WIN + 1;
     std::vector<double> mp(L);
     std::vector<int64_t> mpi(L);
@@ -5322,6 +5571,23 @@ struct MatrixProfileReport final : Report {
     ensure();
     for (const auto& g : r_.gauges) out.push_back(g);
   }
+
+  // The discord IS the anomaly -- the window whose nearest neighbour is furthest
+  // away, i.e. the least-like-anything-else stretch of the trace, already
+  // localized in time. It had no way into the ranked view. Severity scales with
+  // how far the discord stands above the profile's own mean, so a flat trace
+  // (every window similar) never promotes noise.
+  void offenders(std::vector<Offender>& out) override {
+    ensure();
+    if (!have_ || mean_mp_ <= 0.0) return;
+    const double ratio = discord_score_ / mean_mp_;
+    if (ratio < 1.5) return;
+    char idb[32];
+    std::snprintf(idb, sizeof(idb), "%.0fms",
+                  static_cast<double>(discord_bin_) * bin_ms_);
+    out.push_back({"discord", idb, "", "profile_vs_mean", ratio,
+                   ratio >= 3.0 ? 2 : 1});
+  }
 };
 
 std::vector<std::unique_ptr<Report>> make_reports() {
@@ -5365,11 +5631,48 @@ std::vector<std::unique_ptr<Report>> make_reports() {
 // digest does without also writing the "POORLY-BEHAVING ITEMS" text into
 // g_out: rank_offenders sorts in place; emit_offenders_text (assumes already
 // ranked) writes the text table and folds each offender into `prom`.
+// Ranking key: an offender's position WITHIN its own metric, not its raw value.
+struct OffKey { size_t idx; double norm; uint64_t sev; };
+
 void rank_offenders(std::vector<Offender>& offs) {
-  // Two-key order (sev desc, then value desc) as LSD-composed stable index
-  // sorts: minor key (value) first, major key (sev, always 0..2) second.
-  sublimation_order_f64(offs, true, [](const Offender& o) { return o.value; });
-  sublimation_order_u64(offs, true, [](const Offender& o) { return static_cast<uint32_t>(o.sev); });
+  if (offs.size() < 2) return;
+  // Raw `value` is not comparable across reports: bytes against profile_vs_mean
+  // against held_ms against waits_per_s against wakes_issued. Ordering by it
+  // ranked a 256-byte double-free above a 3x-mean discord purely because 256 >
+  // 3. So rank within each METRIC first and use that position as the second
+  // key -- "how extreme is this for its own kind".
+  //
+  // Severity still leads, and stays the contributing report's call: it knows
+  // what is bad, the consolidator only orders. This changes ordering within a
+  // severity tier, never which tier something lands in.
+  std::unordered_map<std::string, std::vector<size_t>> by_metric;
+  for (size_t i = 0; i < offs.size(); ++i) by_metric[offs[i].metric].push_back(i);
+
+  std::vector<OffKey> keys(offs.size());
+  for (size_t i = 0; i < offs.size(); ++i)
+    keys[i] = {i, 1.0, static_cast<uint64_t>(offs[i].sev)};
+  for (auto& [metric, idxs] : by_metric) {
+    (void)metric;
+    if (idxs.size() < 2) continue;   // a lone member of its metric ranks top
+    std::vector<std::pair<size_t, double>> v;
+    v.reserve(idxs.size());
+    for (size_t i : idxs) v.emplace_back(i, offs[i].value);
+    sublimation_order_f64(v, false,
+                          [](const std::pair<size_t, double>& p) { return p.second; });
+    const double denom = static_cast<double>(v.size() - 1);
+    for (size_t r = 0; r < v.size(); ++r)
+      keys[v[r].first].norm = static_cast<double>(r) / denom;
+  }
+
+  // Same LSD composition as before: minor key (normalized rank) first, major
+  // key (sev) second, both descending.
+  sublimation_order_f64(keys, true, [](const OffKey& k) { return k.norm; });
+  sublimation_order_u64(keys, true, [](const OffKey& k) { return k.sev; });
+
+  std::vector<Offender> ranked;
+  ranked.reserve(offs.size());
+  for (const OffKey& k : keys) ranked.push_back(std::move(offs[k.idx]));
+  offs = std::move(ranked);
 }
 
 void emit_offenders_text(const std::vector<Offender>& offs,
@@ -5897,6 +6200,15 @@ int main(int argc, char** argv) {
   const auto t0 = std::chrono::steady_clock::now();
   auto status = reader.for_each([&](uint32_t type, const uint8_t* data, uint32_t len) {
     fold_drop_snapshot(type, data, len);
+    // Shared sched substrate first, ONCE -- dispatch-stall and kstrand both
+    // query it and each used to fold its own private copy of the whole stream.
+    g_sched_holder.fold(type, data, len);
+    if (type == TRACE_EVT_SCHED && len >= sizeof(montauk_sched_event)) {
+      const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+      if (s->op == SCHED_OP_CPU_IDLE)
+        g_sched_idle.fold(s->cpu, s->sub_idx, s->timestamp_ns);
+      g_sched_picks.fold(s);
+    }
     for (Report* r : active) r->fold(type, data, len);
   });
   if (status == montauk::model::TraceReadStatus::CorruptLength) {

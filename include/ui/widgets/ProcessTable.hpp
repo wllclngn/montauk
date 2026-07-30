@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ui/widget/Component.hpp"
+#include "app/Filter.hpp"
+#include <memory>
 #include <string>
 
 namespace montauk::ui {
@@ -45,6 +47,15 @@ class ProcessTable : public widget::Component {
   // Search overlay state.
   bool        search_mode_  = false;
   std::string filter_query_;
+
+  // The filter, CACHED on the query that built it. Constructing a
+  // ProcessFilter compiles up to two sublimation programs, and
+  // sublimation_search is ~5.7 KB each -- so building one per frame while a
+  // filter was active meant ~11.4 KB of object construction and two pattern
+  // compilations on the render path, for a query that changes only on a
+  // keystroke. Held by pointer so the header does not need the full definition.
+  std::string filter_cache_key_;
+  std::unique_ptr<montauk::app::ProcessFilter> filter_cache_;
 
   // Pagination bookkeeping (computed each frame, used by scroll keys).
   int last_total_     = 0;

@@ -2,8 +2,13 @@
 #include "util/Log.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
+#include <vector>
 #include "ui/Config.hpp"
+extern "C" {
+#include "sublimation_text.h"
+}
 
 #ifdef MONTAUK_HAVE_NVML
 #include <nvml.h>
@@ -12,6 +17,56 @@
 using namespace std::chrono;
 
 namespace montauk::app {
+
+namespace {
+// The GPU-owner heuristic's literal probes, as ONE compiled OR each instead of
+// six chained .find() calls written out twice. Same LiteralSet shape
+// Security.cpp established; compiled once at static init, so the attribution
+// path does no per-process scan setup.
+//
+// NOTE while converting: the old chain tested BOTH "/usr/lib/Xorg" and "Xorg".
+// The first is redundant -- any command containing "/usr/lib/Xorg" contains
+// "Xorg" -- so it is dropped rather than carried forward as a compiled program
+// that could never be the deciding match.
+class LiteralSet {
+ public:
+  explicit LiteralSet(std::initializer_list<const char*> lits) : progs_(lits.size()) {
+    size_t i = 0;
+    for (const char* l : lits)
+      sublimation_search_compile(&progs_[i++], l, std::strlen(l),
+                                 SUBLIMATION_SEARCH_FIXED, 0);
+  }
+  [[nodiscard]] bool any(const std::string& hay) const {
+    return sublimation_search_selects(progs_.data(), static_cast<int>(progs_.size()),
+                                      /*regex_face=*/0, hay.data(), hay.size(),
+                                      /*xline=*/0, /*wword=*/0) != 0;
+  }
+ private:
+  std::vector<sublimation_search> progs_;
+};
+
+const LiteralSet kGpuProcess{"--type=gpu-process"};
+const LiteralSet kXServer{"Xorg", "Xwayland"};
+const LiteralSet kChromeFamily{"chrome", "helium"};
+
+// The duplicated owner scan, once. Both call sites walked the same population
+// with the same six probes and the same tie-break; the block existed twice.
+struct GpuOwnerScan { int pid = -1; int matches = 0; int chrome_pid = -1; };
+
+template <typename Procs>
+GpuOwnerScan scan_gpu_owner(const Procs& processes) {
+  GpuOwnerScan r;
+  for (const auto& p : processes) {
+    const std::string& c = p.cmd;
+    if (kGpuProcess.any(c) || kXServer.any(c)) {
+      r.matches++;
+      r.pid = p.pid;
+      if (kChromeFamily.any(c)) r.chrome_pid = p.pid;
+    }
+  }
+  return r;
+}
+}  // namespace
 
 GpuAttributor::GpuAttributor() {}
 GpuAttributor::~GpuAttributor() {
@@ -262,16 +317,10 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
 
   // Heuristics for per-process GMEM when vendor APIs don't expose it
   auto choose_gpu_pid = [&]() -> int {
-    int gpu_proc_pid = -1; int matches = 0; int chrome_gpu_pid = -1;
-    for (const auto& p : s.procs.processes) {
-      const std::string& c = p.cmd;
-      bool is_gpu_proc = (c.find("--type=gpu-process") != std::string::npos);
-      bool is_x = (c.find("/usr/lib/Xorg") != std::string::npos) || (c.find("Xorg") != std::string::npos) || (c.find("Xwayland") != std::string::npos);
-      if (is_gpu_proc || is_x) {
-        matches++; gpu_proc_pid = p.pid;
-        if (c.find("chrome") != std::string::npos || c.find("helium") != std::string::npos) chrome_gpu_pid = p.pid;
-      }
-    }
+    const auto scan = scan_gpu_owner(s.procs.processes);
+    const int gpu_proc_pid = scan.pid;
+    const int matches = scan.matches;
+    const int chrome_gpu_pid = scan.chrome_pid;
     if (matches == 1) return gpu_proc_pid;
     if (chrome_gpu_pid > 0) return chrome_gpu_pid;
     return -1;
@@ -351,16 +400,10 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
   if (pid_to_gpu.empty() && !s.nvml.mig_enabled) {
     int dev_util = (int)std::max({ (double)as_int_pct(s.vram.gpu_util_pct), (double)as_int_pct(s.vram.enc_util_pct), (double)as_int_pct(s.vram.dec_util_pct) });
     if (dev_util > 0) {
-      int gpu_proc_pid = -1; int matches = 0; int chrome_gpu_pid = -1;
-      for (const auto& p : s.procs.processes) {
-        const std::string& c = p.cmd;
-        bool is_gpu_proc = (c.find("--type=gpu-process") != std::string::npos);
-        bool is_x = (c.find("/usr/lib/Xorg") != std::string::npos) || (c.find("Xorg") != std::string::npos) || (c.find("Xwayland") != std::string::npos);
-        if (is_gpu_proc || is_x) {
-          matches++; gpu_proc_pid = p.pid;
-          if (c.find("chrome") != std::string::npos || c.find("helium") != std::string::npos) chrome_gpu_pid = p.pid;
-        }
-      }
+      const auto scan = scan_gpu_owner(s.procs.processes);
+      const int gpu_proc_pid = scan.pid;
+      const int matches = scan.matches;
+      const int chrome_gpu_pid = scan.chrome_pid;
       int chosen = -1;
       if (matches == 1) chosen = gpu_proc_pid;
       else if (chrome_gpu_pid > 0) chosen = chrome_gpu_pid; // prefer Chrome/Helium GPU process if present

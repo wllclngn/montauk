@@ -22,6 +22,11 @@ namespace montauk::ui::widget {
 // Pixel coordinates for emit_column are in *image-local* pixels (relative to
 // the image's upper-left corner), not terminal cells.
 
+// Sixel band payload for an RGBA image, exposed so it is testable without a
+// Sixel terminal: emit_full returns empty when none was detected, which left
+// this code unreachable from any headless test.
+std::string sixel_bands(const uint8_t* rgba, int w_px, int h_px);
+
 enum class Protocol : uint8_t {
   None  = 0,  // no graphics support detected
   Kitty = 1,

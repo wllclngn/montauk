@@ -593,40 +593,6 @@ static void strlist_push(char ***v, int *n, int *cap, const char *s) {
     (*v)[(*n)++] = strdup(s);
 }
 
-// Split a regex on its TOP-LEVEL `|` only -- not one inside a bracket
-// expression, behind a backslash, or nested in a group. Returns the branch
-// count when there are at least two (each strdup'd into *out, caller frees),
-// or 0 when the pattern is a single branch and nothing should change.
-static int split_top_alternation(const char *pat, char ***out, int *nout) {
-    char **br = NULL; int n = 0, cap = 0;
-    int depth = 0, inbr = 0;
-    const char *start = pat;
-    for (const char *p = pat; ; p++) {
-        if (*p == '\0') {
-            char *seg = strndup(start, (size_t)(p - start));
-            if (seg) { strlist_push(&br, &n, &cap, seg); free(seg); }
-            break;
-        }
-        if (inbr) {
-            // POSIX: a ']' directly after '[' or '[^' is a literal, not the close.
-            if (*p == ']' && !(p == start + 1 || (p[-1] == '^' && p > start + 1))) inbr = 0;
-            continue;
-        }
-        if (*p == '\\' && p[1]) { p++; continue; }
-        if (*p == '[') { inbr = 1; continue; }
-        if (*p == '(') { depth++; continue; }
-        if (*p == ')') { if (depth) depth--; continue; }
-        if (*p == '|' && depth == 0) {
-            char *seg = strndup(start, (size_t)(p - start));
-            if (seg) { strlist_push(&br, &n, &cap, seg); free(seg); }
-            start = p + 1;
-        }
-    }
-    if (n < 2) { for (int i = 0; i < n; i++) free(br[i]); free(br); return 0; }
-    *out = br; *nout = n;
-    return n;
-}
-
 // --files-from LIST: input file paths, newline- or NUL-delimited ('-' =
 // stdin); NUL-delimited is auto-detected (any NUL byte in the list = find
 // -print0 form). This is search's traversal affordance: `find ... |
@@ -1099,7 +1065,7 @@ int main(int argc, char **argv) {
                     sublimation_search probe;
                     sublimation_search_compile(&probe, pats[p], strlen(pats[p]), sflags, 0);
                     if (!sublimation_search_valid(&probe))
-                        split_top_alternation(pats[p], &br, &nbr);
+                        sublimation_search_split_alternation(pats[p], &br, &nbr);
                 }
                 if (nbr >= 2) {
                     for (int b = 0; b < nbr; b++) { strlist_push(&np, &nn, &ncap, br[b]); free(br[b]); }

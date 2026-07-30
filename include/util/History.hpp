@@ -34,11 +34,15 @@ class History {
   [[nodiscard]] std::size_t capacity() const { return capacity_; }
   [[nodiscard]] bool empty() const { return size_ == 0; }
 
-  // Copy the most recent `count` samples into oldest→newest order.
-  // If `count` exceeds available, returns everything available.
-  [[nodiscard]] std::vector<T> recent(std::size_t count) const {
-    std::vector<T> out;
-    if (size_ == 0 || count == 0) return out;
+  // Copy the most recent `count` samples into `out`, oldest→newest, REUSING the
+  // caller's buffer. This is the form the render path wants: CpuGrid calls it
+  // once per core per frame, so returning by value allocated a fresh vector per
+  // core per frame (32 of them on a 32-core box) inside the histories mutex.
+  // `out` is cleared but keeps its capacity, so a caller holding one persistent
+  // buffer allocates once for the life of the widget.
+  void recent_into(std::size_t count, std::vector<T>& out) const {
+    out.clear();
+    if (size_ == 0 || count == 0) return;
     const std::size_t take = (count < size_) ? count : size_;
     out.reserve(take);
     // Oldest-to-newest walk: start at (head_ - size_ + (size_ - take)) mod cap
@@ -46,6 +50,12 @@ class History {
     for (std::size_t i = 0; i < take; ++i) {
       out.push_back(buffer_[(start + i) % capacity_]);
     }
+  }
+
+  // Convenience form. Allocates; prefer recent_into on any per-frame path.
+  [[nodiscard]] std::vector<T> recent(std::size_t count) const {
+    std::vector<T> out;
+    recent_into(count, out);
     return out;
   }
 

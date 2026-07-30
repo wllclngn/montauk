@@ -195,6 +195,83 @@ static size_t scan_kmismatch_pre(const uint8_t *hay, size_t n, const uint8_t *pa
     return count;
 }
 
+// Set byte b in the position set, plus its ASCII case-swap under icase. Case is
+// folded into the class SET at compile time (before any negation), so a negated
+// class like (?i)[^a] correctly excludes both 'a' and 'A' -- folding at match
+// time instead would leave 'A' matching, since it is present in the negated set.
+static inline void gset_byte(uint8_t *S, unsigned char b, int icase) {
+    S[b>>3] |= (uint8_t)(1u<<(b&7));
+    if (icase) {
+        unsigned char sw = b;
+        if (b >= 'a' && b <= 'z') sw = (unsigned char)(b - 32);
+        else if (b >= 'A' && b <= 'Z') sw = (unsigned char)(b + 32);
+        if (sw != b) S[sw>>3] |= (uint8_t)(1u<<(sw&7));
+    }
+}
+
+// THE one definition of a bracket expression, for every consumer here and for
+// the CLI's alternation splitter. POSIX ERE: a '^' immediately after '['
+// negates; a ']' in the FIRST content position is a literal member, not the
+// close; backslash is NOT special inside the brackets. `i` indexes the '['.
+// Returns the index just past the closing ']', or 0 when unterminated (0 is
+// never a valid return, since a terminated class ends at i+2 or later).
+// When S is non-NULL the members are written into it as a 32-byte set, folded
+// per member under icase and negated last.
+// Perl-style shorthand byte sets, for `\w \W \s \S` OUTSIDE a bracket
+// expression. Returns 1 and fills S when `c` names one, 0 otherwise.
+//
+// SCOPE MEASURED AGAINST grep -E UNDER LC_ALL=C, not assumed:
+//   \w \W \s \S  GNU ERE supports these; implemented here.
+//   \d \D        GNU ERE does NOT. `grep -E '\d'` matches a literal 'd'.
+//                Adding them would create a NEW divergence from the oracle in
+//                the opposite direction, which is worse than the gap it closes.
+//                Deliberately absent.
+//   [\w]         Inside brackets GNU treats the backslash as a LITERAL member,
+//                so `[\w]` is the set {'\\','w'}. class_span already does
+//                exactly that, so shorthands are correctly NOT expanded there.
+// \w is [[:alnum:]_] and \s is [[:space:]], which is what GNU means by them.
+static int shorthand_set(char c, uint8_t *S) {
+    int negate = 0;
+    switch (c) {
+        case 'W': negate = 1; /* fall through */
+        case 'w':
+            memset(S, 0, 32);
+            for (unsigned b = '0'; b <= '9'; b++) S[b>>3] |= (uint8_t)(1u<<(b&7));
+            for (unsigned b = 'A'; b <= 'Z'; b++) S[b>>3] |= (uint8_t)(1u<<(b&7));
+            for (unsigned b = 'a'; b <= 'z'; b++) S[b>>3] |= (uint8_t)(1u<<(b&7));
+            S['_'>>3] |= (uint8_t)(1u<<('_'&7));
+            break;
+        case 'S': negate = 1; /* fall through */
+        case 's': {
+            memset(S, 0, 32);
+            static const unsigned char ws[] = {' ', '\t', '\n', '\v', '\f', '\r'};
+            for (size_t k = 0; k < sizeof ws; k++)
+                S[ws[k]>>3] |= (uint8_t)(1u<<(ws[k]&7));
+            break;
+        }
+        default: return 0;
+    }
+    if (negate) for (int k = 0; k < 32; k++) S[k] = (uint8_t)~S[k];
+    return 1;
+}
+
+static size_t class_span(const char *p, size_t len, size_t i, uint8_t *S, int icase) {
+    i++;
+    int neg = 0;
+    if (i < len && p[i] == '^') { neg = 1; i++; }
+    for (int first = 1; i < len && (first || p[i] != ']'); first = 0) {
+        unsigned char lo = (unsigned char)p[i];
+        if (i + 2 < len && p[i+1] == '-' && p[i+2] != ']') {
+            unsigned char hi = (unsigned char)p[i+2];
+            if (S) for (unsigned v = lo; v <= hi; v++) gset_byte(S, (unsigned char)v, icase);
+            i += 3;
+        } else { if (S) gset_byte(S, lo, icase); i++; }
+    }
+    if (i >= len) return 0;
+    if (S && neg) for (int k = 0; k < 32; k++) S[k] = (uint8_t)~S[k];
+    return i + 1;
+}
+
 // Fixed-length class field (fast path): each atom is a per-position byte-set. The
 // Shift-And field matches classes and wildcards. Returns -1 on an unsupported
 // construct (anchors, quantifiers, alternation, grouping, braces).
@@ -207,23 +284,20 @@ static int parse_classes(const char *p, uint8_t sets[][32], int maxL) {
         char c = p[i];
         if (c=='*'||c=='+'||c=='?'||c=='|'||c=='('||c==')'||c=='{') return -1;
         if (c == '.') { memset(S, 0xff, 32); i++; }
+        // icase is 0 unconditionally: regex_count routes every icase pattern to
+        // the full field before reaching this fast path.
         else if (c == '[') {
-            i++; int neg = 0;
-            if (i < len && p[i] == '^') { neg = 1; i++; }
-            while (i < len && p[i] != ']') {
-                unsigned char lo = (unsigned char)p[i];
-                if (i + 2 < len && p[i+1] == '-' && p[i+2] != ']') {
-                    unsigned char hi = (unsigned char)p[i+2];
-                    for (unsigned x = lo; x <= hi; x++) S[x>>3] |= (uint8_t)(1u << (x&7));
-                    i += 3;
-                } else { S[lo>>3] |= (uint8_t)(1u << (lo&7)); i++; }
-            }
-            if (i >= len) return -1;
-            i++;
-            if (neg) for (int kk = 0; kk < 32; kk++) S[kk] = (uint8_t)~S[kk];
+            size_t e = class_span(p, len, i, S, 0);
+            if (e == 0) return -1;
+            i = e;
         }
         else {
-            if (c == '\\' && i + 1 < len) { i++; c = p[i]; }
+            if (c == '\\' && i + 1 < len) {
+                i++; c = p[i];
+                // Must expand the same shorthands as g_atom, or the fast path
+                // and the full field disagree on what the pattern means.
+                if (shorthand_set(c, S)) { i++; L++; continue; }
+            }
             unsigned char b = (unsigned char)c;
             S[b>>3] |= (uint8_t)(1u << (b&7)); i++;
         }
@@ -254,20 +328,6 @@ typedef struct { const char *p; gnfa_t *g; } gpar_t;
 
 static gattr_t g_alt(gpar_t *x);
 
-// Set byte b in the position set, plus its ASCII case-swap under icase. Case is
-// folded into the class SET at compile time (before any negation), so a negated
-// class like (?i)[^a] correctly excludes both 'a' and 'A' -- folding at match
-// time instead would leave 'A' matching, since it is present in the negated set.
-static inline void gset_byte(uint8_t *S, unsigned char b, int icase) {
-    S[b>>3] |= (uint8_t)(1u<<(b&7));
-    if (icase) {
-        unsigned char sw = b;
-        if (b >= 'a' && b <= 'z') sw = (unsigned char)(b - 32);
-        else if (b >= 'A' && b <= 'Z') sw = (unsigned char)(b + 32);
-        if (sw != b) S[sw>>3] |= (uint8_t)(1u<<(sw&7));
-    }
-}
-
 static gattr_t g_atom(gpar_t *x) {
     gattr_t a = {0, 0, 0};
     char c = *x->p;
@@ -282,23 +342,26 @@ static gattr_t g_atom(gpar_t *x) {
     uint8_t *S = x->g->setb[pos]; memset(S, 0, 32);
     if (c == '.') { memset(S, 0xff, 32); x->p++; }
     else if (c == '[') {
-        x->p++; int neg = 0;
-        if (*x->p == '^') { neg = 1; x->p++; }
-        while (*x->p && *x->p != ']') {
-            unsigned char lo = (unsigned char)*x->p;
-            if (x->p[1] == '-' && x->p[2] && x->p[2] != ']') {
-                unsigned char hi = (unsigned char)x->p[2];
-                for (unsigned v = lo; v <= hi; v++) gset_byte(S, (unsigned char)v, icase);
-                x->p += 3;
-            } else { gset_byte(S, lo, icase); x->p++; }
-        }
-        if (*x->p == ']') x->p++; else x->g->ok = 0;
-        if (neg) for (int kk = 0; kk < 32; kk++) S[kk] = (uint8_t)~S[kk];
+        // strlen of the REMAINING pattern, not the whole one: x->p is the
+        // parser's cursor. Patterns are capped at 64 positions, so this is a
+        // few tens of bytes at compile time, never in a scan.
+        size_t rem = strlen(x->p);
+        size_t e = class_span(x->p, rem, 0, S, icase);
+        // On an unterminated class the cursor still advances to the end: the
+        // enclosing concat loop only stops on NUL, '|' or ')', not on ok.
+        x->p += e ? e : rem;
+        if (!e) x->g->ok = 0;
     } else {
-        if (c == '\\' && x->p[1]) { x->p++; c = *x->p; }
+        if (c == '\\' && x->p[1]) {
+            x->p++; c = *x->p;
+            // \w \W \s \S fill the whole position set; every other escape is
+            // still "the next byte, literally".
+            if (shorthand_set(c, S)) { x->p++; goto atom_done; }
+        }
         unsigned char b = (unsigned char)c;
         gset_byte(S, b, icase); x->p++;
     }
+atom_done:
     a.nullable = 0; a.first = (1ull<<pos); a.last = (1ull<<pos);
     return a;
 }
@@ -490,7 +553,7 @@ static int regex_maxlen(const char *p) {
         if (c == '(' || c == ')' || c == '|') return -1;
         size_t atom_end;
         if (c == '\\' && i + 1 < plen) atom_end = i + 2;
-        else if (c == '[') { atom_end = i + 1; while (atom_end < plen && p[atom_end] != ']') { if (p[atom_end] == '\\') atom_end++; atom_end++; } if (atom_end < plen) atom_end++; }
+        else if (c == '[') { atom_end = class_span(p, plen, i, NULL, 0); if (!atom_end) atom_end = plen; }
         else atom_end = i + 1;
         int atomlen = 1;
         if (atom_end < plen) {
@@ -519,8 +582,8 @@ static int extract_literal(const char *p, uint8_t *out, int maxout) {
     for (size_t i = 0; i < plen; ) {
         char c = p[i];
         if (c == '[') {
-            i++; while (i < plen && p[i] != ']') { if (p[i] == '\\') i++; i++; }
-            if (i < plen) i++;
+            size_t e = class_span(p, plen, i, NULL, 0);
+            i = e ? e : plen;
             cs = -1; cl = 0; continue;
         }
         if (c == '\\') { i += 2; cs = -1; cl = 0; continue; }
@@ -678,6 +741,47 @@ void sublimation_search_compile(sublimation_search *out, const char *pattern,
 }
 
 int sublimation_search_valid(const sublimation_search *s) { return s->valid; }
+
+// Split a pattern on its TOP-LEVEL '|' only -- not one inside a bracket
+// expression, behind a backslash, or nested in a group. Lives here, beside the
+// parser that DEFINES those three exclusions, rather than in the front end that
+// happens to want it; the class exclusion is class_span, so the splitter and
+// the matcher cannot drift on what a bracket expression is.
+int sublimation_search_split_alternation(const char *pattern, char ***out, int *nout) {
+    size_t len = strlen(pattern);
+    char **br = NULL; int n = 0, cap = 0;
+    int depth = 0;
+    size_t start = 0;
+    for (size_t i = 0; i <= len; i++) {
+        int cut = (i == len) || (pattern[i] == '|' && depth == 0);
+        if (!cut) {
+            if (pattern[i] == '\\' && i + 1 < len) { i++; continue; }
+            if (pattern[i] == '[') {
+                size_t e = class_span(pattern, len, i, NULL, 0);
+                i = (e ? e : len) - 1;
+                continue;
+            }
+            if (pattern[i] == '(') depth++;
+            else if (pattern[i] == ')' && depth) depth--;
+            continue;
+        }
+        if (n == cap) {
+            int nc = cap ? cap * 2 : 4;
+            char **nb = realloc(br, (size_t)nc * sizeof *nb);
+            if (!nb) { for (int k = 0; k < n; k++) free(br[k]); free(br); return 0; }
+            br = nb; cap = nc;
+        }
+        size_t seglen = i - start;
+        char *seg = malloc(seglen + 1);
+        if (!seg) { for (int k = 0; k < n; k++) free(br[k]); free(br); return 0; }
+        memcpy(seg, pattern + start, seglen); seg[seglen] = '\0';
+        br[n++] = seg;
+        start = i + 1;
+    }
+    if (n < 2) { for (int k = 0; k < n; k++) free(br[k]); free(br); return 0; }
+    *out = br; *nout = n;
+    return n;
+}
 
 // The opaque-buffer contract with foreign callers (vector mirrors this
 // struct as a byte buffer in Rust). The static assert pins the size the

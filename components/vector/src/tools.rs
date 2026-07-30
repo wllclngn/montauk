@@ -324,10 +324,21 @@ pub fn call_montauk_similar(args: &Value) -> Result<Value, (i64, String)> {
         feat[i * 3 + 1] = p.get("rss_kb").and_then(Value::as_f64).unwrap_or(0.0);
         feat[i * 3 + 2] = p.get("gpu_util_pct").and_then(Value::as_f64).unwrap_or(0.0);
     }
-    let qi = pids
-        .iter()
-        .position(|&p| p == query_pid)
-        .ok_or((-32602, format!("pid {query_pid} not in the top process list")))?;
+    // AN ERROR THAT NAMES THE VALID INPUTS lets the caller correct itself on the
+    // next turn. A small model reliably READS a pid out of a prior result and
+    // then fails to carry it into the next call's arguments -- three rounds of
+    // prompting did not fix that, but a bare "not in the list" gives it nothing
+    // to retry with, while listing the candidates does.
+    let qi = pids.iter().position(|&p| p == query_pid).ok_or_else(|| {
+        let known: Vec<String> = pids.iter().take(10).map(|p| p.to_string()).collect();
+        (
+            -32602,
+            format!(
+                "pid {query_pid} not in the top process list; valid pids are {}",
+                known.join(", ")
+            ),
+        )
+    })?;
     // The affinity graph is sublimation's algorithm, not vector's: the learn/
     // spectral core standardizes the columns and builds a SELF-TUNING (local-
     // scaling) RBF affinity, each node scaled by the distance to its knn-th
@@ -431,7 +442,7 @@ pub fn call_montauk_regime(args: &Value) -> Result<Value, (i64, String)> {
         }
     }
     let shifted = !shifts.is_empty();
-    let mean = signal.iter().sum::<f64>() / n as f64;
+    let mean = ffi::mean(&signal);
     let result = Value::obj(vec![
         ("shifted", Value::Bool(shifted)),
         ("shifts", Value::Array(shifts)),

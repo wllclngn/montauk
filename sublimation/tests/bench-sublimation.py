@@ -161,84 +161,13 @@ class StatsResults:
                           f"{p95:>8.1f}ns  {p99:>8.1f}ns  {sd:>8.2f}ns  {cv:>6.1f}%")
 
 
-# PERF STAT
-
-class PerfProfile:
-    """Collects perf stat hardware counters per (pattern, size)."""
-
-    def __init__(self):
-        self.data = {}  # (pattern, size) -> {instructions, cycles, cache-misses, ...}
-
-    def parse_perf_stderr(self, stderr_text, pattern, size):
-        """Parse perf stat -x ',' CSV output from stderr."""
-        counters = {}
-        for line in stderr_text.split("\n"):
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split(",")
-            if len(parts) < 3:
-                continue
-            # perf stat -x ',' format: value,unit,event-name,...
-            # with paranoid>=1, events get :u suffix (e.g. instructions:u)
-            try:
-                raw_val = parts[0].strip()
-                if raw_val == "" or raw_val == "<not counted>" or raw_val == "<not supported>":
-                    continue
-                val = int(raw_val)
-                event = parts[2].strip()
-                # strip :u/:k/:uk suffixes from event names
-                base_event = event.split(":")[0] if ":" in event else event
-                counters[base_event] = val
-            except (ValueError, IndexError):
-                continue
-
-        if counters:
-            key = (pattern, size)
-            self.data[key] = counters
-
-    def print_table(self):
-        if not self.data:
-            log_warn("No perf data collected.")
-            return
-
-        # pick a representative size for the table header
-        sizes = sorted(set(s for _, s in self.data.keys()))
-        patterns = sorted(set(p for p, _ in self.data.keys()))
-
-        for size in sizes:
-            print()
-            print(f"  HARDWARE PROFILE (perf stat, {_fmt_size(size)} elements)")
-            print(f"  {'Pattern':<14} {'IPC':>6}  {'Branch Miss%':>13}  "
-                  f"{'Cache Miss%':>12}  {'Insn/elem':>10}")
-
-            for pattern in patterns:
-                key = (pattern, size)
-                c = self.data.get(key)
-                if not c:
-                    continue
-
-                instructions = c.get("instructions", 0)
-                cycles = c.get("cycles", 0)
-                cache_misses = c.get("cache-misses", 0)
-                branch_misses = c.get("branch-misses", 0)
-                l1_misses = c.get("L1-dcache-load-misses", 0)
-
-                ipc = instructions / cycles if cycles > 0 else 0.0
-
-                # branch miss rate: approximate from branch-misses / instructions
-                # (perf doesn't always give branches count, so we use insn as proxy)
-                branch_miss_pct = (branch_misses / instructions * 100.0
-                                   if instructions > 0 else 0.0)
-
-                cache_miss_pct = (cache_misses / instructions * 100.0
-                                  if instructions > 0 else 0.0)
-
-                insn_per_elem = instructions / size if size > 0 else 0.0
-
-                print(f"  {pattern:<14} {ipc:>5.2f}  {branch_miss_pct:>11.1f}%  "
-                      f"{cache_miss_pct:>10.1f}%  {insn_per_elem:>10.0f}")
-
+# PERF STAT IS GONE, and not because it stopped working.
+# montauk is the only tracer in this codebase: ftrace, bpftrace, strace and
+# `perf record/trace/stat` are banned for every task in every project, and this
+# harness was calling `perf stat` on every --perf run inside montauk's own
+# repository. The replacement is montauk's per-process PMU attribution, which
+# exists precisely so nobody needs perf -- see the radix ceiling item in
+# ROADMAP.md, which is the first real consumer of it.
 
 def _fmt_size(n):
     if n >= 1_000_000:
@@ -357,60 +286,21 @@ def build_go_bench():
     return bench_bin
 
 
-def build_rust_direct():
-    log_info("Building Rust DIRECT benchmark (sublimation linked via extern C)")
-
-    bench_bin = BUILD_DIR / "bench_rust_direct"
-    static_lib = BUILD_DIR / "libsublimation.a"
-    if not static_lib.exists():
-        log_warn("libsublimation.a not found, skipping Rust direct")
-        return None
-
-    # link against .so (the .a has LTO GIMPLE objects that rustc can't read)
-    cmd = [
-        "rustc", "-O", "--edition", "2021",
-        "-L", str(BUILD_DIR),
-        "-l", "dylib=sublimation",
-        "-l", "dylib=pthread", "-l", "dylib=m",
-        str(PROJECT_DIR / "bindings" / "rust" / "bench_direct.rs"),
-        "-o", str(bench_bin),
-    ]
-    ret, _, stderr = run_cmd(cmd)
-    if ret != 0:
-        log_warn(f"Rust direct compile failed (skipping): {stderr[:300]}")
-        return None
-
-    log_info(f"Built: {bench_bin}")
-    return bench_bin
-
-
-def build_go_direct():
-    log_info("Building Go DIRECT benchmark (sublimation linked via cgo)")
-
-    bench_bin = BUILD_DIR / "bench_go_direct"
-    static_lib = BUILD_DIR / "libsublimation.a"
-    if not static_lib.exists():
-        log_warn("libsublimation.a not found, skipping Go direct")
-        return None
-
-    env = {**os.environ, "GOWORK": "off", "CGO_ENABLED": "1"}
-    cmd = [
-        "go", "build",
-        "-o", str(bench_bin),
-        str(PROJECT_DIR / "bindings" / "go" / "bench_direct.go"),
-    ]
-    ret, _, stderr = run_cmd(cmd, env=env)
-    if ret != 0:
-        log_warn(f"Go direct compile failed (skipping): {stderr[:300]}")
-        return None
-
-    log_info(f"Built: {bench_bin}")
-    return bench_bin
+# THE DIRECT-FFI COMPARATORS ARE GONE, not fixed, and the distinction matters.
+# They were meant to measure sublimation called over FFI from Rust and Go
+# against those languages' native sorts -- a real question. But bindings/ never
+# existed: not a missing bench_direct.rs, an absent directory tree. So both
+# builders could only ever log a warning and return None, and every published
+# run silently measured two fewer comparators than its own output implied.
+# A skipped comparator that warns and continues is the worst of both; this
+# release found two other gates passing while proving nothing, and this was the
+# third. If the FFI comparison is wanted, write the bindings first and add the
+# builder back with a hard failure.
 
 
 # RUN
 
-def run_bench(binary, size, pattern, runs, perf_mode=False):
+def run_bench(binary, size, pattern, runs):
     try:
         env = {**os.environ, "LD_LIBRARY_PATH": str(BUILD_DIR)}
         cmd = [str(binary), str(size), pattern, str(runs)]
@@ -420,13 +310,6 @@ def run_bench(binary, size, pattern, runs, perf_mode=False):
         if binary.name == "bench_c":
             cmd.append(os.environ.get("BENCH_TYPES", "i64"))
 
-        if perf_mode:
-            cmd = [
-                "perf", "stat", "-e",
-                "instructions,cycles,cache-misses,branch-misses,L1-dcache-load-misses",
-                "-x", ",",
-                "--",
-            ] + cmd
 
         # Scale with input size: one bench_c invocation runs every type variant
         # (6 qsort + 6 sublimation + introsort) x `runs` at the requested n, so
@@ -438,9 +321,7 @@ def run_bench(binary, size, pattern, runs, perf_mode=False):
         result = subprocess.run(cmd, capture_output=True, text=True,
                                 timeout=size_timeout, env=env)
         if result.returncode != 0:
-            if perf_mode and "perf_event" in result.stderr:
-                log_warn("perf stat failed (try: sysctl kernel.perf_event_paranoid=-1)")
-            return [], result.stderr if perf_mode else ""
+            return [], ""
 
         results = []
         for line in result.stdout.strip().split("\n"):
@@ -452,7 +333,7 @@ def run_bench(binary, size, pattern, runs, perf_mode=False):
                 results.append(obj)
             except json.JSONDecodeError:
                 pass
-        return results, result.stderr if perf_mode else ""
+        return results, ""
     except subprocess.TimeoutExpired:
         log_warn(f"Timeout: {binary.name} size={size} pattern={pattern}")
         return [], ""
@@ -546,9 +427,9 @@ def main():
                        help="Comma-separated patterns")
     parser.add_argument("--runs", type=int, default=None,
                        help="Number of runs per benchmark")
-    parser.add_argument("--perf", action="store_true",
-                       help="Wrap runs with perf stat for hardware profiling "
-                            "(IPC, branch/cache miss rates)")
+    parser.add_argument("--publish", action="store_true",
+                       help="Numbers from this run are going in a document: "
+                            "refuse unless the CPU governor is 'performance'")
     parser.add_argument("--stats", action="store_true",
                        help="Statistical mode: 11 runs, report min/p50/p95/p99/stddev/cv%%")
     args = parser.parse_args()
@@ -585,17 +466,29 @@ def main():
         log_info(f"Runs: {runs} (statistical: min/p50/p95/p99/stddev/cv%)")
     else:
         log_info(f"Runs: {runs} (best of)")
-    if args.perf:
-        log_info("perf stat: hardware profiling enabled")
     print()
 
-    # CPU governor warning
+    # CPU GOVERNOR. A warning here is exactly how the published README numbers
+    # came to be taken on 'powersave': the run said so and nobody stopped. With
+    # --publish it is a hard refusal instead, so a number that lands in a
+    # document cannot be measured on an uncontrolled clock by accident. An
+    # exploratory run still only warns.
     try:
         gov = open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor").read().strip()
         if gov != "performance":
-            log_warn(f"CPU governor is '{gov}', not 'performance'. Results may be noisy.")
+            if args.publish:
+                log_error(f"CPU governor is '{gov}', not 'performance'. Refusing a "
+                          f"--publish run on an uncontrolled clock. Set it with: "
+                          f"sudo cpupower frequency-set -g performance")
+                return 1
+            log_warn(f"CPU governor is '{gov}', not 'performance'. Results may be "
+                     f"noisy; do not publish them (see --publish).")
+        elif args.publish:
+            log_info("governor is 'performance'; this run is publishable")
     except Exception:
-        pass
+        if args.publish:
+            log_error("cannot read the CPU governor; refusing a --publish run")
+            return 1
 
     BUILD_DIR.mkdir(exist_ok=True)
 
@@ -603,8 +496,6 @@ def main():
     c_bin = build_c_bench()
     rust_bin = build_rust_bench()
     go_bin = build_go_bench()
-    rust_direct = build_rust_direct()
-    go_direct = build_go_direct()
     print()
 
     if not c_bin:
@@ -613,7 +504,6 @@ def main():
 
     results = Results()
     stats_results = StatsResults() if args.stats else None
-    perf_profile = PerfProfile() if args.perf else None
     algos_seen = set()
 
     total = len(sizes) * len(patterns)
@@ -628,8 +518,6 @@ def main():
                 ("c", c_bin),
                 ("rust", rust_bin),
                 ("go", go_bin),
-                ("rust_direct", rust_direct),
-                ("go_direct", go_direct),
             ]
 
             # Python benchmarks (in-process)
@@ -648,26 +536,22 @@ def main():
                 if args.stats:
                     # statistical mode: run one-at-a-time, collect all timings
                     for _ in range(runs):
-                        bench_results, perf_stderr = run_bench(
-                            binary, size, pattern, 1, perf_mode=args.perf
+                        bench_results, _ = run_bench(
+                            binary, size, pattern, 1
                         )
                         for obj in bench_results:
                             algo = obj["algo"]
                             stats_results.add(algo, pattern, size, obj["ns_per_elem"])
                             results.add(algo, pattern, size, obj["ns_per_elem"])
                             algos_seen.add(algo)
-                        if args.perf and label == "c" and perf_stderr:
-                            perf_profile.parse_perf_stderr(perf_stderr, pattern, size)
                 else:
-                    bench_results, perf_stderr = run_bench(
-                        binary, size, pattern, runs, perf_mode=args.perf
+                    bench_results, _ = run_bench(
+                        binary, size, pattern, runs
                     )
                     for obj in bench_results:
                         algo = obj["algo"]
                         results.add(algo, pattern, size, obj["ns_per_elem"])
                         algos_seen.add(algo)
-                    if args.perf and label == "c" and perf_stderr:
-                        perf_profile.parse_perf_stderr(perf_stderr, pattern, size)
 
     # print results
     # order: sublimation first, then alphabetical
@@ -697,10 +581,8 @@ def main():
         stats_results.print_table(algo_order)
 
     # hardware profile
-    if args.perf and perf_profile:
         print()
         print(f"  {'=' * 90}")
-        perf_profile.print_table()
         print(f"  {'=' * 90}")
 
     print()

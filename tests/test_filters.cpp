@@ -1,6 +1,7 @@
 // Process filter: filtering the process list by name/pid/user criteria.
 #include "minitest.hpp"
 #include "app/Filter.hpp"
+#include "sublimation.h"   // searchsorted: the membership predicate ProcessTable uses
 
 TEST(filters_basic) {
   montauk::model::ProcessSnapshot ps{};
@@ -36,4 +37,45 @@ TEST(filters_case_insensitive_substring) {
   montauk::app::ProcessFilter f2(empty_spec);
   auto idx2 = f2.apply(ps);
   ASSERT_EQ(idx2.size(), 3u);
+}
+
+// apply() returning STRICTLY ASCENDING indices is load-bearing, not incidental:
+// ProcessTable's filter step binary-searches this result with
+// sublimation_searchsorted_u64 instead of building a hash set per frame. If
+// apply() ever emitted out of order the membership test would silently drop
+// rows, and no other test would notice -- so the invariant is asserted here,
+// beside the function that has to hold it.
+TEST(filters_apply_returns_ascending_indices) {
+  montauk::model::ProcessSnapshot ps{};
+  for (int i = 0; i < 64; ++i) {
+    // Every third process matches, so the result is sparse rather than a
+    // contiguous prefix -- a run of 0,1,2,... would pass even if unsorted.
+    const bool hit = (i % 3) == 0;
+    ps.processes.push_back({.pid = 1000 + i,
+                            .total_time = 0,
+                            .rss_kb = 100,
+                            .cpu_pct = 1.0,
+                            .user_name = "mod",
+                            .cmd = hit ? "target-proc" : "other-proc",
+                            .exe_path = "/usr/bin/x"});
+  }
+  montauk::app::ProcessFilterSpec spec{};
+  spec.name_contains = std::optional<std::string>("target");
+  montauk::app::ProcessFilter f(spec);
+  auto idx = f.apply(ps);
+
+  ASSERT_TRUE(idx.size() > 1u);
+  for (size_t i = 1; i < idx.size(); ++i) ASSERT_TRUE(idx[i - 1] < idx[i]);
+
+  // And the exact membership predicate ProcessTable runs: binary search plus an
+  // equality check must agree with a linear scan for every index, hit or miss.
+  for (size_t probe = 0; probe < ps.processes.size(); ++probe) {
+    bool linear = false;
+    for (size_t m : idx) if (m == probe) { linear = true; break; }
+    size_t pos = sublimation_searchsorted_u64(
+        reinterpret_cast<const uint64_t*>(idx.data()), idx.size(),
+        static_cast<uint64_t>(probe), 0);
+    const bool binary = pos < idx.size() && idx[pos] == probe;
+    ASSERT_EQ(binary, linear);
+  }
 }

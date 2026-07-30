@@ -2,6 +2,7 @@
 #include "prom_population.hpp"
 #include "sublimation.h"
 #include "sublimation_order.hpp"
+#include "sublimation_stats.h"   // min/max reductions
 
 #include "prom_stats.hpp"
 #include "util/Log.hpp"
@@ -1192,10 +1193,13 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
       auto& va = cell.runs[groups[i]];
       auto& vb = cell.runs[groups[j]];
       double ma = stats::mean(va), mb = stats::mean(vb);
-      double mnA = *std::min_element(va.begin(), va.end());
-      double mxA = *std::max_element(va.begin(), va.end());
-      double mnB = *std::min_element(vb.begin(), vb.end());
-      double mxB = *std::max_element(vb.begin(), vb.end());
+      // Reductions through sublimation, same single pass -- one owner of what
+      // min/max mean. va/vb are non-empty by construction (groups are filtered
+      // on !g.second.empty() before the pair loop).
+      double mnA = sublimation_min_f64(va.data(), va.size());
+      double mxA = sublimation_max_f64(va.data(), va.size());
+      double mnB = sublimation_min_f64(vb.data(), vb.size());
+      double mxB = sublimation_max_f64(vb.data(), vb.size());
       double cd = stats::cliffs_delta(va, vb);
       double pp = stats::perm_test(va, vb, stats::Stat::Mean, 0.0, rng);
       int npow = stats::mc_power(va, vb, rng);

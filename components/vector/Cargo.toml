@@ -1,7 +1,7 @@
 [package]
 name = "vector"
 # Rides montauk's release train (the platform version), not sublimation's.
-version = "8.5.0"
+version = "8.6.0"
 edition = "2021"
 
 [lib]
@@ -27,6 +27,7 @@ path = "../../tests/test_mcp_rpc.rs"
 [[test]]
 name = "mcp_tools"
 path = "../../tests/test_mcp_tools.rs"
+
 
 [profile.release]
 opt-level = 2

@@ -139,6 +139,34 @@ CLI_CASES = [
     (["search", "(cat|dog)x"], "catx\ndogx\ncat\ndogy\n"),
     (["search", "[a|b]x"], "ax\nbx\n|x\ncx\n"),
     (["search", "a\\|b"], "a|b\nab\na\n"),
+    # v8.6.0: POSIX's leading-']' rule, which none of the five hand-rolled
+    # bracket scanners implemented -- so []] (the ordinary grep idiom for a
+    # literal ']') matched nothing at all. One class_span now defines a bracket
+    # expression for the matcher, the prefilter, the literal extractor and the
+    # alternation splitter alike. The ']' also stays a range endpoint, which is
+    # what grep does under LC_ALL=C, the byte-order oracle this engine answers to.
+    (["search", "[]]"], "a]b\ncat\n"),
+    (["search", "[]|]"], "a]b\nX|Y\nq\n"),
+    (["search", "[^]a]"], "a]b\nX|Y\n]]]\n"),
+    (["search", "[]-a]"], "a]b\ncat\n^x\nz-w\n"),
+    # A top-level | hidden behind a leading-']' class must still not split.
+    (["search", "-c", "[]|]x"], "]x\n|x\ncx\n"),
+    # v8.6.0: the perl-style shorthand byte sets. Scope was MEASURED against
+    # grep -E under LC_ALL=C, not assumed: GNU ERE has \w \W \s \S, does NOT
+    # have \d (it matches a literal 'd'), and treats a backslash inside brackets
+    # as a literal member so [\w] is the set {backslash, w}. All three of those
+    # facts are pinned below, because implementing \d would have created a NEW
+    # divergence from the oracle in the opposite direction.
+    (["search", "-c", r"\w"], "abc\n x \nA-B\n"),
+    (["search", "-c", r"\W"], "abc\n x \nA-B\n"),
+    (["search", "-c", r"\s"], "abc\n x \nA-B\n"),
+    (["search", "-c", r"\S"], "abc\n x \nA-B\n"),
+    (["search", "-c", r"a\wc"], "abc\naxc\na c\n"),
+    (["search", "-c", r"\S\s\S"], "a b\nab\n a\n"),
+    # \d is a literal 'd' here, as in grep -E.
+    (["search", "-c", r"\d"], "123\nd9\nabc\n"),
+    # Inside brackets the backslash is a member, not an escape.
+    (["search", "-c", r"[\w]"], "w\n\\\nabc\n"),
 ]
 
 note = harness.logger("corpus")

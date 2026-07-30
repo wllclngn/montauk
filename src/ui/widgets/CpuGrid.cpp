@@ -192,17 +192,19 @@ void CpuGrid::render(widget::Canvas& canvas,
   // Snapshot per-core histories under the histories mutex once per frame
   // so the rasterize loop doesn't hold the lock per-cell.
   auto& hist = montauk::app::chart_histories();
-  std::vector<std::vector<float>> samples;
-  samples.reserve(static_cast<size_t>(ncpu));
+  // samples_ is a member: the inner vectors keep their capacity between frames,
+  // so after the first frame this loop does no allocation at all.
+  auto& samples = samples_;
+  samples.resize(static_cast<size_t>(ncpu));
   {
     std::lock_guard<std::mutex> lock(hist.mu);
     const int n = static_cast<int>(hist.cpu_per_core.size());
     for (int i = 0; i < ncpu; ++i) {
       if (i < n) {
         auto& h = hist.cpu_per_core[i];
-        samples.push_back(h.recent(h.capacity()));
+        h.recent_into(h.capacity(), samples[static_cast<size_t>(i)]);
       } else {
-        samples.emplace_back();  // empty: this core hasn't pushed yet
+        samples[static_cast<size_t>(i)].clear();  // this core hasn't pushed yet
       }
     }
   }

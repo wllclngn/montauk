@@ -145,6 +145,14 @@ double variance(const std::vector<double>& v) {
   return s / (v.size() - 1);
 }
 
+// THE INTERPOLATING one of the binary's three percentile conventions, and it
+// deliberately DISAGREES with the other two. The analyzer's q_at and
+// sublimation_quantile_f64(nearest=0) are both nearest-rank -- floor(q*n),
+// returning a value present in the data -- which is right for a report, where a
+// p99 should be an observed latency. This one is numpy method="linear" because
+// the cross-run population path is validated for scipy parity, and a
+// nearest-rank estimator would fail that validation on small sample counts.
+// Neither is wrong; they answer different questions. Do not "unify" them.
 double percentile(std::vector<double> v, double q) {
   if (v.empty()) return 0.0;
   if (v.size() == 1) return v[0];

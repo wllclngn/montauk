@@ -407,7 +407,12 @@ int main(int argc, char **argv) {
 
     // Per-type benchmarks: sublimation_T vs qsort for all 6 types
     if (WANT("i32")) run_bench_i32(n, pattern, runs);
-    if (WANT("i64")) run_bench_i64(n, pattern, runs);
+    // NOT run here. The legacy i64 block above ALWAYS runs and is what every
+    // published table reads, so gating this on WANT("i64") sorted i64 twice per
+    // invocation -- and the harness passes "i64" by default, so the duplicate
+    // was the common case, not the rare one. At 100M that is a wasted sort plus
+    // a wasted qsort on the slowest tier.
+    (void)0;
     if (WANT("u32")) run_bench_u32(n, pattern, runs);
     if (WANT("u64")) run_bench_u64(n, pattern, runs);
     if (WANT("f32")) run_bench_f32(n, pattern, runs);

@@ -253,6 +253,76 @@ void GraphicsEmitter::detect() {
 // For Sixel: no tempfile path exists in the protocol, so we emit the full
 // palette-reduced image inline. Sixel terminals are rarer and Sixel output
 // is already much smaller than RGBA base64.
+
+// Sixel band payload for an RGBA image: the per-color runs between the palette
+// and the terminating ST. FREE FUNCTION ON PURPOSE -- it used to live inside
+// emit_full, which returns early with an empty string unless a Sixel terminal
+// was detected, so nothing in a headless test run could reach this code at all.
+// The single-pass rewrite below is a byte-identical replacement for a 216-pass
+// nest and that claim needs to be checkable without a terminal.
+std::string sixel_bands(const uint8_t* rgba, int w_px, int h_px) {
+  std::ostringstream out;
+    // For each 6-row band, emit per-color runs.
+  //
+  // ONE PASS OVER THE PIXELS, not 216. The obvious loop nest asks "which
+  // pixels are color p" for each of the 216 cube entries in turn, which
+  // requantizes EVERY pixel 216 times: O(216 * w_px * h_px) with three
+  // integer divisions per visit. Inverted, each pixel is quantized once and
+  // deposits its bit into its own color's row, which is O(w_px * h_px) and
+  // gives byte-identical output because the emission order (p ascending) and
+  // the row contents are unchanged.
+  //
+  // The cost traded in is 216 * w_px bytes of row buffer, allocated ONCE for
+  // the whole image rather than per band, and only the rows a band actually
+  // touched get cleared afterwards -- clearing all 216 every band would put
+  // most of the saved work back.
+  std::vector<uint8_t> rows(static_cast<size_t>(216) * static_cast<size_t>(w_px), 0);
+  std::vector<uint8_t> used(216, 0);
+  std::vector<int> touched;
+  touched.reserve(216);
+  std::string row;
+  row.reserve(static_cast<size_t>(w_px));
+
+  for (int band_y = 0; band_y < h_px; band_y += 6) {
+    int band_h = std::min(6, h_px - band_y);
+    for (int dy = 0; dy < band_h; ++dy) {
+      const uint8_t* line = rgba + static_cast<size_t>(band_y + dy) *
+                                       static_cast<size_t>(w_px) * 4;
+      const uint8_t bit = static_cast<uint8_t>(1u << dy);
+      for (int x = 0; x < w_px; ++x) {
+        const uint8_t* px = line + static_cast<size_t>(x) * 4;
+        int qidx = ((px[0] + 25) / 51) * 36 + ((px[1] + 25) / 51) * 6 +
+                   ((px[2] + 25) / 51);
+        if (!used[static_cast<size_t>(qidx)]) {
+          used[static_cast<size_t>(qidx)] = 1;
+          touched.push_back(qidx);
+        }
+        rows[static_cast<size_t>(qidx) * static_cast<size_t>(w_px) +
+             static_cast<size_t>(x)] |= bit;
+      }
+    }
+    // p ascending, exactly as before: a color with no set bits in this band
+    // emits nothing, which is what the old `any` flag decided.
+    for (int p = 0; p < 216; ++p) {
+      if (!used[static_cast<size_t>(p)]) continue;
+      const uint8_t* src = rows.data() + static_cast<size_t>(p) *
+                                            static_cast<size_t>(w_px);
+      row.clear();
+      for (int x = 0; x < w_px; ++x) row += static_cast<char>('?' + src[x]);
+      out << '#' << p << row << '$';
+    }
+    for (int p : touched) {
+      std::fill_n(rows.begin() + static_cast<ptrdiff_t>(
+                      static_cast<size_t>(p) * static_cast<size_t>(w_px)),
+                  w_px, static_cast<uint8_t>(0));
+      used[static_cast<size_t>(p)] = 0;
+    }
+    touched.clear();
+    out << '-';
+  }
+  return out.str();
+}
+
 std::string GraphicsEmitter::emit_full(uint32_t chart_id,
                                         int cell_x, int cell_y,
                                         int cell_w, int cell_h,
@@ -301,32 +371,7 @@ std::string GraphicsEmitter::emit_full(uint32_t chart_id,
       }
     }
 
-    // For each 6-row band, emit per-color runs.
-    for (int band_y = 0; band_y < h_px; band_y += 6) {
-      int band_h = std::min(6, h_px - band_y);
-      for (int p = 0; p < 216; ++p) {
-        bool any = false;
-        std::string row;
-        row.reserve(static_cast<size_t>(w_px));
-        for (int x = 0; x < w_px; ++x) {
-          uint8_t sixel_bits = 0;
-          for (int dy = 0; dy < band_h; ++dy) {
-            const uint8_t* px = rgba + ((band_y + dy) * w_px + x) * 4;
-            int pr = (px[0] + 25) / 51;  // 0..5
-            int pg = (px[1] + 25) / 51;
-            int pb = (px[2] + 25) / 51;
-            int qidx = pr * 36 + pg * 6 + pb;
-            if (qidx == p) sixel_bits |= (1u << dy);
-          }
-          if (sixel_bits) any = true;
-          row += static_cast<char>('?' + sixel_bits);
-        }
-        if (any) {
-          oss << '#' << p << row << '$';
-        }
-      }
-      oss << '-';
-    }
+    oss << sixel_bands(rgba, w_px, h_px);
     oss << "\x1b\\";
   }
 

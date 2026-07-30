@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 8.5.0 LANGUAGES C CXX)
+project(montauk VERSION 8.6.0 LANGUAGES C CXX)
 # (7.17.0: kick-capture honesty -- the storm report no longer manufactures a
 #  false kick/s=0 when the scx storm probes are unattached, and kick-latency
 #  surfaces the KICK_ISSUE->RESCHED pairing (availability, unanswered share,
@@ -294,6 +294,7 @@ set_target_properties(montauk PROPERTIES OUTPUT_NAME montauk)
 
 install(TARGETS montauk RUNTIME DESTINATION bin)
 
+
 # Trace-analysis report suite (trace-only; the old live /proc analyzer is
 # gone). Same dependency footprint as the decoder: event headers + the
 # TraceReader record walk, no montauk_core link, no BPF.
@@ -373,6 +374,7 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_gpu_smi_device.cpp
     tests/test_toml_reader.cpp
     tests/test_canvas.cpp
+    tests/test_sixel_encode.cpp
     tests/test_provider_collector.cpp
     tests/test_sink.cpp
   )
@@ -397,7 +399,12 @@ if(MONTAUK_BUILD_TESTS)
   # Stats-kernel characterization tests: prom_stats.cpp only compiles into
   # montauk_analyze, so it gets its own small test executable (the
   # montauk_sink_c_test pattern) rather than a montauk_core dependency.
+  # test_percentile_agreement.cpp rides this target because it needs the same
+  # two things: prom_stats.cpp's interpolating percentile and sublimation's
+  # nearest-rank quantile, to assert that the binary's three conventions stand
+  # in the relation they are documented to.
   add_executable(montauk_stats_test tests/test_main.cpp tests/test_prom_stats.cpp
+      tests/test_percentile_agreement.cpp
       src/tools/prom_stats.cpp)
   target_include_directories(montauk_stats_test PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}/src/tools

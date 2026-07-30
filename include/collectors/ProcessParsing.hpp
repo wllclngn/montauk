@@ -251,18 +251,33 @@ void top_k_by_cpu_pct(std::vector<T>& v, size_t k) {
     if (n > k) v.resize(k);
     return;
   }
-  std::vector<double> keys(n);
-  std::vector<uint32_t> idx(n);
+  // Per-frame scratch, reused across calls. This runs once per frame per
+  // process collector with n = every scanned PID, and plain
+  // sublimation_pack_sort_f64 additionally mallocs 2n slots internally on EVERY
+  // call -- four allocations a frame. The _with_scratch form plus thread-local
+  // buffers makes the path allocation-free after the first frame, the same
+  // pattern src/util/SortDispatch.cpp already uses for the column sorts. Each
+  // thread gets its own, so no locking and no cross-thread aliasing.
+  thread_local std::vector<double> keys;
+  thread_local std::vector<uint32_t> idx;
+  thread_local std::vector<sublimation_pack64_slot> scratch;
+  thread_local std::vector<T> out;
+  if (keys.size() < n) keys.resize(n);
+  if (idx.size() < n) idx.resize(n);
+  if (scratch.size() < 2 * n) scratch.resize(2 * n);
   for (size_t i = 0; i < n; ++i) {
     keys[i] = static_cast<double>(v[i].cpu_pct);
     idx[i] = static_cast<uint32_t>(i);
   }
-  sublimation_pack_sort_f64(keys.data(), idx.data(), n, true);
+  sublimation_pack_sort_f64_with_scratch(keys.data(), idx.data(), n, true, scratch.data());
   const size_t keep = n < k ? n : k;
-  std::vector<T> out;
+  out.clear();
   out.reserve(keep);
   for (size_t i = 0; i < keep; ++i) out.push_back(std::move(v[idx[i]]));
-  v = std::move(out);
+  // swap, not move-assign: `out` keeps v's old storage for the next frame
+  // instead of the thread-local handing its buffer away and reallocating.
+  v.swap(out);
+  out.clear();
 }
 
 }  // namespace montauk::collectors

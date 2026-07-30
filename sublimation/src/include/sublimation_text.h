@@ -65,6 +65,15 @@ SUB_API void sublimation_search_compile(sublimation_search *out, const char *pat
 // Did the pattern compile?
 SUB_API int sublimation_search_valid(const sublimation_search *s);
 
+// Split PATTERN on its top-level '|' only -- never one inside a bracket
+// expression, behind a backslash, or nested in a group. Returns the branch
+// count when there are at least two, with *out set to that many malloc'd
+// branches (caller frees each, then the array), or 0 when the pattern is a
+// single branch and nothing should change. Exported because the bracket rule
+// belongs to the matcher, not to whichever front end wants the split.
+SUB_API int sublimation_search_split_alternation(const char *pattern,
+                                                 char ***out, int *nout);
+
 // sizeof(sublimation_search), exported so a foreign binding that mirrors the
 // struct as an opaque buffer (vector's ffi.rs) can assert its mirror
 // matches this library at runtime, not just at the mirror's writing.

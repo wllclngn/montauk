@@ -59,6 +59,12 @@ class CpuGrid : public widget::Component {
   // Lazily sized to the snapshot's per-core count. Grows on hotplug.
   std::vector<Cell> cells_;
 
+  // Per-core sample scratch, persistent across frames. Held here rather than
+  // built in render() because that ran once per core per frame -- a fresh
+  // vector per core, every frame, inside the histories mutex. Reused via
+  // History::recent_into, which clears but keeps capacity.
+  std::vector<std::vector<float>> samples_;
+
   // Scroll offset measured in cell-rows. Up/Down move by 1 row,
   // PageUp/PageDown move by visible_rows-1.
   int scroll_rows_ = 0;

@@ -174,6 +174,71 @@ int main(int argc, char** argv) {
   ts += 100'000;
   sched_evt(SCHED_OP_WAKE2RUN, 0, 7, -1, 0, /*lat*/5'000'000, 0, ts + 5'000'000);
 
+  // A cache_topology provider snapshot. Without it LocalityReport early-outs
+  // with "cannot map migration distance" and its whole interval/quantile path
+  // never executes -- so edits to it used to pass the golden gate by never
+  // running. 4 CPUs: two L2 pairs sharing one L3 on one socket, which gives
+  // same-L2, same-L3 and cross-socket tiers something to land in.
+  ts += 100'000;
+  {
+    // Prometheus exposition, not bare key=value: the analyzer's parser looks
+    // for label syntax (key="N"), because a provider snapshot is scraped text.
+    const char* topo =
+        "montauk_cpu_topology{cpu=\"0\",l2=\"0\",l3=\"0\",socket=\"0\"} 1\n"
+        "montauk_cpu_topology{cpu=\"1\",l2=\"0\",l3=\"0\",socket=\"0\"} 1\n"
+        "montauk_cpu_topology{cpu=\"2\",l2=\"1\",l3=\"0\",socket=\"0\"} 1\n"
+        "montauk_cpu_topology{cpu=\"3\",l2=\"1\",l3=\"1\",socket=\"1\"} 1\n";
+    const uint32_t plen = static_cast<uint32_t>(std::strlen(topo));
+    std::vector<uint8_t> rec(sizeof(montauk_provider_event) + plen);
+    auto* pe = reinterpret_cast<montauk_provider_event*>(rec.data());
+    std::memset(pe, 0, sizeof(*pe));
+    pe->type = TRACE_EVT_PROVIDER;
+    pe->timestamp_ns = ts;
+    pe->payload_len = plen;
+    std::strncpy(pe->name, "cache_topology", sizeof(pe->name) - 1);
+    std::memcpy(rec.data() + sizeof(montauk_provider_event), topo, plen);
+    emit(rec.data(), static_cast<uint32_t>(rec.size()));
+  }
+
+  // Cross-CPU migrations so locality has tiers and intervals to work with.
+  // last_cpu is the migration SOURCE -- the helper above hardcodes -1 (no prior
+  // run), which reads as "not a migration", so these are emitted directly.
+  // Walk 0->1 (same L2), 1->2 (same L3), 2->3 (cross-socket) and back, with
+  // varied gaps so the inter-migration quantiles are not degenerate.
+  ts += 10'000;
+  {
+    const uint32_t path[] = {0, 1, 2, 3, 2, 1};
+    uint32_t prev = path[0];
+    for (int i = 1; i < 36; ++i) {
+      const uint32_t cur = path[static_cast<size_t>(i) % 6];
+      ts += 40'000 + static_cast<uint64_t>(i % 5) * 7'000;
+      montauk_sched_event ev{};
+      ev.type = TRACE_EVT_SCHED;
+      ev.op = SCHED_OP_WAKE2RUN;
+      ev.cpu = cur;
+      ev.pid = 1002;
+      ev.secondary_pid = -1;
+      ev.last_cpu = static_cast<int32_t>(prev);
+      ev.runtime_ns = 12'000;
+      ev.timestamp_ns = ts;
+      emit(&ev, sizeof(ev));
+      prev = cur;
+    }
+  }
+
+  // Kick/response pairs so KickLatencyReport stops reporting "no kicks
+  // captured": a KICK_ISSUE at a target CPU answered by a RESCHED shortly
+  // after, plus two deliberately unanswered kicks.
+  ts += 100'000;
+  for (int i = 0; i < 12; ++i) {
+    const uint32_t target = static_cast<uint32_t>(i % 4);
+    ts += 50'000;
+    sched_evt(SCHED_OP_KICK_ISSUE, target, -1, -1, 0, 0, 0, ts);
+    if (i % 5 != 4)  // 2 of 12 go unanswered
+      sched_evt(SCHED_OP_RESCHED, target, -1, -1, 0, 0, 0,
+                ts + 3'000 + static_cast<uint64_t>(i % 4) * 1'500);
+  }
+
   // ENQUEUE events carrying cls_weight in score bits 48+, to exercise REPORT
   // classmix (added v7.12.0): a spread of classes across distinct pids -- one
   // LAT_CRITICAL, two LATENCY pids, one INTERACTIVE, one BATCH.

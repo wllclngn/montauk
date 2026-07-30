@@ -58,7 +58,7 @@ fn initialize_reports_protocol_version_and_server_info() {
 }
 
 #[test]
-fn tools_list_names_all_seven_tools() {
+fn tools_list_names_every_tool() {
     let result = call("tools/list", None).unwrap();
     let tools = result.get("tools").unwrap().as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t.get("name").unwrap().as_str().unwrap()).collect();

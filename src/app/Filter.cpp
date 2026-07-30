@@ -1,25 +1,20 @@
 #include "app/Filter.hpp"
 #include <string>
-#include <string_view>
 
 namespace montauk::app {
 
-namespace {
-// The Thompson NFA has no icase flag, so we ASCII-case-fold both the pattern
-// and the input -- preserving the case-insensitive behavior the old
-// std::regex::icase filter had (and matching the Boyer-Moore --contains path).
-std::string ascii_lower(std::string_view s) {
-  std::string out(s);
-  for (char& c : out) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
-  return out;
-}
-} // namespace
-
 ProcessFilter::ProcessFilter(ProcessFilterSpec spec) : spec_(std::move(spec)) {
   if (spec_.name_regex) {
-    std::string lc = ascii_lower(*spec_.name_regex);
+    // ICASE, not a hand-folded copy of pattern and input. The predecessor here
+    // folded both because "the Thompson NFA has no icase flag" -- that engine
+    // was retired in v8.0.0, and the Glushkov field folds case into its class
+    // sets at COMPILE time, which is also more correct than match-time folding
+    // for negated classes. Folding the input separately allocated a lowered
+    // std::string per process, per call.
+    const std::string& rx = *spec_.name_regex;
     compiled_.emplace();
-    sublimation_search_compile(&*compiled_, lc.data(), lc.size(), 0u, 0);
+    sublimation_search_compile(&*compiled_, rx.data(), rx.size(),
+                               SUBLIMATION_SEARCH_ICASE, 0);
     if (!sublimation_search_valid(&*compiled_)) compiled_.reset();  // bad pattern -> regex filter ignored
   }
   // An empty substring query is no constraint (matches all), so only build a
@@ -43,8 +38,7 @@ std::vector<size_t> ProcessFilter::apply(const montauk::model::ProcessSnapshot& 
       if (sublimation_search_find(&*bmh_, p.cmd.data(), p.cmd.size(), nullptr) == -1) ok = false;
     }
     if (ok && compiled_) {
-      std::string lc = ascii_lower(p.cmd);
-      if (sublimation_search_find(&*compiled_, lc.data(), lc.size(), nullptr) < 0) ok = false;
+      if (sublimation_search_find(&*compiled_, p.cmd.data(), p.cmd.size(), nullptr) < 0) ok = false;
     }
     if (ok && spec_.user_equals) { if (p.user_name != *spec_.user_equals) ok = false; }
     if (ok && spec_.cpu_min) { if (p.cpu_pct < *spec_.cpu_min) ok = false; }

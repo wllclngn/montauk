@@ -4,6 +4,7 @@
 #include "ui/Formatting.hpp"
 #include "util/SortDispatch.hpp"
 #include "sublimation_text.h"
+#include "sublimation.h"        // searchsorted: filter membership without a hash set
 #include "app/Filter.hpp"
 
 #include <algorithm>
@@ -239,12 +240,28 @@ void ProcessTable::render(widget::Canvas& canvas,
   }
 
   if (!filter_query_.empty()) {
-    montauk::app::ProcessFilterSpec fspec{};
-    fspec.name_contains = filter_query_;
-    montauk::app::ProcessFilter filt(fspec);
-    auto matched = filt.apply(s.procs);
-    std::unordered_set<size_t> match_set(matched.begin(), matched.end());
-    std::erase_if(order, [&](size_t idx) { return !match_set.contains(idx); });
+    // Rebuild ONLY when the query changed. Constructing a ProcessFilter
+    // compiles its sublimation programs; doing that per frame was two pattern
+    // compilations and ~11.4 KB of object on the render path for a string that
+    // only moves on a keystroke.
+    if (!filter_cache_ || filter_cache_key_ != filter_query_) {
+      montauk::app::ProcessFilterSpec fspec{};
+      fspec.name_contains = filter_query_;
+      filter_cache_ = std::make_unique<montauk::app::ProcessFilter>(fspec);
+      filter_cache_key_ = filter_query_;
+    }
+    auto matched = filter_cache_->apply(s.procs);
+    // ProcessFilter::apply pushes indices in ascending i order, so `matched` is
+    // already sorted -- a binary search answers membership without building a
+    // hash set every frame (that was one node allocation per matched process).
+    static_assert(sizeof(size_t) == sizeof(uint64_t),
+                  "matched is searched as u64 in place; needs an LP64 size_t");
+    const uint64_t* mp = reinterpret_cast<const uint64_t*>(matched.data());
+    const size_t mn = matched.size();
+    std::erase_if(order, [&](size_t idx) {
+      size_t pos = sublimation_searchsorted_u64(mp, mn, static_cast<uint64_t>(idx), 0);
+      return !(pos < mn && mp[pos] == idx);
+    });
   }
 
   // 2. Layout / pagination.

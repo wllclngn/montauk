@@ -16,18 +16,27 @@ VERDICT: no field-gate events (adaptive reclassification gate not streamed)
 
 
 REPORT locality
-VERDICT: no cache_topology snapshot in the trace -- cannot map migration distance (recapture with montauk >= 7.8.0)
+35 migrations (0 unmapped)
+tier           moves        pct     
+same-L2        23             65.7%
+same-L3        12             34.3%
+same-socket    0               0.0%
+cross-socket   0               0.0%
+decay (tier_{k+1}/tier_k): 0.522 0.000 0.000
+rate: 297 migrations/s over 0.12s
+inter-migration interval us: p50=54.0 p99=68.0 min=40.0 (n=34)
+VERDICT: 100.0% of migrations stay cache-local (same-L2/L3); density decays with distance (locality preserved)
 
 
 REPORT summary
-VERDICT: 8.6k events in 0.1 s (73.0k/s), dominated by SCHED WAKE2RUN (23%)
+VERDICT: 8.7k events in 0.1 s (73.5k/s), dominated by SCHED WAKE2RUN (23%)
 pattern         synthetic
 start           15:06:40.000
 format_version  1
 first_event_ms  0.050
 duration_s      0.118
-events          8609
-events_per_sec  72988
+events          8667
+events_per_sec  73480
 type    subtype          count
 NTSYNC  create_sem                  1
 NTSYNC  sem_release                16
@@ -42,11 +51,14 @@ IO      ppoll                       1
 SCHED   ENQUEUE                   100
 SCHED   PREEMPT_TICK             2000
 SCHED   WAKEUP                   2000
-SCHED   WAKE2RUN                 2001
+SCHED   WAKE2RUN                 2036
 SCHED   CPU_IDLE                  286
 SCHED   SWITCH_IN                2000
+SCHED   KICK_ISSUE                 12
+SCHED   RESCHED                    10
 HEAP    malloc                      2
 HEAP    free                        3
+PROVIDER cache_topology              1
 UNKNOWN type=18                     4
 
 REPORT iowait
@@ -55,9 +67,9 @@ tid      pid      comm             syscall      fd     parked_s
 1002     1000     worker           ppoll        9      0.0
 
 REPORT sched
-VERDICT: 2.0k wake2run; p50 17us p99 4000us p999 5000us worst 18000us; 99.0% fast(<100us) / 0.0% mid / 1.0% tick-floor(>=900us); 33.3% cross-domain
+VERDICT: 2.0k wake2run; p50 17us p99 4000us p999 5000us worst 18000us; 99.0% fast(<100us) / 0.0% mid / 1.0% tick-floor(>=900us); 32.8% cross-domain
 cross-domain wake2run: 667 events; p50 17us p99 4000us worst 18000us (high here = scatter feeds the slow mode)
-STRUCTURE: latency-over-trace RANDOM; ~2001 distinct values; inversion ratio 0.48
+STRUCTURE: latency-over-trace RANDOM; ~2036 distinct values; inversion ratio 0.52
 
 
 REPORT work-conservation
@@ -80,7 +92,12 @@ VERDICT: 21 saturated floored wakes; PREEMPT-STARVED 100% (0 intervening picks) 
 
 
 REPORT kick-latency
-VERDICT: no kicks captured (scx_bpf_kick_cpu never fired, or MONTAUK_SCX_STORM off -- the storm probes are not attached)
+12 kicks, 2 unanswered (no resched observed before the next kick or trace end), 0 of those raced a fresh tick-stop
+answered kick->resched latency: p50=6.0us p99=7.5us worst=7.5us
+
+unanswered kicks (ranked, tick-stop-raced first):
+  cpu=1   t=1102.700ms
+  cpu=0   t=1102.450ms
 
 
 REPORT kstrand
@@ -157,7 +174,7 @@ addr               size     freed_by_1            freed_by_2           kind
 REPORT fractal
 TIMELINE: 2.0k dispatches, 667 cross-domain over 0.1s; bin 10us -> 11795 bins
 SERIES                 H(DFA)     H(R/S)    D=2-H  decades  VERDICT
-dispatch-rate        0.618±0.109      0.322    1.382     2.87  indistinguishable from uncorrelated
+dispatch-rate        0.591±0.101      0.233    1.409     2.87  indistinguishable from uncorrelated
 migration-rate       0.496±0.073      0.288    1.504     2.87  indistinguishable from uncorrelated
 NOTE: raw-event timeline spans 2.9 decades of scale -- a rigorous read, not the <1-decade .prom-scrape estimate
 
@@ -168,5 +185,12 @@ VERDICT: 2 ranked pids, 0 self-preempting (stints/wakes > 1.5); floored-wake sha
 
 
 REPORT matrix-profile
-VERDICT: 8387 sched events over 128 windows of 0.92ms; discord (most anomalous) window 105 at 97ms, profile 2.20 vs mean 1.13; motif (most recurring) windows 114~117 at distance 0.00
+VERDICT: 8444 sched events over 128 windows of 0.92ms; discord (most anomalous) window 102 at 94ms, profile 2.48 vs mean 1.21; motif (most recurring) windows 114~117 at distance 0.00
 
+
+POORLY-BEHAVING ITEMS (ranked)
+kind           id                 metric                    value  sev
+doublefree-logic 1001/0x0000000000bbbb00 bytes                       256  HIGH
+kick-latency   cpu1               unanswered_kicks              1  MED
+discord        94ms               profile_vs_mean         2.04958  MED
+kick-latency   cpu0               unanswered_kicks              1  MED

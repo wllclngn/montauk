@@ -264,3 +264,33 @@ bx
 |x
 $ sublimation search a\|b
 a|b
+$ sublimation search []]
+a]b
+$ sublimation search []|]
+a]b
+X|Y
+$ sublimation search [^]a]
+a]b
+X|Y
+$ sublimation search []-a]
+a]b
+cat
+^x
+$ sublimation search -c []|]x
+2
+$ sublimation search -c \w
+3
+$ sublimation search -c \W
+2
+$ sublimation search -c \s
+1
+$ sublimation search -c \S
+3
+$ sublimation search -c a\wc
+2
+$ sublimation search -c \S\s\S
+1
+$ sublimation search -c \d
+1
+$ sublimation search -c [\w]
+2

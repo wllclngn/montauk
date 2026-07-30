@@ -8286,322 +8286,380 @@
 [   118.001] SCHED SWITCH_IN      cpu=3   pid=1001   
 [   100.003] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3740000 budget=1000000
 [   105.100] SCHED WAKE2RUN       cpu=0   pid=7       wake2run=5000us
-[   100.201] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.202] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.203] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.204] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.205] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.206] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.207] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.208] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.209] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.210] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.211] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.212] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.213] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.214] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.215] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.216] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.217] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.218] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.219] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.220] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.221] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.222] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.223] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.224] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.225] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.226] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.227] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.228] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.229] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.230] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.231] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.232] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.233] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.234] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.235] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.236] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.237] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.238] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.239] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.240] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.241] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.242] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.243] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.244] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.245] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.246] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.247] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.248] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.249] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.250] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.251] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.252] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.253] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.254] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.255] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.256] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.257] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.258] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.259] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.260] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.261] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.262] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.263] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.264] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.265] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.266] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.267] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.268] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.269] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.270] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.271] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.272] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.273] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.274] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.275] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.276] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.277] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.278] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.279] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.280] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.281] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.282] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.283] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.284] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.285] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.286] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.287] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.288] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.289] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.290] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.291] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.292] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.293] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.294] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.295] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.296] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   100.297] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   100.298] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   100.299] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   100.300] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   100.400] NTSYNC create_event  pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.401] NTSYNC create_sem    pid=1000    tid=1001    fd=11   result=0 objptr=0x50000
-[   100.402] NTSYNC create_mutex  pid=1000    tid=1001    fd=12   result=0 objptr=0xa0000
-[   100.410] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.411] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.412] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.415] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.416] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.420] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.421] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.425] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.426] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.430] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.431] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.432] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.435] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.436] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.440] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.441] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.445] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.446] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.450] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.451] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.452] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.455] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.456] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.460] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.461] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.465] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.466] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.470] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.471] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.472] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.475] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.476] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.480] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.481] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.485] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.486] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.490] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.491] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.492] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.495] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.496] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.500] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.501] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.505] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.506] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.510] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.511] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.512] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.515] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.516] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.520] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.521] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.525] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.526] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.530] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.531] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.532] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.535] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.536] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.540] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.541] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.545] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.546] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.550] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.551] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.552] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.555] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.556] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.560] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.561] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.565] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.566] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.570] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.571] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.572] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.575] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.576] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.580] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.581] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.585] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.586] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.590] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.591] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.592] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.595] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.596] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.600] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.601] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.605] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.606] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.610] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.611] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.612] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.615] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.616] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.620] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.621] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.625] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.626] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.630] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.631] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.632] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.635] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.636] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.640] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.641] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.645] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.646] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.650] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.651] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.652] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.655] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.656] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.660] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.661] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.665] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.666] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.670] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.671] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.672] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.675] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.676] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.680] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.681] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.685] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.686] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.690] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.691] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.692] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.695] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.696] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.700] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.701] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.705] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.706] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.710] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.711] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.712] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   100.715] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.716] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.720] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.721] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.725] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.726] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   100.900] NTSYNC wait_any      pid=1000    tid=1002    fd=10   result=-999 objs=[10] objptrs=[0xe0000]
-[   101.000] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.001] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.002] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.002] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.004] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.004] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.006] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.007] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.008] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.008] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.010] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.010] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.012] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.013] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.014] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.014] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.016] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.016] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.018] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.019] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.020] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.020] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.022] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.022] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.024] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.025] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.026] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.026] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.028] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.028] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.030] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.031] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.032] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.032] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.034] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.034] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.036] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.037] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.038] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.038] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.040] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.040] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.042] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.043] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.044] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.044] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.046] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.046] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.048] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.049] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.050] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.050] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.052] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.052] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.054] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.055] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.056] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.056] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.058] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.058] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.060] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.061] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.062] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   101.062] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   101.100] IO     ppoll         pid=1000    tid=1002    fd=9    count=0 result=-999 comm='worker'
-[   101.200] HEAP   malloc    pid=1000    tid=1001    addr=0x0000000000aaaa00 size=128 comm='worker'
-[   101.201] HEAP   free      pid=1000    tid=1001    addr=0x0000000000aaaa00 size=0 comm='worker'
-[   101.202] HEAP   malloc    pid=1000    tid=1001    addr=0x0000000000bbbb00 size=256 comm='worker'
-[   101.203] HEAP   free      pid=1000    tid=1001    addr=0x0000000000bbbb00 size=0 comm='worker'
-[   101.204] HEAP   free      pid=1000    tid=1001    addr=0x0000000000bbbb00 size=0 comm='worker'
-# 8609 events
+[   100.200] PROVIDER cache_topology snapshot bytes=228
+[   100.257] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   100.311] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   100.372] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
+[   100.440] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   100.480] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   100.527] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
+[   100.581] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   100.642] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   100.710] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
+[   100.750] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   100.797] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   100.851] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
+[   100.912] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   100.980] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.020] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
+[   101.067] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.121] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   101.182] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
+[   101.250] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   101.290] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.337] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
+[   101.391] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.452] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   101.520] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
+[   101.560] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   101.607] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.661] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
+[   101.722] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.790] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   101.830] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
+[   101.877] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   101.931] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.992] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
+[   102.060] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   102.100] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   102.250] SCHED KICK_ISSUE     cpu=0   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.253] SCHED RESCHED        cpu=0   pid=-1      calling_cpu=-1
+[   102.300] SCHED KICK_ISSUE     cpu=1   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.305] SCHED RESCHED        cpu=1   pid=-1      calling_cpu=-1
+[   102.350] SCHED KICK_ISSUE     cpu=2   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.356] SCHED RESCHED        cpu=2   pid=-1      calling_cpu=-1
+[   102.400] SCHED KICK_ISSUE     cpu=3   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.407] SCHED RESCHED        cpu=3   pid=-1      calling_cpu=-1
+[   102.450] SCHED KICK_ISSUE     cpu=0   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.500] SCHED KICK_ISSUE     cpu=1   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.504] SCHED RESCHED        cpu=1   pid=-1      calling_cpu=-1
+[   102.550] SCHED KICK_ISSUE     cpu=2   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.556] SCHED RESCHED        cpu=2   pid=-1      calling_cpu=-1
+[   102.600] SCHED KICK_ISSUE     cpu=3   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.608] SCHED RESCHED        cpu=3   pid=-1      calling_cpu=-1
+[   102.650] SCHED KICK_ISSUE     cpu=0   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.653] SCHED RESCHED        cpu=0   pid=-1      calling_cpu=-1
+[   102.700] SCHED KICK_ISSUE     cpu=1   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.750] SCHED KICK_ISSUE     cpu=2   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.756] SCHED RESCHED        cpu=2   pid=-1      calling_cpu=-1
+[   102.800] SCHED KICK_ISSUE     cpu=3   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.808] SCHED RESCHED        cpu=3   pid=-1      calling_cpu=-1
+[   102.901] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.902] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.903] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.904] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.905] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.906] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.907] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.908] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.909] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.910] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.911] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.912] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.913] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.914] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.915] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.916] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.917] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.918] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.919] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.920] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.921] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.922] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.923] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.924] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.925] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.926] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.927] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.928] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.929] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.930] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.931] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.932] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.933] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.934] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.935] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.936] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.937] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.938] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.939] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.940] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.941] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.942] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.943] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.944] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.945] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.946] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.947] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.948] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.949] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.950] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.951] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.952] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.953] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.954] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.955] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.956] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.957] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.958] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.959] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.960] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.961] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.962] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.963] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.964] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.965] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.966] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.967] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.968] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.969] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.970] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.971] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.972] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.973] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.974] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.975] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.976] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.977] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.978] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.979] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.980] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.981] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.982] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.983] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.984] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.985] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.986] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.987] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.988] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.989] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.990] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.991] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.992] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.993] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.994] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   102.995] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   102.996] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   102.997] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   102.998] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   102.999] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.000] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.100] NTSYNC create_event  pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.101] NTSYNC create_sem    pid=1000    tid=1001    fd=11   result=0 objptr=0x50000
+[   103.102] NTSYNC create_mutex  pid=1000    tid=1001    fd=12   result=0 objptr=0xa0000
+[   103.110] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.111] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.112] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.115] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.116] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.120] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.121] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.125] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.126] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.130] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.131] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.132] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.135] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.136] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.140] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.141] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.145] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.146] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.150] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.151] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.152] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.155] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.156] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.160] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.161] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.165] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.166] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.170] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.171] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.172] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.175] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.176] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.180] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.181] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.185] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.186] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.190] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.191] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.192] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.195] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.196] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.200] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.201] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.205] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.206] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.210] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.211] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.212] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.215] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.216] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.220] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.221] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.225] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.226] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.230] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.231] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.232] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.235] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.236] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.240] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.241] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.245] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.246] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.250] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.251] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.252] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.255] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.256] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.260] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.261] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.265] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.266] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.270] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.271] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.272] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.275] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.276] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.280] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.281] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.285] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.286] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.290] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.291] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.292] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.295] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.296] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.300] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.301] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.305] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.306] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.310] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.311] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.312] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.315] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.316] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.320] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.321] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.325] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.326] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.330] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.331] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.332] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.335] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.336] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.340] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.341] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.345] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.346] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.350] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.351] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.352] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.355] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.356] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.360] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.361] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.365] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.366] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.370] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.371] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.372] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.375] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.376] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.380] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.381] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.385] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.386] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.390] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.391] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.392] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.395] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.396] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.400] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.401] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.405] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.406] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.410] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.411] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.412] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.415] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.416] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.420] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.421] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.425] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.426] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.600] NTSYNC wait_any      pid=1000    tid=1002    fd=10   result=-999 objs=[10] objptrs=[0xe0000]
+[   103.700] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.701] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.702] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.703] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.704] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.704] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.706] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.707] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.708] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.709] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.710] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.710] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.712] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.713] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.714] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.715] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.716] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.716] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.718] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.719] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.720] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.721] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.722] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.722] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.724] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.725] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.726] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.727] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.728] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.728] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.730] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.731] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.732] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.733] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.734] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.734] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.736] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.737] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.738] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.739] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.740] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.740] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.742] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.743] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.744] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.745] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.746] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.746] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.748] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.749] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.750] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.751] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.752] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.752] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.754] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.754] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.756] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.757] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.758] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.758] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.760] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.760] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.762] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.763] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.800] IO     ppoll         pid=1000    tid=1002    fd=9    count=0 result=-999 comm='worker'
+[   103.900] HEAP   malloc    pid=1000    tid=1001    addr=0x0000000000aaaa00 size=128 comm='worker'
+[   103.901] HEAP   free      pid=1000    tid=1001    addr=0x0000000000aaaa00 size=0 comm='worker'
+[   103.902] HEAP   malloc    pid=1000    tid=1001    addr=0x0000000000bbbb00 size=256 comm='worker'
+[   103.903] HEAP   free      pid=1000    tid=1001    addr=0x0000000000bbbb00 size=0 comm='worker'
+[   103.904] HEAP   free      pid=1000    tid=1001    addr=0x0000000000bbbb00 size=0 comm='worker'
+# 8667 events
