@@ -131,3 +131,29 @@ bool sub_dfs_run(size_t num_workers, sub_dfs_frame_t root,
     free(pool.deques);
     return true;
 }
+
+// PUBLIC WRAPPER over the deque: index-only parallel-for. See sublimation.h for
+// why this is the shape rather than something richer -- anything that knew about
+// the caller's data would drag the caller's concerns into the library.
+typedef struct { void (*fn)(size_t, void *); void *user; } sub_pfor_t;
+
+static void sub_pfor_frame(sub_dfs_frame_t f, sub_dfs_ctx_t *ctx, void *user) {
+    sub_pfor_t *p = (sub_pfor_t *)user;
+    if (f.depth == 0) {          // distributor: one leaf per index
+        for (size_t i = 0; i < f.n; i++)
+            sub_dfs_push(ctx, (sub_dfs_frame_t){ .base = f.base, .n = i, .depth = 1 });
+        return;
+    }
+    p->fn(f.n, p->user);
+}
+
+int sublimation_parallel_for(size_t n, size_t num_threads,
+                             void (*fn)(size_t index, void *user), void *user) {
+    if (!fn || n == 0) return 1;
+    sub_pfor_t p = { fn, user };
+    sub_dfs_frame_t root = { .base = &p, .n = n, .depth = 0 };
+    size_t w = num_threads ? num_threads : sub_default_num_workers();
+    return sub_dfs_run(w, root, sub_pfor_frame, &p) ? 1 : 0;
+}
+
+size_t sublimation_default_workers(void) { return sub_default_num_workers(); }

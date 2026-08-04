@@ -20,6 +20,24 @@ struct PmuSnapshot {
   uint64_t context_switches{}; // PERF_COUNT_SW_CONTEXT_SWITCHES
   uint64_t cpu_migrations{};   // PERF_COUNT_SW_CPU_MIGRATIONS
   uint64_t branch_misses{};    // PERF_COUNT_HW_BRANCH_MISSES
+  uint64_t dtlb_load_misses{}; // HW_CACHE dTLB / READ / MISS
+  uint64_t cache_misses{};     // PERF_COUNT_HW_CACHE_MISSES (last level)
+
+  // CUMULATIVE totals since montauk opened the counters, NOT interval deltas
+  // -- the only fields here with that semantic, which is why they are named
+  // apart. A rate divides by wall time and inherits every source of variance a
+  // latency gauge has; a total is invariant to clock scaling and thermals,
+  // which is the whole property a counter baseline rests on. Summed from the
+  // same per-CPU deltas the fields above carry, so a total and its rate cannot
+  // describe different counters.
+  uint64_t instructions_total{};
+  uint64_t cycles_total{};
+  uint64_t context_switches_total{};
+  uint64_t cpu_migrations_total{};
+  uint64_t branch_misses_total{};
+  uint64_t l2_misses_total{};
+  uint64_t dtlb_load_misses_total{};
+  uint64_t cache_misses_total{};
 
   // Per-second rates for the scheduler-relevant counters.
   double context_switches_per_sec{};
@@ -53,6 +71,39 @@ struct PmuSnapshot {
   std::vector<DomainL3> l3_per_cache_domain;
   uint64_t l3_accesses_total{};
   uint64_t l3_misses_total{};
+
+  // PER-PROCESS ATTRIBUTION. The counters above are per-CPU / system-wide and
+  // need perf_event_paranoid <= 0, so on a default box (paranoid 2) they are
+  // simply off. perf_event_open(pid=<owned>, cpu=-1) is permitted at paranoid 2
+  // with NO privilege and NO sysctl, and answers the strictly more useful
+  // question: WHICH process is thrashing the TLB rather than that someone is.
+  // PMU was the one sensor with no per-process attribution; GPU and thermal are
+  // the precedent.
+  //
+  // inherit=1, so a counter follows threads and children created AFTER the
+  // attach. Threads that already existed when montauk attached are NOT counted
+  // -- stated because it decides how a measurement is set up (attach before the
+  // workload spawns its pool, not mid-run).
+  struct ProcCounters {
+    int32_t  pid{};
+    char     comm[64]{};
+    // Interval deltas.
+    uint64_t instructions{}, cycles{}, dtlb_load_misses{}, cache_misses{};
+    double   ipc{};
+    // Cumulative since attach -- the form a baseline compares, invariant to
+    // clock scaling and thermals in a way a rate is not.
+    uint64_t instructions_total{}, cycles_total{};
+    uint64_t dtlb_load_misses_total{}, cache_misses_total{};
+    // Derived, per thousand instructions: the scale-free form, so a short run
+    // and a long one over the same workload are directly comparable.
+    double   dtlb_misses_per_kilo_instr{}, cache_misses_per_kilo_instr{};
+  };
+  bool per_process_available{false};
+  // Per-process counts exclude kernel time. Forced at
+  // perf_event_paranoid >= 2, which is the ordinary distro default, so
+  // this is the common case rather than the exception.
+  bool per_process_user_only{false};
+  std::vector<ProcCounters> per_process;
 
   // Seconds elapsed since the previous sample (for per-second rate derivation).
   double interval_s{};

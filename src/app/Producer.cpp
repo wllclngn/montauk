@@ -118,6 +118,31 @@ void Producer::stop() {
 
 Producer::~Producer() { stop(); }
 
+// Resolve the operator's selection to a concrete pid set. A pid named
+// explicitly is attached whether or not it appears in the process snapshot
+// (the collector's top-K cap is a display concern, not a measurement one); a
+// comm substring matches against the same cmd string the TUI shows.
+void Producer::refresh_pmu_targets(const montauk::model::ProcessSnapshot& procs) {
+  std::vector<std::pair<int, std::string>> targets;
+  for (int pid : pmu_pids_) targets.emplace_back(pid, std::string());
+  if (!pmu_comm_.empty()) {
+    // Never match montauk itself. The selection is a substring of the whole
+    // command line, and montauk's own line contains the pattern it was given --
+    // so without this the observer measures itself and reports a process the
+    // operator never asked about. --trace excludes its own chain for the same
+    // reason.
+    const int self = static_cast<int>(::getpid());
+    for (const auto& p : procs.processes) {
+      if (p.pid == self) continue;
+      if (p.cmd.find(pmu_comm_) == std::string::npos) continue;
+      bool dup = false;
+      for (const auto& t : targets) if (t.first == p.pid) { dup = true; break; }
+      if (!dup) targets.emplace_back(p.pid, p.cmd);
+    }
+  }
+  pmu_.set_process_targets(targets);
+}
+
 void Producer::run(std::stop_token st) {
   // Small helper: compute kernel tick in milliseconds for warm-up pacing
   auto tick_ms = []{
@@ -175,6 +200,9 @@ void Producer::run(std::stop_token st) {
     (void)fs_.sample(s.fs);
     (void)providers_.sample(s.providers);
     if (proc_) { (void)proc_->sample(s.procs); process_samples_.fetch_add(1, std::memory_order_release); }
+    // Attach before the first PMU read so the warm-up interval is already
+    // attributed rather than discarded.
+    if (pmu_proc_enabled_) { refresh_pmu_targets(s.procs); (void)pmu_.sample(s.pmu); }
     (void)thermal_.sample(s.thermal);
 
     // Time budget for warm-up (~180ms max)
@@ -215,7 +243,7 @@ void Producer::run(std::stop_token st) {
       s.alerts.clear();
       for (auto& it : a) s.alerts.push_back(montauk::model::AlertItem{it.severity, it.message});
     }
-    montauk::app::enrich_anomalies(s.procs, anomaly_prev_faults_);
+    montauk::app::enrich_anomalies(s.procs, anomaly_prev_faults_, anomaly_prev_ctxsw_);
     s.cpu.changepoint_score = cpu_changepoint(s);  // before push: reads prior frames
     chart_histories().push_snapshot(s);
     buffers_.publish();
@@ -227,7 +255,14 @@ void Producer::run(std::stop_token st) {
     bool ran = false;
     auto& s = buffers_.begin_write();
     if (now >= next_cpu) { (void)cpu_.sample(s.cpu); next_cpu = now + cpu_interval; ran = true; }
-    if (now >= next_pmu) { if (pmu_enabled_) { (void)pmu_.sample(s.pmu); ran = true; } next_pmu = now + pmu_interval; }
+    if (now >= next_pmu) {
+      // Re-resolve the per-process selection before every read, so a workload
+      // that starts (or restarts) mid-run is picked up rather than needing
+      // montauk to have been launched after it.
+      if (pmu_proc_enabled_) refresh_pmu_targets(s.procs);
+      if (pmu_enabled_ || pmu_proc_enabled_) { (void)pmu_.sample(s.pmu); ran = true; }
+      next_pmu = now + pmu_interval;
+    }
     if (now >= next_mem) { (void)mem_.sample(s.mem); next_mem = now + mem_interval; ran = true; }
     if (now >= next_gpu) { (void)gpu_.sample(s.vram); next_gpu = now + gpu_interval; ran = true; }
     if (now >= next_net) { (void)net_.sample(s.net); next_net = now + net_interval; ran = true; }
@@ -257,7 +292,7 @@ void Producer::run(std::stop_token st) {
         gpu_attr_->enrich(s);
         next_nvml = now + nvml_interval;
       }
-      montauk::app::enrich_anomalies(s.procs, anomaly_prev_faults_);
+      montauk::app::enrich_anomalies(s.procs, anomaly_prev_faults_, anomaly_prev_ctxsw_);
       s.cpu.changepoint_score = cpu_changepoint(s);  // before push: reads prior frames
       chart_histories().push_snapshot(s);
       buffers_.publish();

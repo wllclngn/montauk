@@ -48,6 +48,12 @@ public:
   // --sched-detail: enable the per-CPU idle-boundary stream (off by default). Must
   // be called before start() -- it sets a const-volatile rodata bit, frozen at load.
   void set_sched_detail(bool on) { sched_detail_ = on; }
+  // Ring size in BYTES. 0 keeps the compiled-in default. Applied before load,
+  // where libbpf still allows a resize.
+  void set_ring_bytes(uint64_t b) { ring_bytes_ = b; }
+  // Per-class capture mask, bit N = TRACE_EVT_N. 0 keeps every class, so an
+  // operator who sets nothing captures what they captured before.
+  void set_capture_mask(uint64_t m) { capture_mask_ = m; }
 
 private:
   void run(std::stop_token st);
@@ -154,6 +160,8 @@ private:
   // Empty when --trace-out is unset (no sidecar has anywhere useful to go).
   std::string trace_dir_;
   bool sched_detail_{false};   // --sched-detail: stream per-CPU idle boundaries
+  uint64_t ring_bytes_{0};     // --trace-ring-bytes: 0 = compiled default
+  uint64_t capture_mask_{0};   // --trace-classes: 0 = every class
   std::vector<uint8_t> trace_buf_;
   // Second binary stream (--stream-out), same wire format, independent fd and
   // buffer -- a character-device target that must keep working even if

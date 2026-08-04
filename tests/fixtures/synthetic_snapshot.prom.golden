@@ -1,6 +1,6 @@
 # HELP montauk_system_info System specs: montauk version, cpu model, cores, memory, gpu, kernel, scheduler
 # TYPE montauk_system_info gauge
-montauk_system_info{version="8.6.0",cpu_model="Test CPU",physical_cores="6",logical_cpus="12",mem_total_gib="62.7",gpu="Test GPU",kernel="7.1.3-arch1-2",sched="pandemonium",cache_domain="2"} 1
+montauk_system_info{version="8.7.0",cpu_model="Test CPU",physical_cores="6",logical_cpus="12",mem_total_gib="62.7",gpu="Test GPU",kernel="7.1.3-arch1-2",sched="pandemonium",cache_domain="2"} 1
 # HELP montauk_cpu_usage_percent Aggregate CPU utilization
 # TYPE montauk_cpu_usage_percent gauge
 montauk_cpu_usage_percent 42.5
@@ -73,6 +73,33 @@ montauk_pmu_cpu_migrations_per_second 4
 # HELP montauk_pmu_branch_misses_per_second Branch mispredictions per second
 # TYPE montauk_pmu_branch_misses_per_second gauge
 montauk_pmu_branch_misses_per_second 55
+# HELP montauk_pmu_instructions_total Retired instructions since counters opened (cumulative)
+# TYPE montauk_pmu_instructions_total counter
+montauk_pmu_instructions_total 0
+# HELP montauk_pmu_cycles_total CPU cycles since counters opened (cumulative)
+# TYPE montauk_pmu_cycles_total counter
+montauk_pmu_cycles_total 0
+# HELP montauk_pmu_context_switches_total Context switches since counters opened (cumulative)
+# TYPE montauk_pmu_context_switches_total counter
+montauk_pmu_context_switches_total 0
+# HELP montauk_pmu_cpu_migrations_total CPU migrations since counters opened (cumulative)
+# TYPE montauk_pmu_cpu_migrations_total counter
+montauk_pmu_cpu_migrations_total 0
+# HELP montauk_pmu_branch_misses_total Branch mispredictions since counters opened (cumulative)
+# TYPE montauk_pmu_branch_misses_total counter
+montauk_pmu_branch_misses_total 0
+# HELP montauk_pmu_l2_misses_total L2 cache misses since counters opened (cumulative)
+# TYPE montauk_pmu_l2_misses_total counter
+montauk_pmu_l2_misses_total 0
+# HELP montauk_pmu_dtlb_load_misses_interval dTLB load misses this interval
+# TYPE montauk_pmu_dtlb_load_misses_interval gauge
+montauk_pmu_dtlb_load_misses_interval 0
+# HELP montauk_pmu_dtlb_load_misses_total dTLB load misses since counters opened (cumulative)
+# TYPE montauk_pmu_dtlb_load_misses_total counter
+montauk_pmu_dtlb_load_misses_total 0
+# HELP montauk_pmu_cache_misses_total Last-level cache misses since counters opened (cumulative)
+# TYPE montauk_pmu_cache_misses_total counter
+montauk_pmu_cache_misses_total 0
 # HELP montauk_energy_per_instruction_pj Energy per retired instruction (picojoules), RAPL power / IPS
 # TYPE montauk_energy_per_instruction_pj gauge
 montauk_energy_per_instruction_pj 22600000
@@ -99,6 +126,9 @@ montauk_pmu_l3_accesses_interval{cache_domain="6"} 6000
 # TYPE montauk_pmu_l3_miss_percent gauge
 montauk_pmu_l3_miss_percent{cache_domain="0"} 5
 montauk_pmu_l3_miss_percent{cache_domain="6"} 5
+# HELP montauk_pmu_per_process_available Per-process PMU attribution active (needs no privilege)
+# TYPE montauk_pmu_per_process_available gauge
+montauk_pmu_per_process_available 0
 # HELP montauk_memory_total_bytes Total physical memory
 # TYPE montauk_memory_total_bytes gauge
 montauk_memory_total_bytes 67335630848

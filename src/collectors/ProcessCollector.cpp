@@ -61,6 +61,13 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     montauk::model::ProcSample ps; ps.pid=pid; ps.total_time=total_proc; ps.rss_kb = (rssp>0 ? static_cast<uint64_t>(rssp)*page_kb : 0);
     ps.cpu_pct = cpu_pct; ps.cmd = comm; // exe/command/user enriched after top-K below
     ps.flt_raw = minflt + majflt; ps.thread_count = nthreads;
+    // All-process, not top-K: the fusion below is cross-POPULATION, so a feature
+    // present for only the visible rows would compare a process against a
+    // sample rather than against its peers.
+    {
+      auto cs = montauk::collectors::ctx_switches_from_status(pid);
+      ps.vctx_raw = cs.voluntary; ps.nvctx_raw = cs.involuntary;
+    }
     out.processes.push_back(std::move(ps));
     // Count process states
     if (stch == 'R') out.state_running++;

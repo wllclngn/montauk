@@ -1266,6 +1266,31 @@ void BpfTraceCollector::run(std::stop_token st) {
     return;
   }
 
+  // RING SIZE, before load: libbpf freezes map dimensions at load time, so this
+  // is the only window. 1MB was never sized against a real offered rate -- one
+  // sched-messaging capture offered ~2.8M events/s against ~254k/s drained and
+  // lost 19.1M events, leaving three arms of one workload 5.70%/8.24%/8.44%
+  // complete and therefore incomparable rather than merely lossy.
+  if (ring_bytes_) {
+    // A ringbuf must be a power of two and a multiple of the page size. Round UP
+    // rather than reject: an operator asking for "about 64MB" wants a capture,
+    // not a usage message, and rounding down would silently give them less ring
+    // than they asked for.
+    uint64_t want = ring_bytes_;
+    const uint64_t page = 4096;
+    if (want < page) want = page;
+    uint64_t pow2 = page;
+    while (pow2 < want) pow2 <<= 1;
+    if (bpf_map__set_max_entries(skel_->maps.events, (uint32_t)pow2) == 0)
+      montauk::util::log_info("trace ring set to %llu bytes (asked %llu)",
+                              (unsigned long long)pow2,
+                              (unsigned long long)ring_bytes_);
+    else
+      montauk::util::log_warn("could not resize the trace ring to %llu bytes; "
+                              "the compiled default stands",
+                              (unsigned long long)pow2);
+  }
+
   // Write pattern to .rodata BEFORE load — libbpf freezes .rodata at load time.
   // bpf_strncmp requires a readonly (frozen + BPF_F_RDONLY_PROG) map pointer.
   {
@@ -1290,6 +1315,16 @@ void BpfTraceCollector::run(std::stop_token st) {
   // --sched-detail: emit the per-CPU idle-boundary firehose only when explicitly
   // asked (off by default, so a generic --trace does not pay the ~6x cost).
   skel_->rodata->sched_detail = sched_detail_ ? 1 : 0;
+
+  // PER-CLASS CAPTURE MASK. 0 from the operator means "everything", which is
+  // NOT the same as a zero mask in BPF (that would capture nothing), so the
+  // translation happens here rather than being left to a caller to remember.
+  skel_->rodata->capture_mask = capture_mask_ ? capture_mask_ : ~0ULL;
+  if (capture_mask_)
+    montauk::util::log_info("capture mask 0x%llx: classes outside it are not "
+                            "reserved at all, and are NOT counted as drops "
+                            "(a narrowed capture is not a damaged one)",
+                            (unsigned long long)capture_mask_);
 
   // Heap caller-stack capture: MONTAUK_HEAP_STACK_SIZE=<bytes> makes every
   // malloc/calloc of exactly that size emit a TRACE_EVT_HEAPSTACK with the

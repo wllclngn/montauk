@@ -5,6 +5,10 @@
 // pigeonhole-prefiltered k-mismatch scans (fuzzy face). Byte-parity with the reference
 // oracles is the gate: every count here is byte-identical to the un-prefiltered path.
 #include "sublimation_text.h"
+#include "case_fold_table.h"   // generated: same-length, last-byte-only fold pairs
+#include "sublimation.h"          // sublimation_classify_u64, for the gap disorder class
+#include "sublimation_stats.h"    // mean/stdev/max/quantile over the strides
+#include "sublimation_signal.h"   // spectral residual + matrix profile, on the SPARSE series
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -195,6 +199,39 @@ static size_t scan_kmismatch_pre(const uint8_t *hay, size_t n, const uint8_t *pa
     return count;
 }
 
+// UTF-8 decode of one character. Returns its byte length, or 0 when the bytes
+// are not a well-formed sequence (in which case the caller treats the lead byte
+// as a plain literal, which is what the engine did before folding existed).
+static int u8_decode(const unsigned char *p, size_t avail, uint32_t *cp) {
+    if (avail == 0) return 0;
+    unsigned char c = p[0];
+    int n; uint32_t v;
+    if (c < 0x80) { *cp = c; return 1; }
+    else if ((c & 0xE0) == 0xC0) { n = 2; v = c & 0x1F; }
+    else if ((c & 0xF0) == 0xE0) { n = 3; v = c & 0x0F; }
+    else if ((c & 0xF8) == 0xF0) { n = 4; v = c & 0x07; }
+    else return 0;
+    if (avail < (size_t)n) return 0;
+    for (int i = 1; i < n; i++) {
+        if ((p[i] & 0xC0) != 0x80) return 0;
+        v = (v << 6) | (uint32_t)(p[i] & 0x3F);
+    }
+    *cp = v;
+    return n;
+}
+
+// The counterpart's LAST byte for `cp`, or 0 when it has no same-length,
+// last-byte-only fold partner. Binary search over the generated table.
+static uint8_t fold_alt_last(uint32_t cp) {
+    size_t lo = 0, hi = SUB_FOLD_PAIRS;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (sub_fold_table[mid].cp == cp) return sub_fold_table[mid].alt_last;
+        if (sub_fold_table[mid].cp < cp) lo = mid + 1; else hi = mid;
+    }
+    return 0;
+}
+
 // Set byte b in the position set, plus its ASCII case-swap under icase. Case is
 // folded into the class SET at compile time (before any negation), so a negated
 // class like (?i)[^a] correctly excludes both 'a' and 'A' -- folding at match
@@ -324,7 +361,10 @@ static size_t scan_classfield(const uint8_t *hay, size_t n, uint8_t sets[][32], 
 
 typedef sublimation_search_gnfa gnfa_t;
 typedef struct { int nullable; uint64_t first, last; } gattr_t;
-typedef struct { const char *p; gnfa_t *g; } gpar_t;
+// fold_left counts bytes until the one that differs under icase; fold_byte is
+// the counterpart to admit there. Only the LAST byte of a folded character
+// ever differs (see case_fold_table.h), so one pending byte is enough.
+typedef struct { const char *p; gnfa_t *g; int fold_left; unsigned char fold_byte; } gpar_t;
 
 static gattr_t g_alt(gpar_t *x);
 
@@ -359,7 +399,20 @@ static gattr_t g_atom(gpar_t *x) {
             if (shorthand_set(c, S)) { x->p++; goto atom_done; }
         }
         unsigned char b = (unsigned char)c;
-        gset_byte(S, b, icase); x->p++;
+        gset_byte(S, b, icase);
+        if (icase) {
+            if (x->fold_left > 0 && --x->fold_left == 0) {
+                // The differing byte of a character whose fold was resolved at
+                // its lead: admit the counterpart here, in this position's set.
+                gset_byte(S, x->fold_byte, 0);
+            } else if (x->fold_left == 0 && b >= 0xC0) {
+                uint32_t cp = 0;
+                int n = u8_decode((const unsigned char *)x->p, strlen(x->p), &cp);
+                uint8_t alt = n >= 2 ? fold_alt_last(cp) : 0;
+                if (alt) { x->fold_left = n - 1; x->fold_byte = alt; }
+            }
+        }
+        x->p++;
     }
 atom_done:
     a.nullable = 0; a.first = (1ull<<pos); a.last = (1ull<<pos);
@@ -455,7 +508,7 @@ static int build_gnfa(const char *pat, gnfa_t *g, int icase) {
         return 1;
     }
     memcpy(buf, pat + s, e - s); buf[e - s] = '\0';
-    gpar_t x = { buf, g };
+    gpar_t x = { buf, g, 0, 0 };
     gattr_t a = g_alt(&x);
     if (!g->ok || *x.p != '\0' || g->npos == 0) return 0;
     g->first = a.first; g->last = a.last; g->nullable_all = a.nullable;
@@ -950,18 +1003,58 @@ static long search_next_match(const sublimation_search *s, int regex_face,
     return -1;
 }
 
-long sublimation_search_next_any(const sublimation_search *set, int nset, int regex_face,
-                                 const char *line, size_t n, size_t off,
-                                 int wword, long *end_out) {
+// Leftmost-longest across the set, additionally reporting WHICH pattern won.
+// next_any is this with the pattern discarded -- one tie-break rule, not two.
+static long next_any_pat(const sublimation_search *set, int nset, int regex_face,
+                         const char *line, size_t n, size_t off, int wword,
+                         long *end_out, int *pat_out) {
     long bs = -1, be = -1;
+    int bp = -1;
     for (int p = 0; p < nset; p++) {
         long e = -1;
         long st = search_next_match(&set[p], regex_face, line, n, off, wword, &e);
         if (st < 0) continue;
-        if (bs < 0 || st < bs || (st == bs && e > be)) { bs = st; be = e; }
+        if (bs < 0 || st < bs || (st == bs && e > be)) { bs = st; be = e; bp = p; }
     }
-    if (bs >= 0 && end_out) *end_out = be;
+    if (bs >= 0) {
+        if (end_out) *end_out = be;
+        if (pat_out) *pat_out = bp;
+    }
     return bs;
+}
+
+long sublimation_search_next_any(const sublimation_search *set, int nset, int regex_face,
+                                 const char *line, size_t n, size_t off,
+                                 int wword, long *end_out) {
+    return next_any_pat(set, nset, regex_face, line, n, off, wword, end_out, NULL);
+}
+
+size_t sublimation_search_spans(const sublimation_search *set, int nset, int regex_face,
+                                const char *text, size_t n, int wword, int xline,
+                                sublimation_match_span *out, size_t cap) {
+    size_t found = 0, off = 0;
+    while (off <= n) {
+        long s, e = -1;
+        int pat = -1;
+        if (xline) { s = 0; e = (long)n; }   // -x: the line IS the match
+        else s = next_any_pat(set, nset, regex_face, text, n, off, wword, &e, &pat);
+        if (s < 0) break;
+        if (e > s) {
+            if (found < cap && out) {
+                out[found].start = (uint32_t)s;
+                out[found].end   = (uint32_t)e;
+                out[found].pat   = xline ? -1 : pat;
+            }
+            ++found;
+            off = (size_t)e;
+        } else {
+            // Zero-width: no span to record, but the scan must still advance or
+            // it spins on the same position forever.
+            off = (size_t)s + 1;
+        }
+        if (xline) break;
+    }
+    return found;
 }
 
 int sublimation_search_selects(const sublimation_search *set, int nset, int regex_face,
@@ -1028,4 +1121,380 @@ size_t sublimation_search_count(const sublimation_search *s, const char *input, 
 
     if (s->icase) return exact_count_folded(hay, n, pat, m, 1);
     return exact_count(hay, n, pat, m);
+}
+
+// THE DISPERSION FIELD. Everything here runs over the SPARSE span array; the
+// haystack is never touched again. See sublimation_text.h for why that is the
+// point rather than an optimisation.
+int sublimation_dispersion_field(const sublimation_match_span *spans, size_t n,
+                                 size_t haystack_len, sublimation_dispersion *out) {
+    if (!spans || !out || n < 2) return 0;
+    memset(out, 0, sizeof *out);
+    out->matches = n;
+    out->span_bytes = (size_t)(spans[n - 1].end - spans[0].start);
+    out->density_per_kb = haystack_len
+        ? (double)n * 1024.0 / (double)haystack_len : 0.0;
+
+    const size_t ng = n - 1;
+    double *gaps = (double *)malloc(ng * sizeof *gaps);
+    uint64_t *gapu = (uint64_t *)malloc(ng * sizeof *gapu);
+    if (!gaps || !gapu) { free(gaps); free(gapu); return 0; }
+    for (size_t i = 0; i < ng; i++) {
+        // Starts, not ends: the question is how often the pattern ARRIVES, which
+        // an end-to-start gap would confound with how long each match is.
+        double g = (double)spans[i + 1].start - (double)spans[i].start;
+        gaps[i] = g;
+        gapu[i] = (uint64_t)(g < 0 ? 0 : g);
+    }
+
+    out->stride_mean  = sublimation_mean_f64(gaps, ng);
+    out->stride_stdev = ng > 1 ? sublimation_stdev_f64(gaps, ng) : 0.0;
+    out->stride_max   = sublimation_max_f64(gaps, ng);
+    {
+        double denom = out->stride_stdev + out->stride_mean;
+        out->burstiness = denom > 0.0
+            ? (out->stride_stdev - out->stride_mean) / denom : 0.0;
+    }
+    // classify BEFORE the quantile calls: those sort in place, and a sorted copy
+    // would report every pattern's gaps as SORTED, which is the classifier
+    // answering a question about our scratch buffer instead of the data.
+    out->gap_class = (int)sublimation_classify_u64(gapu, ng).disorder;
+    {
+        double *q = (double *)malloc(ng * sizeof *q);
+        if (q) {
+            memcpy(q, gaps, ng * sizeof *q);
+            out->stride_p50 = sublimation_quantile_f64(q, ng, 0.50, 0);
+            memcpy(q, gaps, ng * sizeof *q);
+            out->stride_p90 = sublimation_quantile_f64(q, ng, 0.90, 0);
+            memcpy(q, gaps, ng * sizeof *q);
+            out->stride_p99 = sublimation_quantile_f64(q, ng, 0.99, 0);
+            free(q);
+        }
+    }
+
+    // Spectral Residual over the gap series: a burst is a run of short gaps, so
+    // saliency on this series is exactly "here the pattern suddenly clustered".
+    // The transform needs a POWER-OF-TWO length, so it runs over the largest
+    // such prefix of the gap series. saliency_window reports what that was:
+    // a peak index means nothing without knowing how much was looked at, and
+    // silently scanning 512 of 900 arrivals while reporting as if for all of
+    // them is the kind of quiet truncation this project treats as a defect.
+    if (ng >= 8) {
+        size_t n2 = 1;
+        while ((n2 << 1) <= ng) n2 <<= 1;
+        double *sal = (double *)calloc(n2, sizeof *sal);
+        uint8_t *flg = (uint8_t *)calloc(n2, 1);
+        // Returns 0 on SUCCESS.
+        if (sal && flg &&
+            sublimation_spectral_residual(gaps, n2, 3, 3.0, 3, sal, flg) == 0) {
+            out->saliency_window = n2;
+            for (size_t i = 0; i < n2; i++)
+                if (sal[i] > out->saliency_max) { out->saliency_max = sal[i]; out->saliency_at = i; }
+        }
+        free(sal); free(flg);
+    }
+
+    // Matrix profile: discord is the least-like-anything window, motif the
+    // most-repeated. Window of 8 needs a series several times longer to have a
+    // non-trivial neighbour at all.
+    if (ng >= 32) {
+        const size_t m = 8;
+        size_t nprof = ng - m + 1;
+        double *mp = (double *)malloc(nprof * sizeof *mp);
+        int64_t *mpi = (int64_t *)malloc(nprof * sizeof *mpi);
+        if (mp && mpi && sublimation_matrix_profile(gaps, ng, m, mp, mpi) == 0) {
+            double best = -1.0, worst = -1.0;
+            size_t bi = 0, wi = 0;
+            for (size_t i = 0; i < nprof; i++) {
+                if (mp[i] > worst) { worst = mp[i]; wi = i; }
+                if (best < 0.0 || mp[i] < best) { best = mp[i]; bi = i; }
+            }
+            if (worst >= 0.0) { out->discord = worst; out->discord_at = wi; }
+            if (best  >= 0.0) { out->motif   = best;  out->motif_at   = bi; }
+        }
+        free(mp); free(mpi);
+    }
+
+    free(gaps); free(gapu);
+    return 1;
+}
+
+size_t sublimation_search_fold_gaps(const char *pat, size_t len) {
+    size_t gaps = 0;
+    for (size_t i = 0; i < len; ) {
+        uint32_t cp = 0;
+        int n = u8_decode((const unsigned char *)pat + i, len - i, &cp);
+        if (n <= 0) { i++; continue; }
+        i += (size_t)n;
+        if (n == 1) continue;                       // ASCII already folds
+        // Only CASED characters count. A caseless one (CJK, punctuation, emoji)
+        // is not a gap -- -i was never going to change it.
+        size_t lo = 0, hi = SUB_FOLD_EXCLUDED;
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            if (sub_fold_excluded[mid] == cp) { gaps++; break; }
+            if (sub_fold_excluded[mid] < cp) lo = mid + 1; else hi = mid;
+        }
+    }
+    return gaps;
+}
+
+// CAPTURE GROUPS, as a bounded post-pass over ONE match span.
+//
+// The Glushkov field tracks a position SET with no submatch notion, and the
+// compiler builds those positions in a single pass keeping no AST -- so group
+// boundaries cannot be recovered from it at all. On its own that makes captures
+// a second engine over the haystack, which is why they were deferred for so
+// long.
+//
+// The occurrence field inverts it. The match SPAN is already isolated by the
+// fast engine, so this only ever runs over those few bytes, only when a
+// substitution actually asks for a backreference. It is a backtracking matcher
+// -- normally the wrong choice for a scanner -- and that is acceptable precisely
+// because it never sees a scan: worst-case backtracking over a span the fast
+// path already bounded is a different risk from backtracking over a file.
+//
+// It accepts the same ERE subset the Glushkov face does. Anything it cannot
+// parse fails closed (no captures), and the caller substitutes empty rather than
+// guessing.
+
+typedef struct cap_node cap_node;
+struct cap_node {
+    enum { CN_CHAR, CN_ANY, CN_CLASS, CN_CONCAT, CN_ALT, CN_REP, CN_GROUP } k;
+    unsigned char ch;
+    uint8_t set[32];
+    cap_node *a, *b;      // CONCAT/ALT children; REP/GROUP child in `a`
+    int lo, hi;           // REP bounds; hi < 0 = unbounded
+    int gidx;             // GROUP: 1-based capture index
+    cap_node *next;       // arena chain
+};
+
+typedef struct {
+    const char *p;
+    cap_node   *arena;    // every node, for one free() walk
+    int         ngroups;
+    int         ok;
+    int         icase;
+} cap_parser;
+
+static cap_node *cn_new(cap_parser *cp, int k) {
+    cap_node *n = (cap_node *)calloc(1, sizeof *n);
+    if (!n) { cp->ok = 0; return NULL; }
+    n->k = k; n->next = cp->arena; cp->arena = n;
+    return n;
+}
+
+static cap_node *cap_alt(cap_parser *cp);
+
+static cap_node *cap_atom(cap_parser *cp) {
+    if (!cp->ok) return NULL;
+    char c = *cp->p;
+    if (c == '(') {
+        cp->p++;
+        cap_node *g = cn_new(cp, CN_GROUP);
+        if (!g) return NULL;
+        g->gidx = ++cp->ngroups;
+        g->a = cap_alt(cp);
+        if (*cp->p == ')') cp->p++; else cp->ok = 0;
+        return g;
+    }
+    if (c == '.') { cp->p++; cap_node *n = cn_new(cp, CN_ANY); return n; }
+    if (c == '[') {
+        cap_node *n = cn_new(cp, CN_CLASS);
+        if (!n) return NULL;
+        size_t rem = strlen(cp->p);
+        size_t e = class_span(cp->p, rem, 0, n->set, cp->icase);
+        if (!e) { cp->ok = 0; return n; }
+        cp->p += e;
+        return n;
+    }
+    if (c == '\\' && cp->p[1]) {
+        cp->p++;
+        cap_node *n = cn_new(cp, CN_CLASS);
+        if (!n) return NULL;
+        if (shorthand_set(*cp->p, n->set)) { cp->p++; return n; }
+        // Any other escape is the next byte, literally -- same rule the
+        // Glushkov parser uses, so the two agree on what a pattern means.
+        n->k = CN_CHAR; n->ch = (unsigned char)*cp->p; cp->p++;
+        return n;
+    }
+    if (c == '\0' || c == '|' || c == ')') { cp->ok = 0; return NULL; }
+    cap_node *n = cn_new(cp, CN_CHAR);
+    if (!n) return NULL;
+    n->ch = (unsigned char)c; cp->p++;
+    return n;
+}
+
+static cap_node *cap_repeat(cap_parser *cp) {
+    cap_node *a = cap_atom(cp);
+    if (!cp->ok || !a) return a;
+    for (;;) {
+        char c = *cp->p;
+        int lo, hi;
+        if (c == '*') { lo = 0; hi = -1; cp->p++; }
+        else if (c == '+') { lo = 1; hi = -1; cp->p++; }
+        else if (c == '?') { lo = 0; hi = 1; cp->p++; }
+        else if (c == '{') {
+            const char *save = cp->p;
+            cp->p++;
+            int l = 0, h = -2, hasl = 0;
+            while (*cp->p >= '0' && *cp->p <= '9') { l = l * 10 + (*cp->p - '0'); cp->p++; hasl = 1; }
+            if (*cp->p == ',') {
+                cp->p++; h = -1;
+                if (*cp->p >= '0' && *cp->p <= '9') { h = 0; while (*cp->p >= '0' && *cp->p <= '9') { h = h * 10 + (*cp->p - '0'); cp->p++; } }
+            } else h = l;
+            if (!hasl || *cp->p != '}') { cp->p = save; break; }
+            cp->p++; lo = l; hi = h;
+        }
+        else break;
+        cap_node *r = cn_new(cp, CN_REP);
+        if (!r) return NULL;
+        r->a = a; r->lo = lo; r->hi = hi;
+        a = r;
+    }
+    return a;
+}
+
+static cap_node *cap_concat(cap_parser *cp) {
+    cap_node *head = NULL, *tail = NULL;
+    while (cp->ok && *cp->p && *cp->p != '|' && *cp->p != ')') {
+        cap_node *r = cap_repeat(cp);
+        if (!cp->ok || !r) break;
+        if (!head) { head = r; tail = r; continue; }
+        cap_node *c = cn_new(cp, CN_CONCAT);
+        if (!c) return NULL;
+        c->a = head; c->b = r; head = c; tail = r;
+    }
+    (void)tail;
+    return head;
+}
+
+static cap_node *cap_alt(cap_parser *cp) {
+    cap_node *l = cap_concat(cp);
+    while (cp->ok && *cp->p == '|') {
+        cp->p++;
+        cap_node *r = cap_concat(cp);
+        cap_node *n = cn_new(cp, CN_ALT);
+        if (!n) return NULL;
+        n->a = l; n->b = r; l = n;
+    }
+    return l;
+}
+
+// Continuation-passing backtracker: match `n` at text[i..len), then `k`.
+typedef struct { const char *t; size_t len; uint32_t *gs; uint32_t *ge; int icase; } cap_run;
+typedef struct cap_cont cap_cont;
+struct cap_cont { cap_node *n; cap_cont *next; };
+
+static int cap_m(cap_run *r, cap_node *n, size_t i, cap_cont *k);
+
+static int cap_k(cap_run *r, cap_cont *k, size_t i) {
+    if (!k) return i == r->len;          // EXACT consumption: the span is known
+    return cap_m(r, k->n, i, k->next);
+}
+
+static int cap_m(cap_run *r, cap_node *n, size_t i, cap_cont *k) {
+    if (!n) return cap_k(r, k, i);
+    switch (n->k) {
+    case CN_CHAR: {
+        if (i >= r->len) return 0;
+        unsigned char a = (unsigned char)r->t[i], b = n->ch;
+        if (r->icase) { a = fold(a, 1); b = fold(b, 1); }
+        return a == b ? cap_k(r, k, i + 1) : 0;
+    }
+    case CN_ANY:
+        return i < r->len ? cap_k(r, k, i + 1) : 0;
+    case CN_CLASS: {
+        if (i >= r->len) return 0;
+        unsigned char c = (unsigned char)r->t[i];
+        return (n->set[c >> 3] & (uint8_t)(1u << (c & 7))) ? cap_k(r, k, i + 1) : 0;
+    }
+    case CN_CONCAT: {
+        cap_cont c = { n->b, k };
+        return cap_m(r, n->a, i, &c);
+    }
+    case CN_ALT:
+        return cap_m(r, n->a, i, k) || cap_m(r, n->b, i, k);
+    case CN_GROUP: {
+        // Record on the way in; a failed branch overwrites on the retry, and the
+        // final accepted parse is the one whose writes survive.
+        uint32_t save_s = r->gs[n->gidx], save_e = r->ge[n->gidx];
+        r->gs[n->gidx] = (uint32_t)i;
+        // The group's end is stamped by a marker continuation so it reflects
+        // where the group ACTUALLY stopped, not where the parser guessed.
+        cap_node marker;
+        memset(&marker, 0, sizeof marker);
+        marker.k = CN_REP; marker.lo = 0; marker.hi = 0; marker.gidx = n->gidx;
+        cap_cont c = { &marker, k };
+        if (cap_m(r, n->a, i, &c)) return 1;
+        r->gs[n->gidx] = save_s; r->ge[n->gidx] = save_e;
+        return 0;
+    }
+    case CN_REP: {
+        if (n->hi == 0) {           // the group-end marker (lo 0, hi 0, gidx set)
+            if (n->gidx) r->ge[n->gidx] = (uint32_t)i;
+            return cap_k(r, k, i);
+        }
+        // GREEDY: try the longest first, which is POSIX's rule and the one the
+        // fast engine's leftmost-longest span already committed to.
+        int maxrep = n->hi < 0 ? (int)(r->len - i) + 1 : n->hi;
+        for (int cnt = maxrep; cnt >= n->lo; --cnt) {
+            // Build a chain of `cnt` copies ahead of k, then match it.
+            int okrun = 1;
+            size_t j = i;
+            // Fast path: match cnt copies greedily left to right, then the tail.
+            // A copy that itself backtracks is handled by recursion below.
+            if (cnt == 0) { if (cap_k(r, k, j)) return 1; continue; }
+            // Recursive form: one copy, then (cnt-1) more, then k.
+            cap_node rest;
+            memset(&rest, 0, sizeof rest);
+            rest.k = CN_REP; rest.a = n->a; rest.lo = cnt - 1;
+            rest.hi = cnt - 1 ? cnt - 1 : 0;
+            if (cnt - 1 == 0) {
+                cap_cont c = { NULL, k };
+                if (cap_m(r, n->a, j, &c)) return 1;
+            } else {
+                cap_cont c = { &rest, k };
+                if (cap_m(r, n->a, j, &c)) return 1;
+            }
+            (void)okrun;
+        }
+        return 0;
+    }
+    default: return 0;
+    }
+}
+
+int sublimation_search_captures(const char *pat, const char *text, size_t n,
+                                int icase, sublimation_match_span *groups,
+                                size_t max_groups, size_t *ngroups) {
+    if (ngroups) *ngroups = 0;
+    if (!pat || !text || !groups || max_groups == 0) return 0;
+    cap_parser cp = { pat, NULL, 0, 1, icase };
+    cap_node *root = cap_alt(&cp);
+    int ok = cp.ok && root && *cp.p == '\0' && cp.ngroups > 0;
+    int rc = 0;
+    if (ok) {
+        int ng = cp.ngroups;
+        uint32_t *gs = (uint32_t *)calloc((size_t)ng + 1, sizeof *gs);
+        uint32_t *ge = (uint32_t *)calloc((size_t)ng + 1, sizeof *ge);
+        if (gs && ge) {
+            for (int g = 0; g <= ng; g++) { gs[g] = UINT32_MAX; ge[g] = UINT32_MAX; }
+            cap_run r = { text, n, gs, ge, icase };
+            if (cap_m(&r, root, 0, NULL)) {
+                size_t out = 0;
+                for (int g = 1; g <= ng && out < max_groups; g++, out++) {
+                    int set = gs[g] != UINT32_MAX && ge[g] != UINT32_MAX;
+                    groups[out].start = set ? gs[g] : 0;
+                    groups[out].end   = set ? ge[g] : 0;
+                    groups[out].pat   = set ? g : -1;   // -1: group did not participate
+                }
+                if (ngroups) *ngroups = out;
+                rc = 1;
+            }
+        }
+        free(gs); free(ge);
+    }
+    for (cap_node *q = cp.arena; q; ) { cap_node *nx = q->next; free(q); q = nx; }
+    return rc;
 }

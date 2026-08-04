@@ -225,6 +225,31 @@ SUB_API size_t sublimation_searchsorted_f64(const double   *sorted, size_t n, do
 // large random the same way, using the hardware thread count.
 SUB_API void sublimation_i64_parallel(int64_t *SUB_RESTRICT arr, size_t n, size_t num_threads);
 
+// THE SHARED WORK-STEALING ENGINE, as a public entry point.
+//
+// One Chase-Lev deque backs the parallel sort, the parallel radix and the
+// search fan-out; until now only the first two could reach it, and the CLI got
+// at it by including sublimation's INTERNAL headers -- a front end reaching
+// past the API, and the last standing evidence that something was misplaced.
+//
+// Deliberately the SMALLEST thing that removes that reach: run `n` independent
+// tasks, index 0..n-1, on the shared pool. It does not own the tasks' data, does
+// not touch the filesystem and imposes no record shape, which is what keeps the
+// division-by-target constraint intact -- the library owns the engine, the
+// caller keeps its own I/O.
+//
+// `num_threads` of 0 means the hardware count. Returns 0 only when the pool
+// itself could not start; the caller is then expected to run the same callback
+// serially, which is exactly what a correct callback already supports since the
+// tasks are independent by contract.
+SUB_API int sublimation_parallel_for(size_t n, size_t num_threads,
+                                     void (*fn)(size_t index, void *user),
+                                     void *user);
+
+// The worker count sublimation would choose itself: cpuset-aware, so taskset
+// and cgroup limits cap it, and capped at 64.
+SUB_API size_t sublimation_default_workers(void);
+
 // Version queries. `sublimation_api_version()` returns SUBLIMATION_API_VERSION
 // (ABI). `sublimation_version()` returns the release string (e.g. "3.1.0").
 SUB_API int sublimation_api_version(void) SUB_CONST;

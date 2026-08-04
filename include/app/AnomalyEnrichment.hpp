@@ -16,6 +16,7 @@ namespace montauk::app {
 // this call refreshes it). Runs on the Producer thread before publish; writes
 // back onto procs.processes. A near-empty population (< 8 processes) is unscored.
 void enrich_anomalies(montauk::model::ProcessSnapshot& procs,
-                      std::unordered_map<int32_t, uint64_t>& prev_faults);
+                      std::unordered_map<int32_t, uint64_t>& prev_faults,
+                      std::unordered_map<int32_t, uint64_t>& prev_ctxsw);
 
 }  // namespace montauk::app

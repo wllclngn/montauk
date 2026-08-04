@@ -6,6 +6,7 @@
 
 #include "prom_stats.hpp"
 #include "util/Log.hpp"
+#include "util/json.h"          // write-only JSON serializer on the sink (the --json renderer)
 
 #include <algorithm>
 #include <atomic>
@@ -18,6 +19,7 @@
 #include <ctime>
 #include <map>
 #include <set>
+#include <unordered_map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -295,6 +297,89 @@ std::vector<std::string> glob_proms(const std::string& dir) {
   }
   ::closedir(d);
   sublimation_order_strings(out, false, [](const std::string& s){ return s.c_str(); });
+  return out;
+}
+
+std::vector<ScrapeSeries> scrape_series(const std::string& dir) {
+  // Insertion-ordered accumulation: key -> index, so the emitted order follows
+  // the recording's own family order rather than a hash walk. A golden is read
+  // in a diff, and a stable order is what makes that diff mean anything.
+  std::unordered_map<std::string, size_t> idx;
+  std::vector<ScrapeSeries> out;
+  std::unordered_map<std::string, double> sum;
+  std::set<std::string> counters;  // families declared `# TYPE ... counter`
+
+  for (const auto& path : glob_proms(dir)) {
+    FILE* fp = std::fopen(path.c_str(), "r");
+    if (!fp) continue;
+    char* line = nullptr;
+    size_t cap = 0;
+    ssize_t len;
+    while ((len = ::getline(&line, &cap, fp)) != -1) {
+      std::string ln = strip(std::string(line, len > 0 ? static_cast<size_t>(len) : 0));
+      if (ln.empty()) continue;
+      if (ln[0] == '#') {
+        // "# TYPE <name> counter" -- the declaration that decides whether the
+        // natural reduction is `last` (cumulative) or `mean` (instantaneous).
+        if (ln.rfind("# TYPE ", 0) != 0) continue;
+        size_t a = 7;
+        size_t b = ln.find(' ', a);
+        if (b == std::string::npos) continue;
+        if (ln.compare(b + 1, std::string::npos, "counter") == 0)
+          counters.insert(ln.substr(a, b - a));
+        continue;
+      }
+      // name[{labels}] value [timestamp]. Value is the FIRST token after the
+      // name or label set; a trailing Prometheus timestamp is ignored.
+      size_t brace = ln.find('{');
+      std::string key, valstr, family;
+      if (brace != std::string::npos) {
+        size_t close = ln.rfind('}');
+        if (close == std::string::npos || close < brace) continue;
+        family = ln.substr(0, brace);
+        key = ln.substr(0, close + 1);
+        size_t v = ln.find_first_not_of(" \t", close + 1);
+        if (v == std::string::npos) continue;
+        valstr = ln.substr(v);
+      } else {
+        size_t sp = ln.find(' ');
+        if (sp == std::string::npos) continue;
+        family = ln.substr(0, sp);
+        key = family;
+        size_t v = ln.find_first_not_of(" \t", sp);
+        if (v == std::string::npos) continue;
+        valstr = ln.substr(v);
+      }
+      char* end = nullptr;
+      double val = std::strtod(valstr.c_str(), &end);
+      if (end == valstr.c_str()) continue;
+      auto it = idx.find(key);
+      if (it == idx.end()) {
+        idx.emplace(key, out.size());
+        ScrapeSeries ss{};
+        ss.key = key;
+        ss.last = ss.max = ss.min = val;
+        ss.samples = 1;
+        out.push_back(ss);
+        sum[key] = val;
+      } else {
+        ScrapeSeries& ss = out[it->second];
+        ss.last = val;
+        ss.max = std::max(ss.max, val);
+        ss.min = std::min(ss.min, val);
+        ++ss.samples;
+        sum[key] += val;
+      }
+    }
+    std::free(line);
+    std::fclose(fp);
+  }
+  for (auto& ss : out) {
+    ss.mean = ss.samples > 0 ? sum[ss.key] / static_cast<double>(ss.samples) : 0.0;
+    size_t brace = ss.key.find('{');
+    std::string family = brace == std::string::npos ? ss.key : ss.key.substr(0, brace);
+    ss.is_counter = counters.count(family) > 0;
+  }
   return out;
 }
 
@@ -1716,7 +1801,7 @@ int l2_severity(double top_pct, double uniform_pct) {
 }
 }  // namespace
 
-int run_l2_by_cpu(const std::string& dir) {
+int run_l2_by_cpu(const std::string& dir, bool want_json) {
   ensure_pop_out();
   std::vector<std::string> files = glob_proms(dir);
   if (files.empty()) {
@@ -1730,6 +1815,47 @@ int run_l2_by_cpu(const std::string& dir) {
     util::log_warn("no per-CPU L2 in recording -- recapture with the per-CPU "
                    "emission build (montauk_pmu_l2_misses_per_cpu)");
     return 1;
+  }
+
+  // Same typed result, second rendering. This mode was the one analyzer surface
+  // with no structured face: the digest publishes only the WINNING cpu, so the
+  // per-CPU vector, the busy/total scrape counts and the spread verdict could be
+  // had only by parsing the table below -- which is the thing structured output
+  // exists to make unnecessary.
+  if (want_json) {
+    const double top_pct = 100.0 * s.rows.front().second / s.grand;
+    const double uniform_pct = 100.0 / static_cast<double>(s.rows.size());
+    const int sev = l2_severity(top_pct, uniform_pct);
+    montauk_json j;
+    montauk_json_init(&j, &g_pop_out);
+    montauk_json_obj_begin(&j);
+      montauk_json_ku64(&j, "schema_version", 1u);
+      montauk_json_key(&j, "l2_by_cpu");
+      montauk_json_obj_begin(&j);
+        montauk_json_kstr(&j, "dir", dir.c_str());
+        montauk_json_ku64(&j, "scrapes", static_cast<uint64_t>(s.scrapes));
+        montauk_json_ki64(&j, "busy_scrapes", s.busy);
+        montauk_json_knum(&j, "total_misses", s.grand);
+        montauk_json_knum(&j, "uniform_pct", uniform_pct);
+        montauk_json_ki64(&j, "top_cpu", s.rows.front().first);
+        montauk_json_knum(&j, "top_share_pct", top_pct);
+        montauk_json_ki64(&j, "sev", sev);
+        montauk_json_kstr(&j, "class", sev == 2 ? "concentrated"
+                                     : sev == 1 ? "skewed" : "spread");
+        montauk_json_key(&j, "cpus");
+        montauk_json_arr_begin(&j);
+          for (const auto& r : s.rows) {
+            montauk_json_obj_begin(&j);
+              montauk_json_ki64(&j, "cpu", r.first);
+              montauk_json_knum(&j, "misses", r.second);
+              montauk_json_knum(&j, "share_pct", 100.0 * r.second / s.grand);
+            montauk_json_obj_end(&j);
+          }
+        montauk_json_arr_end(&j);
+      montauk_json_obj_end(&j);
+    montauk_json_obj_end(&j);
+    montauk_sink_appendc(&g_pop_out, '\n');
+    return 0;
   }
 
   montauk_sink_appendf(&g_pop_out, "\nREPORT l2-by-cpu  (%d busy of %zu scrapes)\n", s.busy, s.scrapes);

@@ -130,6 +130,39 @@ void render_pmu(MetricsSink& sink, const MetricsSnapshot& s) {
     sink.f64({"branch_misses_per_sec", "montauk_pmu_branch_misses_per_second",
               "Branch mispredictions per second"}, s.pmu.branch_misses_per_sec);
 
+    // CUMULATIVE COUNTERS BESIDE THE DERIVED RATES. A rate divides by wall
+    // time and inherits every source of variance a latency gauge has; a total
+    // is invariant to clock scaling and thermals on fixed hardware, which is
+    // what a counter baseline needs and what none of the gauges above could
+    // provide. `_total` beside a rate is the ordinary Prometheus convention.
+    sink.u64({"instructions_total", "montauk_pmu_instructions_total",
+              "Retired instructions since counters opened (cumulative)", MetricKind::Counter},
+             s.pmu.instructions_total);
+    sink.u64({"cycles_total", "montauk_pmu_cycles_total",
+              "CPU cycles since counters opened (cumulative)", MetricKind::Counter},
+             s.pmu.cycles_total);
+    sink.u64({"context_switches_total", "montauk_pmu_context_switches_total",
+              "Context switches since counters opened (cumulative)", MetricKind::Counter},
+             s.pmu.context_switches_total);
+    sink.u64({"cpu_migrations_total", "montauk_pmu_cpu_migrations_total",
+              "CPU migrations since counters opened (cumulative)", MetricKind::Counter},
+             s.pmu.cpu_migrations_total);
+    sink.u64({"branch_misses_total", "montauk_pmu_branch_misses_total",
+              "Branch mispredictions since counters opened (cumulative)", MetricKind::Counter},
+             s.pmu.branch_misses_total);
+    sink.u64({"l2_misses_total", "montauk_pmu_l2_misses_total",
+              "L2 cache misses since counters opened (cumulative)", MetricKind::Counter},
+             s.pmu.l2_misses_total);
+
+    sink.u64({"dtlb_load_misses_interval", "montauk_pmu_dtlb_load_misses_interval",
+              "dTLB load misses this interval"}, s.pmu.dtlb_load_misses);
+    sink.u64({"dtlb_load_misses_total", "montauk_pmu_dtlb_load_misses_total",
+              "dTLB load misses since counters opened (cumulative)",
+              MetricKind::Counter}, s.pmu.dtlb_load_misses_total);
+    sink.u64({"cache_misses_total", "montauk_pmu_cache_misses_total",
+              "Last-level cache misses since counters opened (cumulative)",
+              MetricKind::Counter}, s.pmu.cache_misses_total);
+
     if (s.thermal.has_power && s.pmu.instructions_per_sec > 0.0)
       sink.f64({nullptr, "montauk_energy_per_instruction_pj",
                 "Energy per retired instruction (picojoules), RAPL power / IPS"},
@@ -188,6 +221,65 @@ void render_pmu(MetricsSink& sink, const MetricsSnapshot& s) {
       }
       sink.collection_end();
     }
+  }
+
+  // PER-PROCESS ATTRIBUTION, outside the s.pmu.available bracket on purpose:
+  // the per-CPU counters need perf_event_paranoid<=0 and the per-process ones
+  // do not, so on a default box this is the only PMU data that exists. Gating
+  // it on the system-wide flag would hide it exactly where it is the whole
+  // point.
+  sink.boolean({"per_process_available", "montauk_pmu_per_process_available",
+                "Per-process PMU attribution active (needs no privilege)"},
+               s.pmu.per_process_available);
+  if (s.pmu.per_process_available)
+    sink.boolean({"per_process_user_only", "montauk_pmu_per_process_user_only",
+                  "Per-process counts exclude kernel time (forced at "
+                  "perf_event_paranoid >= 2)"}, s.pmu.per_process_user_only);
+  if (!s.pmu.per_process.empty()) {
+    MetricDesc d_instr{nullptr, "montauk_pmu_process_instructions_total",
+                       "Retired instructions since attach, per process",
+                       MetricKind::Counter};
+    MetricDesc d_cyc{nullptr, "montauk_pmu_process_cycles_total",
+                     "CPU cycles since attach, per process", MetricKind::Counter};
+    MetricDesc d_dtlb{nullptr, "montauk_pmu_process_dtlb_load_misses_total",
+                      "dTLB load misses since attach, per process",
+                      MetricKind::Counter};
+    MetricDesc d_cm{nullptr, "montauk_pmu_process_cache_misses_total",
+                    "Last-level cache misses since attach, per process",
+                    MetricKind::Counter};
+    // The scale-free forms. A raw total says a big run happened; per-thousand
+    // instructions says whether the work per instruction changed, which is the
+    // question a baseline is actually asking.
+    MetricDesc d_dtlbk{nullptr, "montauk_pmu_process_dtlb_misses_per_kilo_instruction",
+                       "dTLB load misses per 1000 retired instructions, per process"};
+    MetricDesc d_cmk{nullptr, "montauk_pmu_process_cache_misses_per_kilo_instruction",
+                     "Cache misses per 1000 retired instructions, per process"};
+    MetricDesc d_ipc{nullptr, "montauk_pmu_process_ipc",
+                     "Instructions per cycle (interval), per process"};
+    sink.collection_begin("per_process", Shape::Objects);
+    for (const auto& p : s.pmu.per_process) {
+      std::string pid_s = std::to_string(p.pid);
+      Label l[]{{"pid", pid_s}, {"comm", p.comm}};
+      sink.entry_begin();
+      sink.i64({"pid", nullptr, nullptr}, p.pid);
+      sink.str({"comm", nullptr, nullptr}, p.comm);
+      sink.u64({"instructions_total", nullptr, nullptr}, p.instructions_total);
+      sink.u64({"cycles_total", nullptr, nullptr}, p.cycles_total);
+      sink.u64({"dtlb_load_misses_total", nullptr, nullptr}, p.dtlb_load_misses_total);
+      sink.u64({"cache_misses_total", nullptr, nullptr}, p.cache_misses_total);
+      sink.f64({"dtlb_misses_per_kilo_instr", nullptr, nullptr}, p.dtlb_misses_per_kilo_instr);
+      sink.f64({"cache_misses_per_kilo_instr", nullptr, nullptr}, p.cache_misses_per_kilo_instr);
+      sink.f64({"ipc", nullptr, nullptr}, p.ipc);
+      sink.labeled_u64(d_instr, l, p.instructions_total);
+      sink.labeled_u64(d_cyc, l, p.cycles_total);
+      sink.labeled_u64(d_dtlb, l, p.dtlb_load_misses_total);
+      sink.labeled_u64(d_cm, l, p.cache_misses_total);
+      sink.labeled_f64(d_dtlbk, l, p.dtlb_misses_per_kilo_instr);
+      sink.labeled_f64(d_cmk, l, p.cache_misses_per_kilo_instr);
+      sink.labeled_f64(d_ipc, l, p.ipc);
+      sink.entry_end();
+    }
+    sink.collection_end();
   }
   sink.section_end();
 }
@@ -435,6 +527,7 @@ void render_processes(MetricsSink& sink, const MetricsSnapshot& s) {
       sink.f64({"rss_kb", nullptr, nullptr}, r.rss_kb);
       sink.f64({"gpu_util_pct", nullptr, nullptr}, r.gpu_util_pct);
       sink.f64({"fault_delta", nullptr, nullptr}, r.fault_delta);
+      sink.f64({"ctxsw_delta", nullptr, nullptr}, r.ctxsw_delta);
       sink.f64({"thread_count", nullptr, nullptr}, r.thread_count);
       sink.entry_end();
     }

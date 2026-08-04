@@ -122,6 +122,56 @@ $ sublimation group 1 mean 2
 alpha 25
 beta 20
 gamma 30
+$ sublimation group 1 min 2
+alpha 10
+beta 20
+gamma 30
+$ sublimation group 1 max 2
+alpha 40
+beta 20
+gamma 30
+$ sublimation group 1 median 2
+alpha 25
+beta 20
+gamma 30
+$ sublimation group 1 sstdev 2
+alpha 21.213203435596
+beta nan
+gamma nan
+$ sublimation group 1 pstdev 2
+alpha 15
+beta 0
+gamma 0
+$ sublimation group 1 first 2
+alpha 10
+beta 20
+gamma 30
+$ sublimation group 1 last 2
+alpha 40
+beta 20
+gamma 30
+$ sublimation group 1 mode 2
+alpha 10
+beta 20
+gamma 30
+$ sublimation group 1 antimode 2
+alpha 10
+beta 20
+gamma 30
+$ sublimation group 1 unique 2
+alpha 10,40
+beta 20
+gamma 30
+$ sublimation group 1 collapse 2
+alpha 10,40
+beta 20
+gamma 30
+$ sublimation group 1 countunique 2
+alpha 2
+beta 1
+gamma 1
+$ sublimation group 1 sstdev 2
+solo nan
 $ sublimation outliers
 100
 $ sublimation histogram

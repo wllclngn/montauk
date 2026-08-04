@@ -9,18 +9,26 @@
 namespace montauk::app {
 
 void enrich_anomalies(montauk::model::ProcessSnapshot& procs,
-                      std::unordered_map<int32_t, uint64_t>& prev_faults) {
+                      std::unordered_map<int32_t, uint64_t>& prev_faults,
+                      std::unordered_map<int32_t, uint64_t>& prev_ctxsw) {
   auto& ps = procs.processes;
   const size_t n = ps.size();
-  for (auto& p : ps) { p.anomaly_score = 0.0; p.anomaly_axis = -1; p.fault_delta = 0.0; }
+  for (auto& p : ps) { p.anomaly_score = 0.0; p.anomaly_axis = -1;
+                       p.fault_delta = 0.0; p.ctxsw_delta = 0.0; }
   auto refresh_faults = [&]() {
     prev_faults.clear();
     prev_faults.reserve(ps.size());
     for (const auto& p : ps) prev_faults[p.pid] = p.flt_raw;
+    prev_ctxsw.clear();
+    prev_ctxsw.reserve(ps.size());
+    for (const auto& p : ps) prev_ctxsw[p.pid] = p.nvctx_raw;
   };
   if (n < 8) { refresh_faults(); return; }  // too few for a distribution
 
-  constexpr size_t d = 5;  // cpu%, rss, gpu%, fault delta, thread count
+  // INVOLUNTARY switches, not the sum: a voluntary switch is a process
+  // choosing to block, which cpu% already describes. Being PREEMPTED is the
+  // axis nothing else here can see.
+  constexpr size_t d = 6;  // cpu%, rss, gpu%, fault delta, thread count, ctxsw delta
   std::vector<double> x(n * d);
   for (size_t i = 0; i < n; ++i) {
     x[i * d + 0] = ps[i].cpu_pct;
@@ -30,7 +38,11 @@ void enrich_anomalies(montauk::model::ProcessSnapshot& procs,
     x[i * d + 3] = (pf != prev_faults.end() && ps[i].flt_raw > pf->second)
                        ? static_cast<double>(ps[i].flt_raw - pf->second) : 0.0;
     x[i * d + 4] = static_cast<double>(ps[i].thread_count);
-    ps[i].fault_delta = x[i * d + 3];   // publish the stateful feature for --json / vector
+    auto pc = prev_ctxsw.find(ps[i].pid);
+    x[i * d + 5] = (pc != prev_ctxsw.end() && ps[i].nvctx_raw > pc->second)
+                       ? static_cast<double>(ps[i].nvctx_raw - pc->second) : 0.0;
+    ps[i].fault_delta = x[i * d + 3];   // publish the stateful features for --json / vector
+    ps[i].ctxsw_delta = x[i * d + 5];
   }
 
   // The fusion is the sublimation learn-lane primitive: the three spatial

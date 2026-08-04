@@ -19,7 +19,7 @@ namespace montauk::app {
 // Prometheus face keeps the per-process anomaly_score gauge it already emits.
 struct AnomalyFeatureRow {
   int64_t pid;
-  double cpu_pct, rss_kb, gpu_util_pct, fault_delta, thread_count;
+  double cpu_pct, rss_kb, gpu_util_pct, fault_delta, thread_count, ctxsw_delta;
 };
 
 // Bounded snapshot for metrics serialization.
@@ -89,7 +89,8 @@ struct MetricsSnapshot {
     for (const auto& p : s.procs.processes)
       ms.anomaly_features.push_back({p.pid, p.cpu_pct, static_cast<double>(p.rss_kb),
                                      p.has_gpu_util ? p.gpu_util_pct : 0.0,
-                                     p.fault_delta, static_cast<double>(p.thread_count)});
+                                     p.fault_delta, static_cast<double>(p.thread_count),
+                                     p.ctxsw_delta});
     return ms;
   });
 }

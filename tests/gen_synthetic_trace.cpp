@@ -15,6 +15,7 @@
 #include "src/bpf/montauk_trace.h"
 
 #include <cstdio>
+#include <string>
 #include <cstring>
 #include <cstdint>
 #include <vector>
@@ -134,6 +135,19 @@ void heap_evt(uint32_t op, uint64_t addr, uint64_t size, uint32_t tid, uint64_t 
 
 int main(int argc, char** argv) {
   const char* out = (argc >= 2) ? argv[1] : "synthetic.mtk";
+  // --no-idle omits the CPU_IDLE stream, which makes placement-race report
+  // NO-IDLE-STREAM -- a CAPTURE LIMITATION rather than a finding. That is the
+  // one thing the golden's freeze path refuses to freeze (it records a
+  // `skipped` line instead), and it had no fixture: every capture on hand has
+  // the idle stream, so the writer's refusal branch was untested.
+  //
+  // A real no-sched-detail capture was taken under root on 2026-08-04 to
+  // confirm this is the actual mechanism (placement-race = NO-IDLE-STREAM,
+  // 10MB) before reproducing it synthetically here. Synthetic is what SHIPS:
+  // 600KB, no privileges, and it cannot rot the way a recorded capture does.
+  bool no_idle = false;
+  for (int i = 2; i < argc; ++i)
+    if (std::string(argv[i]) == "--no-idle") no_idle = true;
 
   // Thread identities first so the holder ledger / wakers can name them.
   thread_name(1000, "messenger");
@@ -160,7 +174,7 @@ int main(int argc, char** argv) {
 
     // Slice: switch-in pick + idle boundary, inter-switch interval spreads.
     sched_evt(SCHED_OP_SWITCH_IN, cpu, wakee, -1, 0, 0, 0, ts + lat + 1000);
-    if (i % 7 == 0)
+    if (i % 7 == 0 && !no_idle)
       sched_evt(SCHED_OP_CPU_IDLE, cpu, 0, -1, /*entering*/1, 0, 0, ts + lat + 2000);
 
     // Preempt tick with occasional long-slice overrun (>2ms/5ms/8ms).

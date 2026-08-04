@@ -72,7 +72,7 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
 // Localize cache misses across CPUs from a montauk --trace recording dir: sum
 // montauk_pmu_l2_misses_per_cpu over the busy (storm) scrapes and report the
 // per-CPU distribution + concentration. Answers "which cores eat the misses."
-int run_l2_by_cpu(const std::string& dir);
+int run_l2_by_cpu(const std::string& dir, bool want_json = false);
 
 // The single hottest CPU by L2-miss share over the busy window -- the same
 // computation as run_l2_by_cpu, returned as data so the digest can fold it into
@@ -88,6 +88,26 @@ HotCpu l2_hot_cpu(const std::string& dir);
 
 // All `*.prom` in `dir` except the analyzer's own `analysis-*` outputs.
 std::vector<std::string> glob_proms(const std::string& dir);
+
+// EVERY gauge in a recording's scrapes, reduced to one value per
+// (name, labels). A recording holds many scrapes over time, so a "gauge" from
+// that source is a SERIES -- freezing one means CHOOSING a reduction, and the
+// choice is recorded in the golden rather than assumed by whoever reads it.
+//
+// `last` is right for a cumulative counter (the run total); `mean` is the
+// stable summary for an instantaneous gauge, where `max` would freeze the
+// noisiest single scrape. Both are offered because which one a baseline wants
+// is a property of the metric, not of the tool.
+struct ScrapeSeries {
+  std::string key;        // name{labels} -- the pair, never the name alone
+  bool        is_counter{false};  // declared `# TYPE ... counter`
+  double      last{0.0};
+  double      mean{0.0};
+  double      max{0.0};
+  double      min{0.0};
+  int         samples{0};
+};
+std::vector<ScrapeSeries> scrape_series(const std::string& dir);
 
 // Structured system specs parsed from a recording dir's montauk_system_info{}
 // scrape -- the data behind system_info_block(), so a JSON digest can emit

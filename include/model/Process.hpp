@@ -29,11 +29,20 @@ struct ProcSample {
   // the /proc/PID/stat line the collectors already parse).
   uint64_t flt_raw{0};      // cumulative minor+major faults; rate derived in enrichment
   int      thread_count{1}; // /proc/PID/stat num_threads
+  // Cumulative context-switch counters from /proc/PID/status, read for EVERY
+  // process. The rate is what the anomaly fusion wants; the raw totals live here
+  // so the delta can be taken across frames the way flt_raw's is.
+  uint64_t vctx_raw{0};     // voluntary: gave up the CPU (blocked, yielded)
+  uint64_t nvctx_raw{0};    // involuntary: was preempted
   // Cross-sectional anomaly enrichment (AnomalyEnrichment): fused score over the
   // live process population, higher = more anomalous, with the dominant feature.
   double  fault_delta{0.0};   // per-frame page-fault increase (feature 3); stateful, set in enrichment
+  // Per-frame involuntary context switches. The axis the other five cannot see:
+  // a process being PREEMPTED hard shows up here and nowhere else -- cpu% says
+  // it ran, rss says nothing, and thread count is static.
+  double  ctxsw_delta{0.0};
   double  anomaly_score{0.0};
-  int8_t  anomaly_axis{-1};   // 0=cpu 1=rss 2=gpu 3=faults 4=threads; -1 = none
+  int8_t  anomaly_axis{-1};   // 0=cpu 1=rss 2=gpu 3=faults 4=threads 5=ctxsw; -1 = none
 };
 
 struct ProcessSnapshot {

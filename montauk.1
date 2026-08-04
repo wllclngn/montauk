@@ -1,4 +1,4 @@
-.TH MONTAUK 1 "July 2026" "montauk 8.6.0" "User Commands"
+.TH MONTAUK 1 "August 2026" "montauk 8.7.0" "User Commands"
 .SH NAME
 montauk \- Linux observability platform: monitor, eBPF tracer and analyzer
 .SH SYNOPSIS
@@ -12,6 +12,14 @@ montauk \- Linux observability platform: monitor, eBPF tracer and analyzer
 .RB [ \-\-headless ]
 .RB [ \-\-trace
 .IR PATTERN ]
+.RB [ \-\-trace\-ring\-bytes
+.IR N ]
+.RB [ \-\-trace\-classes
+.IR LIST ]
+.RB [ \-\-pmu\-comm
+.IR SUBSTR ]
+.RB [ \-\-pmu\-pid
+.IR N ]
 .RB [ \-\-init\-theme ]
 .RB [ \-\-self\-test\-seconds
 .IR N ]
@@ -89,6 +97,65 @@ on most kernel configurations). Build requires libbpf, bpftool, and clang
 Composes with \-\-metrics and \-\-log to export trace data as Prometheus
 metrics (montauk_trace_* family) or write it to flight recorder logs for
 post-mortem analysis.
+.TP
+.BI \-\-trace\-ring\-bytes " N"
+Size the BPF ring buffer, in bytes; accepts a
+.BR K ,
+.B M
+or
+.B G
+suffix and is rounded up to a power of two. The 1MB default was never sized
+against a real offered rate: one scheduler-messaging capture offered roughly
+2.8M events/s against 254k/s drained and kept 5.7% of its stream, leaving three
+arms of the same workload 5.70%, 8.24% and 8.44% complete and therefore
+incomparable rather than merely lossy. Measured on one workload, a 64M ring took
+that capture from 46,214 dropped events to zero.
+.TP
+.BI \-\-trace\-classes " LIST"
+Capture only the named event classes, comma separated:
+.BR fork ,
+.BR exec ,
+.BR exit ,
+.BR comm ,
+.BR io ,
+.BR ntsync ,
+.BR sched ,
+.BR heap ,
+.BR signal ,
+.BR mmap ,
+.BR provider ,
+.BR abort ,
+.BR heapstack ,
+.BR keyedevt .
+Exists to stop one loud class drowning the class the capture is
+.IR for :
+in the run above roughly 18.2M of 19.1M dropped events were
+.B io
+from a messaging flood, and they took about a million
+.B sched
+events with them. An excluded class is never reserved and is
+.B not
+counted as a drop, because a deliberately narrowed capture is not a damaged one.
+.TP
+.BI \-\-pmu\-comm " SUBSTR"
+Attach hardware performance counters to every process whose command line
+contains SUBSTR, re-resolved each tick so a workload started later is picked up.
+Reports retired instructions, cycles, dTLB load misses and cache misses per
+process, as totals since attach plus the scale-free per-thousand-instructions
+forms. Unlike the system-wide PMU under
+.BR \-\-trace ,
+this needs
+.B no root and no sysctl:
+perf_event_open with a pid and cpu \-1 is permitted at the ordinary
+perf_event_paranoid of 2. At paranoid 2 the counts exclude kernel time, which is
+published as montauk_pmu_per_process_user_only rather than left to be guessed.
+One counter follows a whole thread pool, but only threads created after the
+attach.
+.TP
+.BI \-\-pmu\-pid " N"
+As above for one explicit pid. Repeatable, and composes with
+.BR \-\-pmu\-comm .
+
 .TP
 .BI \-\-trace\-out " FILE"
 Write a raw binary event log to FILE (requires \-\-trace). Records are the
@@ -259,7 +326,16 @@ montauk_trace_decode /tmp/myapp.mtktrace        # human-readable text
 montauk_trace_decode /tmp/myapp.mtktrace --csv  # CSV for tooling
 montauk_analyze /tmp/myapp.mtktrace             # diagnostic reports
 montauk_analyze /tmp/rec --digest               # shareable digest
+montauk_analyze /tmp/rec --golden g.golden --update --label mywork
+montauk_analyze /tmp/rec --golden g.golden      # compare; 0 pass 1 moved 2 declined
 montauk_analyze --version                       # print version, exit
+
+# Per-process hardware counters, no root and no sysctl
+montauk --pmu-comm mywork --headless --metrics 9101
+
+# A capture that keeps its stream: bigger ring, and only the classes wanted
+montauk --trace myapp --trace-out /tmp/a.mtktrace \\
+        --trace-ring-bytes 64M --trace-classes sched,fork,exec,exit
 .RE
 .fi
 .SS Binary Event Log (\-\-trace-out)
@@ -287,6 +363,54 @@ with scheduler-stability and clean-room state above the system specs.
 .B montauk_analyze \-\-version
 prints the project version and exits, so a consumer can tell a current install
 from a stale one.
+.SS Behavioral goldens (\-\-golden)
+A benchmark gate that compares numbers cannot see a failure
+.I mechanism
+change underneath a stable number, and montauk has shipped that failure: a
+dispatch stall went from PREEMPT-STARVED with zero pass-overs to 90%
+ORDER-STARVED averaging 4.2, survived ten days of gated runs, and was found by
+reading a report by hand.
+.PP
+.B montauk_analyze
+.I TRACE|RECORDING_DIR
+.B \-\-golden
+.I FILE
+compares; adding
+.B \-\-update \-\-label
+.I NAME
+freezes. Two lanes with separate flags because they fail for different reasons
+and the difference is the diagnosis.
+.B \-\-functional
+is the default and is a real golden: each report's categorical class, compared
+exactly, no tolerance.
+.B \-\-performance
+is opt-in and is a baseline gate: gauges named by
+.B \-\-watch
+at freeze time, compared within max(percent, absolute floor).
+.PP
+Exit status is 0 pass, 1 a frozen fact moved, 2
+.BR DECLINED .
+The third is distinct on purpose: "this regressed" and "this was never actually
+checked" are different answers. montauk declines rather than comparing when a
+capture is under 95% complete, when completeness is UNKNOWN (absence of the drop
+counter is not evidence of a lossless capture; \-\-allow\-unknown overrides), or
+when the golden holds a line this build cannot interpret. The same gate applies
+at freeze: refusing to compare data it would nonetheless canonize is backwards.
+.PP
+Over a RECORDING_DIR the performance lane reads the .prom scrapes, which is the
+only place the montauk_pmu_* counters live. A gauge from a recording is a
+.IR series ,
+so
+.B \-\-reduce
+picks which number is frozen (last for a counter, mean for a gauge by default)
+and the choice is recorded in the golden rather than assumed.
+.B \-\-exclude
+drops reports the operator does not want frozen; a report whose class is a
+capture limitation is recorded as
+.B skipped
+with its token rather than aborting the freeze, since re-capturing cannot fix a
+property of the workload.
+.PP
 .B montauk_analyze \-\-json
 emits the same reports as one structured JSON envelope (schema_version, trace
 context and a reports array) instead of the text report. It renders the same
@@ -723,6 +847,6 @@ Report issues at: https://github.com/wllclngn/montauk/issues
 .SH COPYRIGHT
 MIT License. See LICENSE file in repository.
 .SH VERSION
-montauk 8.6.0
+montauk 8.7.0
 .br
-July 2026
+August 2026

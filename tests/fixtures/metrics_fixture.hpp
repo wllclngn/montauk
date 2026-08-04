@@ -152,10 +152,13 @@ inline montauk::app::MetricsSnapshot make_fixture_snapshot() {
   }
 
   // Anomaly feature matrix over the fused population, exercising the JSON-only
-  // anomaly_features block (columns: cpu%, rss, gpu%, fault delta, threads).
+  // anomaly_features block
+  // (columns: cpu%, rss, gpu%, fault delta, threads, involuntary ctxsw delta).
+  // The last one is non-zero on the second row so the fixture exercises a
+  // populated axis rather than freezing a column of zeros.
   s.anomaly_features = {
-    {805, 1.5, 45548.0, 0.0, 0.0, 1.0},
-    {939, 0.5, 267992.0, 9.0, 0.0, 1.0},
+    {805, 1.5, 45548.0, 0.0, 0.0, 1.0, 0.0},
+    {939, 0.5, 267992.0, 9.0, 0.0, 1.0, 42.0},
   };
 
   return s;

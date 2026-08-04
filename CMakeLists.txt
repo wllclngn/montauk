@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 8.6.0 LANGUAGES C CXX)
+project(montauk VERSION 8.7.0 LANGUAGES C CXX)
 # (7.17.0: kick-capture honesty -- the storm report no longer manufactures a
 #  false kick/s=0 when the scx storm probes are unattached, and kick-latency
 #  surfaces the KICK_ISSUE->RESCHED pairing (availability, unanswered share,

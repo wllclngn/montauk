@@ -90,6 +90,15 @@ def op_counts(binpath):
     # Strip the "[   ts]" prefix (split on ']'), then TYPE+subtype = first two tokens.
     after_ts = harness.run_text([str(SUBL), "field", "2", "--delim", "]"], input=body)
     cat = harness.run_text([str(SUBL), "field", "1,2"], input=after_ts.stdout)
+    # A CATEGORY IS A SHAPE, NOT AN INSTANCE. Some subtypes carry a run-specific
+    # value -- `EXEC pid=44397`, `DROPS total=19115`, `MMAP pid=122654` -- and
+    # keeping the value made every one of them a category that could never match
+    # across two captures. The T1 comparison this function exists for was then
+    # unusable by construction: it reported dozens of appeared/vanished
+    # categories on any two runs, including two runs of the SAME build, and the
+    # real signal (SCHED WAKEUP and kin, which are stable) was buried in them.
+    # Strip the value, keep the key.
+    cat = harness.run_text([str(SUBL), "replace", "=[^ ]*", "="], input=cat.stdout)
     tally = harness.run_text([str(SUBL), "tally"], input=cat.stdout)
     counts = {}
     for line in tally.stdout.splitlines():
@@ -225,9 +234,14 @@ def run_compare(args):
 
     # A pure-dedup refactor keeps every op category present in both runs. Absolute
     # counts differ run-to-run (live timing), so only appear/vanish is a hard fail.
-    return check(regressions == 0,
-                 f"no op category added or dropped between captures "
-                 f"({regressions} changed)") and 0 or 1
+    # `check(...) and 0 or 1` was the original spelling and it ALWAYS returned 1:
+    # a pass makes check() return True, True and 0 is 0, and 0 is falsy, so the
+    # `or 1` fires. The comparison reported failure on every successful run --
+    # which, combined with the category bug above, made this gate report a
+    # regression no matter what it was given.
+    return 0 if check(regressions == 0,
+                      f"no op category added or dropped between captures "
+                      f"({regressions} changed)") else 1
 
 
 def main():

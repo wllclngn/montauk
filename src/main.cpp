@@ -91,7 +91,18 @@ int main(int argc, char** argv) {
   // consumed only inside the MONTAUK_HAVE_BPF block below; a libbpf-less build
   // otherwise dies on -Werror=unused-but-set-variable.
   [[maybe_unused]] bool sched_detail = false;
+  // --trace-ring-bytes / --trace-classes: the two knobs a capture that lost most
+  // of itself needed and did not have. Both default to today's behaviour.
+  [[maybe_unused]] uint64_t trace_ring_bytes = 0;
+  [[maybe_unused]] uint64_t trace_class_mask = 0;
   bool json_once = false;      // --json: one-shot structured snapshot to stdout, then exit
+  // --pmu-comm / --pmu-pid: per-process hardware-counter attribution. Separate
+  // from --trace's per-CPU PMU because the permission story is different --
+  // perf_event_open(pid>=0, cpu=-1) needs no privilege and no sysctl, while the
+  // per-CPU form needs perf_event_paranoid<=0. Gating this behind --trace would
+  // put an unprivileged capability behind BPF and root.
+  std::string pmu_comm;
+  std::vector<int> pmu_pids;
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--iterations" && i + 1 < argc) iterations = parse_int_arg(argv[++i], iterations);
@@ -105,6 +116,63 @@ int main(int argc, char** argv) {
     else if (a == "--trace-out" && i + 1 < argc) trace_out = argv[++i];
     else if (a == "--stream-out" && i + 1 < argc) stream_out = argv[++i];
     else if (a == "--sched-detail") sched_detail = true;
+    else if (a == "--trace-ring-bytes" && i + 1 < argc) {
+      // Accept a plain byte count or a K/M/G suffix: a ring is discussed in
+      // megabytes and typing seven zeroes is how the wrong number gets set.
+      char* endp = nullptr;
+      unsigned long long v = std::strtoull(argv[++i], &endp, 10);
+      if (endp && *endp) {
+        switch (*endp) {
+          case 'k': case 'K': v *= 1024ULL; break;
+          case 'm': case 'M': v *= 1024ULL * 1024ULL; break;
+          case 'g': case 'G': v *= 1024ULL * 1024ULL * 1024ULL; break;
+          default:
+            montauk::util::log_error("--trace-ring-bytes: unknown suffix '%s' "
+                                     "(use a plain count, or K/M/G)", endp);
+            return 1;
+        }
+      }
+      trace_ring_bytes = v;
+    }
+    else if (a == "--trace-classes" && i + 1 < argc) {
+      // NAMES, not a bitmask. An operator narrowing a capture is already doing
+      // something subtle; making them hand-assemble 1<<7 invites the mistake
+      // that loses the class they cared about.
+      static const struct { const char* name; int bit; } kClasses[] = {
+        {"fork",1},{"exec",2},{"exit",3},{"comm",4},{"io",5},{"ntsync",6},
+        {"sched",7},{"heap",8},{"signal",9},{"mmap",10},{"provider",11},
+        {"abort",12},{"heapstack",13},{"keyedevt",14},
+      };
+      std::string list = argv[++i];
+      uint64_t mask = 0;
+      size_t pos2 = 0;
+      while (pos2 <= list.size()) {
+        size_t c = list.find(',', pos2);
+        if (c == std::string::npos) c = list.size();
+        std::string tok = list.substr(pos2, c - pos2);
+        pos2 = c + 1;
+        if (tok.empty()) { if (c == list.size()) break; continue; }
+        bool found = false;
+        for (const auto& k : kClasses)
+          if (tok == k.name) { mask |= (1ULL << k.bit); found = true; break; }
+        if (!found) {
+          std::string known;
+          for (const auto& k : kClasses) { known += " "; known += k.name; }
+          montauk::util::log_error("--trace-classes: unknown class '%s' (known:%s)",
+                                   tok.c_str(), known.c_str());
+          return 1;
+        }
+        if (c == list.size()) break;
+      }
+      if (!mask) {
+        montauk::util::log_error("--trace-classes selected nothing -- a capture "
+                                 "with no classes records nothing at all");
+        return 1;
+      }
+      trace_class_mask = mask;
+    }
+    else if (a == "--pmu-comm" && i + 1 < argc) pmu_comm = argv[++i];
+    else if (a == "--pmu-pid" && i + 1 < argc) pmu_pids.push_back(parse_int_arg(argv[++i], 0));
     else if (a == "--init-theme") {
       auto colors = montauk::ui::detect_palette();
       montauk::util::TomlReader toml;
@@ -187,6 +255,7 @@ int main(int argc, char** argv) {
       montauk_sink_appendf(&g_out, "Usage: montauk [--self-test-seconds S] [--iterations N]\n");
       montauk_sink_appendf(&g_out, "               [--metrics PORT] [--log DIR] [--log-interval-ms MS] [--headless]\n");
       montauk_sink_appendf(&g_out, "               [--trace PATTERN] [--trace-out FILE] [--stream-out DEVICE] [--sched-detail] [--init-theme]\n");
+      montauk_sink_appendf(&g_out, "               [--pmu-comm SUBSTR] [--pmu-pid N]\n");
       montauk_sink_appendf(&g_out, "Notes: Text UI runs until Ctrl+C by default.\n");
       montauk_sink_appendf(&g_out, "       --metrics PORT        Enable Prometheus endpoint on PORT\n");
       montauk_sink_appendf(&g_out, "       --log DIR             Write timestamped snapshots to DIR\n");
@@ -195,8 +264,12 @@ int main(int argc, char** argv) {
       montauk_sink_appendf(&g_out, "       --trace PATTERN       Trace process group matching PATTERN (headless)\n");
       montauk_sink_appendf(&g_out, "       --trace-out FILE      Write raw binary event log; decode with montauk_trace_decode\n");
       montauk_sink_appendf(&g_out, "       --stream-out DEVICE   Second, independent binary stream (same format as --trace-out), meant for a character device (e.g. a qemu-backed serial port) so capture survives a hang that takes --trace-out's filesystem down with it\n");
+      montauk_sink_appendf(&g_out, "       --trace-ring-bytes N  BPF ring size (default 1M; accepts K/M/G). The default was never sized against a real offered rate: one sched-messaging capture offered ~2.8M events/s against ~254k/s drained and kept 5.7%% of its stream. Rounded up to a power of two\n");
+      montauk_sink_appendf(&g_out, "       --trace-classes LIST  Capture only these event classes (comma-separated: fork,exec,exit,comm,io,ntsync,sched,heap,signal,mmap,provider,abort,heapstack,keyedevt). Stops one loud class drowning the one the capture is FOR -- excluded classes are never reserved, and are NOT counted as drops\n");
       montauk_sink_appendf(&g_out, "       --sched-detail        Stream the heavy per-switch scheduler-decision detail -- per-CPU idle boundaries and the EEVDF pick fallback (off by default; the placement/slice/stall reports need it, ~6x cost on CPU-cycling workloads)\n");
       montauk_sink_appendf(&g_out, "       --init-theme          Detect terminal palette and write config.toml\n");
+      montauk_sink_appendf(&g_out, "       --pmu-comm SUBSTR     Attach hardware counters to processes whose command matches SUBSTR (instructions, cycles, dTLB load misses, cache misses, per process). Needs no root and no sysctl, unlike --trace's system-wide PMU; re-resolved every tick, so a workload started later is picked up\n");
+      montauk_sink_appendf(&g_out, "       --pmu-pid N           Same, for one explicit pid (repeatable; composes with --pmu-comm)\n");
       montauk_sink_appendf(&g_out, "       --json                One-shot structured system snapshot to stdout, then exit\n");
       return 0;
     }
@@ -217,6 +290,9 @@ int main(int argc, char** argv) {
     // which a plain `montauk` TUI run must never demand. Only trace mode
     // opts in.
     if (!trace_pattern.empty()) producer.enable_pmu();
+    // Per-process attribution is the unprivileged half and stands on its own.
+    if (!pmu_comm.empty() || !pmu_pids.empty())
+      producer.set_pmu_process_filter(pmu_comm, pmu_pids);
     producer.start();
 
     // Trace subsystem (optional, parallel to main pipeline). Constructed
@@ -232,6 +308,8 @@ int main(int argc, char** argv) {
       if (!trace_out.empty()) trace_collector->set_binary_output(trace_out);
       if (!stream_out.empty()) trace_collector->set_stream_output(stream_out);
       trace_collector->set_sched_detail(sched_detail);  // before start(): sets a frozen rodata bit
+      trace_collector->set_ring_bytes(trace_ring_bytes);   // before load: libbpf freezes map size
+      trace_collector->set_capture_mask(trace_class_mask); // before load: .rodata
       trace_collector->start();
     }
 #else

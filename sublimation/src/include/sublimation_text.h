@@ -112,6 +112,132 @@ SUB_API long sublimation_search_next_any(const sublimation_search *set, int nset
                                          int regex_face, const char *line, size_t n,
                                          size_t off, int wword, long *end_out);
 
+// How many characters in `pat` CANNOT be case-folded by the -i face: non-ASCII
+// characters whose upper/lower counterpart changes the UTF-8 byte length or the
+// lead byte, which a byte-positional engine cannot admit without also admitting
+// sequences nobody wrote. Those characters match EXACTLY under -i, so the search
+// narrows rather than widens.
+//
+// Exists so a caller can SAY that. An -i that quietly matches less than the user
+// asked for is the failure this reports; returning 0 means -i is fully honoured
+// for this pattern.
+SUB_API size_t sublimation_search_fold_gaps(const char *pat, size_t len);
+
+// THE OCCURRENCE FIELD -- every match in a range, as POSITIONS, at MATCH
+// granularity rather than line granularity.
+//
+// This is the field the analysis instruments run over. The matcher still SKIPS
+// (the Glushkov position-NFA already fires a match-end bit per input byte; this
+// keeps that bit instead of collapsing it into a counter), and the instruments
+// RELATE the few thousand positions it emits rather than the billions of bytes
+// it scanned. That separation is load-bearing: it is why classify, Spectral
+// Residual and Matrix Profile can sit ABOVE the matcher without ever touching
+// the haystack.
+//
+// OPT-IN BY CONSTRUCTION. Deciding a line matched stops at the first hit;
+// enumerating every occurrence gives that up. Nothing here is on the selection
+// path -- a caller that only wants "did this line match" keeps calling
+// sublimation_search_selects and pays nothing.
+//
+// `pat` is which pattern of the set fired, which next_any cannot report because
+// it collapses the set to one leftmost-longest answer. A consumer that renders
+// or substitutes per pattern needs it; -1 means no single pattern owns the span
+// (whole-line -x, where the line is the match by definition).
+typedef struct {
+    uint32_t start;   // byte offset of the match within the scanned range
+    uint32_t end;     // exclusive
+    int32_t  pat;     // index into the pattern set, or -1
+} sublimation_match_span;
+
+// Fill `out` with up to `cap` spans and RETURN THE TOTAL FOUND, which may exceed
+// `cap` -- count-then-fill, so the library allocates nothing and ownership never
+// crosses the boundary. `out` may be NULL when cap is 0 to size a buffer first.
+//
+// Walk order and semantics are exactly the CLI's --color walk, because that walk
+// is the definition every consumer has to agree with: leftmost-longest across
+// the set, advance past the match end, and step ONE byte on a zero-width match
+// (which records no span -- there is nothing to highlight or substitute).
+SUB_API size_t sublimation_search_spans(const sublimation_search *set, int nset,
+                                        int regex_face, const char *text, size_t n,
+                                        int wword, int xline,
+                                        sublimation_match_span *out, size_t cap);
+
+// CAPTURE GROUPS for ONE match span. `text[0..n)` must be exactly a match of
+// `pat` -- the fast engine isolates it first, and this only ever runs over those
+// bytes, only when a substitution asks for a backreference. Fills `groups` with
+// up to `max_groups` spans, 1-based left to right, and writes how many to
+// `ngroups`. A group that did not participate has pat == -1.
+//
+// Returns 1 on a parse-and-match, 0 otherwise. Fails CLOSED: a pattern this
+// subset cannot express yields no captures rather than a guess.
+SUB_API int sublimation_search_captures(const char *pat, const char *text, size_t n,
+                                        int icase, sublimation_match_span *groups,
+                                        size_t max_groups, size_t *ngroups);
+
+// THE DISPERSION FIELD -- what the occurrence field is FOR.
+//
+// The matcher skips billions of bytes; these instruments relate the few thousand
+// positions it emits. That is the separation law resolved rather than bent: the
+// RELATE-shaped primitives everyone keeps trying to force INTO the matcher
+// (spectral, entropy, FFT) run ABOVE it, on the sparse output, never on the
+// haystack. It is the same reason an O(n^3) method is affordable over a few
+// hundred vectors and unthinkable over a log file.
+//
+// This is a SENSOR, not a leaf. "Where does this pattern cluster, and does its
+// burst line up with something else that moved" is a question about a text
+// stream that nothing else here could answer, because every other sensor reads
+// structured telemetry.
+//
+// STATIC ONLY. "Did this pattern's match RATE shift, and where" is the temporal
+// half and is deliberately absent: it needs an incremental per-key streaming
+// changepoint, which is built once for processes and inherited here rather than
+// written twice.
+typedef struct {
+    size_t matches;          // spans considered
+    size_t span_bytes;       // first match start .. last match end
+    double density_per_kb;   // matches per 1024 bytes of HAYSTACK, not of span
+
+    // Stride = distance between consecutive match STARTS. Mean alone hides the
+    // shape, so the spread ships with it.
+    double stride_mean, stride_stdev;
+    double stride_p50, stride_p90, stride_p99, stride_max;
+
+    // Goh-Barabasi burstiness on the strides: (sd - mean) / (sd + mean).
+    // -1 perfectly periodic, 0 Poisson (memoryless), +1 maximally bursty. It is
+    // scale-free by construction, so a dense pattern and a rare one are directly
+    // comparable -- which a raw variance is not.
+    double burstiness;
+
+    // Disorder class of the stride sequence, from the same classifier the sort
+    // routes on. A pattern whose gaps are SORTED is thinning out or ramping up;
+    // one whose gaps are RANDOM is memoryless. Values are sub_disorder_t.
+    int    gap_class;
+
+    // Peak Spectral-Residual saliency over the arrival series: how much one
+    // burst stands out from the pattern's own background. 0 when the series is
+    // too short for the transform.
+    double saliency_max;
+    size_t saliency_at;      // arrival index of that peak
+    size_t saliency_window;  // gaps actually transformed (largest power-of-two
+                             // prefix); 0 when the series was too short
+
+    // Matrix-profile DISCORD: the most anomalous window of arrivals (highest
+    // distance to its nearest neighbour), and MOTIF: the most repeated one.
+    // 0/absent when the series is shorter than a usable window.
+    double discord;
+    size_t discord_at;
+    double motif;
+    size_t motif_at;
+} sublimation_dispersion;
+
+// Compute the field from a span array. `haystack_len` is what density is
+// relative to. Returns 1 on success, 0 when there is nothing to describe
+// (fewer than 2 spans -- a single match has no stride and no shape).
+// Allocates internally and frees before returning; nothing is owed to the caller.
+SUB_API int sublimation_dispersion_field(const sublimation_match_span *spans,
+                                         size_t n, size_t haystack_len,
+                                         sublimation_dispersion *out);
+
 // Does ANY pattern in the set accept this line? 1 = yes, 0 = no.
 SUB_API int sublimation_search_selects(const sublimation_search *set, int nset,
                                        int regex_face, const char *line, size_t n,

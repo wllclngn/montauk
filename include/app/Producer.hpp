@@ -4,7 +4,9 @@
 #include <memory>
 #include <thread>
 #include <stop_token>
+#include <string>
 #include <unordered_map>
+#include <vector>
 #include "app/SnapshotBuffers.hpp"
 #include "collectors/MemoryCollector.hpp"
 #include "collectors/GpuCollector.hpp"
@@ -43,6 +45,20 @@ public:
   // is active. Must be called before start().
   void enable_pmu() { pmu_enabled_ = true; }
 
+  // Per-process PMU attribution: attach hardware counters to the processes the
+  // operator names, by command substring and/or explicit pid. Unlike
+  // enable_pmu()'s per-CPU counters this needs NO privilege and NO sysctl
+  // (perf_event_open with pid >= 0 and cpu == -1 is permitted at
+  // perf_event_paranoid 2), so it is deliberately NOT gated behind --trace --
+  // gating it there would put it behind BPF and root and defeat the point.
+  // Selection is re-resolved every process tick, so a workload started after
+  // montauk is picked up when it appears.
+  void set_pmu_process_filter(std::string comm_substr, std::vector<int> pids) {
+    pmu_comm_ = std::move(comm_substr);
+    pmu_pids_ = std::move(pids);
+    pmu_proc_enabled_ = !pmu_comm_.empty() || !pmu_pids_.empty();
+  }
+
   // Count of completed per-process samples. The hot-start warm-up fires
   // several only a kernel tick apart, so a delta taken across them is
   // quantized noise (most processes accrue no jiffy at all and read 0, an
@@ -71,6 +87,13 @@ private:
   montauk::collectors::CpuCollector cpu_{};
   montauk::collectors::PmuCollector pmu_{};
   bool pmu_enabled_{false};  // see enable_pmu()
+  bool pmu_proc_enabled_{false};   // see set_pmu_process_filter()
+  std::string pmu_comm_;
+  std::vector<int> pmu_pids_;
+  // Resolve pmu_comm_/pmu_pids_ against the live process list and hand the
+  // result to the collector. Cheap: a substring scan over an already-collected
+  // snapshot, and the collector keeps existing attachments untouched.
+  void refresh_pmu_targets(const montauk::model::ProcessSnapshot& procs);
   std::atomic<uint64_t> process_samples_{0};  // see process_samples()
   montauk::collectors::MemoryCollector mem_{};
   montauk::collectors::GpuCollector gpu_{};
@@ -87,6 +110,8 @@ private:
   // Per-pid cumulative fault count from the previous cycle; the anomaly
   // enrichment derives its fault-delta feature from this and refreshes it.
   std::unordered_map<int32_t, uint64_t> anomaly_prev_faults_;
+  // Same shape, for the involuntary context-switch axis.
+  std::unordered_map<int32_t, uint64_t> anomaly_prev_ctxsw_;
   // Unified GPU attributor (NVML + fdinfo)
   std::unique_ptr<montauk::app::GpuAttributor> gpu_attr_;
 };

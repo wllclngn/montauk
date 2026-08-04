@@ -240,7 +240,9 @@ static std::string redact_comm(const char* comm) {
 
 #include <chrono>
 #include <cmath>
+#include <unistd.h>          // sysconf, for the golden's core-count fingerprint
 #include <cstdint>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -315,6 +317,78 @@ int32_t signal_nr_from(const std::string& s) {
     if (nm && want == nm) return n;
   }
   return -1;
+}
+
+// ROW QUALIFIERS, PARSED IN ONE PLACE FOR EVERY MODE.
+// The qualifiers are the sanctioned generic narrowing surface: any per-event
+// report consumes them, so "show me thread X's SIGSEGVs" is a command line
+// rather than a code change. They were parsed only inside single-trace mode's
+// flag loop, which meant the recording-dir modes (--digest, --l2-by-cpu)
+// returned before the loop ran and READ PAST every qualifier given to them --
+// not rejected, not warned about, silently unapplied. A caller had no way to
+// learn the narrowing never happened. This is that parsing, callable from both.
+//
+// Returns 0 when argv[i] was a qualifier and was applied, 2 on a malformed
+// value, and kQualNotMine when argv[i] is some other flag entirely (the caller
+// keeps matching). *consumed is set to the number of EXTRA argv slots eaten (1
+// for a qualifier's value), which the caller adds to its own index.
+//
+// Flags are matched with strcmp on the argv pointer rather than by constructing
+// a std::string per argument: no allocation on a startup path that does not
+// need one.
+//
+// The attribute is a TOOLCHAIN WORKAROUND, scoped as narrowly as it can be.
+// gcc 16.x segfaults compiling this function at -O3 -- `during GIMPLE pass:
+// ifcvt`, in tree_if_conversion -- and it is a genuine compiler bug, not a code
+// defect: bisected to -O3 alone (clean at -O0 and -O2), reproduced against both
+// the std::string and the strcmp form of the matcher, and it survived a stack
+// limit raise. Disabling that ONE pass for this ONE function is the smallest
+// intervention that keeps the project's -O3 -Werror build whole; nothing else in
+// the file changes optimization level. Remove the attribute when the toolchain
+// is fixed and confirm the build still passes.
+constexpr int kQualNotMine = -1;
+
+// gcc-only: clang has neither the bug nor the attribute, and warns (fatal under
+// this build's -Werror) on an attribute it does not know.
+#if defined(__GNUC__) && !defined(__clang__)
+#define MONTAUK_NO_IFCVT __attribute__((optimize("no-tree-loop-if-convert")))
+#else
+#define MONTAUK_NO_IFCVT
+#endif
+
+MONTAUK_NO_IFCVT
+int take_row_qualifier(int argc, char** argv, int i, int* consumed) {
+  *consumed = 0;
+  const char* a = argv[i];
+  const char* val = (i + 1 < argc) ? argv[i + 1] : nullptr;
+  auto is = [a](const char* flag) { return std::strcmp(a, flag) == 0; };
+  if (is("--sig") && val) {
+    *consumed = 1;
+    g_qual_sig = signal_nr_from(val);
+    if (g_qual_sig < 0) {
+      log_error("--sig '%s' names no signal (number, SIGSEGV or SEGV)", val);
+      return 2;
+    }
+  } else if (is("--comm") && val) {
+    *consumed = 1;
+    g_qual_comm = val;
+  } else if (is("--pid") && val) {
+    *consumed = 1;
+    g_qual_pid = std::strtol(val, nullptr, 10);
+  } else if (is("--tid") && val) {
+    *consumed = 1;
+    g_qual_tid = std::strtol(val, nullptr, 10);
+  } else if (is("--window") && val) {
+    *consumed = 1;
+    g_qual_window_s = std::strtod(val, nullptr);
+    if (g_qual_window_s < 0) {
+      log_error("--window takes seconds >= 0, got '%s'", val);
+      return 2;
+    }
+  } else {
+    return kQualNotMine;
+  }
+  return 0;
 }
 
 // Format an absolute wall-clock ns-since-epoch into HH:MM:SS.mmm.
@@ -423,6 +497,68 @@ struct PromMetric {
   std::string labels;  // pre-formatted: k="v",k="v"
   double value;
 };
+
+// CAPTURE LOSS, ONE EMITTER FOR EVERY SURFACE.
+// Overload drop is load-correlated -- the tracer sheds exactly when the
+// interesting events are produced -- so observed counts are LOWER BOUNDS, tail
+// quantiles are biased downward, and an absence-of-anomaly verdict over a lossy
+// window is not the same claim as one over a lossless capture. That
+// qualification is not optional decoration on a verdict; it is part of the
+// verdict, so every path that states a conclusion states this beside it.
+//
+// It lived inline in the --report path, which left the DIGEST -- the compact
+// redacted file that actually gets shared with someone else -- asserting clean
+// quantiles over captures as low as 5.7% complete. Shared here so the two
+// cannot drift again, and so the digest's envelope can publish the same numbers
+// its text prints.
+
+static double capture_completeness(uint64_t observed) {
+  const uint64_t dropped = g_drop_seen ? drops_total() : 0;
+  const uint64_t offered = observed + dropped;
+  return offered > 0 ? static_cast<double>(observed) /
+                           static_cast<double>(offered)
+                     : 1.0;
+}
+
+// Text block + the prom family. No-op when the capture predates drop accounting:
+// absence of the counter is not evidence of zero loss, so nothing is claimed.
+static void emit_capture_loss(uint64_t observed,
+                              std::vector<PromMetric>& prom) {
+  if (!g_drop_seen) return;
+  const uint64_t dropped = drops_total();
+  const double completeness = capture_completeness(observed);
+  prom.push_back({"montauk_analysis_events_dropped_total", "",
+                  static_cast<double>(dropped)});
+  prom.push_back({"montauk_analysis_capture_completeness", "", completeness});
+  for (uint32_t t = 0; t < MONTAUK_DROP_SLOTS; ++t)
+    if (g_drop_final.dropped[t] > 0)
+      prom.push_back({"montauk_analysis_events_dropped_total",
+                      std::string("type=\"") + evt_type_name(t) + "\"",
+                      static_cast<double>(g_drop_final.dropped[t])});
+  if (dropped > 0) {
+    montauk_sink_appendf(&g_out,
+        "\nCAPTURE LOSS: %" PRIu64 " event(s) dropped at the ring "
+        "(completeness %.4f%%)\n",
+        dropped, completeness * 100.0);
+    for (uint32_t t = 0; t < MONTAUK_DROP_SLOTS; ++t)
+      if (g_drop_final.dropped[t] > 0)
+        montauk_sink_appendf(
+            &g_out, "  %s: %" PRIu64 "\n", evt_type_name(t),
+            static_cast<uint64_t>(g_drop_final.dropped[t]));
+    montauk_sink_appendf(&g_out,
+        "  counts above are lower bounds; tail quantiles are biased "
+        "downward\n"
+        "  (loss lands in the busy windows); absence-of-anomaly verdicts "
+        "for the\n"
+        "  types listed are qualified, not clean\n");
+  }
+  if (g_drop_final.writer_errors > 0)
+    montauk_sink_appendf(&g_out,
+        "CAPTURE LOSS: %" PRIu64 " trace write error(s), %" PRIu64
+        " byte(s) short at the disk path\n",
+        static_cast<uint64_t>(g_drop_final.writer_errors),
+        static_cast<uint64_t>(g_drop_final.writer_lost_bytes));
+}
 
 const char* prom_help(const char* name) {
   static constexpr struct { const char* name; const char* help; } kHelp[] = {
@@ -629,7 +765,21 @@ struct Offender {
 // compute() populates it once after fold(); emit() (text), prom() (scalars),
 // offenders() (objects) and json() all render from it, so they cannot disagree.
 struct ReportResult {
+  // The report's conclusion as a SENTENCE, for a human. Composed in compute()
+  // and printed by emit(); never composed inside emit(), because the --json
+  // driver calls compute() then json() and RETURNS without ever calling emit().
+  // A verdict assembled at print time is invisible to every structured surface.
   std::string verdict;
+  // The same conclusion as a TOKEN, for a machine. Short, SCREAMING-KEBAB, and
+  // drawn from a small fixed set per report (PREEMPT-STARVED, ORDER-STARVED,
+  // NONE, ...). The sentence carries numbers and therefore drifts; the token is
+  // what a behavioral golden can compare EXACTLY, which is the whole reason it
+  // exists separately rather than being parsed back out of the prose.
+  //
+  // Convention: a report that found nothing to report emits "NONE" rather than
+  // leaving this empty, so "no finding" is a comparable state and not an
+  // absence indistinguishable from a report that never ran.
+  std::string klass;
   std::vector<PromMetric> gauges;
   std::vector<Offender> offenders;
 };
@@ -656,9 +806,60 @@ struct Report {
   virtual void json(montauk_json& j) {
     montauk_json_obj_begin(&j);
     montauk_json_kstr(&j, "name", name());
+    json_conclusion(j);
     json_gauges(j);
     json_offenders(j);
     montauk_json_obj_end(&j);
+  }
+  // The conclusion pair, published from the SHARED typed-result slot so a report
+  // only has to fill it. Before this, three reports published a verdict and each
+  // did it from its own private member with its own json() override -- so 26
+  // reports computed a conclusion, printed it, and gave a structured caller no
+  // way to read it. Emitted only when set, so a report mid-migration is absent
+  // rather than blank, and an override that already writes its own verdict key
+  // does not collide.
+  void json_conclusion(montauk_json& j) {
+    if (!result_base().verdict.empty())
+      montauk_json_kstr(&j, "verdict", result_base().verdict.c_str());
+    if (!result_base().klass.empty())
+      montauk_json_kstr(&j, "class", result_base().klass.c_str());
+  }
+  // THE SHARED SLOT LIVES HERE so a report does not have to declare one. 25 of
+  // 28 reports had no result member at all; giving each its own plus a
+  // result_base() override would have been ~50 lines of identical boilerplate
+  // to publish a field. Reports with a TYPED result (SchedResult and friends,
+  // which extend ReportResult) keep theirs and override result_base().
+  ReportResult res_;
+  virtual const ReportResult& result_base() const { return res_; }
+
+  // Compose the conclusion INTO THE SLOT. Called from compute(), never from
+  // emit(): the --json driver runs compute() then json() and returns without
+  // ever calling emit(), so a sentence assembled at print time is invisible to
+  // every structured surface. `klass` is the comparable token -- short,
+  // SCREAMING-KEBAB, from a small fixed set per report -- and "NONE" is the
+  // convention for "nothing to report", so that state is comparable rather than
+  // an absence indistinguishable from a report that never ran.
+  void set_verdict(const char* klass, const char* fmt, ...)
+      __attribute__((format(printf, 3, 4))) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    res_.verdict = buf;
+    res_.klass = klass;
+  }
+  // Print the stored sentence. ONE string reaches both surfaces; composing a
+  // summary for JSON and a longer line for text would be two strings for one
+  // conclusion, free to drift apart.
+  // Refuses to print a blank line. A report whose compute() returns early
+  // before composing leaves the slot empty, and printing "VERDICT:" with
+  // nothing after it is worse than an obvious placeholder -- it reads as a
+  // report that concluded nothing rather than one that was never asked.
+  void emit_verdict() const {
+    const std::string& v = result_base().verdict;
+    montauk_sink_appendf(&g_out, "VERDICT: %s\n",
+                         v.empty() ? "(not computed -- report bug)" : v.c_str());
   }
   // Shared serializers for the two structured surfaces every report already
   // produces; a typed-result override calls these after its own detail blocks.
@@ -1131,6 +1332,46 @@ struct SpinsReport final : Report {
       (void)key;
       finalize(s.tid, s.obj, s, s.last_ts);
     }
+    compute_verdict();
+  }
+
+  // The three spin classes are three DIFFERENT bugs, which is why the token
+  // carries the dominant one rather than a count: instant-success is a livelock
+  // (the object is stuck signalled), timeout is a starved waiter, error is a
+  // caller mistake. A run that trades one for another is not an unchanged run.
+  void compute_verdict() {
+    if (runs_.empty()) {
+      set_verdict("NONE", "no spin runs detected");
+      return;
+    }
+    std::map<std::string, uint64_t> by_class;
+    std::set<uint64_t> pairs;
+    double peak = 0.0;
+    for (const Run& r : runs_) {
+      ++by_class[run_class(r)];
+      pairs.insert(tid_obj_key(r.tid, r.obj));
+      peak = std::max(peak, run_rate(r));
+    }
+    const auto dom_cls = std::max_element(by_class.begin(), by_class.end(),
+                                          [](const auto& l, const auto& r) { return l.second < r.second; });
+    const char* word = "error spin";
+    const char* tok  = "ERROR-SPIN";
+    if (dom_cls->first == "instant-success") { word = "livelock"; tok = "LIVELOCK"; }
+    else if (dom_cls->first == "timeout")    { word = "starved waiter"; tok = "STARVED-WAITER"; }
+    char counts[80];
+    if (dom_cls->second == runs_.size())
+      std::snprintf(counts, sizeof(counts), "%zu %s spin runs", runs_.size(), dom_cls->first.c_str());
+    else
+      std::snprintf(counts, sizeof(counts), "%" PRIu64 " of %zu spin runs %s",
+                    dom_cls->second, runs_.size(), dom_cls->first.c_str());
+    std::string where;
+    if (pairs.size() == 1)
+      where = "all tid=" + std::to_string(runs_[0].tid) + " obj=" +
+              fmt_obj(runs_[0].pid, runs_[0].obj, runs_[0].is_futex);
+    else
+      where = "across " + std::to_string(pairs.size()) + " tid/obj pairs";
+    set_verdict(tok, "%s — %s, %s, peak %s waits/s",
+                word, counts, where.c_str(), fmt_count(peak).c_str());
   }
 
   // Classify a run by its dominant result tally (mirrors the table verdict).
@@ -1147,39 +1388,12 @@ struct SpinsReport final : Report {
 
   void emit(const montauk::model::TraceReader& reader) override {
     header();
+    emit_verdict();
     if (runs_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no spin runs detected\n");
       montauk_sink_appendf(&g_out, "criteria: inter-wait gap < %.1f ms sustained >= %" PRIu64 " iterations\n",
                   static_cast<double>(kSpinGapNs) / 1e6, kSpinMinIters);
       return;
     }
-    std::map<std::string, uint64_t> by_class;
-    std::set<uint64_t> pairs;
-    double peak = 0.0;
-    for (const Run& r : runs_) {
-      ++by_class[run_class(r)];
-      pairs.insert(tid_obj_key(r.tid, r.obj));
-      peak = std::max(peak, run_rate(r));
-    }
-    const auto dom_cls = std::max_element(by_class.begin(), by_class.end(),
-                                          [](const auto& l, const auto& r) { return l.second < r.second; });
-    const char* word = "error spin";
-    if (dom_cls->first == "instant-success") word = "livelock";
-    else if (dom_cls->first == "timeout") word = "starved waiter";
-    char counts[80];
-    if (dom_cls->second == runs_.size())
-      std::snprintf(counts, sizeof(counts), "%zu %s spin runs", runs_.size(), dom_cls->first.c_str());
-    else
-      std::snprintf(counts, sizeof(counts), "%" PRIu64 " of %zu spin runs %s",
-                    dom_cls->second, runs_.size(), dom_cls->first.c_str());
-    std::string where;
-    if (pairs.size() == 1)
-      where = "all tid=" + std::to_string(runs_[0].tid) + " obj=" +
-              fmt_obj(runs_[0].pid, runs_[0].obj, runs_[0].is_futex);
-    else
-      where = "across " + std::to_string(pairs.size()) + " tid/obj pairs";
-    montauk_sink_appendf(&g_out, "VERDICT: %s — %s, %s, peak %s waits/s\n",
-                word, counts, where.c_str(), fmt_count(peak).c_str());
     montauk_sink_appendf(&g_out, "criteria: inter-wait gap < %.1f ms sustained >= %" PRIu64 " iterations\n",
                 static_cast<double>(kSpinGapNs) / 1e6, kSpinMinIters);
     sublimation_order_u64(runs_, true, [](const Run& r) { return r.iters; });
@@ -1307,10 +1521,9 @@ struct PairingReport final : Report {
     return a.waits >= kPairingMinWaits && a.waits > signal_total(a) * kPairingWaitSignalRatio;
   }
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
+  void compute() override {
     if (aggs_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no NTSYNC activity in trace\n");
+      set_verdict("NONE", "no NTSYNC activity in trace");
       return;
     }
     size_t n_flagged = 0;
@@ -1321,16 +1534,26 @@ struct PairingReport final : Report {
       ++n_flagged;
       if (!worst || a.waits > worst->waits) { worst = &a; worst_fd = fd; }
     }
+    // STUCK-SIGNALED names a signal that never reaches a waiter -- the defect
+    // this report exists to find. PAIRED is not merely "fewer flags": it is the
+    // absence of the defect, and the transition between them is the event a
+    // golden must fail on.
     if (!worst) {
-      montauk_sink_appendf(&g_out, "VERDICT: all waited fds have plausible signalers\n");
+      set_verdict("PAIRED", "all waited fds have plausible signalers");
     } else {
       char more[64] = "";
       if (n_flagged > 1)
         std::snprintf(more, sizeof(more), ", +%zu more flagged fds", n_flagged - 1);
-      montauk_sink_appendf(&g_out, "VERDICT: fd %d stuck-signaled — %s waits, %s signals%s\n",
+      set_verdict("STUCK-SIGNALED", "fd %d stuck-signaled — %s waits, %s signals%s",
                   worst_fd, fmt_count(static_cast<double>(worst->waits)).c_str(),
                   fmt_count(static_cast<double>(signal_total(*worst))).c_str(), more);
     }
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    emit_verdict();
+    if (aggs_.empty()) return;
     montauk_sink_appendf(&g_out, "flag: waits > %" PRIu64 "x signals (min %" PRIu64 " waits) = waits with no plausible signaler\n",
                 kPairingWaitSignalRatio, kPairingMinWaits);
     std::vector<std::pair<int32_t, const Agg*>> rows;
@@ -1531,14 +1754,18 @@ struct AbortPostmortemReport final : Report {
     }
   }
 
+  void compute() override {
+    // An abort is memory corruption reaching glibc, so the token is binary:
+    // either the trace contains one or it does not. There is no degree here.
+    if (findings_.empty()) set_verdict("NONE", "no abort events in trace");
+    else set_verdict("ABORT", "%zu abort(s); victim chunk = highest live allocation "
+                              "in the aborting arena", findings_.size());
+  }
+
   void emit(const montauk::model::TraceReader&) override {
     header();
-    if (findings_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no abort events in trace\n");
-      return;
-    }
-    montauk_sink_appendf(&g_out, "VERDICT: %zu abort(s); victim chunk = highest live allocation in the aborting arena\n",
-                findings_.size());
+    emit_verdict();
+    if (findings_.empty()) return;
     for (const auto& f : findings_) montauk_sink_appendf(&g_out, "%s", f.c_str());
   }
 
@@ -2284,6 +2511,7 @@ struct DoubleFreeReport final : Report {
   void compute() override {
     cross_ = 0;
     for (const auto& h : hits_) if (h.first_tid != h.second_tid) ++cross_;
+    compute_verdict();
   }
 
   void prom(std::vector<PromMetric>& out) override {
@@ -2311,15 +2539,25 @@ struct DoubleFreeReport final : Report {
     }
   }
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
+  void compute_verdict() {
     if (hits_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no double-frees in %" PRIu64 " frees\n", total_frees_);
+      set_verdict("CLEAN", "no double-frees in %" PRIu64 " frees", total_frees_);
       return;
     }
-    const size_t cross = cross_;
-    montauk_sink_appendf(&g_out, "VERDICT: %zu double-free(s) in %" PRIu64 " frees — %zu cross-thread (race), %zu same-thread (logic)\n",
-                hits_.size(), total_frees_, cross, hits_.size() - cross);
+    // RACE outranks LOGIC in the token: a cross-thread double free is a
+    // synchronization defect and a same-thread one is a bookkeeping defect, and
+    // a run that gains a race while losing a logic hit must not read as
+    // unchanged.
+    set_verdict(cross_ ? "RACE" : "LOGIC",
+        "%zu double-free(s) in %" PRIu64 " frees — %zu cross-thread (race), "
+        "%zu same-thread (logic)",
+        hits_.size(), total_frees_, cross_, hits_.size() - cross_);
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    emit_verdict();
+    if (hits_.empty()) return;
     montauk_sink_appendf(&g_out, "addr               size     freed_by_1            freed_by_2           kind\n");
     for (const auto& h : hits_) {
       montauk_sink_appendf(&g_out, "0x%016" PRIx64 " %-8" PRIu64 " tid=%-7u %-10.10s tid=%-7u %-10.10s %s\n",
@@ -3038,23 +3276,36 @@ struct WorkConservationReport final : Report {
   // without emit() having run.
   void compute() override {
     if (!strand_ns_.empty()) sublimation_u64(strand_ns_.data(), strand_ns_.size());
-  }
-
-  void emit(const montauk::model::TraceReader&) override {
-    header();
     if (strand_ns_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no idle strands >= 50ms "
-                  "(work-conserving, or PICK events not streamed)\n\n");
+      set_verdict("CONSERVING", "no idle strands >= 50ms "
+                  "(work-conserving, or PICK events not streamed)");
       return;
     }
     uint64_t n = pulled_ + local_;
     double pull_pct  = n ? 100.0 * static_cast<double>(pulled_) / static_cast<double>(n) : 0.0;
     double local_pct = n ? 100.0 * static_cast<double>(local_) / static_cast<double>(n) : 0.0;
-    montauk_sink_appendf(&g_out, "VERDICT: %s idle strands (>=50ms); p50 %.1fms p99 %.1fms "
-                "worst %.1fms; closed by PULL %.0f%% / LOCAL-REWAKE %.0f%%\n",
-                fmt_count(static_cast<double>(strand_ns_.size())).c_str(),
-                q_ms(strand_ns_, 0.50), q_ms(strand_ns_, 0.99),
-                ms(strand_ns_.back()), pull_pct, local_pct);
+    // The token names WHICH WAY the gap closes, because that is the actionable
+    // half: strands closed by LOCAL-REWAKE mean idle CPUs sat on remote
+    // runnable work instead of pulling it, which is a different defect from
+    // strands that closed by a pull.
+    set_verdict(local_pct >= 66.0 ? "LOCAL-REWAKE-GAP"
+                : pull_pct >= 66.0 ? "PULL-CLOSED"
+                                   : "MIXED-CLOSE",
+        "%s idle strands (>=50ms); p50 %.1fms p99 %.1fms worst %.1fms; "
+        "closed by PULL %.0f%% / LOCAL-REWAKE %.0f%%",
+        fmt_count(static_cast<double>(strand_ns_.size())).c_str(),
+        q_ms(strand_ns_, 0.50), q_ms(strand_ns_, 0.99),
+        ms(strand_ns_.back()), pull_pct, local_pct);
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (strand_ns_.empty()) {
+      emit_verdict();
+      montauk_sink_appendf(&g_out, "\n");
+      return;
+    }
+    emit_verdict();
     montauk_sink_appendf(&g_out, "  (high LOCAL-REWAKE %% = idle CPUs sit on remote runnable "
                 "work instead of pulling it -- the work-conservation gap)\n\n");
   }
@@ -3145,7 +3396,9 @@ struct PlacementRaceReport final : Report {
   // Attribute each floored wake to placement-miss vs saturation once, so
   // prom()/json() read the scalars without emit() having run. emit() renders.
   void compute() override {
-    if (idle_evt_.empty() || floored_.empty()) return;
+    // Verdict before the early return, or the slot stays empty on exactly the
+    // two paths that have something to say about WHY there is nothing to say.
+    if (idle_evt_.empty() || floored_.empty()) { compute_verdict(); return; }
     for (auto& kv : idle_evt_)
       sublimation_order_u64(kv.second, false,
                             [](const std::pair<uint64_t, uint8_t>& p) { return p.first; });
@@ -3168,24 +3421,44 @@ struct PlacementRaceReport final : Report {
     sat_pct_  = n ? 100.0 * (double)saturated / (double)n : 0.0;
     avg_idle_ = miss ? (double)idle_cpu_sum / (double)miss : 0.0;
     floored_n_ = n;
+    compute_verdict();
+  }
+
+  void compute_verdict() {
+    // NO-IDLE-STREAM is a CAPTURE limitation, not a finding, and must not read
+    // as "nothing wrong": the report could not attribute anything because the
+    // trace lacks per-CPU idle events. Distinguishing it from NONE (idle events
+    // present, nothing floored) is the difference between "re-capture" and
+    // "this run was clean".
+    if (idle_evt_.empty()) {
+      set_verdict("NO-IDLE-STREAM", "no CPU_IDLE events -- trace captured by a montauk "
+                  "without per-CPU idle streaming; re-capture to resolve");
+      return;
+    }
+    if (floored_.empty()) {
+      set_verdict("NONE", "no tick-floored wakeups (>=900us) -- nothing to attribute");
+      return;
+    }
+    // PLACEMENT-MISS is REROUTABLE (an idle CPU was free and a placement fix
+    // moves it); SATURATED is genuine queueing that only a busy-CPU fix cuts.
+    // Two different remedies, so two different tokens.
+    set_verdict(miss_pct_ >= 66.0 ? "PLACEMENT-MISS"
+                : sat_pct_ >= 66.0 ? "SATURATED"
+                                   : "MIXED",
+        "%s tick-floored wakes (>=900us); PLACEMENT-MISS %.0f%% "
+        "(idle CPU was free) / SATURATED %.0f%% (all busy); "
+        "avg %.1f idle CPUs free at a miss",
+        fmt_count((double)floored_n_).c_str(), miss_pct_, sat_pct_, avg_idle_);
   }
 
   void emit(const montauk::model::TraceReader&) override {
     header();
-    if (idle_evt_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no CPU_IDLE events -- trace captured by a montauk "
-                  "without per-CPU idle streaming; re-capture to resolve\n\n");
+    if (idle_evt_.empty() || floored_.empty()) {
+      emit_verdict();
+      montauk_sink_appendf(&g_out, "\n");
       return;
     }
-    if (floored_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no tick-floored wakeups (>=900us) -- nothing to "
-                  "attribute\n\n");
-      return;
-    }
-    montauk_sink_appendf(&g_out, "VERDICT: %s tick-floored wakes (>=900us); PLACEMENT-MISS %.0f%% "
-                "(idle CPU was free) / SATURATED %.0f%% (all busy); "
-                "avg %.1f idle CPUs free at a miss\n",
-                fmt_count((double)floored_n_).c_str(), miss_pct_, sat_pct_, avg_idle_);
+    emit_verdict();
     montauk_sink_appendf(&g_out, "  (high PLACEMENT-MISS %% = wakees queued behind a busy CPU "
                 "while idle CPUs sat free -- the wakeup-placement race; "
                 "high SATURATED %% = unavoidable queueing, fix the busy CPU)\n");
@@ -3507,6 +3780,29 @@ static void ensure_sched_substrate() {
   g_sched_picks.finalize();
 }
 
+// DRIVER-LEVEL FOLD: everything that must be folded ONCE per event, outside the
+// per-report loop -- the shared sched substrate the reports hold references to,
+// and the capture-loss snapshot.
+//
+// This exists as a function because having it inline in one driver was a defect
+// with teeth. run_digest ran its own fold loop that called only r->fold(), so in
+// the digest the substrate stayed EMPTY and the reports that query it answered
+// from nothing: dispatch-stall reported PREEMPT-STARVED 100% with 0 pass-overs
+// on a trace the --report path reads as ORDER-STARVED 100% with 11.0 average
+// pass-overs and named offenders. Two renderings of one capture, opposite
+// diagnoses, and the wrong one was on the shareable face. Every fold path calls
+// this; adding driver state means adding it here and both paths get it.
+static void fold_driver_state(uint32_t type, const uint8_t* data, uint32_t len) {
+  fold_drop_snapshot(type, data, len);
+  g_sched_holder.fold(type, data, len);
+  if (type == TRACE_EVT_SCHED && len >= sizeof(montauk_sched_event)) {
+    const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    if (s->op == SCHED_OP_CPU_IDLE)
+      g_sched_idle.fold(s->cpu, s->sub_idx, s->timestamp_ns);
+    g_sched_picks.fold(s);
+  }
+}
+
 struct DispatchStallReport final : Report {
   static constexpr uint64_t kTickFloorNs = 900000ULL;
   // pick on a CPU: timestamp, picked pid, LANE (sub_idx: 0=primary, >0=steal), and
@@ -3596,7 +3892,14 @@ struct DispatchStallReport final : Report {
         }
       }
     }
-    if (floored_.empty()) return;
+    // Compose BEFORE the early-out. build_verdict() is the last statement of
+    // this function and already handles the empty case (klass "NONE"), so
+    // returning here skipped it entirely: the text report printed its own
+    // VERDICT line from emit() while the JSON envelope carried nothing but a
+    // name. The 2026-08-03 stability experiment caught it -- 6 of 10 captures
+    // of the same workload published no class at all, which reads as an
+    // unstable report when the report was simply silent.
+    if (floored_.empty()) { build_verdict(); return; }
     ensure_sched_substrate();   // shared: folded and sorted once, not per report
     reconstructed_ = g_sched_picks.reconstructed();
     const auto& src = g_sched_picks.active();
@@ -3737,6 +4040,22 @@ struct DispatchStallReport final : Report {
           (unsigned long long)p99_);
     }
     verdict_ = b;
+    // THE TOKEN THIS ITEM EXISTS FOR. PANDEMONIUM's IPC mechanism inverted from
+    // PREEMPT-STARVED with zero pass-overs to 90% ORDER-STARVED averaging 4.2,
+    // and survived ten days of gated runs because every gate compared numbers
+    // and the numbers barely moved. This is the field that would have failed
+    // the moment the shape moved. MIXED is a real state, not a rounding
+    // artifact: a run genuinely split between the two mechanisms is a different
+    // finding from either pure one.
+    if (floored_.empty()) {
+      res_.klass = "NONE";
+    } else if (preempt_pct_ >= 66.0) {
+      res_.klass = "PREEMPT-STARVED";
+    } else if (order_pct_ >= 66.0) {
+      res_.klass = "ORDER-STARVED";
+    } else {
+      res_.klass = "MIXED";
+    }
     if (have_idle_ && !floored_.empty()) {
       std::snprintf(b, sizeof b, "; %.0f%% DARK (worst %.1fms) / %.0f%% HELD",
                     dark_pct_, (double)worst_dark_ns_ / 1e6, held_pct_);
@@ -3749,6 +4068,9 @@ struct DispatchStallReport final : Report {
           (unsigned long long)censored_n_, (double)worst_censored_ns_ / 1e6);
       verdict_ += b;
     }
+    // Published through the shared slot rather than this report's private
+    // member, so one consumer path reads every report the same way.
+    res_.verdict = verdict_;
   }
 
   // The JSON face carries the verdict string, the per-kthread held_by
@@ -3757,7 +4079,7 @@ struct DispatchStallReport final : Report {
   void json(montauk_json& j) override {
     montauk_json_obj_begin(&j);
     montauk_json_kstr(&j, "name", name());
-    montauk_json_kstr(&j, "verdict", verdict_.c_str());
+    json_conclusion(j);
     if (censored_n_) {
       montauk_json_key(&j, "censored_strands");
       montauk_json_obj_begin(&j);
@@ -4064,18 +4386,31 @@ struct KickLatencyReport final : Report {
     if (!latencies_ns_.empty())
       sublimation_u64(latencies_ns_.data(), latencies_ns_.size());
     sublimation_order_u64(misses_, true, [](const Miss& m) { return m.tickless ? 1u : 0u; });
+
+    // Conclusion composed HERE, not at print time: the --json driver runs
+    // compute() then json() and never calls emit(), so a sentence assembled
+    // inside emit() is invisible to every structured surface.
+    if (kicks_.empty()) {
+      set_verdict("NONE", "no kicks captured (scx_bpf_kick_cpu never fired, or "
+                          "MONTAUK_SCX_STORM off -- the storm probes are not attached)");
+    } else {
+      set_verdict(unanswered_ == 0 ? "ALL-ANSWERED"
+                  : tickless_race_ ? "UNANSWERED-TICKSTOP-RACE"
+                                   : "UNANSWERED",
+          "%" PRIu64 " kicks, %" PRIu64 " unanswered (no resched observed "
+          "before the next kick or trace end), %" PRIu64
+          " of those raced a fresh tick-stop", total_, unanswered_, tickless_race_);
+    }
   }
 
   void emit(const montauk::model::TraceReader&) override {
     header();
     if (kicks_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no kicks captured (scx_bpf_kick_cpu never fired, or "
-                  "MONTAUK_SCX_STORM off -- the storm probes are not attached)\n\n");
+      emit_verdict();
+      montauk_sink_appendf(&g_out, "\n");
       return;
     }
-    montauk_sink_appendf(&g_out, "%" PRIu64 " kicks, %" PRIu64 " unanswered (no resched observed "
-                "before the next kick or trace end), %" PRIu64 " of those raced a fresh tick-stop\n",
-                total_, unanswered_, tickless_race_);
+    montauk_sink_appendf(&g_out, "%s\n", res_.verdict.c_str());
     if (!latencies_ns_.empty()) {
       montauk_sink_appendf(&g_out, "answered kick->resched latency: p50=%.1fus p99=%.1fus worst=%.1fus\n",
                   q_us(latencies_ns_, 0.50), q_us(latencies_ns_, 0.99), q_us(latencies_ns_, 1.0));
@@ -4192,22 +4527,37 @@ struct SliceReport final : Report {
         }
       }
     }
+    compute_verdict();
   }
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
+  void compute_verdict() {
     if (slices_.empty()) {
-      montauk_sink_appendf(&g_out, "VERDICT: no slices (PICK stream absent)\n\n");
+      // Capture limitation, not a finding: the PICK stream needs --sched-detail.
+      set_verdict("NO-PICK-STREAM", "no slices (PICK stream absent)");
       return;
     }
     double mean = 0;
     for (uint64_t s : slices_) mean += (double)s;
     mean /= (double)slices_.size();
-    montauk_sink_appendf(&g_out, "VERDICT: %s dispatched slices; p50 %.1fus p90 %.1fus p99 %.1fus "
-                "worst %.1fus; mean %.1fus\n",
-                fmt_count((double)slices_.size()).c_str(),
-                q_us(slices_, 0.50), q_us(slices_, 0.90), q_us(slices_, 0.99),
-                us(slices_.back()), mean / 1000.0);
+    // The TAIL is the finding, not the median: long slices times pass-over
+    // depth is the saturation tail, and a p99 an order of magnitude past the
+    // p50 is a different regime from one that tracks it.
+    double p50 = q_us(slices_, 0.50), p99 = q_us(slices_, 0.99);
+    set_verdict(p50 > 0.0 && p99 >= 10.0 * p50 ? "HEAVY-TAIL" : "EVEN",
+        "%s dispatched slices; p50 %.1fus p90 %.1fus p99 %.1fus worst %.1fus; "
+        "mean %.1fus",
+        fmt_count((double)slices_.size()).c_str(),
+        p50, q_us(slices_, 0.90), p99, us(slices_.back()), mean / 1000.0);
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (slices_.empty()) {
+      emit_verdict();
+      montauk_sink_appendf(&g_out, "\n");
+      return;
+    }
+    emit_verdict();
     montauk_sink_appendf(&g_out, "  (long slices x pass-over depth = the saturation tail; a "
                 "shorter effective slice drains a deep runqueue faster)\n");
     if (traj_ok_) {
@@ -4283,7 +4633,10 @@ struct StormReport final : Report {
   // Derive storm rate/peak/percent once so prom()/offenders() are correct in the
   // digest path (which calls compute() but not emit()). emit() renders.
   void compute() override {
-    if (samples_.empty() || tot_ms_ == 0) return;
+    // Verdict FIRST on the empty path: an early return here used to skip
+    // composition entirely, and because emit() prints the stored string the
+    // report rendered a bare "VERDICT:" with nothing after it.
+    if (samples_.empty() || tot_ms_ == 0) { compute_verdict(); return; }
     std::vector<uint64_t> rr;
     rr.reserve(samples_.size());
     size_t storm_intervals = 0;
@@ -4297,13 +4650,13 @@ struct StormReport final : Report {
     sublimation_u64(rr.data(), rr.size());
     peak_reenq_rate_ = (double)rr.back();
     p50_reenq_ = (double)q_at(rr, 0.50);
+    compute_verdict();
   }
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
+  void compute_verdict() {
     if (samples_.empty() || tot_ms_ == 0) {
-      montauk_sink_appendf(&g_out, "VERDICT: no sched_ext kick activity captured (non-scx scheduler, "
-                  "or no cpu_release storm)\n\n");
+      set_verdict("NONE", "no sched_ext kick activity captured (non-scx scheduler, "
+                          "or no cpu_release storm)");
       return;
     }
     double secs = (double)tot_ms_ / 1000.0;
@@ -4311,11 +4664,28 @@ struct StormReport final : Report {
     const char* kind = storm_intervals_ == 0 ? "clean -- no storm intervals"
                        : real_ipi ? "REAL IPI storm (preempt-kick dominant)"
                                   : "IDLE re-enqueue churn (kicks no-op on busy CPUs)";
-    montauk_sink_appendf(&g_out, "VERDICT: %s; storm %zu/%zu intervals (%.1f%%); reenq/s p50=%.0f "
-                "peak=%.0f; kick/s=%.0f (preempt %.0f) reenq/s=%.0f\n",
-                kind, storm_intervals_, samples_.size(), storm_pct_,
-                p50_reenq_, peak_reenq_rate_, (double)tot_kicks_ / secs,
-                (double)tot_preempt_ / secs, (double)tot_reenq_ / secs);
+    // The two storm kinds are DIFFERENT DEFECTS, not degrees of one: a real IPI
+    // storm burns interrupts, idle churn burns nothing and means the kicks are
+    // no-ops. A golden that could not tell them apart would miss the transition
+    // between them entirely.
+    set_verdict(storm_intervals_ == 0 ? "CLEAN"
+                : real_ipi            ? "REAL-IPI-STORM"
+                                      : "IDLE-REENQUEUE-CHURN",
+        "%s; storm %zu/%zu intervals (%.1f%%); reenq/s p50=%.0f peak=%.0f; "
+        "kick/s=%.0f (preempt %.0f) reenq/s=%.0f",
+        kind, storm_intervals_, samples_.size(), storm_pct_,
+        p50_reenq_, peak_reenq_rate_, (double)tot_kicks_ / secs,
+        (double)tot_preempt_ / secs, (double)tot_reenq_ / secs);
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (samples_.empty() || tot_ms_ == 0) {
+      emit_verdict();
+      montauk_sink_appendf(&g_out, "\n");
+      return;
+    }
+    emit_verdict();
     montauk_sink_appendf(&g_out, "  (storm interval = reenqueue rate >= %.0f/s; REAL when preempt-kicks "
                 ">= %.0f%% of reenqueues)\n\n", kStormReenqPerS, kHardFrac * 100.0);
   }
@@ -4476,7 +4846,11 @@ struct WakersReport final : Report {
   bool have_ = false;
 
   void compute() override {
-    if (wake_count_.empty()) return;
+    if (wake_count_.empty()) {
+      set_verdict("NO-WAKER-EDGES", "no waker edges (pre-v7.9.0 trace -- sched_wakeup did "
+                                    "not stamp the waker); re-capture to resolve");
+      return;
+    }
     uint64_t sum = 0; for (auto& kv : wake_count_) sum += kv.second;
     double mean = (double)sum / (double)wake_count_.size();
     thresh_ = (uint64_t)(mean * 8.0); if (thresh_ < 8) thresh_ = 8;
@@ -4501,20 +4875,30 @@ struct WakersReport final : Report {
     sublimation_u64(msg_.data(), msg_.size());
     sublimation_u64(wrk_.data(), wrk_.size());
     have_ = true;
+    // MESSENGER-CLIFF is this report's whole reason to exist: when the
+    // messenger tail dwarfs the worker tail, the latency lives on the WAKER's
+    // critical path and the fix is to protect the wakers rather than
+    // deprioritize them. That is the same threshold offenders() already uses to
+    // decide whether the hot wakers are culprits at all.
+    double mp99 = msg_.empty() ? 0.0 : q_us(msg_, 0.99);
+    double wp99 = wrk_.empty() ? 0.0 : q_us(wrk_, 0.99);
+    set_verdict(mp99 > 0.0 && wp99 > 0.0 && mp99 >= 2.0 * wp99 ? "MESSENGER-CLIFF"
+                : hot_.empty()                                 ? "NO-HOT-WAKERS"
+                                                               : "HOT-WAKERS",
+        "%s waker pids, %s hot (messengers, >=%llu wakes); %s total wakes",
+        fmt_count((double)wake_count_.size()).c_str(),
+        fmt_count((double)hot_.size()).c_str(),
+        (unsigned long long)thresh_, fmt_count((double)total_wakes_).c_str());
   }
 
   void emit(const montauk::model::TraceReader&) override {
     header();
     if (!have_) {
-      montauk_sink_appendf(&g_out, "VERDICT: no waker edges (pre-v7.9.0 trace -- sched_wakeup did "
-                  "not stamp the waker); re-capture to resolve\n\n");
+      emit_verdict();
+      montauk_sink_appendf(&g_out, "\n");
       return;
     }
-    montauk_sink_appendf(&g_out, "VERDICT: %s waker pids, %s hot (messengers, >=%llu wakes); "
-                "%s total wakes\n",
-                fmt_count((double)wake_count_.size()).c_str(),
-                fmt_count((double)hot_.size()).c_str(),
-                (unsigned long long)thresh_, fmt_count((double)total_wakes_).c_str());
+    emit_verdict();
     montauk_sink_appendf(&g_out, "  MESSENGER wake2run (%s samples): p50 %.0fus p99 %.0fus "
                 "p999 %.0fus\n", fmt_count((double)msg_.size()).c_str(),
                 q_us(msg_, 0.50), q_us(msg_, 0.99), q_us(msg_, 0.999));
@@ -4761,6 +5145,26 @@ struct KStrandReport final : Report {
       if (idle * 2 >= e.lat) a.dark++;
       else { a.held++; if (e.lat > worst_held_ns_) worst_held_ns_ = e.lat; }
     }
+    // ONE conclusion string. This report previously composed a verdict twice --
+    // once in emit() for text and a shorter one in json() -- so the two faces
+    // disagreed about what it concluded. The text keeps its own detail block
+    // (it has no VERDICT line in the non-empty case and byte-identity forbids
+    // adding one); the slot carries the summary both structured faces read.
+    if (evs_.empty()) {
+      set_verdict("NO-STRAND", "no per-CPU kthread strands over threshold "
+                               "(no I/O-completion starvation captured)");
+    } else {
+      uint64_t held = 0, dark = 0;
+      for (const auto& kv : by_comm_) { held += kv.second.held; dark += kv.second.dark; }
+      // HELD and DARK are different failures: HELD means the CPU was busy
+      // through the wait (an I/O-completion freeze), DARK means it sat idle
+      // (a dispatch miss). A strand count that stays put while the split
+      // inverts is exactly what a numeric gate cannot see.
+      set_verdict(held > dark ? "STRAND-HELD" : dark ? "STRAND-DARK" : "STRAND",
+          "%zu strands across %zu per-CPU kthreads; worst HELD strand %.1fms "
+          "(I/O-completion freeze signature)",
+          static_cast<size_t>(total_), by_comm_.size(), ms(worst_held_ns_));
+    }
   }
 
   void emit(const montauk::model::TraceReader&) override {
@@ -4809,19 +5213,12 @@ struct KStrandReport final : Report {
   void json(montauk_json& j) override {
     montauk_json_obj_begin(&j);
     montauk_json_kstr(&j, "name", name());
+    json_conclusion(j);
     if (evs_.empty()) {
-      montauk_json_kstr(&j, "verdict",
-          "no per-CPU kthread strands over threshold");
       json_gauges(j);
       montauk_json_obj_end(&j);
       return;
     }
-    char vb[256];
-    std::snprintf(vb, sizeof vb,
-        "%zu strands across %zu per-CPU kthreads; worst HELD strand %.1fms "
-        "(I/O-completion freeze signature)",
-        static_cast<size_t>(total_), by_comm_.size(), ms(worst_held_ns_));
-    montauk_json_kstr(&j, "verdict", vb);
     std::vector<std::pair<std::string, Agg*>> rows;
     rows.reserve(by_comm_.size());
     for (auto& kv : by_comm_) rows.push_back({kv.first, &kv.second});
@@ -4996,16 +5393,55 @@ class LocalityReport : public Report {
     ++tier_[t];
   }
 
-  void emit(const montauk::model::TraceReader&) override {
-    header();
+  // Everything the conclusion needs comes from tier_/have_topo_, so it composes
+  // here rather than mid-print: the --json driver never calls emit().
+  void compute() override {
     if (!have_topo_) {
-      montauk_sink_appendf(&g_out, "VERDICT: no cache_topology snapshot in the trace -- cannot map "
-                  "migration distance (recapture with montauk >= 7.8.0)\n\n");
+      // A CAPTURE limitation, not a finding. Distinct from NONE (topology
+      // present, nothing migrated) because one says "recapture" and the other
+      // says "this run was clean" -- collapsing them would make a golden read
+      // an unreadable trace as a passing one.
+      set_verdict("NO-TOPOLOGY", "no cache_topology snapshot in the trace -- cannot map "
+                                 "migration distance (recapture with montauk >= 7.8.0)");
       return;
     }
     uint64_t cl = tier_[0] + tier_[1] + tier_[2] + tier_[3];
     if (cl == 0) {
-      montauk_sink_appendf(&g_out, "VERDICT: no cross-CPU migrations captured\n\n");
+      set_verdict("NONE", "no cross-CPU migrations captured");
+      return;
+    }
+    bool mono = true;
+    uint64_t prev = 0;
+    bool seen = false;
+    for (int t = 0; t < 4; t++) {
+      if (!seen && tier_[t] == 0) continue;
+      if (seen && tier_[t] > prev) { mono = false; break; }
+      prev = tier_[t];
+      seen = true;
+    }
+    double local_pct =
+        100.0 * static_cast<double>(tier_[0] + tier_[1]) / static_cast<double>(cl);
+    // SCATTERED is the finding that matters: density failing to decay with
+    // distance means placement is ignoring the cache hierarchy, which is a
+    // different defect from merely migrating a lot while staying local.
+    set_verdict(!mono ? "SCATTERED" : (local_pct >= 90.0 ? "CACHE-LOCAL" : "SPREAD"),
+        "%.1f%% of migrations stay cache-local (same-L2/L3); density %s",
+        local_pct,
+        mono ? "decays with distance (locality preserved)"
+             : "does NOT decay with distance (placement scatters across domains)");
+  }
+
+  void emit(const montauk::model::TraceReader&) override {
+    header();
+    if (!have_topo_) {
+      emit_verdict();
+      montauk_sink_appendf(&g_out, "\n");
+      return;
+    }
+    uint64_t cl = tier_[0] + tier_[1] + tier_[2] + tier_[3];
+    if (cl == 0) {
+      emit_verdict();
+      montauk_sink_appendf(&g_out, "\n");
       return;
     }
     montauk_sink_appendf(&g_out, "%" PRIu64 " migrations (%" PRIu64 " unmapped)\n", migrations_, unmapped_);
@@ -5055,24 +5491,8 @@ class LocalityReport : public Report {
     // (e.g. same-L2 on a no-SMT part, where no two cores share L2) is not scatter
     // -- it just doesn't exist on that hardware. Skip leading empties, then density
     // must be non-increasing with distance.
-    bool mono = true;
-    uint64_t prev = 0;
-    bool seen = false;
-    for (int t = 0; t < 4; t++) {
-      if (!seen && tier_[t] == 0) continue;
-      if (seen && tier_[t] > prev) {
-        mono = false;
-        break;
-      }
-      prev = tier_[t];
-      seen = true;
-    }
-    double local_pct =
-        100.0 * static_cast<double>(tier_[0] + tier_[1]) / static_cast<double>(cl);
-    montauk_sink_appendf(&g_out, "VERDICT: %.1f%% of migrations stay cache-local (same-L2/L3); density %s\n\n",
-                local_pct,
-                mono ? "decays with distance (locality preserved)"
-                     : "does NOT decay with distance (placement scatters across domains)");
+    emit_verdict();
+    montauk_sink_appendf(&g_out, "\n");
   }
 
   void prom(std::vector<PromMetric>& out) override {
@@ -5384,7 +5804,6 @@ struct SeatReport final : Report {
 
   struct Row { int pid; uint64_t stints, wakes; double ratio, dom; uint32_t cpu; };
   std::vector<Row> rows_;
-  ReportResult r_;
   bool computed_ = false;
 
   const char* name() const override { return "seat"; }
@@ -5429,15 +5848,17 @@ struct SeatReport final : Report {
     std::snprintf(v, sizeof(v),
         "%zu ranked pids, %zu self-preempting (stints/wakes > 1.5); "
         "floored-wake share %.1f%%", rows_.size(), sp, floored * 100.0);
-    r_.verdict = v;
-    r_.gauges.push_back({"montauk_analysis_seat_floored_wake_ratio", "", floored});
-    r_.gauges.push_back(
+    // The comparable token beside the sentence: what a golden diffs. The
+    // sentence carries three moving numbers and would flap on any of them.
+    set_verdict(sp ? "SELF-PREEMPTING" : (rows_.empty() ? "NONE" : "SEATED"), "%s", v);
+    res_.gauges.push_back({"montauk_analysis_seat_floored_wake_ratio", "", floored});
+    res_.gauges.push_back(
         {"montauk_analysis_seat_self_preempting", "", static_cast<double>(sp)});
     size_t k = 0;
     for (const auto& row : rows_) {
       if (row.ratio <= 1.5 || k >= 8) break;
       int sev = row.ratio > 4.0 ? 2 : (row.ratio > 2.0 ? 1 : 0);
-      r_.offenders.push_back({"self-preempt", "tid=" + std::to_string(row.pid),
+      res_.offenders.push_back({"self-preempt", "tid=" + std::to_string(row.pid),
                               "", "stint_wake_ratio", row.ratio, sev});
       ++k;
     }
@@ -5452,7 +5873,7 @@ struct SeatReport final : Report {
       montauk_sink_appendf(&g_out, "VERDICT: no SWITCH_IN stints to rank\n\n");
       return;
     }
-    montauk_sink_appendf(&g_out, "VERDICT: %s\n", r_.verdict.c_str());
+    emit_verdict();
     size_t k = 0;
     for (const auto& row : rows_) {
       if (row.ratio <= 1.5 || k >= 8) break;
@@ -5469,11 +5890,11 @@ struct SeatReport final : Report {
 
   void prom(std::vector<PromMetric>& out) override {
     ensure();
-    for (const auto& g : r_.gauges) out.push_back(g);
+    for (const auto& g : res_.gauges) out.push_back(g);
   }
   void offenders(std::vector<Offender>& out) override {
     ensure();
-    for (const auto& o : r_.offenders) out.push_back(o);
+    for (const auto& o : res_.offenders) out.push_back(o);
   }
 };
 
@@ -5540,10 +5961,10 @@ struct MatrixProfileReport final : Report {
     motif_nn_ = mpi[mbin];
     motif_dist_ = mp[mbin];
     mean_mp_ = sum / static_cast<double>(L);
-    r_.gauges.push_back(
+    res_.gauges.push_back(
         {"montauk_analysis_matrix_profile_discord_score", "", discord_score_});
-    r_.gauges.push_back({"montauk_analysis_matrix_profile_mean", "", mean_mp_});
-    r_.gauges.push_back({"montauk_analysis_matrix_profile_discord_ms", "",
+    res_.gauges.push_back({"montauk_analysis_matrix_profile_mean", "", mean_mp_});
+    res_.gauges.push_back({"montauk_analysis_matrix_profile_discord_ms", "",
                          static_cast<double>(discord_bin_) * bin_ms_});
   }
 
@@ -5569,7 +5990,7 @@ struct MatrixProfileReport final : Report {
 
   void prom(std::vector<PromMetric>& out) override {
     ensure();
-    for (const auto& g : r_.gauges) out.push_back(g);
+    for (const auto& g : res_.gauges) out.push_back(g);
   }
 
   // The discord IS the anomaly -- the window whose nearest neighbour is furthest
@@ -5698,8 +6119,21 @@ void emit_offenders_text(const std::vector<Offender>& offs,
 // The JSON envelope for --digest --json: the same data the text digest reads
 // (SystemInfo/ScxStability/ThermalPower/HotCpu/Offender/Report::json()), one
 // parse per source, two renderings -- same discipline as --report --json.
+// The reports whose FULL text leads KEY METRICS. Deliberately a short list and
+// not "every report with a finding": the digest is the one-call shareable
+// report and is KB-scale by design, so widening it is a product decision rather
+// than a cleanup. The name test used to be spelled inline in two places and
+// drifting between them was a live hazard; this is the one place to edit.
+// The JSON envelope no longer needs it -- it carries EVERY report's conclusion
+// compactly instead, which is what retires the hardcoding for a consumer.
+constexpr const char* kDigestHeadline[] = {"sched", "dispatch-stall", "kstrand"};
+inline bool is_digest_headline(const char* n) {
+  for (const char* h : kDigestHeadline) if (std::string(n) == h) return true;
+  return false;
+}
+
 void emit_digest_json(const std::string& dir, bool have_events,
-                       const std::string& events_path,
+                       const std::string& events_path, uint64_t events_observed,
                        const std::vector<std::unique_ptr<Report>>& reports,
                        const std::vector<Offender>& offs,
                        const montauk::pop::HotCpu& hot) {
@@ -5718,6 +6152,19 @@ void emit_digest_json(const std::string& dir, bool have_events,
       // Name the layout so a consumer that got has_events:false knows what was
       // looked for -- the <dir>.events sibling or the in-dir events.bin.
       montauk_json_kstr(&j, "events_path", events_path.c_str());
+      // Loss beside the data it qualifies, the same numbers the text block
+      // prints. Emitted only when a drop snapshot exists: a capture predating
+      // drop accounting reports NOTHING here rather than a zero, because absence
+      // of the counter is not evidence of a lossless capture and a consumer must
+      // be able to tell those apart.
+      if (have_events) {
+        montauk_json_ku64(&j, "events_observed", events_observed);
+        if (g_drop_seen) {
+          montauk_json_ku64(&j, "dropped_events", drops_total());
+          montauk_json_knum(&j, "capture_completeness",
+                            capture_completeness(events_observed));
+        }
+      }
     montauk_json_obj_end(&j);
 
     if (sys.found) {
@@ -5807,10 +6254,25 @@ void emit_digest_json(const std::string& dir, bool have_events,
       montauk_json_key(&j, "reports");
       montauk_json_arr_begin(&j);
         for (auto& r : reports)
-          if (std::string(r->name()) == "sched" ||
-              std::string(r->name()) == "dispatch-stall" ||
-              std::string(r->name()) == "kstrand")
-            r->json(j);
+          if (is_digest_headline(r->name())) r->json(j);
+      montauk_json_arr_end(&j);
+
+      // EVERY report's conclusion, compactly. This is what retires the
+      // hardcoded selection for a structured consumer: instead of montauk
+      // choosing which three conclusions matter on the caller's behalf, the
+      // caller gets all of them as {name, class, verdict} and selects for its
+      // own audience. Costs a few hundred bytes against a KB-scale digest.
+      montauk_json_key(&j, "conclusions");
+      montauk_json_arr_begin(&j);
+        for (auto& r : reports) {
+          const ReportResult& rr = r->result_base();
+          if (rr.klass.empty() && rr.verdict.empty()) continue;
+          montauk_json_obj_begin(&j);
+          montauk_json_kstr(&j, "name", r->name());
+          if (!rr.klass.empty()) montauk_json_kstr(&j, "class", rr.klass.c_str());
+          if (!rr.verdict.empty()) montauk_json_kstr(&j, "verdict", rr.verdict.c_str());
+          montauk_json_obj_end(&j);
+        }
       montauk_json_arr_end(&j);
     }
   montauk_json_obj_end(&j);
@@ -5848,6 +6310,11 @@ int run_digest(const std::string& dir, bool redact, bool want_json) {
   auto reports = make_reports();
   if (have_events) {
     (void)reader.for_each([&](uint32_t t, const uint8_t* d, uint32_t l) {
+      // The SAME driver-level fold the --report path runs. The digest used to
+      // call only r->fold(), which left both the drop accounting and the shared
+      // sched substrate empty -- so it under-reported loss as absent and
+      // mis-diagnosed dispatch stalls from a substrate with nothing in it.
+      fold_driver_state(t, d, l);
       for (auto& r : reports) r->fold(t, d, l);
     });
     for (auto& r : reports) r->compute();  // finalize typed results once, before any renderer
@@ -5870,7 +6337,8 @@ int run_digest(const std::string& dir, bool redact, bool want_json) {
     // When nothing opened, report the layouts that were tried, not a bare path.
     std::string events_path = have_events ? events
                                           : (base + ".events | " + base + "/events.bin");
-    emit_digest_json(dir, have_events, events_path, reports, offs, hot);
+    emit_digest_json(dir, have_events, events_path, reader.events_read(),
+                     reports, offs, hot);
     return 0;
   }
 
@@ -5889,11 +6357,13 @@ int run_digest(const std::string& dir, bool redact, bool want_json) {
   emit_offenders_text(offs, prom);
 
   if (have_events) {
+    // Directly above the quantiles it qualifies: a p99 read off a 5.7%-complete
+    // capture is a different claim from one read off a whole stream, and the
+    // reader of a shared digest has no other way to know which they hold.
+    emit_capture_loss(reader.events_read(), prom);
     montauk_sink_appendf(&g_out, "\nKEY METRICS\n");
     for (auto& r : reports)
-      if (std::string(r->name()) == "sched" ||
-          std::string(r->name()) == "dispatch-stall" ||
-          std::string(r->name()) == "kstrand") {
+      if (is_digest_headline(r->name())) {
         r->emit(reader);
         r->prom(prom);
       }
@@ -5914,11 +6384,694 @@ int run_digest(const std::string& dir, bool redact, bool want_json) {
   return 0;
 }
 
-} // namespace
-
 #ifndef MONTAUK_VERSION
 #define MONTAUK_VERSION "unknown"
 #endif
+
+// BEHAVIORAL GOLDENS
+//
+// Two lanes with separate flags, because they fail for different reasons and
+// the difference IS the diagnosis. --functional freezes each report's
+// CATEGORICAL class and compares it EXACTLY: a classification does not drift,
+// PREEMPT-STARVED either still holds or it does not. --performance freezes
+// named numeric gauges with a tolerance band and an absolute floor; it is a
+// baseline gate, not a golden. A number moving 8% with the class unchanged is
+// tuning. The class flipping with the number unchanged is a different bug
+// wearing the same p99 -- which is the failure this exists for.
+//
+// THE FILE IS LINE-ORIENTED TEXT, NOT JSON, for two reasons. montauk writes
+// JSON and never parses it -- the serializer in util/json.h is write-only by
+// design, and a golden the tool must READ would put a parser in the one place
+// the discipline forbids. And a golden is a file a human reviews in a diff: the
+// --json envelope is a single line, so a one-token change shows as the whole
+// file rewritten. Here one frozen fact is one line, so `git diff` names exactly
+// what moved. montauk already reads a line-oriented format (.prom), so this is
+// the codebase's existing shape rather than a new one.
+//
+// Every line is `KEY REST`. Unknown keys are an ERROR, not a skip: a golden
+// with a line this build cannot interpret is a golden whose meaning is unknown,
+// and silently comparing the subset it does understand is how a gate comes to
+// pass while checking nothing.
+
+// A frozen numeric gauge. The band is max(tolerance_pct% of golden, floor).
+// The floor is not decoration: a percentage band alone trips on noise over
+// small values, which is how these gates come to be ignored.
+struct GoldenGauge {
+  std::string key;        // name{labels} -- the pair, never the name alone
+  double value = 0.0;
+  double tol_pct = 0.0;
+  double floor = 0.0;
+  std::string tier;       // deterministic | statistical
+  // HOW THE VALUE WAS REDUCED FROM ITS SOURCE, recorded rather than assumed.
+  // A single trace's report gauges are single-valued, so `point`. A RECORDING
+  // holds many scrapes over time, so a gauge from that source is a SERIES and
+  // freezing one is a choice: `last` for a cumulative counter (the run total),
+  // `mean` for an instantaneous gauge (freezing `max` would freeze the noisiest
+  // single scrape). A checker must apply the SAME reduction it froze, so the
+  // file carries it.
+  std::string reduction;  // point | last | mean | max | min
+};
+
+struct Golden {
+  int version = 0;
+  std::string workload;         // operator label; identity, and a mismatch refuses
+  std::string montauk_version;  // recorded, never compared (see parity_check.py)
+  std::string env_kernel, env_cpu, env_cores;
+  std::string completeness;     // "unknown", or the fraction as text
+  std::vector<std::pair<std::string, std::string>> classes;  // name -> class
+  // Reports NOT frozen because their class was a capture limitation. Recorded
+  // rather than refused: a limitation is a fact ABOUT THE CAPTURE, and an
+  // artifact that names what it could not freeze is more useful than no
+  // artifact at all.
+  std::vector<std::pair<std::string, std::string>> skipped;  // name -> token
+  std::vector<GoldenGauge> gauges;
+};
+
+// GAUGE KEYS ARE (NAME, LABELS). montauk_analysis_locality_tier_moves appears
+// four times with tier="same_l2"/"same_l3"/"same_socket"/"cross_socket"; a
+// tolerance addresses the pair, not the name.
+static std::string gauge_key(const PromMetric& m) {
+  std::string k = m.name;
+  if (!m.labels.empty()) k += "{" + m.labels + "}";
+  return k;
+}
+
+// A capture limitation is not a finding, and freezing one freezes the CAPTURE's
+// shape rather than the workload's. NO-STRAND and NO-HOT-WAKERS are absent on
+// purpose: those are real clean results, so a "NO-" prefix rule would be wrong.
+static bool is_capture_limitation(const std::string& klass) {
+  static constexpr const char* kLimits[] = {
+    "NO-TOPOLOGY", "NO-PICK-STREAM", "NO-IDLE-STREAM", "NO-WAKER-EDGES"
+  };
+  for (const char* l : kLimits) if (klass == l) return true;
+  return false;
+}
+
+// THE FINGERPRINT IS WEAKER THAN IT LOOKS and is treated that way: it is read
+// at FREEZE time on the freezing machine, which is not necessarily the machine
+// that produced the capture. A mismatch WARNS rather than fails -- a kernel bump
+// is news, not a regression.
+static std::string read_first_line(const char* path, const char* prefix) {
+  std::ifstream f(path);
+  std::string line;
+  while (std::getline(f, line)) {
+    if (!prefix) return line;
+    if (line.rfind(prefix, 0) != 0) continue;
+    size_t c = line.find(':');
+    if (c == std::string::npos) return line;
+    size_t v = line.find_first_not_of(" \t", c + 1);
+    return v == std::string::npos ? std::string() : line.substr(v);
+  }
+  return {};
+}
+
+static void fill_environment(Golden& g) {
+  g.env_kernel = read_first_line("/proc/sys/kernel/osrelease", nullptr);
+  g.env_cpu = read_first_line("/proc/cpuinfo", "model name");
+  long n = ::sysconf(_SC_NPROCESSORS_ONLN);
+  if (n > 0) g.env_cores = std::to_string(n);
+}
+
+static bool parse_double(const std::string& s, double* out) {
+  char* end = nullptr;
+  const char* c = s.c_str();
+  double v = std::strtod(c, &end);
+  if (end == c || *end != '\0') return false;
+  *out = v;
+  return true;
+}
+
+// Split off the first whitespace-delimited token; REST keeps its interior
+// spaces, which matters because a CPU model and a label set both contain them.
+static bool split_key(const std::string& line, std::string* key, std::string* rest) {
+  size_t s = line.find_first_not_of(" \t");
+  if (s == std::string::npos) return false;
+  size_t e = line.find_first_of(" \t", s);
+  *key = line.substr(s, e == std::string::npos ? std::string::npos : e - s);
+  if (e == std::string::npos) { rest->clear(); return true; }
+  size_t v = line.find_first_not_of(" \t", e);
+  *rest = v == std::string::npos ? std::string() : line.substr(v);
+  return true;
+}
+
+// 2: gauge lines carry their REDUCTION. Bumped rather than defaulted, because
+// a v1 gauge line has no way to say whether its number is a point, a run total
+// or a mean, and silently guessing on the checker's behalf is the class of
+// thing this whole surface exists to prevent.
+static constexpr int kGoldenFormat = 2;
+
+static bool read_golden(const std::string& path, Golden& g) {
+  std::ifstream f(path);
+  if (!f) { log_error("cannot open golden '%s'", path.c_str()); return false; }
+  std::string line;
+  int lineno = 0;
+  while (std::getline(f, line)) {
+    ++lineno;
+    if (line.empty() || line[0] == '#') continue;
+    std::string key, rest;
+    if (!split_key(line, &key, &rest)) continue;
+    if (key == "golden_version") {
+      g.version = std::atoi(rest.c_str());
+    } else if (key == "workload") {
+      g.workload = rest;
+    } else if (key == "montauk_version") {
+      g.montauk_version = rest;
+    } else if (key == "completeness") {
+      g.completeness = rest;
+    } else if (key == "env") {
+      std::string what, val;
+      split_key(rest, &what, &val);
+      if (what == "kernel") g.env_kernel = val;
+      else if (what == "cpu") g.env_cpu = val;
+      else if (what == "cores") g.env_cores = val;
+      else { log_error("%s:%d: unknown env field '%s'", path.c_str(), lineno,
+                       what.c_str()); return false; }
+    } else if (key == "skipped") {
+      std::string name, tok;
+      split_key(rest, &name, &tok);
+      if (name.empty() || tok.empty()) {
+        log_error("%s:%d: skipped needs REPORT and TOKEN", path.c_str(), lineno);
+        return false;
+      }
+      g.skipped.push_back({name, tok});
+    } else if (key == "class") {
+      std::string name, klass;
+      split_key(rest, &name, &klass);
+      if (name.empty() || klass.empty()) {
+        log_error("%s:%d: class needs REPORT and TOKEN", path.c_str(), lineno);
+        return false;
+      }
+      g.classes.push_back({name, klass});
+    } else if (key == "gauge") {
+      // gauge TIER REDUCTION TOL_PCT FLOOR VALUE KEY...  -- KEY last, because
+      // it carries the label set and therefore embedded spaces and quotes.
+      GoldenGauge gg;
+      std::string r = rest, tolS, floorS, valS;
+      split_key(r, &gg.tier, &r);
+      split_key(r, &gg.reduction, &r);
+      split_key(r, &tolS, &r);
+      split_key(r, &floorS, &r);
+      split_key(r, &valS, &gg.key);
+      if (gg.key.empty() || !parse_double(tolS, &gg.tol_pct) ||
+          !parse_double(floorS, &gg.floor) || !parse_double(valS, &gg.value)) {
+        log_error("%s:%d: gauge needs TIER REDUCTION TOL_PCT FLOOR VALUE KEY",
+                  path.c_str(), lineno);
+        return false;
+      }
+      if (gg.reduction != "point" && gg.reduction != "last" &&
+          gg.reduction != "mean" && gg.reduction != "max" &&
+          gg.reduction != "min") {
+        log_error("%s:%d: unknown reduction '%s' (point|last|mean|max|min)",
+                  path.c_str(), lineno, gg.reduction.c_str());
+        return false;
+      }
+      g.gauges.push_back(gg);
+    } else {
+      log_error("%s:%d: unknown key '%s' -- this build cannot interpret the "
+                "whole golden, so it will not compare part of it",
+                path.c_str(), lineno, key.c_str());
+      return false;
+    }
+  }
+  if (g.version != kGoldenFormat) {
+    log_error("%s: golden_version %d, this build writes %d. Re-freeze it: "
+              "--golden %s --update --label NAME (v2 added the per-gauge "
+              "REDUCTION field, which a v1 line cannot express)",
+              path.c_str(), g.version, kGoldenFormat, path.c_str());
+    return false;
+  }
+  if (g.workload.empty()) {
+    log_error("%s: no workload label -- a golden with no identity cannot be "
+              "matched to a run", path.c_str());
+    return false;
+  }
+  return true;
+}
+
+// COMPLETENESS GATES BOTH DIRECTIONS, and it lives in one function because the
+// first cut gated only the CHECK. That asymmetry is backwards and it shipped:
+// the same recording froze with rc 0 and then declined on check with rc 2, so
+// montauk refused to COMPARE data it did not trust and then happily CANONIZED
+// it. A declined check wastes one run; a poisoned baseline silently invalidates
+// every future one, and surfaces later as "why does every check decline" rather
+// than "this golden was never valid".
+//
+// Worse in kind: a golden frozen from a lossy capture still produces plausible
+// CLASSES. A real adoption run had eleven of twelve tokens hold across ten
+// recordings that saw 5.9%-30% of the workload -- a set that looked stable and
+// reportable, where the stability was indistinguishable from consistently
+// dropping the same events. Bad input produced a confident answer, which is the
+// one thing a gate exists to prevent.
+//
+// `action` is "freeze" or "compare", so the message names what is being refused.
+static int completeness_gate(uint64_t observed, bool allow_unknown,
+                             const char* action) {
+  if (!g_drop_seen) {
+    if (!allow_unknown) {
+      log_error("DECLINED: will not %s -- capture completeness is UNKNOWN (no "
+                "drop snapshot; this capture predates drop accounting). Absence "
+                "of the counter is not evidence of a lossless capture, and "
+                "unknown is not whole. Re-capture, or pass --allow-unknown",
+                action);
+      return 2;
+    }
+    log_warn("capture completeness UNKNOWN, %s anyway (--allow-unknown)", action);
+    return 0;
+  }
+  const double c = capture_completeness(observed);
+  if (c < 0.95) {
+    if (!allow_unknown) {
+      log_error("DECLINED: will not %s -- capture is %.4f%% complete (%" PRIu64
+                " event(s) dropped at the ring). Loss lands in the busy windows, "
+                "so tail quantiles are biased downward and absence-of-anomaly "
+                "classes are qualified rather than clean. Pass --allow-unknown "
+                "to override deliberately",
+                action, c * 100.0, drops_total());
+      return 2;
+    }
+    log_warn("capture is %.4f%% complete, %s anyway (--allow-unknown)",
+             c * 100.0, action);
+  }
+  return 0;
+}
+
+// Freeze. Returns 0, or 2 on a refusal -- and the refusals are the design: a
+// golden that blesses a capture limitation or a missing class is a gate that
+// passes while checking nothing.
+static int write_golden(const std::string& path, const std::string& label,
+                        const std::vector<Report*>& active,
+                        const std::vector<PromMetric>& prom,
+                        const std::vector<std::string>& watch,
+                        double tol_pct, double floor, uint64_t observed,
+                        bool allow_unknown,
+                        const std::vector<std::string>& reductions = {}) {
+  if (int rc = completeness_gate(observed, allow_unknown, "freeze")) return rc;
+  std::string body;
+  body += "# montauk behavioral golden -- one frozen fact per line.\n";
+  body += "# Hand-editable: per-key tolerance is editing one gauge line.\n";
+  body += "golden_version " + std::to_string(kGoldenFormat) + "\n";
+  body += "workload " + label + "\n";
+  body += "montauk_version " MONTAUK_VERSION "\n";
+  Golden env;
+  fill_environment(env);
+  if (!env.env_kernel.empty()) body += "env kernel " + env.env_kernel + "\n";
+  if (!env.env_cpu.empty()) body += "env cpu " + env.env_cpu + "\n";
+  if (!env.env_cores.empty()) body += "env cores " + env.env_cores + "\n";
+
+  // Completeness has THREE states and the third is recorded, not flattened.
+  // It is emitted only when a drop snapshot exists, so absence means the
+  // capture predates drop accounting -- which correlates with the older
+  // captures most likely to BE lossy. "unknown" is its own value.
+  char cbuf[64];
+  if (g_drop_seen) std::snprintf(cbuf, sizeof cbuf, "%.6f",
+                                 capture_completeness(observed));
+  else std::snprintf(cbuf, sizeof cbuf, "unknown");
+  body += std::string("completeness ") + cbuf + "\n";
+
+  int frozen = 0, skipped = 0;
+  for (Report* r : active) {
+    const ReportResult& rr = r->result_base();
+    if (rr.klass.empty()) continue;  // a report outside the classed set
+    if (is_capture_limitation(rr.klass)) {
+      // NOT FROZEN, AND NOT FATAL. This used to abort the whole freeze and
+      // recommend --report as the escape -- which was broken in recording-dir
+      // mode, so a workload with a structurally capture-limited report could not
+      // be frozen by any route. Re-capturing cannot fix a property of the
+      // workload, so refusing forever was the wrong answer. The skip goes IN the
+      // artifact with its token, so a reader sees what was not covered instead
+      // of inferring it from an absence.
+      body += std::string("skipped ") + r->name() + " " + rr.klass + "\n";
+      ++skipped;
+      continue;
+    }
+    body += std::string("class ") + r->name() + " " + rr.klass + "\n";
+    ++frozen;
+  }
+
+  // OPT-IN PER KEY. The frozen set contains only numbers somebody chose to
+  // watch, which is what keeps it trustworthy; freezing everything trains
+  // everyone to ignore red.
+  int watched = 0;
+  bool pid_warned = false;
+  for (size_t mi = 0; mi < prom.size(); ++mi) {
+    const PromMetric& m = prom[mi];
+    const std::string key = gauge_key(m);
+    bool want = false;
+    for (const std::string& w : watch)
+      if (key.find(w) != std::string::npos) { want = true; break; }
+    if (!want) continue;
+    // A counter is invariant to clock scaling because it is a TOTAL; a rate
+    // divides by wall time and inherits every source of variance the latency
+    // gauges have. The tier is read off the name, so it populates itself the
+    // day cumulative PMU counters land.
+    const std::string nm = m.name;
+    const char* tier = (nm.size() > 6 &&
+                        nm.compare(nm.size() - 6, 6, "_total") == 0)
+                           ? "deterministic" : "statistical";
+    char line[512];
+    const char* red = mi < reductions.size() ? reductions[mi].c_str() : "point";
+    std::snprintf(line, sizeof line, "gauge %s %s %.4f %.6g %.10g %s\n",
+                  tier, red, tol_pct, floor, m.value, key.c_str());
+    body += line;
+    ++watched;
+    // A pid is RUN-SCOPED. Freezing a key labelled by one produces a golden
+    // that cannot match any later run, and it would fail as "gauge the run did
+    // not emit" rather than as what it is -- so say it here, once, at the only
+    // moment the operator can still choose a different --watch. A warning and
+    // not a refusal: a same-pid re-check (a long-lived service) is legitimate.
+    if (!pid_warned && key.find("pid=\"") != std::string::npos) {
+      pid_warned = true;
+      log_warn("frozen key carries a pid= label (%s) -- a pid does not survive "
+               "a restart, so this golden will not match a later run of the "
+               "same workload. Watch a run-stable key instead, or re-freeze "
+               "per run",
+               key.c_str());
+    }
+  }
+  if (!watch.empty() && watched == 0) {
+    log_error("--watch matched no gauge -- nothing would be frozen in the "
+              "performance lane");
+    return 2;
+  }
+  // Refuse an EMPTY golden, not a class-less one. A .prom-only recording has no
+  // event stream and therefore no classes, but its gauges are exactly what the
+  // deterministic tier is about -- so gauges alone are a legitimate golden and
+  // only "nothing at all" is the error.
+  if (frozen == 0 && watched == 0) {
+    log_error("nothing to freeze: no report published a class and no --watch "
+              "matched a gauge");
+    return 2;
+  }
+
+  std::ofstream out(path, std::ios::trunc);
+  if (!out) { log_error("cannot write golden '%s'", path.c_str()); return 2; }
+  out << body;
+  if (!out) { log_error("short write on golden '%s'", path.c_str()); return 2; }
+  out.close();
+  if (skipped)
+    log_warn("%d report(s) NOT frozen: their class is a capture limitation, "
+             "which records the trace's shape rather than the workload's. They "
+             "are named in the golden and are not compared",
+             skipped);
+  log_info("froze %d class(es) and %d gauge(s) into %s", frozen, watched,
+           path.c_str());
+  return 0;
+}
+
+// Check. Exit 0 pass, 1 a real mismatch, 2 DECLINED -- the gate could not run
+// and is saying so rather than returning a verdict it cannot support. Keeping
+// declined distinct from failed is what lets a caller tell "this regressed"
+// from "this was never actually checked."
+static int check_golden(const std::string& path, const Golden& g,
+                        bool want_functional, bool want_performance,
+                        const std::vector<Report*>& active,
+                        const std::vector<PromMetric>& prom,
+                        uint64_t observed, bool allow_unknown) {
+  // COMPLETENESS GATES THE WHOLE COMPARISON, both lanes, before anything is
+  // read. A class computed over a capture that saw 8% of its stream is a
+  // different claim from one computed over a whole capture, and comparing the
+  // two produces a number nobody should act on.
+  if (int rc = completeness_gate(observed, allow_unknown, "compare")) return rc;
+
+  // Environment mismatch WARNS. A kernel bump is news, not a regression, and a
+  // gate that fails on one is a gate somebody switches off.
+  Golden now;
+  fill_environment(now);
+  if (!g.env_kernel.empty() && g.env_kernel != now.env_kernel)
+    log_warn("environment: kernel %s frozen, %s now", g.env_kernel.c_str(),
+             now.env_kernel.c_str());
+  if (!g.env_cpu.empty() && g.env_cpu != now.env_cpu)
+    log_warn("environment: cpu '%s' frozen, '%s' now", g.env_cpu.c_str(),
+             now.env_cpu.c_str());
+  if (!g.env_cores.empty() && g.env_cores != now.env_cores)
+    log_warn("environment: %s core(s) frozen, %s now", g.env_cores.c_str(),
+             now.env_cores.c_str());
+
+  int failed = 0, checked = 0;
+  montauk_sink_appendf(&g_out, "GOLDEN %s (workload %s, frozen by montauk %s)\n",
+                       path.c_str(), g.workload.c_str(),
+                       g.montauk_version.empty() ? "?" : g.montauk_version.c_str());
+
+  if (want_functional) {
+    for (const auto& [name, want] : g.classes) {
+      Report* r = nullptr;
+      for (Report* c : active) if (name == c->name()) { r = c; break; }
+      if (!r) {
+        log_error("DECLINED: golden freezes report '%s', which this run did not "
+                  "produce", name.c_str());
+        return 2;
+      }
+      const std::string& got = r->result_base().klass;
+      if (got.empty()) {
+        // An empty class means compute() returned before composing a verdict.
+        // That is a REPORT BUG, and reading past it would let the gate pass on
+        // a report that answered nothing.
+        log_error("DECLINED: report '%s' published no class (its compute() "
+                  "returned before composing a verdict -- report bug)",
+                  name.c_str());
+        return 2;
+      }
+      ++checked;
+      if (got == want) continue;
+      ++failed;
+      montauk_sink_appendf(&g_out,
+          "  FUNCTIONAL FAIL %-18s golden %-20s actual %s\n", name.c_str(),
+          want.c_str(), got.c_str());
+      if (is_capture_limitation(got))
+        montauk_sink_appendf(&g_out,
+            "    (%s is a CAPTURE limitation, not a finding -- the trace could "
+            "not answer, which is not the same as the run being clean)\n",
+            got.c_str());
+    }
+  }
+
+  // A SKIPPED REPORT IS NOT COMPARED, but if the capture improved enough that it
+  // now carries a real class, say so: that is news the operator should act on by
+  // re-freezing, and it must not read as a failure of the run under test.
+  for (const auto& [name, tok] : g.skipped) {
+    Report* r = nullptr;
+    for (Report* c : active) if (name == c->name()) { r = c; break; }
+    if (!r) continue;
+    const std::string& got = r->result_base().klass;
+    if (got.empty() || is_capture_limitation(got)) continue;
+    montauk_sink_appendf(&g_out,
+        "  NOTE %s was skipped at freeze (%s, a capture limitation) and now "
+        "reports %s -- this capture can answer it; re-freeze to cover it\n",
+        name.c_str(), tok.c_str(), got.c_str());
+  }
+
+  if (want_performance) {
+    if (g.gauges.empty()) {
+      log_error("DECLINED: --performance, but the golden freezes no gauge. "
+                "Gauges are opt-in per key: re-freeze with --watch PATTERN");
+      return 2;
+    }
+    for (const GoldenGauge& gg : g.gauges) {
+      const PromMetric* m = nullptr;
+      for (const PromMetric& p : prom)
+        if (gauge_key(p) == gg.key) { m = &p; break; }
+      if (!m) {
+        log_error("DECLINED: golden freezes gauge '%s', which this run did not "
+                  "emit", gg.key.c_str());
+        return 2;
+      }
+      ++checked;
+      // The band is the LARGER of the percentage and the floor. The floor is
+      // what stops a percentage band from tripping on noise over small values.
+      const double band = std::max(std::fabs(gg.value) * gg.tol_pct / 100.0,
+                                   gg.floor);
+      const double delta = m->value - gg.value;
+      if (std::fabs(delta) <= band) continue;
+      ++failed;
+      montauk_sink_appendf(&g_out,
+          "  PERFORMANCE FAIL %s [%s/%s]\n"
+          "    golden %.10g  actual %.10g  delta %+.10g (%+.2f%%)  band +-%.10g"
+          " (%.4f%% or floor %.6g)\n",
+          gg.key.c_str(), gg.tier.c_str(), gg.reduction.c_str(), gg.value,
+          m->value, delta,
+          gg.value != 0.0 ? delta / std::fabs(gg.value) * 100.0 : 0.0, band,
+          gg.tol_pct, gg.floor);
+    }
+  }
+
+  if (checked == 0) {
+    log_error("DECLINED: no lane had anything to check%s",
+              g.skipped.empty()
+                  ? ""
+                  : " (every frozen report was a capture limitation at freeze "
+                    "time -- the golden records them but cannot compare them)");
+    return 2;
+  }
+  if (failed == 0) {
+    montauk_sink_appendf(&g_out, "  PASS %d frozen fact(s)\n", checked);
+    return 0;
+  }
+  // The accept command on the same screen as the failure. A gate whose fix
+  // requires looking up the syntax is a gate people work around.
+  montauk_sink_appendf(&g_out,
+      "  %d of %d frozen fact(s) moved.\n"
+      "  accept: montauk_analyze TRACE --golden %s --update --label %s\n",
+      failed, checked, path.c_str(), g.workload.c_str());
+  return 1;
+}
+
+// Report selection, shared by both golden paths so they cannot drift on which
+// reports a run covers. `select` is a positive comma list (empty = all);
+// `exclude` is subtracted after. An unknown name in either is an ERROR: a
+// misspelled exclusion that silently does nothing is how a report nobody meant
+// to freeze ends up frozen.
+static bool select_reports(std::vector<Report*>& active,
+                           const std::string& select,
+                           const std::string& exclude) {
+  auto split = [](const std::string& csv, std::vector<std::string>& out) {
+    size_t pos = 0;
+    while (pos <= csv.size()) {
+      size_t c = csv.find(',', pos);
+      if (c == std::string::npos) c = csv.size();
+      std::string t = csv.substr(pos, c - pos);
+      pos = c + 1;
+      if (!t.empty()) out.push_back(t);
+      if (c == csv.size()) break;
+    }
+  };
+  auto known = [&](const std::string& n) {
+    for (Report* r : active) if (n == r->name()) return true;
+    return false;
+  };
+  std::vector<std::string> sel, exc;
+  split(select, sel);
+  split(exclude, exc);
+  for (const auto& n : sel)
+    if (!known(n)) { log_error("unknown report '%s'", n.c_str()); return false; }
+  for (const auto& n : exc)
+    if (!known(n)) { log_error("unknown report '%s' in --exclude", n.c_str()); return false; }
+  if (!sel.empty()) {
+    std::vector<Report*> keep;
+    for (const auto& n : sel)
+      for (Report* r : active)
+        if (n == r->name() &&
+            std::find(keep.begin(), keep.end(), r) == keep.end())
+          keep.push_back(r);
+    active.swap(keep);
+  }
+  for (const auto& n : exc)
+    active.erase(std::remove_if(active.begin(), active.end(),
+                                [&](Report* r) { return n == r->name(); }),
+                 active.end());
+  if (active.empty()) {
+    log_error("no report left after --report/--exclude");
+    return false;
+  }
+  return true;
+}
+
+// GOLDEN OVER A RECORDING DIRECTORY. The single-trace form freezes what the
+// REPORTS emit (montauk_analysis_*); the monitor's own families -- the PMU
+// counters a deterministic baseline is actually about -- are collected live and
+// land in the `montauk_*.prom` scrapes beside the `.events`. Neither surface
+// sees the other, so the deterministic tier was unreachable from the trace form
+// no matter how the checker was written.
+//
+// This folds both: the event stream for the categorical classes (the same
+// fold_driver_state the --report and --digest paths run, so the substrate is
+// populated and the classes are the ones a reader would get elsewhere), and the
+// reduced scrape series for the gauges.
+static int run_golden_dir(const std::string& dir, const std::string& golden,
+                          const std::string& label, bool update,
+                          bool want_functional, bool want_performance,
+                          const std::vector<std::string>& watch,
+                          double tol_pct, double floor, bool allow_unknown,
+                          const std::string& reduction,
+                          const std::string& select,
+                          const std::string& exclude) {  // NOLINT
+  std::string base = dir;
+  while (!base.empty() && base.back() == '/') base.pop_back();
+
+  // --functional is the default lane on BOTH paths. Applying it only on the
+  // check path left a freeze with no lane flag falling through to the generic
+  // "nothing to freeze" instead of naming the actual reason -- the recording
+  // has no event stream, so there are no classes.
+  if (!want_functional && !want_performance) want_functional = true;
+
+  montauk::model::TraceReader reader;
+  std::string events = base + ".events";
+  bool have_events =
+      reader.open(events.c_str()) == montauk::model::TraceReadStatus::Ok;
+  if (!have_events) {
+    std::string inside = base + "/events.bin";
+    if (reader.open(inside.c_str()) == montauk::model::TraceReadStatus::Ok)
+      have_events = true;
+  }
+
+  auto reports = make_reports();
+  std::vector<Report*> active;
+  if (have_events) {
+    (void)reader.for_each([&](uint32_t t, const uint8_t* d, uint32_t l) {
+      fold_driver_state(t, d, l);
+      for (auto& r : reports) r->fold(t, d, l);
+    });
+    for (auto& r : reports) r->compute();
+    for (auto& r : reports) active.push_back(r.get());
+    if (!select_reports(active, select, exclude)) return 2;
+  } else if (want_functional) {
+    // A .prom-only recording carries no classes. Say so rather than freeze or
+    // compare an empty functional lane, which would read as a clean pass.
+    log_error("%s has no event stream (%s.events or %s/events.bin) -- the "
+              "functional lane has no classes to %s. Use --performance alone "
+              "for a .prom-only recording",
+              dir.c_str(), base.c_str(), base.c_str(),
+              update ? "freeze" : "compare");
+    return 2;
+  }
+
+  // The scrape series, reduced. Each becomes a PromMetric the existing
+  // freeze/compare path handles unchanged -- the only new thing is WHICH number
+  // out of the series it is, which the golden records per line.
+  std::vector<PromMetric> prom;
+  for (Report* r : active) r->prom(prom);
+  std::vector<std::string> reductions;   // parallel to `prom`
+  reductions.assign(prom.size(), "point");
+  for (const auto& ss : montauk::pop::scrape_series(dir)) {
+    // A counter's natural reduction is its LAST value (the run total); an
+    // instantaneous gauge's is the mean. --reduce overrides both when an
+    // operator wants the excursion instead of the summary.
+    std::string red = reduction.empty() ? (ss.is_counter ? "last" : "mean")
+                                        : reduction;
+    double v = red == "last" ? ss.last
+             : red == "max"  ? ss.max
+             : red == "min"  ? ss.min
+                             : ss.mean;
+    // Split the key back into name/labels: PromMetric holds them apart, and
+    // gauge_key() rejoins them the same way for the comparison.
+    size_t brace = ss.key.find('{');
+    static std::vector<std::string> names;   // stable storage for const char*
+    names.push_back(brace == std::string::npos ? ss.key : ss.key.substr(0, brace));
+    std::string labels;
+    if (brace != std::string::npos) {
+      size_t close = ss.key.rfind('}');
+      if (close != std::string::npos && close > brace)
+        labels = ss.key.substr(brace + 1, close - brace - 1);
+    }
+    prom.push_back({names.back().c_str(), labels, v});
+    reductions.push_back(red);
+  }
+
+  if (update) {
+    if (label.empty()) {
+      log_error("--update needs --label NAME: a golden with no workload "
+                "identity cannot be matched to a run");
+      return 2;
+    }
+    return write_golden(golden, label, active, prom, watch, tol_pct, floor,
+                        reader.events_read(), allow_unknown, reductions);
+  }
+  Golden g;
+  if (!read_golden(golden, g)) return 2;
+  return check_golden(golden, g, want_functional, want_performance, active,
+                      prom, reader.events_read(), allow_unknown);
+}
+
+} // namespace
 
 int main(int argc, char** argv) {
   // Report stdout buffers into g_out and drains once at exit; set up before any
@@ -5947,6 +7100,21 @@ int main(int argc, char** argv) {
         "                        and --comm remain signals-only (sched events carry\n"
         "                        no signal number or comm). --window bounds the\n"
         "                        trailing capture-teardown split, def 2s)\n"
+        "       montauk_analyze TRACE --golden FILE [--functional] [--performance]\n"
+        "                       [--allow-unknown]\n"
+        "       montauk_analyze TRACE --golden FILE --update --label NAME\n"
+        "                       [--watch PATTERN]... [--tolerance PCT] [--floor N]\n"
+        "                       [--exclude NAME[,NAME...]]\n"
+        "                       (--functional is the DEFAULT and is a real golden:\n"
+        "                        each report's categorical class, compared EXACTLY.\n"
+        "                        --performance is opt-in and is a baseline gate:\n"
+        "                        gauges named by --watch at freeze time, compared\n"
+        "                        within max(PCT%% of golden, floor). Exit 0 pass,\n"
+        "                        1 a fact moved, 2 DECLINED -- the gate could not\n"
+        "                        run. A capture under 95%% complete declines; an\n"
+        "                        UNKNOWN completeness declines unless\n"
+        "                        --allow-unknown, since absence of the drop counter\n"
+        "                        is not evidence of a lossless capture)\n"
         "       montauk_analyze DIR|FILE.prom [more.prom...] [--by LABEL]\n"
         "                       [--pairs adjacent|all|vs-best] [--trajectory]\n"
         "                       [--metric substr] [--full] [--higher-better]\n"
@@ -5960,8 +7128,33 @@ int main(int argc, char** argv) {
         "                        axes version/capture, all otherwise.\n"
         "                        --trajectory: version-ordered change-point\n"
         "                        scan instead of pairwise comparison)\n"
+        "       montauk_analyze RECORDING_DIR --golden FILE [--functional]\n"
+        "                       [--performance] [--update --label NAME]\n"
+        "                       [--watch PATTERN]... [--reduce last|mean|max|min]\n"
+        "                       [--report NAME[,NAME...]] [--exclude NAME[,NAME...]]\n"
+        "                       (the same two lanes over a whole recording. The\n"
+        "                        functional lane folds the .events stream for its\n"
+        "                        classes; the performance lane reads the .prom\n"
+        "                        scrapes, which is where the monitor's montauk_pmu_*\n"
+        "                        families live and therefore the only place the\n"
+        "                        deterministic tier can be reached. A recording holds\n"
+        "                        many scrapes, so a gauge from it is a SERIES:\n"
+        "                        --reduce picks which number is frozen, defaulting to\n"
+        "                        last for a counter and mean for a gauge, and the\n"
+        "                        choice is recorded in the golden rather than assumed.\n"
+        "                        A report whose class is a CAPTURE LIMITATION is not\n"
+        "                        frozen and is recorded as `skipped` with its token,\n"
+        "                        rather than aborting the freeze: re-capturing cannot\n"
+        "                        fix a property of the workload. --exclude drops a\n"
+        "                        report the operator does not want frozen at all)\n"
         "       montauk_analyze RECORDING_DIR --digest [--redact] [--json]\n"
-        "       montauk_analyze RECORDING_DIR --l2-by-cpu\n");
+        "                       [--sig N|NAME] [--comm SUBSTR] [--pid N]\n"
+        "                       [--tid N] [--window SECONDS]\n"
+        "                       (the digest folds the same per-event reports, so\n"
+        "                        it takes the same row qualifiers)\n"
+        "       montauk_analyze RECORDING_DIR --l2-by-cpu [--json]\n"
+        "                       (reads the .prom scrapes; row qualifiers do not\n"
+        "                        apply and are rejected rather than ignored)\n");
     return want_help ? 0 : 2;
   }
   const char* path = argv[1];
@@ -5976,30 +7169,96 @@ int main(int argc, char** argv) {
     bool has_group = false;
     for (int i = 1; i < argc; ++i)
       if (std::string(argv[i]) == "--group") has_group = true;
-    // --report is an unambiguous request for single-trace mode. Without this
-    // check, is_dir/is_prom always wins for any real montauk capture (every
-    // recording is a directory or a .prom file), making --report -- and
+    // --report is an unambiguous request for single-trace mode, UNLESS an
+    // explicit recording-dir verb is also present. Without the first half,
+    // is_dir/is_prom always wins for any real montauk capture (every recording
+    // is a directory or a .prom file), making --report -- and
     // --sig/--comm/--pid/--tid/--window with it -- permanently unreachable:
     // the flag loop below has no case for it and errors "unknown population
     // flag '--report'" before single-trace mode's own (correct, complete)
     // --report parsing further down is ever reached.
-    bool has_report = false;
-    for (int i = 1; i < argc; ++i)
-      if (std::string(argv[i]) == "--report") has_report = true;
-    if (!has_report && (is_dir || is_prom || has_group)) {
+    //
+    // WITHOUT THE SECOND HALF, `RECORDING_DIR --golden --report X` fell into
+    // single-trace mode and tried to open the DIRECTORY as a trace file, failing
+    // with "short read on header" -- which reads like a corrupt capture and is
+    // not. That combination is not exotic: the capture-limitation refusal used
+    // to recommend --report as its escape hatch, so the one flag an operator was
+    // told to reach for was the one that broke. A verb naming the mode outranks
+    // a flag that merely implies it.
+    bool has_report = false, has_dir_verb = false;
+    for (int i = 1; i < argc; ++i) {
+      std::string a = argv[i];
+      if (a == "--report") has_report = true;
+      else if (a == "--digest" || a == "--l2-by-cpu" || a == "--golden")
+        has_dir_verb = true;
+    }
+    if ((!has_report || has_dir_verb) && (is_dir || is_prom || has_group)) {
       // Recording-dir modes (vs cross-run population stats):
       //   --digest    compact specs+offenders+aggregates report
       //   --l2-by-cpu per-CPU cache-miss localization
       bool want_digest = false, want_l2 = false, redact = false, want_digest_json = false;
+      // The golden verb reaches recording dirs too. Without this the
+      // deterministic tier is unreachable by construction: its gauges are the
+      // monitor's montauk_pmu_* families, which live in the .prom scrapes here
+      // and never in a single trace's reports.
+      std::string g_path, g_label, g_reduce, g_reports, g_exclude;
+      bool g_update = false, g_func = false, g_perf = false, g_unknown = false;
+      std::vector<std::string> g_watch;
+      double g_tol = 10.0, g_floor = 0.0;
+      // Row qualifiers are honored here too. They used to be read past in this
+      // block, so a --window given to --digest silently did nothing; the digest
+      // folds the same per-event reports single-trace mode does, so the same
+      // narrowing applies to it.
+      bool saw_qualifier = false;
       for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--digest") want_digest = true;
         else if (a == "--l2-by-cpu") want_l2 = true;
         else if (a == "--redact") redact = true;
         else if (a == "--json") want_digest_json = true;
+        else if (a == "--golden" && i + 1 < argc) g_path = argv[++i];
+        else if (a == "--report" && i + 1 < argc) g_reports = argv[++i];
+        else if (a == "--exclude" && i + 1 < argc) g_exclude = argv[++i];
+        else if (a == "--label" && i + 1 < argc) g_label = argv[++i];
+        else if (a == "--watch" && i + 1 < argc) g_watch.push_back(argv[++i]);
+        else if (a == "--tolerance" && i + 1 < argc) g_tol = std::strtod(argv[++i], nullptr);
+        else if (a == "--floor" && i + 1 < argc) g_floor = std::strtod(argv[++i], nullptr);
+        else if (a == "--reduce" && i + 1 < argc) g_reduce = argv[++i];
+        else if (a == "--update") g_update = true;
+        else if (a == "--functional") g_func = true;
+        else if (a == "--performance") g_perf = true;
+        else if (a == "--allow-unknown") g_unknown = true;
+        else {
+          int used = 0;
+          int q = take_row_qualifier(argc, argv, i, &used);
+          if (q == 2) return 2;
+          if (q == 0) { saw_qualifier = true; i += used; }
+        }
+      }
+      if (!g_path.empty()) {
+        if (!g_reduce.empty() && g_reduce != "last" && g_reduce != "mean" &&
+            g_reduce != "max" && g_reduce != "min") {
+          log_error("--reduce takes last | mean | max | min (default: last for "
+                    "a counter, mean for a gauge)");
+          return 2;
+        }
+        return run_golden_dir(path, g_path, g_label, g_update, g_func, g_perf,
+                              g_watch, g_tol, g_floor, g_unknown, g_reduce,
+                              g_reports, g_exclude);
       }
       if (want_digest) return run_digest(path, redact, want_digest_json);
-      if (want_l2) return montauk::pop::run_l2_by_cpu(path);
+      if (want_l2) {
+        // The per-CPU L2 localization reads the .prom scrapes, not the event
+        // stream, so no row qualifier can narrow it. Say so rather than accept
+        // the flag and ignore it.
+        if (saw_qualifier) {
+          log_error("--l2-by-cpu reads the .prom scrapes, not per-event rows -- "
+                    "row qualifiers (--sig/--comm/--pid/--tid/--window) do not "
+                    "apply to it");
+          return 2;
+        }
+        return montauk::pop::run_l2_by_cpu(path, want_digest_json);
+      }
       montauk::pop::PopOptions opt;
       std::vector<std::string> files;
       // argv[1] is a consumed path only when it is itself a dir/prom; a bare
@@ -6119,6 +7378,11 @@ int main(int argc, char** argv) {
   std::vector<Report*> active;
   std::string report_list;
   bool want_json = false;
+  std::string golden_path, golden_label, golden_exclude;
+  bool golden_update = false, lane_functional = false, lane_performance = false;
+  bool golden_allow_unknown = false;
+  std::vector<std::string> golden_watch;
+  double golden_tol = 10.0, golden_floor = 0.0;
   for (int i = 2; i < argc; ++i) {
     std::string a = argv[i];
     if (a == "--redact") {
@@ -6127,28 +7391,54 @@ int main(int argc, char** argv) {
       want_json = true;
     } else if (a == "--report" && i + 1 < argc) {
       report_list = argv[++i];
-    } else if (a == "--sig" && i + 1 < argc) {
-      g_qual_sig = signal_nr_from(argv[++i]);
-      if (g_qual_sig < 0) {
-        log_error("--sig '%s' names no signal (number, SIGSEGV or SEGV)", argv[i]);
-        return 2;
-      }
-    } else if (a == "--comm" && i + 1 < argc) {
-      g_qual_comm = argv[++i];
-    } else if (a == "--pid" && i + 1 < argc) {
-      g_qual_pid = std::strtol(argv[++i], nullptr, 10);
-    } else if (a == "--tid" && i + 1 < argc) {
-      g_qual_tid = std::strtol(argv[++i], nullptr, 10);
-    } else if (a == "--window" && i + 1 < argc) {
-      g_qual_window_s = std::strtod(argv[++i], nullptr);
-      if (g_qual_window_s < 0) {
-        log_error("--window takes seconds >= 0, got '%s'", argv[i]);
-        return 2;
-      }
+    } else if (a == "--golden" && i + 1 < argc) {
+      golden_path = argv[++i];
+    } else if (a == "--label" && i + 1 < argc) {
+      golden_label = argv[++i];
+    } else if (a == "--exclude" && i + 1 < argc) {
+      golden_exclude = argv[++i];
+    } else if (a == "--watch" && i + 1 < argc) {
+      golden_watch.push_back(argv[++i]);
+    } else if (a == "--tolerance" && i + 1 < argc) {
+      golden_tol = std::strtod(argv[++i], nullptr);
+    } else if (a == "--floor" && i + 1 < argc) {
+      golden_floor = std::strtod(argv[++i], nullptr);
+    } else if (a == "--update") {
+      golden_update = true;
+    } else if (a == "--functional") {
+      lane_functional = true;
+    } else if (a == "--performance") {
+      lane_performance = true;
+    } else if (a == "--allow-unknown") {
+      golden_allow_unknown = true;
+    } else if (int used = 0, q = take_row_qualifier(argc, argv, i, &used);
+               q != kQualNotMine) {
+      if (q != 0) return q;
+      i += used;
     } else {
       log_error("unknown flag '%s' (see montauk_analyze --help)", a.c_str());
       return 2;
     }
+  }
+  // Golden flags are only meaningful with --golden. Say so rather than accept
+  // them and do nothing, the same rule --l2-by-cpu applies to row qualifiers.
+  if (golden_path.empty()) {
+    const char* stray = golden_update      ? "--update"
+                        : lane_functional  ? "--functional"
+                        : lane_performance ? "--performance"
+                        : !golden_label.empty() ? "--label"
+                        : !golden_exclude.empty() ? "--exclude"
+                        : !golden_watch.empty() ? "--watch"
+                        : golden_allow_unknown ? "--allow-unknown"
+                                               : nullptr;
+    if (stray) {
+      log_error("%s has no meaning without --golden FILE", stray);
+      return 2;
+    }
+  } else if (want_json) {
+    log_error("--golden and --json are alternate outputs; --golden emits the "
+              "comparison and sets the exit status");
+    return 2;
   }
   if (report_list.empty()) {
     for (auto& r : reports) active.push_back(r.get());
@@ -6199,16 +7489,7 @@ int main(int argc, char** argv) {
 
   const auto t0 = std::chrono::steady_clock::now();
   auto status = reader.for_each([&](uint32_t type, const uint8_t* data, uint32_t len) {
-    fold_drop_snapshot(type, data, len);
-    // Shared sched substrate first, ONCE -- dispatch-stall and kstrand both
-    // query it and each used to fold its own private copy of the whole stream.
-    g_sched_holder.fold(type, data, len);
-    if (type == TRACE_EVT_SCHED && len >= sizeof(montauk_sched_event)) {
-      const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
-      if (s->op == SCHED_OP_CPU_IDLE)
-        g_sched_idle.fold(s->cpu, s->sub_idx, s->timestamp_ns);
-      g_sched_picks.fold(s);
-    }
+    fold_driver_state(type, data, len);
     for (Report* r : active) r->fold(type, data, len);
   });
   if (status == montauk::model::TraceReadStatus::CorruptLength) {
@@ -6220,6 +7501,33 @@ int main(int argc, char** argv) {
   }
 
   for (Report* r : active) r->compute();  // finalize typed results once, before any renderer
+
+  // --golden: freeze or compare. A third renderer over the same typed results,
+  // reading the categorical class rather than the prose verdict -- the sentence
+  // carries numbers and drifts, the token is what can be compared exactly.
+  if (!golden_path.empty()) {
+    if (!select_reports(active, "", golden_exclude)) return 2;
+    std::vector<PromMetric> gprom;
+    for (Report* r : active) r->prom(gprom);
+    if (golden_update) {
+      if (golden_label.empty()) {
+        log_error("--update needs --label NAME: a golden with no workload "
+                  "identity cannot be matched to a run");
+        return 2;
+      }
+      return write_golden(golden_path, golden_label, active, gprom,
+                          golden_watch, golden_tol, golden_floor,
+                          reader.events_read(), golden_allow_unknown);
+    }
+    Golden g;
+    if (!read_golden(golden_path, g)) return 2;
+    // --functional is the default and the lane that catches a flipped
+    // mechanism; --performance is opt-in and is a baseline gate, not a golden.
+    if (!lane_functional && !lane_performance) lane_functional = true;
+    return check_golden(golden_path, g, lane_functional, lane_performance,
+                        active, gprom, reader.events_read(),
+                        golden_allow_unknown);
+  }
 
   // --json: the structured surface. Same typed results the text/prom renderers
   // read, wrapped in one envelope: trace context + the reports array. An agent
@@ -6306,56 +7614,7 @@ int main(int argc, char** argv) {
   std::vector<PromMetric> prom;
   for (Report* r : active) r->prom(prom);
 
-  // CAPTURE LOSS: the loss-aware verdict layer. Overload drop is
-  // load-correlated (the tracer sheds exactly when the interesting events
-  // are produced), so observed counts are LOWER BOUNDS, tail quantiles are
-  // biased downward and an absence-of-anomaly verdict over a lossy window is
-  // not the same claim as one over a lossless capture. The block prints only
-  // when a snapshot exists; its absence means the capture predates drop
-  // accounting, which is stated rather than read as zero.
-  {
-    const uint64_t dropped = g_drop_seen ? drops_total() : 0;
-    const uint64_t observed = reader.events_read();
-    if (g_drop_seen) {
-      double completeness =
-          (observed + dropped) > 0
-              ? static_cast<double>(observed) /
-                    static_cast<double>(observed + dropped)
-              : 1.0;
-      prom.push_back({"montauk_analysis_events_dropped_total",
-                      "", static_cast<double>(dropped)});
-      prom.push_back({"montauk_analysis_capture_completeness", "",
-                      completeness});
-      for (uint32_t t = 0; t < MONTAUK_DROP_SLOTS; ++t)
-        if (g_drop_final.dropped[t] > 0)
-          prom.push_back({"montauk_analysis_events_dropped_total",
-                          std::string("type=\"") + evt_type_name(t) + "\"",
-                          static_cast<double>(g_drop_final.dropped[t])});
-      if (dropped > 0) {
-        montauk_sink_appendf(&g_out,
-            "\nCAPTURE LOSS: %" PRIu64 " event(s) dropped at the ring "
-            "(completeness %.4f%%)\n",
-            dropped, completeness * 100.0);
-        for (uint32_t t = 0; t < MONTAUK_DROP_SLOTS; ++t)
-          if (g_drop_final.dropped[t] > 0)
-            montauk_sink_appendf(
-                &g_out, "  %s: %" PRIu64 "\n", evt_type_name(t),
-                static_cast<uint64_t>(g_drop_final.dropped[t]));
-        montauk_sink_appendf(&g_out,
-            "  counts above are lower bounds; tail quantiles are biased "
-            "downward\n"
-            "  (loss lands in the busy windows); absence-of-anomaly verdicts "
-            "for the\n"
-            "  types listed are qualified, not clean\n");
-      }
-      if (g_drop_final.writer_errors > 0)
-        montauk_sink_appendf(&g_out,
-            "CAPTURE LOSS: %" PRIu64 " trace write error(s), %" PRIu64
-            " byte(s) short at the disk path\n",
-            static_cast<uint64_t>(g_drop_final.writer_errors),
-            static_cast<uint64_t>(g_drop_final.writer_lost_bytes));
-    }
-  }
+  emit_capture_loss(reader.events_read(), prom);
 
   // POORLY-BEHAVING ITEMS: consolidate every active report's offenders into one
   // severity-ranked view -- the "what specifically misbehaved" the report leads

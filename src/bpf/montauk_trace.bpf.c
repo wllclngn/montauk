@@ -44,11 +44,22 @@ struct {
   __type(value, struct fd_bpf_entry);
 } fd_map SEC(".maps");
 
-// Ring buffer for lifecycle events → userspace
+// Ring buffer for lifecycle events → userspace.
+//
+// SIZE IS AN OPERATOR KNOB, not a constant. 1MB was never sized against a real
+// offered rate: a 2026-07-30 PANDEMONIUM sched-messaging run offered ~2.8M
+// events/s against ~254k/s drained and lost 19.1M events, and three arms of the
+// same workload came back 5.70%, 8.24% and 8.44% complete -- not even sampled at
+// comparable rates, which makes them incomparable rather than merely lossy.
+// Pinning the drain core was the existing mitigation and it was never the
+// binding constraint; RING RESIDENCY was.
+//
+// libbpf lets userspace resize a ringbuf before load (bpf_map__set_max_entries),
+// so the value here is only the default. Must stay a power of two and a multiple
+// of the page size, which the setter enforces.
 struct {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
-  __uint(max_entries, 1024 * 1024); // 1MB (ntsync events 128B; headroom so a brief
-                                    // flush stall can't overflow before the next drain)
+  __uint(max_entries, 1024 * 1024); // default 1MB; --trace-ring-bytes overrides
 } events SEC(".maps");
 
 // Reserve-failure drop counters, per CPU per event type. A failed reserve
@@ -65,9 +76,29 @@ struct {
   __type(value, u64);
 } drop_counts SEC(".maps");
 
+// PER-CLASS CAPTURE MASK. Bit N (1 << TRACE_EVT_*) enables that class; a 0 bit
+// means the emit site returns before reserving ring space at all.
+//
+// The point is not to save bytes, it is to stop ONE LOUD CLASS DROWNING THE
+// CLASS THE CAPTURE IS FOR. On the 2026-07-30 PANDEMONIUM run ~18.2M of 19.1M
+// dropped events were io from a messaging flood, and they took 0.93M-1.16M
+// SCHED events with them -- the events the capture existed to record.
+// --sched-detail could ADD classes; nothing could ever subtract one.
+//
+// Default all-ones: an operator who sets nothing captures what they did before.
+const volatile __u64 capture_mask = ~0ULL;
+
 // Counting reserve wrapper: every emit site goes through this so no failure
 // path can forget to account. Slot 0 catches any out-of-range type.
+//
+// It is also where the capture mask applies, for the same reason: ONE choke
+// point means a class cannot be suppressed at nine emit sites and forgotten at
+// the tenth. A masked-out class returns NULL before touching the ring and is
+// NOT counted as a drop -- a drop is loss the operator did not choose, and
+// conflating the two would make a deliberately narrowed capture read as a
+// damaged one.
 static __always_inline void *rb_reserve(u32 type, u64 size) {
+  if (type < 64 && !((capture_mask >> type) & 1ULL)) return 0;
   void *p = bpf_ringbuf_reserve(&events, size, 0);
   if (!p) {
     u32 k = type < MONTAUK_DROP_SLOTS ? type : 0;
@@ -75,6 +106,36 @@ static __always_inline void *rb_reserve(u32 type, u64 size) {
     if (c) __sync_fetch_and_add(c, 1);
   }
   return p;
+}
+
+// T1: ONE sched emit path. Ten call sites reserved, filled nine fields in the
+// same order, stamped a timestamp and submitted -- identical but for the values,
+// which is how the tenth came to differ from the other nine without anyone
+// noticing.
+//
+// IT ALSO FIXES A REAL DEFECT, which is what folding a duplicated path is for:
+// bpf_ringbuf_reserve does NOT zero the record, and only two of the twelve sched
+// emit sites ever assigned freq_mhz. The other ten published whatever bytes the
+// previous occupant of that ring slot left there. Assigning every field exactly
+// once here makes that unrepresentable rather than merely fixed.
+static __always_inline void sched_emit(u32 op, u32 cpu, s32 pid, s32 secondary_pid,
+                                       s32 last_cpu, u32 sub_idx, u32 freq_mhz,
+                                       u64 score, u64 runtime_ns, u64 budget_ns) {
+  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
+  if (!e) return;
+  e->type          = TRACE_EVT_SCHED;
+  e->op            = op;
+  e->cpu           = cpu;
+  e->pid           = pid;
+  e->secondary_pid = secondary_pid;
+  e->last_cpu      = last_cpu;
+  e->sub_idx       = sub_idx;
+  e->freq_mhz      = freq_mhz;
+  e->score         = score;
+  e->runtime_ns    = runtime_ns;
+  e->budget_ns     = budget_ns;
+  e->timestamp_ns  = bpf_ktime_get_ns();
+  bpf_ringbuf_submit(e, 0);
 }
 
 // Per-CPU scratch for ntsync ioctl enter → exit state passing
@@ -238,6 +299,7 @@ const volatile __u64 heap_stack_size = 0;
 // timescales (btrfs writeback, fsync) that wedge when these threads strand.
 // Userspace may lower it via MONTAUK_KSTRAND_THRESH_NS before load.
 const volatile __u64 kstrand_thresh_ns = 5000000;
+
 
 // WRITABLE global (.bss), set by the collector AFTER the decision tracepoints are
 // bound -- not const volatile rodata, which is frozen at load before that attach
@@ -1388,26 +1450,15 @@ int handle_sched_wakeup(struct trace_event_raw_sched_wakeup_compat *ctx) {
   if (wt)
     wt->wake_ns = bpf_ktime_get_ns();
 
-  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
-  if (!e) return 0;
-  e->type          = TRACE_EVT_SCHED;
-  e->op            = SCHED_OP_WAKEUP;
-  e->cpu           = (u32)ctx->target_cpu;
-  e->pid           = ctx->pid;
   /* v7.9.0: stamp the WAKER. sched_wakeup fires in try_to_wake_up in the
    * waker's context, so current is the task issuing the wake. Recording it
    * gives every wake its causal edge waker -> wakee, which the analyzer walks
    * to reconstruct the messenger->worker wake chain and attribute request-level
    * latency per hop (the interval schbench reports but per-hop wake2run cannot
    * localize). -1 only for a kernel/IRQ-context wake with no task current. */
-  e->secondary_pid = (int)(bpf_get_current_pid_tgid() & 0xffffffffULL);
-  e->last_cpu      = -1;
-  e->sub_idx       = 0;
-  e->score         = 0;
-  e->runtime_ns    = 0;
-  e->budget_ns     = 0;
-  e->timestamp_ns  = bpf_ktime_get_ns();
-  bpf_ringbuf_submit(e, 0);
+  sched_emit(SCHED_OP_WAKEUP, (u32)ctx->target_cpu, ctx->pid,
+             (int)(bpf_get_current_pid_tgid() & 0xffffffffULL),
+             -1, 0, 0, 0, 0, 0);
   return 0;
 }
 
@@ -1465,20 +1516,8 @@ int BPF_PROG(handle_scx_kick, s32 cpu, u64 flags)
   // flags (score) -- generic to any sched_ext scheduler. Pair against
   // SCHED_OP_RESCHED on the same target cpu to see whether the kick actually
   // resulted in a resched, or was swallowed.
-  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
-  if (!e) return 0;
-  e->type          = TRACE_EVT_SCHED;
-  e->op            = SCHED_OP_KICK_ISSUE;
-  e->cpu           = (u32)cpu;
-  e->pid           = -1;
-  e->secondary_pid = -1;
-  e->last_cpu      = (s32)bpf_get_smp_processor_id();
-  e->sub_idx       = 0;
-  e->score         = flags;
-  e->runtime_ns    = 0;
-  e->budget_ns     = 0;
-  e->timestamp_ns  = bpf_ktime_get_ns();
-  bpf_ringbuf_submit(e, 0);
+  sched_emit(SCHED_OP_KICK_ISSUE, (u32)cpu, -1, -1,
+             (s32)bpf_get_smp_processor_id(), 0, 0, flags, 0, 0);
   return 0;
 }
 
@@ -1494,20 +1533,8 @@ int BPF_PROG(handle_resched_curr, struct rq *rq)
   // or anything else). Universal to any scheduling class, not sched_ext-
   // specific. Absence of a RESCHED shortly after a KICK_ISSUE for the same
   // target cpu is the generic signature of a swallowed/lost kick.
-  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
-  if (!e) return 0;
-  e->type          = TRACE_EVT_SCHED;
-  e->op            = SCHED_OP_RESCHED;
-  e->cpu           = (u32)BPF_CORE_READ(rq, cpu);
-  e->pid           = -1;
-  e->secondary_pid = -1;
-  e->last_cpu      = (s32)bpf_get_smp_processor_id();
-  e->sub_idx       = 0;
-  e->score         = 0;
-  e->runtime_ns    = 0;
-  e->budget_ns     = 0;
-  e->timestamp_ns  = bpf_ktime_get_ns();
-  bpf_ringbuf_submit(e, 0);
+  sched_emit(SCHED_OP_RESCHED, (u32)BPF_CORE_READ(rq, cpu), -1, -1,
+             (s32)bpf_get_smp_processor_id(), 0, 0, 0, 0, 0);
   return 0;
 }
 
@@ -1524,20 +1551,8 @@ int handle_tick_stop(struct trace_event_raw_tick_stop *ctx)
   // bitmask (TICK_DEP_MASK_*, meaningful only when sub_idx=0). Correlate
   // against KICK_ISSUE/RESCHED on the same cpu to see whether a CPU went
   // tickless right as a kick targeting it was in flight.
-  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
-  if (!e) return 0;
-  e->type          = TRACE_EVT_SCHED;
-  e->op            = SCHED_OP_TICK_STOP;
-  e->cpu           = (u32)bpf_get_smp_processor_id();
-  e->pid           = -1;
-  e->secondary_pid = -1;
-  e->last_cpu      = -1;
-  e->sub_idx       = (u32)ctx->success;
-  e->score         = (u64)ctx->dependency;
-  e->runtime_ns    = 0;
-  e->budget_ns     = 0;
-  e->timestamp_ns  = bpf_ktime_get_ns();
-  bpf_ringbuf_submit(e, 0);
+  sched_emit(SCHED_OP_TICK_STOP, (u32)bpf_get_smp_processor_id(), -1, -1,
+             -1, (u32)ctx->success, 0, (u64)ctx->dependency, 0, 0);
   return 0;
 }
 
@@ -2100,25 +2115,15 @@ struct trace_event_raw_sched_field_gate {
   u64 prev;       // signature at the previous gate tick
 };
 
+
+
 SEC("tp/sched_decision/enqueue")
 int handle_sched_enqueue(struct trace_event_raw_sched_enqueue *ctx) {
   sched_op_bump(SCHED_OP_ENQUEUE);
   if (!sched_stream)
     return 0;
-  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
-  if (!e) return 0;
-  e->type          = TRACE_EVT_SCHED;
-  e->op            = SCHED_OP_ENQUEUE;
-  e->cpu           = (u32)ctx->cpu;
-  e->pid           = ctx->pid;
-  e->secondary_pid = -1;
-  e->last_cpu      = ctx->last_cpu;
-  e->sub_idx       = ctx->sub_idx;
-  e->score         = ctx->score;
-  e->runtime_ns    = 0;
-  e->budget_ns     = 0;
-  e->timestamp_ns  = bpf_ktime_get_ns();
-  bpf_ringbuf_submit(e, 0);
+  sched_emit(SCHED_OP_ENQUEUE, (u32)ctx->cpu, ctx->pid, -1,
+             ctx->last_cpu, ctx->sub_idx, 0, ctx->score, 0, 0);
   return 0;
 }
 
@@ -2127,20 +2132,9 @@ int handle_sched_pick(struct trace_event_raw_sched_pick *ctx) {
   sched_op_bump(SCHED_OP_PICK);
   if (!sched_stream)
     return 0;
-  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
-  if (!e) return 0;
-  e->type          = TRACE_EVT_SCHED;
-  e->op            = SCHED_OP_PICK;
-  e->cpu           = (u32)ctx->cpu;
-  e->pid           = ctx->pid;
-  e->secondary_pid = -1;
-  e->last_cpu      = -1;
-  e->sub_idx       = ctx->lane;   // dispatch lane (0=mirror, else sub+1)
-  e->score         = ctx->score;
-  e->runtime_ns    = 0;
-  e->budget_ns     = 0;
-  e->timestamp_ns  = bpf_ktime_get_ns();
-  bpf_ringbuf_submit(e, 0);
+  // sub_idx carries the dispatch lane here (0 = mirror, else sub+1).
+  sched_emit(SCHED_OP_PICK, (u32)ctx->cpu, ctx->pid, -1,
+             -1, ctx->lane, 0, ctx->score, 0, 0);
   return 0;
 }
 
@@ -2149,20 +2143,8 @@ int handle_sched_pick_empty(struct trace_event_raw_sched_pick_empty *ctx) {
   sched_op_bump(SCHED_OP_PICK_EMPTY);
   if (!sched_stream)
     return 0;
-  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
-  if (!e) return 0;
-  e->type          = TRACE_EVT_SCHED;
-  e->op            = SCHED_OP_PICK_EMPTY;
-  e->cpu           = (u32)ctx->cpu;
-  e->pid           = -1;
-  e->secondary_pid = -1;
-  e->last_cpu      = -1;
-  e->sub_idx       = 0;
-  e->score         = 0;
-  e->runtime_ns    = 0;
-  e->budget_ns     = 0;
-  e->timestamp_ns  = bpf_ktime_get_ns();
-  bpf_ringbuf_submit(e, 0);
+  sched_emit(SCHED_OP_PICK_EMPTY, (u32)ctx->cpu, -1, -1,
+             -1, 0, 0, 0, 0, 0);
   return 0;
 }
 
@@ -2171,20 +2153,8 @@ int handle_sched_preempt_tick(struct trace_event_raw_sched_preempt_tick *ctx) {
   sched_op_bump(SCHED_OP_PREEMPT_TICK);
   if (!sched_stream)
     return 0;
-  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
-  if (!e) return 0;
-  e->type          = TRACE_EVT_SCHED;
-  e->op            = SCHED_OP_PREEMPT_TICK;
-  e->cpu           = (u32)ctx->cpu;
-  e->pid           = ctx->pid;
-  e->secondary_pid = -1;
-  e->last_cpu      = -1;
-  e->sub_idx       = 0;
-  e->score         = 0;
-  e->runtime_ns    = ctx->runtime_ns;
-  e->budget_ns     = ctx->budget_ns;
-  e->timestamp_ns  = bpf_ktime_get_ns();
-  bpf_ringbuf_submit(e, 0);
+  sched_emit(SCHED_OP_PREEMPT_TICK, (u32)ctx->cpu, ctx->pid, -1,
+             -1, 0, 0, 0, ctx->runtime_ns, ctx->budget_ns);
   return 0;
 }
 
@@ -2193,20 +2163,8 @@ int handle_sched_preempt_wakeup(struct trace_event_raw_sched_preempt_wakeup *ctx
   sched_op_bump(SCHED_OP_PREEMPT_WAKEUP);
   if (!sched_stream)
     return 0;
-  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
-  if (!e) return 0;
-  e->type          = TRACE_EVT_SCHED;
-  e->op            = SCHED_OP_PREEMPT_WAKEUP;
-  e->cpu           = (u32)ctx->cpu;
-  e->pid           = ctx->wakee;
-  e->secondary_pid = ctx->waker;
-  e->last_cpu      = -1;
-  e->sub_idx       = 0;
-  e->score         = 0;
-  e->runtime_ns    = 0;
-  e->budget_ns     = 0;
-  e->timestamp_ns  = bpf_ktime_get_ns();
-  bpf_ringbuf_submit(e, 0);
+  sched_emit(SCHED_OP_PREEMPT_WAKEUP, (u32)ctx->cpu, ctx->wakee, ctx->waker,
+             -1, 0, 0, 0, 0, 0);
   return 0;
 }
 
@@ -2221,20 +2179,8 @@ int handle_sched_field_gate(struct trace_event_raw_sched_field_gate *ctx) {
   sched_op_bump(SCHED_OP_FIELD_GATE);
   if (!sched_stream)
     return 0;
-  struct montauk_sched_event *e = rb_reserve(TRACE_EVT_SCHED, sizeof(*e));
-  if (!e) return 0;
-  e->type          = TRACE_EVT_SCHED;
-  e->op            = SCHED_OP_FIELD_GATE;
-  e->cpu           = (u32)ctx->cpu;
-  e->pid           = -1;
-  e->secondary_pid = -1;
-  e->last_cpu      = -1;
-  e->sub_idx       = ctx->changed ? 1u : 0u;
-  e->score         = ctx->signature;
-  e->runtime_ns    = ctx->prev;
-  e->budget_ns     = 0;
-  e->timestamp_ns  = bpf_ktime_get_ns();
-  bpf_ringbuf_submit(e, 0);
+  sched_emit(SCHED_OP_FIELD_GATE, (u32)ctx->cpu, -1, -1,
+             -1, ctx->changed ? 1u : 0u, 0, ctx->signature, ctx->prev, 0);
   return 0;
 }
 

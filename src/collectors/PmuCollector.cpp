@@ -194,6 +194,109 @@ int PmuCollector::open_one(uint32_t type, uint64_t config, int cpu) {
   return static_cast<int>(fd);
 }
 
+// HW_CACHE events pack (cache-id, op, result) into config. dTLB read misses is
+// the one that answers "is this workload thrashing address translation", which
+// no existing montauk counter could distinguish from "the data is not resident".
+static constexpr uint64_t kDtlbLoadMissConfig =
+    static_cast<uint64_t>(PERF_COUNT_HW_CACHE_DTLB) |
+    (static_cast<uint64_t>(PERF_COUNT_HW_CACHE_OP_READ) << 8) |
+    (static_cast<uint64_t>(PERF_COUNT_HW_CACHE_RESULT_MISS) << 16);
+
+int PmuCollector::open_one_proc(uint32_t type, uint64_t config, int pid) {
+  struct perf_event_attr attr{};
+  attr.size = sizeof(attr);
+  attr.type = type;
+  attr.config = config;
+  attr.disabled = 1;
+  attr.exclude_hv = 1;
+  attr.exclude_idle = 0;
+  // Follow threads and children created after the attach. This is what makes
+  // one fd per process sufficient for a thread-pool workload instead of one fd
+  // per thread; it does NOT retroactively cover threads that already existed,
+  // which is why the attach wants to happen before the pool spawns.
+  attr.inherit = 1;
+  // Own-process measurement: pid >= 0 with cpu == -1 is the form paranoid 2
+  // permits without CAP_PERFMON.
+  //
+  // TWO ATTEMPTS, AND THE SECOND IS THE ONE THAT WORKS ON A DEFAULT BOX.
+  // paranoid 2 forbids KERNEL profiling, so an otherwise-permitted per-process
+  // open is still denied with EACCES unless exclude_kernel is set -- which is
+  // why the first cut of this looked like a root problem and was not. Try the
+  // richer form first so a privileged box counts kernel time too, then fall
+  // back to user-space-only. exclude_kernel is recorded on the collector so the
+  // renderer can state which one is in force: user-space-only counts are the
+  // right measure for a compute kernel and the wrong one for a syscall-bound
+  // workload, and a consumer must not have to guess which it is holding.
+  long fd = perf_event_open(&attr, pid, /*cpu*/ -1, /*group_fd*/ -1, /*flags*/ 0);
+  if (fd < 0 && (errno == EACCES || errno == EPERM)) {
+    attr.exclude_kernel = 1;
+    fd = perf_event_open(&attr, pid, /*cpu*/ -1, /*group_fd*/ -1, /*flags*/ 0);
+    if (fd >= 0) proc_user_only_ = true;
+  }
+  if (fd < 0) {
+    if (first_proc_errno_ == 0) first_proc_errno_ = errno;
+    return -1;
+  }
+  return static_cast<int>(fd);
+}
+
+void PmuCollector::set_process_targets(
+    const std::vector<std::pair<int, std::string>>& targets) {
+  auto cl = [](Counter& c) { if (c.fd >= 0) { ::close(c.fd); c.fd = -1; } };
+
+  // Drop attachments whose pid is no longer selected. Their totals go with
+  // them: a total is "since attach", and a pid that left and came back is a
+  // different process even if the number is reused.
+  for (size_t i = 0; i < procs_.size();) {
+    bool keep = false;
+    for (const auto& t : targets) if (t.first == procs_[i].pid) { keep = true; break; }
+    if (keep) { ++i; continue; }
+    cl(procs_[i].instr); cl(procs_[i].cycles);
+    cl(procs_[i].dtlb); cl(procs_[i].cachemiss);
+    procs_.erase(procs_.begin() + static_cast<long>(i));
+  }
+
+  for (const auto& t : targets) {
+    bool have = false;
+    for (auto& p : procs_) if (p.pid == t.first) { have = true; break; }
+    if (have) continue;
+    ProcTarget p{};
+    p.pid = t.first;
+    p.comm = t.second;
+    int fi = open_one_proc(PERF_TYPE_HARDWARE, PERF_COUNT_HW_INSTRUCTIONS, p.pid);
+    if (fi < 0) {
+      // One line, once. A denied per-process open at paranoid 2 means the pid
+      // is not ours (or is gone); spamming it per tick would bury the log.
+      if (!proc_warned_) {
+        proc_warned_ = true;
+        montauk::util::log_warn(
+            "per-process perf_event_open failed for pid %d (errno=%d %s); "
+            "per-process PMU unavailable for it. Own-user processes need no "
+            "privilege; another user's do.",
+            p.pid, first_proc_errno_, std::strerror(first_proc_errno_));
+      }
+      continue;
+    }
+    p.instr = Counter{fi, -1, 0, false};
+    int fc = open_one_proc(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES, p.pid);
+    if (fc >= 0) p.cycles = Counter{fc, -1, 0, false};
+    int fd = open_one_proc(PERF_TYPE_HW_CACHE, kDtlbLoadMissConfig, p.pid);
+    if (fd >= 0) p.dtlb = Counter{fd, -1, 0, false};
+    int fm = open_one_proc(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CACHE_MISSES, p.pid);
+    if (fm >= 0) p.cachemiss = Counter{fm, -1, 0, false};
+    auto enable = [](Counter& c) {
+      if (c.fd >= 0) {
+        ::ioctl(c.fd, PERF_EVENT_IOC_RESET, 0);
+        ::ioctl(c.fd, PERF_EVENT_IOC_ENABLE, 0);
+      }
+    };
+    enable(p.instr); enable(p.cycles); enable(p.dtlb); enable(p.cachemiss);
+    procs_.push_back(std::move(p));
+    proc_available_ = true;
+  }
+  if (procs_.empty()) proc_available_ = false;
+}
+
 void PmuCollector::init() {
   initialized_ = true;
 
@@ -276,6 +379,11 @@ void PmuCollector::init() {
     branch_.push_back(Counter{
         open_one(PERF_TYPE_HARDWARE, PERF_COUNT_HW_BRANCH_MISSES, cpu),
         cpu, 0, false});
+    dtlb_.push_back(Counter{
+        open_one(PERF_TYPE_HW_CACHE, kDtlbLoadMissConfig, cpu), cpu, 0, false});
+    cachemiss_.push_back(Counter{
+        open_one(PERF_TYPE_HARDWARE, PERF_COUNT_HW_CACHE_MISSES, cpu),
+        cpu, 0, false});
   }
   available_ = true;
 
@@ -320,6 +428,8 @@ void PmuCollector::init() {
   for (auto& c : ctxsw_)   enable(c);
   for (auto& c : migr_)    enable(c);
   for (auto& c : branch_)  enable(c);
+  for (auto& c : dtlb_)    enable(c);
+  for (auto& c : cachemiss_) enable(c);
   for (auto& d : l3_) { enable(d.access); enable(d.miss); }
 }
 
@@ -332,9 +442,13 @@ void PmuCollector::close_all() {
   for (auto& c : ctxsw_)   cl(c);
   for (auto& c : migr_)    cl(c);
   for (auto& c : branch_)  cl(c);
+  for (auto& c : dtlb_)    cl(c);
+  for (auto& c : cachemiss_) cl(c);
   for (auto& d : l3_) { cl(d.access); cl(d.miss); }
+  for (auto& p : procs_) { cl(p.instr); cl(p.cycles); cl(p.dtlb); cl(p.cachemiss); }
   l2_miss_.clear(); l2_ref_.clear(); instr_.clear(); cycles_.clear();
   ctxsw_.clear(); migr_.clear(); branch_.clear();
+  dtlb_.clear(); cachemiss_.clear(); procs_.clear();
   l3_.clear();
 }
 
@@ -356,12 +470,53 @@ uint64_t PmuCollector::read_delta(Counter& c) {
   return delta;
 }
 
+// Per-process fill. Deliberately runs BEFORE the per-CPU availability gate:
+// the two paths have different permission requirements, and coupling them is
+// what would leave a default box (paranoid 2) with no PMU attribution at all
+// even though the per-process form is permitted there.
+void PmuCollector::fill_per_process(montauk::model::PmuSnapshot& out) {
+  out.per_process.clear();
+  out.per_process_available = proc_available_;
+  out.per_process_user_only = proc_user_only_;
+  if (!proc_available_) return;
+  for (auto& p : procs_) {
+    montauk::model::PmuSnapshot::ProcCounters c{};
+    c.pid = p.pid;
+    std::snprintf(c.comm, sizeof c.comm, "%s", p.comm.c_str());
+    c.instructions     = read_delta(p.instr);
+    c.cycles           = read_delta(p.cycles);
+    c.dtlb_load_misses = read_delta(p.dtlb);
+    c.cache_misses     = read_delta(p.cachemiss);
+    p.total_instr     += c.instructions;
+    p.total_cycles    += c.cycles;
+    p.total_dtlb      += c.dtlb_load_misses;
+    p.total_cachemiss += c.cache_misses;
+    c.instructions_total     = p.total_instr;
+    c.cycles_total           = p.total_cycles;
+    c.dtlb_load_misses_total = p.total_dtlb;
+    c.cache_misses_total     = p.total_cachemiss;
+    c.ipc = c.cycles > 0 ? (double)c.instructions / (double)c.cycles : 0.0;
+    // Per thousand instructions, from the TOTALS rather than the interval:
+    // the scale-free form, so a 2-second window and a 40-second run over the
+    // same workload are directly comparable, and a quiet interval does not
+    // read as a different workload.
+    const double ki = (double)p.total_instr / 1000.0;
+    c.dtlb_misses_per_kilo_instr =
+        ki > 0.0 ? (double)p.total_dtlb / ki : 0.0;
+    c.cache_misses_per_kilo_instr =
+        ki > 0.0 ? (double)p.total_cachemiss / ki : 0.0;
+    out.per_process.push_back(c);
+  }
+}
+
 bool PmuCollector::sample(montauk::model::PmuSnapshot& out) {
   if (!initialized_) init();
+  fill_per_process(out);
   if (!available_) {
     out.available = false;
     out.l3_available = false;
-    return false; // no counters sampled: section not refreshed
+    // Per-process may still have filled above; that is the point of the split.
+    return out.per_process_available;
   }
 
   auto now = std::chrono::steady_clock::now();
@@ -385,7 +540,7 @@ bool PmuCollector::sample(montauk::model::PmuSnapshot& out) {
   out.per_cpu_cycles.assign(n, 0);
 
   uint64_t agg_miss = 0, agg_ref = 0, agg_instr = 0, agg_cyc = 0;
-  uint64_t agg_cs = 0, agg_mig = 0, agg_br = 0;
+  uint64_t agg_cs = 0, agg_mig = 0, agg_br = 0, agg_dtlb = 0, agg_cm = 0;
   for (size_t i = 0; i < n; ++i) {
     uint64_t dm = read_delta(l2_miss_[i]);
     uint64_t dr = read_delta(l2_ref_[i]);
@@ -400,6 +555,8 @@ bool PmuCollector::sample(montauk::model::PmuSnapshot& out) {
     if (i < ctxsw_.size())  agg_cs  += read_delta(ctxsw_[i]);
     if (i < migr_.size())   agg_mig += read_delta(migr_[i]);
     if (i < branch_.size()) agg_br  += read_delta(branch_[i]);
+    if (i < dtlb_.size())   agg_dtlb += read_delta(dtlb_[i]);
+    if (i < cachemiss_.size()) agg_cm += read_delta(cachemiss_[i]);
   }
   out.l2_misses    = agg_miss;
   out.l2_refs      = agg_ref;
@@ -408,6 +565,29 @@ bool PmuCollector::sample(montauk::model::PmuSnapshot& out) {
   out.context_switches = agg_cs;
   out.cpu_migrations   = agg_mig;
   out.branch_misses    = agg_br;
+  out.dtlb_load_misses = agg_dtlb;
+  out.cache_misses     = agg_cm;
+
+  // The cumulative half. read_delta drops the very first sample per counter
+  // (nothing to subtract from yet), so these run from montauk's first complete
+  // interval rather than from the perf_event_open -- which is the semantic a
+  // baseline wants anyway: what happened while montauk was watching.
+  total_instructions_     += agg_instr;
+  total_cycles_           += agg_cyc;
+  total_context_switches_ += agg_cs;
+  total_cpu_migrations_   += agg_mig;
+  total_branch_misses_    += agg_br;
+  total_l2_misses_        += agg_miss;
+  total_dtlb_             += agg_dtlb;
+  total_cache_misses_     += agg_cm;
+  out.instructions_total     = total_instructions_;
+  out.cycles_total           = total_cycles_;
+  out.context_switches_total = total_context_switches_;
+  out.cpu_migrations_total   = total_cpu_migrations_;
+  out.branch_misses_total    = total_branch_misses_;
+  out.l2_misses_total        = total_l2_misses_;
+  out.dtlb_load_misses_total = total_dtlb_;
+  out.cache_misses_total     = total_cache_misses_;
 
   out.ipc = (agg_cyc > 0) ? (double)agg_instr / (double)agg_cyc : 0.0;
   out.l2_miss_pct = (agg_ref > 0)

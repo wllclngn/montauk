@@ -24,6 +24,12 @@ from harness import ROOT, MONTAUK_ANALYZE as ANALYZE, MONTAUK_TRACE_DECODE as DE
 
 GEN_SRC = ROOT / "tests" / "gen_synthetic_trace.cpp"
 FIXTURE = ROOT / "tests" / "fixtures" / "synthetic.mtk"
+# The same generator with --no-idle: no CPU_IDLE stream, so placement-race
+# reports NO-IDLE-STREAM. That is a CAPTURE LIMITATION, the one class the
+# behavioral-golden freeze refuses to freeze, and golden_gate.py needs it to
+# exercise the writer's refusal. Regenerated here beside the main fixture so the
+# two cannot drift apart on a generator change.
+FIXTURE_NOIDLE = ROOT / "tests" / "fixtures" / "synthetic_noidle.mtk"
 
 # label -> (binary, golden path, extra args)
 SURFACES = {
@@ -80,6 +86,27 @@ CLI_CASES = [
     (["group", "1", "sum", "2"], _ROWS),
     (["group", "1", "count"], _ROWS),
     (["group", "1", "mean", "2"], _ROWS),
+    # The rest of the datamash vocabulary. parity_check.py compares these
+    # against datamash itself, which is the stronger check -- but it can only
+    # run where datamash is INSTALLED, and `group sum` sat SKIPPED there long
+    # enough to read as covered while being wrong. Freezing the bytes here means
+    # the ops are gated on every box, oracle present or not.
+    (["group", "1", "min", "2"], _ROWS),
+    (["group", "1", "max", "2"], _ROWS),
+    (["group", "1", "median", "2"], _ROWS),
+    (["group", "1", "sstdev", "2"], _ROWS),
+    (["group", "1", "pstdev", "2"], _ROWS),
+    (["group", "1", "first", "2"], _ROWS),
+    (["group", "1", "last", "2"], _ROWS),
+    (["group", "1", "mode", "2"], _ROWS),
+    (["group", "1", "antimode", "2"], _ROWS),
+    (["group", "1", "unique", "2"], _ROWS),
+    (["group", "1", "collapse", "2"], _ROWS),
+    (["group", "1", "countunique", "2"], _ROWS),
+    # sstdev of a ONE-element group is undefined, not zero. beta/gamma are
+    # singletons in _ROWS, so this case pins the nan rather than leaving the
+    # distinction to a comment.
+    (["group", "1", "sstdev", "2"], "solo 7\n"),
     (["outliers"], "1\n2\n3\n4\n5\n6\n7\n8\n9\n100\n"),
     (["histogram"], _NUMS),
     (["uniq"], "a\na\nb\nc\nc\n"),
@@ -185,6 +212,7 @@ def regenerate_fixture(tmp: Path) -> None:
         sys.exit(1)
     FIXTURE.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([str(gen), str(FIXTURE)], capture_output=True)
+    subprocess.run([str(gen), str(FIXTURE_NOIDLE), "--no-idle"], capture_output=True)
 
 
 def run_stdout(binary: Path, args: list) -> str:

@@ -100,6 +100,15 @@ void sublimation_i64_parallel(int64_t *restrict arr, size_t n, size_t num_thread
     // cheap and spare a needless parallel pass over already-ordered data); large
     // random then distributes across cores through the parallel radix, and
     // everything else takes the serial adaptive path.
+    // 0 MEANS "USE THE HARDWARE", not "use one thread". Without this it failed
+    // the >= 2 test below and fell through to the SERIAL adaptive path, which
+    // at 100M random i64 measured 44.5 ns/element against 16.3 for the same
+    // call with an explicit 12 -- a 2.8x silent degradation from the argument
+    // callers are most likely to pass, and the one bench_parallel.c documents
+    // as "0 = library default". The plain sublimation_<T> entries already
+    // resolve the count this way (sort_impl.h); this one simply never did.
+    if (num_threads == 0) num_threads = sub_default_num_workers();
+
     sub_profile_t profile;
     if (fast_path_dispatch_i64(arr, n, &profile)) return;
 

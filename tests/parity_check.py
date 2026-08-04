@@ -34,6 +34,14 @@ WORDS = "foo\nbar\nfoobar\nbaz\nFOO\nFoo\n"
 WMIX = "a-b\nfoo-bar\nfoobar\nan a here\naab\n"
 ADJ = "a\na\nb\nc\nc\nc\nd\n"
 KV = "a 10\nb 20\na 30\nc 5\nb 15\n"
+NAMES = "alice smith\nbob jones\nsolo\n"
+TRIG  = "a1b\nz9y\nnope\n"
+ABS   = "aaabb\nab\nc\nabc\n"
+PETS  = "cats\ndogs\nbirds\n"
+DATES = "12-34\n56-78\nxx-yy\n"
+# Mixed-case UTF-8 across the blocks that fold cleanly.
+UTF8 = ("Café au lait\nCAFÉ NOIR\ncafé\nΑθήνα\nαθήνα\n"
+        "Äpfel\näpfel\nŁódź\nłódź\n")
 CTX = "one\ntwo\nMATCH1\nfour\nfive\nsix\nseven\nMATCH2\nnine\nten\n"
 # Duplicate keys on purpose: rows b/c share key 2 and a/d share key 1, so any
 # instability in the keyed sort (now sublimation_pack_sort_f64, not qsort)
@@ -73,7 +81,29 @@ CASES = [
     ("column -t",          ["column"],                      "column -t",               ROWS),
     ("column -t >256 cols",["column"],                      "column -t",               COLUMN_WIDE),
     ("column -t >4096B line",["column"],                    "column -t",               COLUMN_LONG_LINE),
-    ("group sum",          ["group", "1", "sum", "2"],      "datamash -g 1 sum 2",     KV),
+    # UTF-8 case folding. Only patterns whose characters fold under the
+    # same-length/same-lead rule are compared against grep -- the ones that
+    # cannot fold are a DOCUMENTED narrowing, not a parity claim, and asserting
+    # them here would be freezing a known gap as if it were the contract.
+    ("search -i latin1",   ["search", "-i", "café"],        "grep -i café",   UTF8),
+    ("search -i latin1 up",["search", "-i", "CAFÉ"],        "grep -i CAFÉ",   UTF8),
+    ("search -i greek",    ["search", "-i", "αθήνα"],       "grep -i αθήνα",  UTF8),
+    ("search -i latext",   ["search", "-i", "łódź"],        "grep -i łódź",   UTF8),
+    ("search -i umlaut",   ["search", "-i", "äpfel"],       "grep -i äpfel",  UTF8),
+    ("group sum",          ["group", "1", "sum", "2"],      "datamash -t ' ' -s -g 1 sum 2",     KV),
+    # The rest of the datamash vocabulary. These SKIP where datamash is absent
+    # (as it is on the box this landed on), so they were validated against
+    # Python's statistics module there and are wired here to run for real
+    # wherever the oracle exists -- the point of a parity gate is that it does
+    # not depend on who happens to be looking.
+    ("group median",       ["group", "1", "median", "2"],   "datamash -t ' ' -s -g 1 median 2",  KV),
+    ("group sstdev",       ["group", "1", "sstdev", "2"],   "datamash -t ' ' -s -g 1 sstdev 2",  KV),
+    ("group pstdev",       ["group", "1", "pstdev", "2"],   "datamash -t ' ' -s -g 1 pstdev 2",  KV),
+    ("group first",        ["group", "1", "first", "2"],    "datamash -t ' ' -s -g 1 first 2",   KV),
+    ("group last",         ["group", "1", "last", "2"],     "datamash -t ' ' -s -g 1 last 2",    KV),
+    ("group countunique",  ["group", "1", "countunique", "2"], "datamash -t ' ' -s -g 1 countunique 2", KV),
+    ("group unique",       ["group", "1", "unique", "2"],   "datamash -t ' ' -s -g 1 unique 2",  KV),
+    ("group collapse",     ["group", "1", "collapse", "2"], "datamash -t ' ' -s -g 1 collapse 2", KV),
     ("head",               ["head", "3"],                   "head -3",                 NUMS),
     ("tail",               ["tail", "3"],                   "tail -3",                 NUMS),
     ("count --words",      ["count", "--words"],            "wc -w",                   WORDS),
@@ -93,6 +123,22 @@ CASES = [
     ("replace $ suffix",   ["replace", "$", " S"],           "sed 's/$/ S/g'",          WORDS),
     ("replace ^tok",       ["replace", "^foo", "X"],         "sed -E 's/^foo/X/g'",     WORDS),
     ("replace tok$",       ["replace", "o$", "O"],           "sed -E 's/o$/O/g'",       WORDS),
+    # CAPTURE GROUPS. Compared against sed -E, which is the reference for what a
+    # backreference means. The delimiter is ':' throughout, not '/': a '/' in a
+    # replacement silently terminates sed's own expression, which cost one
+    # false divergence while these were being written.
+    ("replace \\1 swap",    ["replace", "([a-z]+) ([a-z]+)", r"\2, \1"],
+                            r"sed -E 's:([a-z]+) ([a-z]+):\2, \1:g'",        NAMES),
+    ("replace \\1 three",   ["replace", "([a-z])([0-9])([a-z])", r"\3\2\1"],
+                            r"sed -E 's:([a-z])([0-9])([a-z]):\3\2\1:g'",    TRIG),
+    ("replace \\1 nested",  ["replace", "((a+)(b+))", r"[\2|\3]"],
+                            r"sed -E 's:((a+)(b+)):[\2|\3]:g'",              ABS),
+    ("replace \\1 alt",     ["replace", "(cat|dog)s", r"\1!"],
+                            r"sed -E 's:(cat|dog)s:\1!:g'",                  PETS),
+    ("replace \\1 optional",["replace", "(ab)?c", r"<\1>"],
+                            r"sed -E 's:(ab)?c:<\1>:g'",                     ABS),
+    ("replace \\1 bounded", ["replace", "([0-9]{2})-([0-9]{2})", r"\2:\1"],
+                            r"sed -E 's:([0-9]{2})-([0-9]{2}):\2\:\1:g'",    DATES),
     ("replace unanchored", ["replace", "o", "0"],            "sed 's/o/0/g'",           WORDS),
     ("search -o ^anchor",  ["search", "-o", "^[a-z]+"],        "grep -E -o '^[a-z]+'",    WORDS),
     ("search -o anchor$",  ["search", "-o", "[a-z]+$"],        "grep -E -o '[a-z]+$'",    WORDS),

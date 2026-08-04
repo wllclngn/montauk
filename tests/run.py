@@ -10,7 +10,8 @@ Five layers, one command, a clear split:
             under ThreadSanitizer)
   gate   -- the Python byte-identical output gate (corpus_check.py): analyzer /
             decoder / sublimation CLI stdout vs frozen goldens, plus the
-            search/learn/spectral/signal numpy-parity gates
+            search/learn/spectral/signal numpy-parity gates, and the
+            behavioral-golden checker's own contract (golden_gate.py)
   perf   -- the performance envelopes (perf_gate.py): CPU-time ceilings, a
             growth bound and the sort-vs-sort oracle
   trace  -- the live BPF trace harness (trace_loadtest.py); needs root, so it is
@@ -127,6 +128,7 @@ def layer_gate():
     parity = run([sys.executable, str(ROOT / "tests" / "parity_check.py")]) == 0
     pop = run([sys.executable, str(ROOT / "tests" / "pop_gate.py")]) == 0
     semantic = run([sys.executable, str(ROOT / "tests" / "semantic_check.py")]) == 0
+    golden = run([sys.executable, str(ROOT / "tests" / "golden_gate.py")]) == 0
     # Shipped sublimation-API byte-parity gates (self-build libsublimation and a
     # harness that touches only the public API, then diff against numpy oracles).
     subt = ROOT / "sublimation" / "tests"
@@ -134,8 +136,8 @@ def layer_gate():
     learn = run([sys.executable, str(subt / "test_learn.py")]) == 0
     spectral = run([sys.executable, str(subt / "test_spectral.py")]) == 0
     signal = run([sys.executable, str(subt / "test_signal.py")]) == 0
-    return (corpus and parity and pop and semantic and match and learn
-            and spectral and signal)
+    return (corpus and parity and pop and semantic and golden and match
+            and learn and spectral and signal)
 
 
 def layer_perf():

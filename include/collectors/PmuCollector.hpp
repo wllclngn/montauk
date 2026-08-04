@@ -2,6 +2,8 @@
 #include "model/Pmu.hpp"
 #include <chrono>
 #include <cstdint>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace montauk::collectors {
@@ -25,6 +27,17 @@ public:
   // even when unavailable (resilient: callers ignore the value like cpu_).
   [[nodiscard]] bool sample(montauk::model::PmuSnapshot& out);
 
+  // Declare the set of processes to attribute counters to. Idempotent: pids
+  // already attached keep their counters (and therefore their cumulative
+  // totals) across calls, pids that disappear are closed, new pids are opened.
+  // Called every producer tick with whatever the operator's --pmu-comm /
+  // --pmu-pid selection currently resolves to.
+  //
+  // Independent of the per-CPU path in both directions: this works at
+  // perf_event_paranoid 2 where the per-CPU path cannot open at all, so a box
+  // with the system-wide PMU off still gets per-process attribution.
+  void set_process_targets(const std::vector<std::pair<int, std::string>>& pids);
+
 private:
   // One opened counter fd plus its rolling last value.
   struct Counter {
@@ -42,6 +55,14 @@ private:
   // fd or -1 on failure (sets first_open_errno_ on the first failure seen).
   int open_one(uint32_t type, uint64_t config, int cpu);
 
+  // Open one counting-mode fd for (type, config) against `pid`, all CPUs,
+  // inheriting into children. Separate from open_one because the two differ in
+  // more than an argument: this one may succeed where that one is forbidden,
+  // and must not record its errno into the per-CPU diagnosis.
+  int open_one_proc(uint32_t type, uint64_t config, int pid);
+
+  void fill_per_process(montauk::model::PmuSnapshot& out);
+
   bool initialized_{false};
   bool available_{false};
   bool l3_available_{false};
@@ -57,6 +78,28 @@ private:
   std::vector<Counter> ctxsw_;
   std::vector<Counter> migr_;
   std::vector<Counter> branch_;
+  // Memory-stall attribution: which of the two answers to "why is this
+  // memory-bound thing slow" applies -- address translation, or the data not
+  // being resident. Best-effort like the three above.
+  std::vector<Counter> dtlb_;
+  std::vector<Counter> cachemiss_;
+
+  // One attached process. Opened with pid=<target>, cpu=-1, inherit=1 --
+  // permitted at paranoid 2 with no privilege, unlike everything above.
+  struct ProcTarget {
+    int         pid{-1};
+    std::string comm;
+    Counter     instr, cycles, dtlb, cachemiss;
+    uint64_t    total_instr{}, total_cycles{}, total_dtlb{}, total_cachemiss{};
+  };
+  std::vector<ProcTarget> procs_;
+  bool proc_available_{false};
+  int  first_proc_errno_{0};
+  bool proc_warned_{false};
+  // True when the per-process opens had to drop to user-space-only
+  // (paranoid >= 2). Published, not hidden: it changes what the numbers
+  // mean.
+  bool proc_user_only_{false};
 
   // amd_l3 uncore: one (access, miss) pair per L3 cache domain cpu.
   struct L3Domain {
@@ -68,6 +111,11 @@ private:
 
   std::chrono::steady_clock::time_point last_sample_time_{};
   bool has_last_time_{false};
+
+  // Running sums of the per-interval aggregates, for the _total families.
+  uint64_t total_instructions_{}, total_cycles_{}, total_context_switches_{};
+  uint64_t total_cpu_migrations_{}, total_branch_misses_{}, total_l2_misses_{};
+  uint64_t total_dtlb_{}, total_cache_misses_{};
 };
 
 } // namespace montauk::collectors
