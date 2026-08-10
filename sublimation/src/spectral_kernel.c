@@ -28,50 +28,82 @@ uint64_t sub_sm_next(uint64_t *s) {
     return z ^ (z >> 31);
 }
 
-// Cyclic symmetric Jacobi. A (n*n, destroyed) -> eval[n], V (n*n eigenvectors
-// as columns), sorted ascending by eigenvalue.
-void sub_spectral_jacobi(double *A, size_t n, double *eval, double *V) {
-    for (size_t i = 0; i < n * n; i++) V[i] = 0.0;
-    for (size_t i = 0; i < n; i++) V[i * n + i] = 1.0;
+// Cyclic symmetric Jacobi over row stride `ld` (>= n). Both rotation loops walk
+// COLUMNS p and q, so the row stride -- not n -- decides the cache behaviour;
+// see the padding wrapper below for why that matters.
+static void jacobi_ld(double *A, size_t n, size_t ld, double *eval, double *V) {
+    for (size_t i = 0; i < n * ld; i++) V[i] = 0.0;
+    for (size_t i = 0; i < n; i++) V[i * ld + i] = 1.0;
     for (int sweep = 0; sweep < 100; sweep++) {
         double off = 0.0;
         for (size_t p = 0; p < n; p++)
-            for (size_t q = p + 1; q < n; q++) off += A[p * n + q] * A[p * n + q];
+            for (size_t q = p + 1; q < n; q++) off += A[p * ld + q] * A[p * ld + q];
         if (off < 1e-30) break;
         for (size_t p = 0; p < n; p++)
             for (size_t q = p + 1; q < n; q++) {
-                double apq = A[p * n + q];
+                double apq = A[p * ld + q];
                 if (fabs(apq) < 1e-300) continue;
-                double app = A[p * n + p], aqq = A[q * n + q];
+                double app = A[p * ld + p], aqq = A[q * ld + q];
                 double theta = (aqq - app) / (2.0 * apq);
                 double t = (theta >= 0.0 ? 1.0 : -1.0) /
                            (fabs(theta) + sqrt(theta * theta + 1.0));
                 double c = 1.0 / sqrt(t * t + 1.0), s = t * c;
                 for (size_t k = 0; k < n; k++) {
                     if (k == p || k == q) continue;
-                    double akp = A[k * n + p], akq = A[k * n + q];
-                    A[k * n + p] = A[p * n + k] = c * akp - s * akq;
-                    A[k * n + q] = A[q * n + k] = s * akp + c * akq;
+                    double akp = A[k * ld + p], akq = A[k * ld + q];
+                    A[k * ld + p] = A[p * ld + k] = c * akp - s * akq;
+                    A[k * ld + q] = A[q * ld + k] = s * akp + c * akq;
                 }
-                A[p * n + p] = c * c * app - 2.0 * s * c * apq + s * s * aqq;
-                A[q * n + q] = s * s * app + 2.0 * s * c * apq + c * c * aqq;
-                A[p * n + q] = A[q * n + p] = 0.0;
+                A[p * ld + p] = c * c * app - 2.0 * s * c * apq + s * s * aqq;
+                A[q * ld + q] = s * s * app + 2.0 * s * c * apq + c * c * aqq;
+                A[p * ld + q] = A[q * ld + p] = 0.0;
                 for (size_t k = 0; k < n; k++) {
-                    double vkp = V[k * n + p], vkq = V[k * n + q];
-                    V[k * n + p] = c * vkp - s * vkq;
-                    V[k * n + q] = s * vkp + c * vkq;
+                    double vkp = V[k * ld + p], vkq = V[k * ld + q];
+                    V[k * ld + p] = c * vkp - s * vkq;
+                    V[k * ld + q] = s * vkp + c * vkq;
                 }
             }
     }
-    for (size_t i = 0; i < n; i++) eval[i] = A[i * n + i];
+    for (size_t i = 0; i < n; i++) eval[i] = A[i * ld + i];
     for (size_t i = 0; i < n; i++)
         for (size_t j = i + 1; j < n; j++)
             if (eval[j] < eval[i]) {
                 double te = eval[i]; eval[i] = eval[j]; eval[j] = te;
                 for (size_t k = 0; k < n; k++) {
-                    double tv = V[k * n + i]; V[k * n + i] = V[k * n + j]; V[k * n + j] = tv;
+                    double tv = V[k * ld + i]; V[k * ld + i] = V[k * ld + j]; V[k * ld + j] = tv;
                 }
             }
+}
+
+// Cyclic symmetric Jacobi. A (n*n, destroyed) -> eval[n], V (n*n eigenvectors
+// as columns), sorted ascending by eigenvalue.
+//
+// PADDING IS NOT AN OPTIMIZATION HERE, it is the difference between a call that
+// returns and one that looks hung. The rotation loops walk columns p and q, so
+// consecutive accesses stride by the row length; when that stride is a multiple
+// of the L1 way size every row of a column lands in ONE cache set and only
+// `associativity` of them stay resident. Measured on this box through
+// montauk_similar's path, random 6-feature input, cost of the whole
+// effective-resistance call: n=511 2.18s, n=512 41.6s, n=513 2.93s -- a 19x
+// spike on the power of two alone. At n=1024 it reaches 332s while n=1025, a
+// LARGER problem, takes 50s. An odd row stride cannot alias, so pad even n by
+// one column and leave odd n (already safe) untouched.
+void sub_spectral_jacobi(double *A, size_t n, double *eval, double *V) {
+    if (n == 0 || n % 2 == 1) { jacobi_ld(A, n, n, eval, V); return; }
+    size_t ld = n + 1;
+    double *Ap = malloc(n * ld * sizeof(double));
+    double *Vp = malloc(n * ld * sizeof(double));
+    if (!Ap || !Vp) {                 // padding is a speed property, not a
+        free(Ap); free(Vp);           // correctness one: unpadded still answers
+        jacobi_ld(A, n, n, eval, V);
+        return;
+    }
+    for (size_t i = 0; i < n; i++)
+        memcpy(Ap + i * ld, A + i * n, n * sizeof(double));
+    jacobi_ld(Ap, n, ld, eval, Vp);
+    for (size_t i = 0; i < n; i++)
+        memcpy(V + i * n, Vp + i * ld, n * sizeof(double));
+    free(Ap); free(Vp);
 }
 
 // L = D - W into L (n*n), from a symmetric non-negative adjacency W.
@@ -167,13 +199,26 @@ int sublimation_effective_resistance(const double *W, size_t n, double *reff) {
     sub_spectral_jacobi(L, n, eval, V);
     double emax = eval[n - 1] > 0.0 ? eval[n - 1] : 1.0;
     double tol = emax * (double)n * 1e-12;          // drop the near-zero null mode
+    // Accumulate the pseudoinverse over eigenvector COLUMNS. Indexed straight
+    // out of V both operands stride by n, which aliases on a power-of-two n for
+    // the same reason the Jacobi rotations do (834ms at n=512 against 50ms at
+    // 511). Transposing once, O(n^2) against this O(n^3) loop, makes the inner
+    // j-walk contiguous in both Vt and Lp.
+    double *Vt = malloc(n * n * sizeof(double));
+    if (!Vt) { free(L); free(eval); free(V); free(Lp); return 1; }
+    for (size_t i = 0; i < n; i++)
+        for (size_t k = 0; k < n; k++) Vt[k * n + i] = V[i * n + k];
     for (size_t k = 0; k < n; k++) {
         if (eval[k] <= tol) continue;
         double inv = 1.0 / eval[k];
-        for (size_t i = 0; i < n; i++)
-            for (size_t j = 0; j < n; j++)
-                Lp[i * n + j] += inv * V[i * n + k] * V[j * n + k];
+        const double *vk = Vt + k * n;
+        for (size_t i = 0; i < n; i++) {
+            double ci = inv * vk[i];
+            double *lp = Lp + i * n;
+            for (size_t j = 0; j < n; j++) lp[j] += ci * vk[j];
+        }
     }
+    free(Vt);
     for (size_t i = 0; i < n; i++)
         for (size_t j = 0; j < n; j++)
             reff[i * n + j] = Lp[i * n + i] + Lp[j * n + j] - 2.0 * Lp[i * n + j];

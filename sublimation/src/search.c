@@ -1,8 +1,8 @@
-// search.c -- structural locator (sublimation_search.h). Instantiates the
+// search.c -- structural locator (sublimation_locate.h). Instantiates the
 // sliding-window classifier locate/profile for all six key types (the same set
 // the value sort and randomness battery cover) and the disorder name helper.
 // The query engine is sublimation_classify; this just walks it.
-#include "sublimation_search.h"
+#include "sublimation_locate.h"
 #include "sublimation.h"
 #include "include/internal/sort_internal.h"
 

@@ -157,3 +157,32 @@ int sublimation_parallel_for(size_t n, size_t num_threads,
 }
 
 size_t sublimation_default_workers(void) { return sub_default_num_workers(); }
+
+// 2 MiB. Measured through the CLI's search, where fanning out below this loses
+// to the fixed dispatch cost. It lived as SEARCH_PAR_MIN_BYTES in cli.c, which
+// meant the second consumer had to invent its own; the number is the library's
+// to own, so both ask the same question and get the same answer.
+#define SUB_SCAN_MIN_BYTES ((size_t)(2 * 1024 * 1024))
+
+size_t sublimation_scan_min_bytes(void) { return SUB_SCAN_MIN_BYTES; }
+
+int sublimation_scan(size_t nrec, size_t total_bytes,
+                     void (*fn)(size_t index, void *user), void *user,
+                     size_t num_threads, int *ran_parallel) {
+    if (!fn) { if (ran_parallel) *ran_parallel = 0; return 0; }
+    if (ran_parallel) *ran_parallel = 0;
+    if (nrec == 0) return 1;
+
+    size_t w = num_threads ? num_threads : sub_default_num_workers();
+    if (nrec >= 2 && w >= 2 && total_bytes >= SUB_SCAN_MIN_BYTES) {
+        if (sublimation_parallel_for(nrec, w, fn, user)) {
+            if (ran_parallel) *ran_parallel = 1;
+            return 1;
+        }
+        // Pool could not start. The tasks are independent by contract, so the
+        // same callback run serially produces the same result -- which is why
+        // this is a fallback and not an error the caller has to handle.
+    }
+    for (size_t i = 0; i < nrec; i++) fn(i, user);
+    return 1;
+}

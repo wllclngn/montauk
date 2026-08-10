@@ -31,7 +31,7 @@
 
 #include "sublimation.h"
 #include "sublimation_pack.h"
-#include "sublimation_search.h"
+#include "sublimation_locate.h"
 #include "sublimation_randomness.h"
 #include "sublimation_stats.h"
 #include "sublimation_text.h"
@@ -63,7 +63,25 @@ static void *xrealloc(void *q, size_t n) { void *p = realloc(q, n); if (!p && n)
 
 static void usage(FILE *out) {
     fputs(
-        "usage: sublimation COMMAND [options]   (reads numbers on stdin)\n"
+        "usage: sublimation COMMAND [options]\n"
+        "\n"
+        "  THE FILE ARGUMENT SPLITS THE VERBS IN HALF, and it is the one rule worth\n"
+        "  knowing up front. Verbs that WALK TEXT take an optional [FILE]/[FILE..] and\n"
+        "  fall back to stdin: search, field, where, cut, column, uniq, tac, paste,\n"
+        "  head, tail. Verbs that CONSUME A VALUE STREAM are stdin-only, and so are\n"
+        "  replace and tr (they take PATTERN/SET arguments, so a trailing path would\n"
+        "  be ambiguous):\n"
+        "  sort, quantile, select, searchsorted, sum, mean, stdev, variance, min, max,\n"
+        "  describe, histogram, outliers, classify, rand, characterize, locate.\n"
+        "  'sublimation describe FILE' is therefore an error, not an oversight --\n"
+        "  pipe it: 'sublimation describe < FILE'.\n"
+        "\n"
+        "  OPTION FORMS: a long option takes either form, '--delim ,' or '--delim=,'.\n"
+        "  A short option that takes a value wants it SEPARATE: '-A 6', never '-A6'.\n"
+        "  Where a verb's value is positional it is never a flag: 'cut 1-60', not\n"
+        "  '-c1-60'. Any of these rejected tells you WHICH form it wants rather than\n"
+        "  claiming the option does not exist.\n"
+        "\n"
         "\n"
         "  sort                  order ascending (or --desc); --keyed keeps the\n"
         "                        whole line, ordering by the key (--field N or the\n"
@@ -103,7 +121,8 @@ static void usage(FILE *out) {
         "                        sum|mean|count|min|max|sstdev|pstdev|first|last|\n"
         "                        median|mode|antimode|unique|collapse|countunique)\n"
         "  uniq [-d|-u] [-i] [FILE] collapse adjacent duplicate lines (-d dups only, -u uniques only, -i case-insensitive)\n"
-        "  cut LO-HI [FILE]      character columns, 1-based inclusive (cut -c): N, lo-hi, lo-, -hi\n"
+        "  cut LO-HI [FILE]      character columns, 1-based inclusive: N, lo-hi, lo-, -hi.\n"
+        "                        The RANGE IS POSITIONAL -- 'cut 1-60', never '-c1-60'\n"
         "  column [FILE]         align delimited input into columns (column -t)\n"
         "  tac [FILE]            reverse line order\n"
         "  paste [FILE..]        one line per input, tab-joined side by side (zip-style);\n"
@@ -458,7 +477,10 @@ static void emit_colored_line(montauk_sink *out, const sublimation_search *set, 
 // freed inside the call), so one const sublimation_search array is shared
 // read-only across workers with no lock: unlike ripgrep, nothing here needs
 // per-thread cloning.
-#define SEARCH_PAR_MIN_BYTES (2 * 1024 * 1024)
+// The gate is the LIBRARY's, not this file's. It was a #define here, which is
+// how the second consumer ended up inventing its own: a threshold that only one
+// caller can read is a threshold every other caller has to guess.
+#define SEARCH_PAR_MIN_BYTES ((long long)sublimation_scan_min_bytes())
 
 // Cheap stat() pass (no opens, no reads) to size the corpus before deciding.
 static long long search_total_bytes(char **files, int n) {
@@ -746,6 +768,39 @@ static int search_split_file(const char *fname, long long size, int want,
 // b f v, or the escaped char itself) -- byte-domain only, no POSIX [:class:]
 // names, no multi-byte UTF-8 range expansion. Expands into out[] (caller-sized,
 // >=256 for a full-range SET); returns the expanded length.
+// SHORT OPTIONS THAT TAKE A VALUE, per verb. Exists so a rejected form can say
+// which form it wants instead of claiming the option does not exist -- see the
+// diagnostic at the cluster loop below for why that distinction is the whole
+// point. Keep in step with the parse loop's `-X` cases; a missing entry here
+// only costs a worse message, never a wrong parse.
+// Verbs whose VALUE is positional but whose doc line cites a coreutils flag that
+// carries it. `cut LO-HI [FILE] ... (cut -c)` reads as though -c were the flag,
+// so `cut -c1-60` is a natural call -- and "unknown option '-c'" is literally
+// true and useless, because the range was never a flag here. Naming the shape
+// costs one line and saves the round trip.
+static const char *positional_not_flag(const char *cmd, char c) {
+    if (!strcmp(cmd, "cut") && c == 'c') return "the character range";
+    if (!strcmp(cmd, "head") && c == 'n') return "the line count";
+    if (!strcmp(cmd, "tail") && c == 'n') return "the line count";
+    if (!strcmp(cmd, "column") && c == 't') return "no argument (alignment is the default)";
+    return NULL;
+}
+
+static int short_opt_takes_value(const char *cmd, char c) {
+    if (!strcmp(cmd, "search")) {
+        switch (c) {
+            case 'm': case 'k': case 'A': case 'B': case 'C':
+            case 'e': case 'f': case 'd':
+                return 1;
+            default: break;
+        }
+    }
+    // -d (delimiter) is shared by every verb that splits fields; uniq and tr
+    // spell -d as a boolean and are excluded in the parse loop for that reason.
+    if (c == 'd' && strcmp(cmd, "uniq") && strcmp(cmd, "tr")) return 1;
+    return 0;
+}
+
 static size_t tr_expand_set(const char *set, unsigned char *out, size_t outcap) {
     size_t n = 0;
     for (const char *p = set; *p && n < outcap; ) {
@@ -1056,6 +1111,40 @@ int main(int argc, char **argv) {
     int dispersion_mode = 0;
     int is_tr      = !strcmp(cmd, "tr");
 
+    // `--opt=value` IS ACCEPTED FOR EVERY LONG OPTION THAT TAKES ONE, not just
+    // the two that happened to parse it themselves. Before this, --color=always
+    // worked and --delim=, answered "unknown option '--delim=,'" -- the same
+    // lie the short-option path told about -A6, and the same cost: a caller who
+    // learns one form works reasonably assumes the other does, and the error
+    // says the option does not exist.
+    //
+    // Done by REWRITING argv before the loop rather than at each call site, so
+    // a long option added later gets the form for free instead of needing to
+    // remember. --label= and --color= are excluded because they already consume
+    // the '=' themselves; splitting those would hand their value to the
+    // positional slot.
+    char **argv2 = (char **)malloc((size_t)argc * 2 * sizeof(char *));
+    int argc2 = 0;
+    if (argv2) {
+        for (int i = 0; i < argc; i++) {
+            const char *a = argv[i];
+            const char *eq = (a[0] == '-' && a[1] == '-') ? strchr(a, '=') : NULL;
+            int self = a[0] == '-' && a[1] == '-' &&
+                       (!strncmp(a, "--label=", 8) || !strncmp(a, "--color=", 8));
+            if (eq && !self && eq != a + 2) {
+                size_t nlen = (size_t)(eq - a);
+                char *name = (char *)malloc(nlen + 1);
+                if (!name) { argc2 = 0; break; }
+                memcpy(name, a, nlen); name[nlen] = '\0';
+                argv2[argc2++] = name;
+                argv2[argc2++] = (char *)(eq + 1);
+            } else {
+                argv2[argc2++] = (char *)a;
+            }
+        }
+        if (argc2) { argv = argv2; argc = argc2; }
+    }
+
     for (int i = 2; i < argc; i++) {
         const char *a = argv[i];
         if (endopts) {  // after `--`, everything is a positional (lets REPL/PATTERN start with '-')
@@ -1173,6 +1262,34 @@ int main(int argc, char **argv) {
                     known = 0;   // no other verb owns any short boolean flag
                 }
                 if (!known) {
+                    // A KNOWN OPTION IN THE WRONG FORM IS NOT AN UNKNOWN OPTION.
+                    // `-A6` used to report "unknown option '-A'", which says the
+                    // build lacks the feature -- so the correct response is to
+                    // stop and work around it. That is what happened on
+                    // 2026-08-04: two calls failed, -A/-B/-C were reported
+                    // absent from this build, the context-line request was
+                    // abandoned for a whole-file read, and correct --help
+                    // guidance was overridden on the strength of the message.
+                    //
+                    // The two faults demand OPPOSITE responses from the caller
+                    // and only one is recoverable without abandoning the goal,
+                    // so the diagnostic has to tell them apart.
+                    const char *what = positional_not_flag(cmd, *f);
+                    if (what) {
+                        fprintf(stderr,
+                                "sublimation: %s takes %s POSITIONALLY -- use "
+                                "'%s %s', not '%s -%c%s'\n",
+                                cmd, what, cmd, f + 1, cmd, *f, f + 1);
+                        return 2;
+                    }
+                    if (short_opt_takes_value(cmd, *f)) {
+                        fprintf(stderr,
+                                "sublimation: option '-%c' for %s takes a SEPARATE "
+                                "value -- use '-%c %.*s', not '-%c%.*s'\n",
+                                *f, cmd, *f, (int)strlen(f + 1), f + 1,
+                                *f, (int)strlen(f + 1), f + 1);
+                        return 2;
+                    }
                     fprintf(stderr, "sublimation: unknown option '-%c' for %s\n", *f, cmd);
                     return 2;
                 }
@@ -1528,10 +1645,11 @@ int main(int argc, char **argv) {
             atomic_init(&pc.inflight, (size_t)0);
             pc.max_inflight = search_max_inflight();
             atomic_init(&pc.overflow_announced, 0);
-            if (!sublimation_parallel_for((size_t)nchunks, (size_t)workers,
-                                          search_par_chunk, &pc))
-                for (int ci = 0; ci < nchunks; ci++)      // engine OOM: same worker fn, serial
-                    search_par_chunk((size_t)ci, &pc);
+            // The gate above already decided this set is worth fanning out, so
+            // pass its own byte weight through; sublimation_scan owns the
+            // serial fallback that used to be written out here.
+            sublimation_scan((size_t)nchunks, (size_t)par_bytes,
+                             search_par_chunk, &pc, (size_t)workers, NULL);
             // Merge in chunk order, grouping by file. line_base is accumulated
             // HERE and nowhere else: a chunk records line numbers relative to
             // its own start because it cannot know what precedes it, and this

@@ -233,7 +233,7 @@ static std::string redact_comm(const char* comm) {
 
 #include "sublimation.h"        // in-tree sub-system: flow-model sort, classify
 #include "sublimation_order.hpp" // sublimation_order_u64/_f64: struct-by-key ordering (pulls in sublimation_pack.h)
-#include "sublimation_search.h" // structural locator: where a disorder pattern sits
+#include "sublimation_locate.h" // structural locator: where a disorder pattern sits
 #include "sublimation_signal.h" // matrix profile (STOMP on the FFT): discords + motifs
 #include "util/sink.h"          // buffered stdout sink: one drain, not a printf per line
 #include "util/json.h"          // write-only JSON serializer on the sink (the --json renderer)

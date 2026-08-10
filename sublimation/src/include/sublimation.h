@@ -250,6 +250,40 @@ SUB_API int sublimation_parallel_for(size_t n, size_t num_threads,
 // and cgroup limits cap it, and capped at 64.
 SUB_API size_t sublimation_default_workers(void);
 
+// The byte weight below which fanning out costs more than it saves. Exposed
+// because a caller that has to invent its own threshold has already lost the
+// point of a shared engine: two consumers guessing separately is two different
+// answers to one question.
+SUB_API size_t sublimation_scan_min_bytes(void);
+
+// SCAN A RECORD SET, in parallel when the work justifies it and serially when it
+// does not, with the decision and the fallback owned HERE rather than restated
+// at every call site.
+//
+// This exists because sublimation_parallel_for alone was not the capability
+// callers actually needed. The COMPOSITION around it -- gate on total byte
+// weight, fan out one task per record, and re-run the same callback serially
+// when the pool cannot start -- lived in cli.c and was then hand-copied into
+// OUROBOROS, threshold and all. A second copy of a merge convention is how two
+// implementations begin disagreeing about ordering, which is the one property
+// the convention exists to guarantee.
+//
+// ORDERING IS THE LIBRARY'S PROMISE. `fn` is called once per index in
+// [0, nrec); tasks are independent by contract and must write only their own
+// index's slot. Nothing here reorders the caller's output, so reading those
+// slots back in index order recovers record order exactly, whether the run went
+// parallel or serial. That equivalence is the guarantee -- the two paths are
+// never allowed to differ in what they produce, only in how fast.
+//
+// `total_bytes` is the caller's own measure of the work (summed record sizes);
+// pass 0 to force the serial path. `num_threads` of 0 means the hardware count.
+// Returns 1 when every record was scanned by either path, 0 only when `fn` is
+// NULL. *ran_parallel, if non-NULL, reports which path ran -- for diagnostics,
+// never for correctness, since the two produce the same result.
+SUB_API int sublimation_scan(size_t nrec, size_t total_bytes,
+                             void (*fn)(size_t index, void *user), void *user,
+                             size_t num_threads, int *ran_parallel);
+
 // Version queries. `sublimation_api_version()` returns SUBLIMATION_API_VERSION
 // (ABI). `sublimation_version()` returns the release string (e.g. "3.1.0").
 SUB_API int sublimation_api_version(void) SUB_CONST;

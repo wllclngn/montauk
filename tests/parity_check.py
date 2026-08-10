@@ -247,6 +247,23 @@ EXIT_CASES = [
 # (a silently accepted-and-ignored flag or positional used to exit 0).
 CONTRACT_CASES = [
     # (name, sublimation argv, stdin, expected rc, stderr must contain)
+    # THE DIAGNOSTIC IS THE CONTRACT HERE, not merely the exit code. A known
+    # option in the wrong FORM used to report as UNKNOWN, and "unknown option"
+    # means the build lacks the feature -- so the correct response is to stop
+    # and work around it. That is what happened on 2026-08-04: two calls failed,
+    # -A/-B/-C were reported absent, the context-line request was abandoned, and
+    # correct --help guidance was overridden on the strength of the string.
+    # These pin the distinction the caller acts on.
+    ("-A6 says which form it wants",   ["search", "-A6", "x"], "x\n", 2, "takes a SEPARATE value"),
+    ("-A6 does NOT say unknown",       ["search", "-A6", "x"], "x\n", 2, "-A 6"),
+    ("-m3 says which form it wants",   ["search", "-m3", "x"], "x\n", 2, "takes a SEPARATE value"),
+    ("a real unknown still says so",   ["search", "-Z", "x"], "x\n", 2, "unknown option '-Z'"),
+    ("cut names the positional",       ["cut", "-c1-3"], "abcd\n", 2, "POSITIONALLY"),
+    ("head names the positional",      ["head", "-n2"], "a\nb\nc\n", 2, "POSITIONALLY"),
+    # --opt=value works for EVERY long option now, not just the two that parsed
+    # '=' themselves. --delim=, used to answer "unknown option '--delim=,'".
+    ("--delim= is accepted",           ["field", "2", "--delim=,"], "a,b\n", 0, ""),
+    ("--delim separated still works",  ["field", "2", "--delim", ","], "a,b\n", 0, ""),
     ("field rejects search flags",     ["field", "1", "-v"], "x\n", 2, "unknown option '-v' for field"),
     ("field rejects bundled -vqF",     ["field", "1", "-vqF"], "x\n", 2, "unknown option"),
     ("sum rejects a positional",       ["sum", "{pa}"], "1\n", 2, "unexpected argument"),

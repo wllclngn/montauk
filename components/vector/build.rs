@@ -8,10 +8,18 @@ fn main() {
     let build_dir = std::env::var("MONTAUK_BUILD_DIR")
         .unwrap_or_else(|_| format!("{manifest_dir}/../../build"));
 
+    // sublimation defines its own target now, pulled in with an explicit binary
+    // dir (the CLI executable is already called `sublimation` and occupies
+    // build/sublimation), so the archive lands in build/sublimation-lib/. The
+    // old build/ location is searched too: an out-of-tree consumer setting
+    // MONTAUK_BUILD_DIR may still place it there, and searching both costs
+    // nothing while silently linking a STALE archive costs a debugging session.
+    println!("cargo:rustc-link-search=native={build_dir}/sublimation-lib");
     println!("cargo:rustc-link-search=native={build_dir}");
     println!("cargo:rustc-link-lib=static=sublimation");
     // sublimation's own CMakeLists.txt links these; static linking needs them too.
     println!("cargo:rustc-link-lib=dylib=pthread");
     println!("cargo:rustc-link-lib=dylib=m");
+    println!("cargo:rerun-if-changed={build_dir}/sublimation-lib/libsublimation.a");
     println!("cargo:rerun-if-changed={build_dir}/libsublimation.a");
 }

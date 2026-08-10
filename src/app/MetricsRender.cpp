@@ -523,6 +523,9 @@ void render_processes(MetricsSink& sink, const MetricsSnapshot& s) {
     for (const auto& r : s.anomaly_features) {
       sink.entry_begin();
       sink.i64({"pid", nullptr, nullptr}, r.pid);
+      // Every ranked row is nameable. comm is NUL-terminated within its 16
+      // bytes; the full cmdline for the displayed subset stays in `top`.
+      sink.str({"comm", nullptr, nullptr}, std::string(r.comm.data()));
       sink.f64({"cpu_pct", nullptr, nullptr}, r.cpu_pct);
       sink.f64({"rss_kb", nullptr, nullptr}, r.rss_kb);
       sink.f64({"gpu_util_pct", nullptr, nullptr}, r.gpu_util_pct);

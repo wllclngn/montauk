@@ -1,11 +1,14 @@
-// sublimation_search.h -- structural search: locate where a disorder pattern
+// sublimation_locate.h -- structural search: locate where a disorder pattern
 // occurs in a numeric stream.
 //
-// Name note: this header is the STRUCTURAL search over numeric streams
-// (sublimation_profile / sublimation_locate). It is distinct from the TEXT
-// matcher type `sublimation_search`, which lives in sublimation_text.h -- same
-// word, different lane (numbers vs bytes). The two never mix; a full rename to
-// retire the overlap is deferred as its own breaking-change pass.
+// RENAMED FROM sublimation_search.h IN v8.8.0. This header is the STRUCTURAL
+// search over numeric streams and declares only sublimation_profile_* and
+// sublimation_locate_*, so nothing in it was ever called "search" but the file
+// itself. The TEXT matcher type `sublimation_search` lives in sublimation_text.h
+// -- same word, different lane (numbers vs bytes) -- and the overlap cost real
+// time during the OUROBOROS resync, where the name matched the intent (text
+// search) and this was the other lane entirely. The header you reach for by
+// name is now the one you meant.
 //
 // This is the third primitive alongside the sort (ordering) and the classifier
 // (what an input *is*). Where grep finds the positions of a TEXT pattern,
@@ -22,8 +25,8 @@
 // Read-only: the input is never modified. The classifier runs in place on each
 // window (no copy). Window sizes >= 256 get the full Young-tableau treatment;
 // smaller windows still yield a disorder class from the cheap profile.
-#ifndef SUBLIMATION_SEARCH_H
-#define SUBLIMATION_SEARCH_H
+#ifndef SUBLIMATION_LOCATE_H
+#define SUBLIMATION_LOCATE_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -101,4 +104,4 @@ SUB_API const char *sublimation_disorder_name(sub_disorder_t d);
 }
 #endif
 
-#endif // SUBLIMATION_SEARCH_H
+#endif // SUBLIMATION_LOCATE_H

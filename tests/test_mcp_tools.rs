@@ -133,9 +133,9 @@ fn sublimation_classify_names_a_disorder_class() {
 }
 
 #[test]
-fn sublimation_grep_reports_match_position() {
+fn sublimation_find_reports_match_position() {
     let args = Value::obj(vec![
-        ("op", Value::String("grep".to_string())),
+        ("op", Value::String("find".to_string())),
         ("pattern", Value::String("wor.d".to_string())),
         ("text", Value::String("hello world".to_string())),
     ]);
@@ -146,9 +146,9 @@ fn sublimation_grep_reports_match_position() {
 }
 
 #[test]
-fn sublimation_grep_no_match_reports_false() {
+fn sublimation_find_no_match_reports_false() {
     let args = Value::obj(vec![
-        ("op", Value::String("grep".to_string())),
+        ("op", Value::String("find".to_string())),
         ("pattern", Value::String("xyz".to_string())),
         ("text", Value::String("hello world".to_string())),
     ]);
@@ -158,14 +158,14 @@ fn sublimation_grep_no_match_reports_false() {
 }
 
 #[test]
-fn sublimation_grep_invalid_regex_is_an_error_not_false() {
+fn sublimation_find_invalid_regex_is_an_error_not_false() {
     // A pattern that cannot compile (state explosion past the engine's 256
     // NFA states) must surface as a JSON-RPC error. Mapping it to
     // matched:false hands the caller a silent wrong answer, indistinguishable
     // from a genuine no-match.
     let big = "a".repeat(400);
     let args = Value::obj(vec![
-        ("op", Value::String("grep".to_string())),
+        ("op", Value::String("find".to_string())),
         ("pattern", Value::String(big)),
         ("text", Value::String("hello".to_string())),
     ]);
@@ -224,9 +224,9 @@ fn sublimation_sort_missing_values_is_an_error() {
 }
 
 #[test]
-fn sublimation_grep_missing_text_is_an_error() {
+fn sublimation_find_missing_text_is_an_error() {
     let args = Value::obj(vec![
-        ("op", Value::String("grep".to_string())),
+        ("op", Value::String("find".to_string())),
         ("pattern", Value::String("x".to_string())),
     ]);
     let err = tool_call("sublimation", args).unwrap_err();
@@ -497,15 +497,15 @@ fn montauk_anomalies_computes_the_fusion_over_the_feature_matrix() {
     let json = r#"{"processes":{
         "top":[{"pid":100,"cmd":"hog"}],
         "anomaly_features":[
-          {"pid":100,"cpu_pct":98.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1},
-          {"pid":101,"cpu_pct":0.5,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1},
-          {"pid":102,"cpu_pct":0.4,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1},
-          {"pid":103,"cpu_pct":0.3,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":2},
-          {"pid":104,"cpu_pct":0.6,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1},
-          {"pid":105,"cpu_pct":0.2,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1},
-          {"pid":106,"cpu_pct":0.5,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":2},
-          {"pid":107,"cpu_pct":0.4,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1},
-          {"pid":108,"cpu_pct":0.3,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1}
+          {"pid":100,"cpu_pct":98.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0},
+          {"pid":101,"cpu_pct":0.5,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0},
+          {"pid":102,"cpu_pct":0.4,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0},
+          {"pid":103,"cpu_pct":0.3,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":2,"ctxsw_delta":0},
+          {"pid":104,"cpu_pct":0.6,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0},
+          {"pid":105,"cpu_pct":0.2,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0},
+          {"pid":106,"cpu_pct":0.5,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":2,"ctxsw_delta":0},
+          {"pid":107,"cpu_pct":0.4,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0},
+          {"pid":108,"cpu_pct":0.3,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0}
         ]}}"#;
     let result = vector::tools::anomalies_reduce(json, 3).expect("anomalies_reduce ok");
     let inner = vector::json::parse(tool_text(&result)).expect("inner json parses");
@@ -517,10 +517,253 @@ fn montauk_anomalies_computes_the_fusion_over_the_feature_matrix() {
     assert_eq!(top.get("cmd").and_then(Value::as_str), Some("hog"), "named from the top set");
 }
 
+// THE DRIFT GUARD. vector fused five features while montauk fused six for the
+// whole of v8.7.0 -- two different answers to "what is anomalous", from a tool
+// whose entire value is that it agrees with montauk. Nothing failed, because
+// nothing was watching the SHAPE.
+//
+// A montauk that publishes a feature this build does not fuse must now be a
+// REFUSAL, not a narrower ranking: a plausible-looking answer computed over the
+// wrong matrix is the worst way to be wrong, and the message has to name the
+// field so the fix is obvious.
+#[test]
+fn montauk_anomalies_refuses_a_feature_matrix_wider_than_it_fuses() {
+    let json = r#"{"processes":{
+        "top":[{"pid":100,"cmd":"hog"}],
+        "anomaly_features":[
+          {"pid":100,"cpu_pct":98.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"future_axis":5.0},
+          {"pid":101,"cpu_pct":0.5,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"future_axis":0.0},
+          {"pid":102,"cpu_pct":0.4,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"future_axis":0.0},
+          {"pid":103,"cpu_pct":0.3,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":2,"ctxsw_delta":0,"future_axis":0.0},
+          {"pid":104,"cpu_pct":0.6,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"future_axis":0.0},
+          {"pid":105,"cpu_pct":0.2,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"future_axis":0.0},
+          {"pid":106,"cpu_pct":0.5,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":2,"ctxsw_delta":0,"future_axis":0.0},
+          {"pid":107,"cpu_pct":0.4,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"future_axis":0.0},
+          {"pid":108,"cpu_pct":0.3,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"future_axis":0.0}
+        ]}}"#;
+    let err = vector::tools::anomalies_reduce(json, 3).expect_err("must refuse a wider matrix");
+    assert!(err.1.contains("future_axis"), "the refusal names the unknown feature: {}", err.1);
+}
+
+// And the sixth feature is genuinely fused, not merely accepted: a population
+// whose ONLY outlier is the context-switch axis must rank that process first
+// and name ctxsw. Under the five-feature build this row was invisible.
+#[test]
+fn montauk_anomalies_fuses_the_context_switch_axis() {
+    let json = r#"{"processes":{
+        "top":[{"pid":200,"cmd":"preempted"}],
+        "anomaly_features":[
+          {"pid":200,"cpu_pct":1.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":90000},
+          {"pid":201,"cpu_pct":1.1,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
+          {"pid":202,"cpu_pct":0.9,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
+          {"pid":203,"cpu_pct":1.0,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":4},
+          {"pid":204,"cpu_pct":1.2,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
+          {"pid":205,"cpu_pct":0.8,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
+          {"pid":206,"cpu_pct":1.0,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":5},
+          {"pid":207,"cpu_pct":1.1,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
+          {"pid":208,"cpu_pct":0.9,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2}
+        ]}}"#;
+    let result = vector::tools::anomalies_reduce(json, 3).expect("anomalies_reduce ok");
+    let inner = vector::json::parse(tool_text(&result)).expect("inner json parses");
+    let anomalies = inner.get("anomalies").and_then(Value::as_array).expect("anomalies array");
+    let top = &anomalies[0];
+    assert_eq!(top.get("pid").and_then(Value::as_f64), Some(200.0), "the preempted process ranks first");
+    assert_eq!(top.get("axis").and_then(Value::as_str), Some("ctxsw"), "dominant axis is ctxsw");
+}
+
+// EVERY RANKED PROCESS IS NAMEABLE. The ranking runs over anomaly_features
+// (the whole population) while `top` holds only the displayed subset, so
+// naming from `top` alone left the majority of ranked pids with cmd:"" -- a
+// rank attached to what reads like a process with no command. montauk carries
+// a comm on every feature row for this; `top`'s fuller cmdline still wins
+// where it exists.
+#[test]
+fn montauk_anomalies_names_a_process_outside_the_displayed_top_set() {
+    let json = r#"{"processes":{
+        "top":[{"pid":200,"cmd":"/usr/lib/firefox/firefox --tab"}],
+        "anomaly_features":[
+          {"pid":200,"comm":"firefox","cpu_pct":1.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":90000},
+          {"pid":201,"comm":"kworker/2:1","cpu_pct":1.1,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
+          {"pid":202,"comm":"sshd","cpu_pct":0.9,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
+          {"pid":203,"comm":"systemd","cpu_pct":1.0,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":4},
+          {"pid":204,"comm":"dbus-daemon","cpu_pct":1.2,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
+          {"pid":205,"comm":"pipewire","cpu_pct":0.8,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
+          {"pid":206,"comm":"chrome","cpu_pct":1.0,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":5},
+          {"pid":207,"comm":"bash","cpu_pct":1.1,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
+          {"pid":208,"comm":"nvidia-smi","cpu_pct":0.9,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2}
+        ]}}"#;
+    let result = vector::tools::anomalies_reduce(json, 9).expect("anomalies_reduce ok");
+    let inner = vector::json::parse(tool_text(&result)).expect("inner json parses");
+    let anomalies = inner.get("anomalies").and_then(Value::as_array).expect("anomalies array");
+
+    for a in anomalies {
+        let pid = a.get("pid").and_then(Value::as_f64).expect("pid");
+        let cmd = a.get("cmd").and_then(Value::as_str).unwrap_or("");
+        assert!(!cmd.is_empty(), "pid {pid} ranked but was returned with no name");
+    }
+    // pid 200 is in `top`, so the richer full cmdline wins over its comm.
+    let p200 = anomalies.iter().find(|a| a.get("pid").and_then(Value::as_f64) == Some(200.0)).unwrap();
+    assert_eq!(p200.get("cmd").and_then(Value::as_str), Some("/usr/lib/firefox/firefox --tab"));
+    // pid 206 is NOT in `top` and would have been nameless before.
+    let p206 = anomalies.iter().find(|a| a.get("pid").and_then(Value::as_f64) == Some(206.0)).unwrap();
+    assert_eq!(p206.get("cmd").and_then(Value::as_str), Some("chrome"));
+}
+
+// comm is IDENTITY, not a feature: it must not trip the contract check that
+// refuses a feature matrix wider than this build fuses.
+#[test]
+fn montauk_anomalies_does_not_mistake_comm_for_a_fusion_axis() {
+    let json = r#"{"processes":{
+        "top":[],
+        "anomaly_features":[
+          {"pid":1,"comm":"a","cpu_pct":1.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":9},
+          {"pid":2,"comm":"b","cpu_pct":1.1,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
+          {"pid":3,"comm":"c","cpu_pct":0.9,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
+          {"pid":4,"comm":"d","cpu_pct":1.0,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":4},
+          {"pid":5,"comm":"e","cpu_pct":1.2,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
+          {"pid":6,"comm":"f","cpu_pct":0.8,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
+          {"pid":7,"comm":"g","cpu_pct":1.0,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":5},
+          {"pid":8,"comm":"h","cpu_pct":1.1,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
+          {"pid":9,"comm":"i","cpu_pct":0.9,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2}
+        ]}}"#;
+    assert!(vector::tools::anomalies_reduce(json, 3).is_ok(),
+            "comm names the row; it is not an axis and must not be refused as one");
+}
+
+// Build a snapshot with `rows` feature rows, of which only the first
+// `top_rows` also appear in `top`. pid == index, so a pid above top_rows is one
+// that the old top-only implementation would have refused outright.
+fn similar_fixture(rows: usize, top_rows: usize) -> String {
+    let mut top = Vec::new();
+    for i in 0..top_rows {
+        top.push(format!(r#"{{"pid":{i},"cmd":"displayed-{i}"}}"#));
+    }
+    let mut feats = Vec::new();
+    for i in 0..rows {
+        let f = i as f64;
+        feats.push(format!(
+            r#"{{"pid":{i},"comm":"proc-{i}","cpu_pct":{:.3},"rss_kb":{:.1},"gpu_util_pct":0,"fault_delta":{:.1},"thread_count":{},"ctxsw_delta":{:.1}}}"#,
+            (f * 0.37) % 11.0,
+            1000.0 + f * 13.0,
+            f % 7.0,
+            1 + (i % 5),
+            f % 17.0
+        ));
+    }
+    format!(
+        r#"{{"processes":{{"top":[{}],"anomaly_features":[{}]}}}}"#,
+        top.join(","),
+        feats.join(",")
+    )
+}
+
+// THE HAND-OFF THE TWO TOOLS EXIST TO SUPPORT. montauk_anomalies ranks the whole
+// population, so montauk_similar has to accept a pid from anywhere in it. This
+// read `top` alone and refused 79% of them on a real box.
+#[test]
+fn montauk_similar_accepts_a_pid_outside_the_displayed_top_set() {
+    let json = similar_fixture(120, 10);
+    let result = vector::tools::similar_reduce(&json, 97, 5).expect("pid 97 is a live process");
+    let inner = vector::json::parse(tool_text(&result)).expect("inner json parses");
+    assert_eq!(
+        inner.get("query").and_then(|q| q.get("pid")).and_then(Value::as_f64),
+        Some(97.0)
+    );
+    // Named from the feature row's comm, since 97 is not in `top`.
+    assert_eq!(
+        inner.get("query").and_then(|q| q.get("cmd")).and_then(Value::as_str),
+        Some("proc-97")
+    );
+    let sim = inner.get("similar").and_then(Value::as_array).expect("similar array");
+    assert_eq!(sim.len(), 5);
+    for s in sim {
+        assert!(!s.get("cmd").and_then(Value::as_str).unwrap_or("").is_empty(),
+                "every neighbour is named");
+    }
+}
+
+// A pid genuinely absent from the population is still an error, and the error
+// still names live pids for the caller to retry with.
+#[test]
+fn montauk_similar_still_refuses_a_pid_that_is_not_running() {
+    let json = similar_fixture(50, 10);
+    let err = vector::tools::similar_reduce(&json, 999_999, 5).expect_err("pid is not live");
+    assert!(err.1.contains("999999"), "the error names the pid asked for");
+    assert!(err.1.contains("process population"), "and says what it searched");
+}
+
+// ABOVE THE CAP THE GRAPH IS BOUNDED, and `basis` says so rather than leaving
+// the caller to assume the whole population was related. The O(n^3) solve costs
+// ~50 s at n=1024, so an uncapped promise here is a hang.
+#[test]
+fn montauk_similar_caps_the_graph_and_states_the_bound() {
+    let json = similar_fixture(900, 10);
+    let result = vector::tools::similar_reduce(&json, 800, 5).expect("query is live");
+    let inner = vector::json::parse(tool_text(&result)).expect("inner json parses");
+    let basis = inner.get("basis").and_then(Value::as_str).expect("basis");
+    assert!(basis.contains("512 of 900"), "basis reports the bound it used: {basis}");
+    assert!(basis.contains("nearest to the query"), "and how the set was chosen: {basis}");
+    // The query survives its own pre-filter.
+    assert_eq!(
+        inner.get("query").and_then(|q| q.get("pid")).and_then(Value::as_f64),
+        Some(800.0)
+    );
+}
+
+// Under the cap, nothing is dropped and the basis says the whole population.
+#[test]
+fn montauk_similar_relates_the_whole_population_when_it_fits() {
+    let json = similar_fixture(200, 10);
+    let result = vector::tools::similar_reduce(&json, 150, 3).expect("query is live");
+    let inner = vector::json::parse(tool_text(&result)).expect("inner json parses");
+    let basis = inner.get("basis").and_then(Value::as_str).expect("basis");
+    assert!(basis.contains("200 of 200"), "no pre-filter below the cap: {basis}");
+    assert!(basis.contains("whole population"), "and it says so: {basis}");
+}
+
 #[test]
 fn montauk_anomalies_errors_when_the_feature_matrix_is_absent() {
     // No anomaly_features block -> a contract break, surfaced as an error rather
     // than a silent all-zero ranking.
     let json = r#"{"processes":{"top":[{"pid":1,"cmd":"x"}]}}"#;
     assert!(vector::tools::anomalies_reduce(json, 5).is_err());
+}
+
+// `grep` IS REJECTED BY NAME, WITH THE ALTERNATIVES. sublimation replaces grep
+// rather than reimplementing it, so this surface must not promise grep's
+// contract -- the op returns ONE span over the whole text, where grep returns
+// one result per matching line. A bare "unknown op 'grep'" would read as "this
+// server cannot match text", which is the opposite of true.
+#[test]
+fn sublimation_rejects_grep_by_name_and_names_the_alternatives() {
+    for name in ["grep", "search", "match"] {
+        let args = Value::obj(vec![
+            ("op", Value::String(name.to_string())),
+            ("pattern", Value::String("a".to_string())),
+            ("text", Value::String("abc".to_string())),
+        ]);
+        let err = vector::tools::call_sublimation(&args).expect_err("must reject");
+        assert!(err.1.contains("'find'"), "{name}: names find: {}", err.1);
+        assert!(err.1.contains("'contains'"), "{name}: names contains: {}", err.1);
+        assert!(err.1.contains("sublimation search"), "{name}: names the CLI: {}", err.1);
+        assert!(!err.1.starts_with("unknown op"), "{name}: not a bare unknown: {}", err.1);
+    }
+}
+
+// And `find` is honest about WHICH span it returns: one match over the whole
+// text, not per line. ^ anchors to the text, so a pattern that would match
+// three separate lines under grep matches once here.
+#[test]
+fn sublimation_find_spans_the_text_not_each_line() {
+    let args = Value::obj(vec![
+        ("op", Value::String("find".to_string())),
+        ("pattern", Value::String("^a.*a$".to_string())),
+        ("text", Value::String("alpha\nbeta\nalpaca".to_string())),
+    ]);
+    let out = vector::tools::call_sublimation(&args).expect("find ok");
+    let v = vector::json::parse(tool_text(&out)).expect("json");
+    assert_eq!(v.get("matched").and_then(Value::as_bool), Some(true));
+    // The whole 17-byte text, not the 5-byte first line -- the behaviour the
+    // rename exists to stop misrepresenting. grep would return three lines here.
+    assert_eq!(v.get("len").and_then(Value::as_f64), Some(17.0), "one span over the text");
 }

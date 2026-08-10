@@ -4,7 +4,7 @@
 // block -- and show that sublimation_locate finds exactly those window positions
 // and nothing else. This is grep for structure: the window is the line, the
 // disorder class is the pattern.
-#include "../src/include/sublimation_search.h"
+#include "../src/include/sublimation_locate.h"
 
 #include <stdio.h>
 #include <stdint.h>

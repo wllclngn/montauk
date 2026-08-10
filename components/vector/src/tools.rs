@@ -28,7 +28,7 @@ pub const TOOLS_LIST: &[(&str, &str)] = &[
     ),
     (
         "montauk_anomalies",
-        "What is anomalous on the system right now, ranked and explained. Fuses three spatial detectors -- MAD (per-axis outlier), Mahalanobis (odd combination of axes) and Half-Space Trees (density/isolation, no shape assumption) -- rank-averaged over the live process population (CPU, RSS, GPU, page-fault rate, thread count) into a per-process anomaly score, and returns the top processes with the dominant feature axis and a plain-language note. Read-only: reads the feature matrix from `montauk --json` and computes the fusion in-process over sublimation's learn lane (the same primitive montauk itself uses). Arguments: top (number, optional, how many to return, default 5).",
+        "What is anomalous on the system right now, ranked and explained. Fuses three spatial detectors -- MAD (per-axis outlier), Mahalanobis (odd combination of axes) and Half-Space Trees (density/isolation, no shape assumption) -- rank-averaged over the live process population (CPU, RSS, GPU, page-fault rate, thread count, involuntary context switches) into a per-process anomaly score, and returns the top processes with the dominant feature axis and a plain-language note. Read-only: reads the feature matrix from `montauk --json` and computes the fusion in-process over sublimation's learn lane (the same primitive montauk itself uses). Arguments: top (number, optional, how many to return, default 5).",
     ),
     (
         "montauk_similar",
@@ -48,7 +48,7 @@ pub const TOOLS_LIST: &[(&str, &str)] = &[
     ),
     (
         "sublimation",
-        "Read-only call into sublimation's engines over a bounded input, returning structured values. Direct FFI, no subprocess, for every op: \"sort\"|\"classify\" over values, \"grep\"|\"contains\" over pattern+text, the statistics lane over values -- \"sum\"|\"mean\"|\"stdev\"|\"variance\"|\"min\"|\"max\" (returns the named scalar), \"quantile\" (needs q in 0..1, optional nearest bool for nearest-rank), \"describe\" (count/mean/stdev/min/q25/q50/q75/max), \"outliers\" (Tukey IQR fences plus the values outside them), \"histogram\" (10 bins with start and count); \"characterize\" (the fused eight-lens randomness battery over values -- confidence, verdict, and each lens's name/score/availability); and over text (newline-separated lines) -- \"count\" (record total), \"distinct\" (number of distinct records), \"tally\" (each distinct record with its count, high to low). Arguments: op (required), values (number array), q and nearest (quantile only), pattern/text (strings), icase (bool, optional). For large or piped streams use the sublimation CLI directly; this tool is for bounded in-conversation analysis.",
+        "Read-only call into sublimation's engines over a bounded input, returning structured values. Direct FFI, no subprocess, for every op: \"sort\"|\"classify\" over values, \"grep\"|\"contains\" over pattern+text, the statistics lane over values -- \"sum\"|\"mean\"|\"stdev\"|\"variance\"|\"min\"|\"max\" (returns the named scalar), \"quantile\" (needs q in 0..1, optional nearest bool for nearest-rank), \"describe\" (count/mean/stdev/min/q25/q50/q75/max), \"outliers\" (Tukey IQR fences plus the values outside them), \"histogram\" (10 bins with start and count); \"characterize\" (the fused eight-lens randomness battery over values -- confidence, verdict, and each lens's name/score/availability); and over text (newline-separated lines) -- \"count\" (record total), \"distinct\" (number of distinct records), \"tally\" (each distinct record with its count, high to low). Arguments: op (required), values (number array), q and nearest (quantile only), pattern/text (strings), icase (bool, optional). Prefer this over shelling out whenever the values are already in hand: direct FFI, no subprocess, no quoting, and the result comes back as structured values rather than text to re-parse. The CLI is the right tool for a LARGE or PIPED stream -- an MCP result cannot be piped onward inside the same command -- but a bounded array or a block of text belongs here.",
     ),
 ];
 
@@ -117,7 +117,7 @@ pub fn input_schema_for(name: &str) -> Value {
         "sublimation" => schema_object(
             vec![
                 ("op", schema_string_enum(&[
-                    "sort", "classify", "grep", "contains",
+                    "sort", "classify", "find", "contains",
                     "sum", "mean", "stdev", "variance", "min", "max", "quantile",
                     "describe", "outliers", "histogram", "characterize",
                     "count", "distinct", "tally",
@@ -199,67 +199,117 @@ pub fn anomalies_reduce(out: &str, top_n: usize) -> Result<Value, (i64, String)>
     if n < 8 {
         return Err((-32000, "too few processes for a population anomaly".to_string()));
     }
-    // pid -> cmd from the displayed top set (feature rows carry pid only, to keep
-    // the snapshot copy heap-light); an anomaly outside the displayed set reports
-    // its pid without a name.
+    // pid -> name, for the WHOLE ranked population.
+    //
+    // This used to read only `top`, which is 64 rows against the feature array's
+    // ~300, so 79% of the processes this tool ranks came back with cmd:"" -- a
+    // rank attached to what reads like a process with no command. montauk now
+    // carries a comm on every feature row for exactly this. `top`'s full cmdline
+    // still wins where it exists, because it is the richer name; the comm is the
+    // floor that guarantees every ranked pid has one.
     let mut cmd_by_pid: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    for r in feats {
+        if let (Some(pid), Some(comm)) =
+            (r.get("pid").and_then(Value::as_f64), r.get("comm").and_then(Value::as_str))
+        {
+            if !comm.is_empty() {
+                cmd_by_pid.insert(pid as i64, comm.to_string());
+            }
+        }
+    }
     if let Some(top) = procs.get("top").and_then(Value::as_array) {
         for p in top {
             if let (Some(pid), Some(cmd)) =
                 (p.get("pid").and_then(Value::as_f64), p.get("cmd").and_then(Value::as_str))
             {
-                cmd_by_pid.insert(pid as i64, cmd.to_string());
+                if !cmd.is_empty() {
+                    cmd_by_pid.insert(pid as i64, cmd.to_string());
+                }
             }
         }
     }
-    // Build the n*5 matrix in the primitive's column order. A missing feature is a
-    // contract break -> error, never a silent 0 that would skew the population.
-    const D: usize = 5;
+    // THE FEATURE TABLE IS THE CONTRACT WITH montauk, in the primitive's column
+    // order. Derived from here rather than a literal D, because a hardcoded 5
+    // is exactly how this drifted: montauk's enrichment grew a sixth feature in
+    // v8.7.0 (involuntary context switches) and vector kept fusing five,
+    // quietly answering a different question than montauk's own TUI while its
+    // description advertised the old basis.
+    //
+    // (json key, axis name, how the note phrases that axis's value)
+    const FEATURES: &[(&str, &str, &str)] = &[
+        ("cpu_pct", "cpu", "cpu"),
+        ("rss_kb", "rss", "rss"),
+        ("gpu_util_pct", "gpu", "GPU activity"),
+        ("fault_delta", "faults", "elevated page-fault rate"),
+        ("thread_count", "threads", "elevated thread count"),
+        ("ctxsw_delta", "ctxsw", "elevated involuntary context switches"),
+    ];
+    let d = FEATURES.len();
     let field = |row: &Value, k: &str| -> Result<f64, (i64, String)> {
         row.get(k)
             .and_then(Value::as_f64)
             .ok_or((-32000, format!("anomaly_features row missing {k}")))
     };
-    let mut x = vec![0.0f64; n * D];
+    // FAIL LOUD ON A WIDER montauk. If the snapshot carries a numeric feature
+    // this build does not know, the fusion it would compute is a DIFFERENT
+    // question from the one montauk answers -- and a plausible-looking ranking
+    // is the worst way to be wrong. Refuse and name the field, rather than
+    // silently narrowing. This is a runtime contract precisely because a test
+    // can be skipped and this cannot.
+    if let Some(Value::Object(row)) = feats.first() {
+        let unknown: Vec<&str> = row
+            .iter()
+            .map(|(k, _)| k.as_str())
+            // pid and comm are IDENTITY, not features -- they name the row
+            // rather than contributing an axis to the fusion, so they are not
+            // part of the matrix this check guards.
+            .filter(|k| {
+                *k != "pid" && *k != "comm" && !FEATURES.iter().any(|(fk, _, _)| fk == k)
+            })
+            .collect();
+        if !unknown.is_empty() {
+            return Err((
+                -32000,
+                format!(
+                    "montauk publishes anomaly feature(s) this vector build does not                      fuse: {}. Refusing rather than ranking on a narrower matrix than                      montauk's own -- add them to FEATURES in tools.rs, in montauk's                      column order.",
+                    unknown.join(", ")
+                ),
+            ));
+        }
+    }
+    let mut x = vec![0.0f64; n * d];
     let mut pids = vec![0i64; n];
     for (i, row) in feats.iter().enumerate() {
         pids[i] = field(row, "pid")? as i64;
-        x[i * D] = field(row, "cpu_pct")?;
-        x[i * D + 1] = field(row, "rss_kb")?;
-        x[i * D + 2] = field(row, "gpu_util_pct")?;
-        x[i * D + 3] = field(row, "fault_delta")?;
-        x[i * D + 4] = field(row, "thread_count")?;
+        for (j, (k, _, _)) in FEATURES.iter().enumerate() {
+            x[i * d + j] = field(row, k)?;
+        }
     }
     // The conclusion, computed IN-PROCESS over the learn core -- the same
     // sublimation_anomaly_fuse montauk's enrichment calls.
-    let (scores, axes) = crate::ffi::anomaly_fuse(&x, n, D)
+    let (scores, axes) = crate::ffi::anomaly_fuse(&x, n, d)
         .ok_or((-32000, "anomaly fusion failed".to_string()))?;
     let mut rows: Vec<(f64, i64, i8, f64, f64)> = (0..n)
-        .map(|i| (scores[i], pids[i], axes[i], x[i * D], x[i * D + 1]))
+        .map(|i| (scores[i], pids[i], axes[i], x[i * d], x[i * d + 1]))
         .collect();
     rows.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     rows.truncate(top_n);
     let axis_name = |a: i8| -> &'static str {
-        match a {
-            0 => "cpu",
-            1 => "rss",
-            2 => "gpu",
-            3 => "faults",
-            4 => "threads",
-            _ => "none",
-        }
+        FEATURES.get(a as usize).map(|(_, n, _)| *n).unwrap_or("none")
     };
     let items: Vec<Value> = rows
         .iter()
         .map(|(score, pid, axis, cpu, rss)| {
             let an = axis_name(*axis);
+            // cpu and rss carry the actual number; the rest are phrased, since a
+            // raw fault delta or switch count means nothing without its window.
             let val = match *axis {
                 0 => format!("{cpu:.0}% CPU"),
                 1 => format!("{:.0} MB RSS", rss / 1024.0),
-                2 => "GPU activity".to_string(),
-                3 => "elevated page-fault rate".to_string(),
-                4 => "elevated thread count".to_string(),
-                _ => "no dominant feature".to_string(),
+                a => FEATURES
+                    .get(a as usize)
+                    .map(|(_, _, phrase)| (*phrase).to_string())
+                    .unwrap_or_else(|| "no dominant feature".to_string()),
             };
             let cmd = cmd_by_pid.get(pid).cloned().unwrap_or_default();
             let note =
@@ -284,7 +334,8 @@ pub fn anomalies_reduce(out: &str, top_n: usize) -> Result<Value, (i64, String)>
             Value::String(
                 "fused MAD, Mahalanobis and Half-Space Trees (rank-averaged), computed \
                  in-process over the full live process population (cpu, rss, gpu, \
-                 page-fault rate, thread count); higher score is more anomalous"
+                 page-fault rate, thread count, involuntary context switches); \
+                 higher score is more anomalous"
                     .to_string(),
             ),
         ),
@@ -304,41 +355,141 @@ pub fn call_montauk_similar(args: &Value) -> Result<Value, (i64, String)> {
         .unwrap_or(5)
         .clamp(1, 50);
     let out = run_subprocess("montauk", &["--json"])?;
-    let snap = crate::json::parse(&out).map_err(|e| (-32000, format!("parse montauk --json: {e}")))?;
+    similar_reduce(&out, query_pid, top_n)
+}
+
+// Split from the subprocess call so the graph logic is testable against a fixed
+// snapshot -- the population cap in particular cannot be exercised through a
+// live montauk, whose process count is whatever the box happens to be running.
+pub fn similar_reduce(out: &str, query_pid: i64, top_n: usize) -> Result<Value, (i64, String)> {
+    let snap = crate::json::parse(out).map_err(|e| (-32000, format!("parse montauk --json: {e}")))?;
+    // THE WHOLE POPULATION, not the displayed subset. This read `processes.top`
+    // -- 64 rows against the feature array's ~300 -- so it refused 79% of the
+    // pids montauk_anomalies had just surfaced, which is exactly the hand-off
+    // the two tools exist to support. It also fused 3 features where anomalies
+    // fused 6, so the two disagreed about what "similar" even meant.
     let procs = snap
         .get("processes")
-        .and_then(|p| p.get("top"))
+        .and_then(|p| p.get("anomaly_features"))
         .and_then(Value::as_array)
-        .ok_or((-32000, "montauk --json missing processes.top".to_string()))?;
-    let n = procs.len();
-    if n < 3 {
+        .ok_or((-32000, "montauk --json missing processes.anomaly_features".to_string()))?;
+    if procs.len() < 3 {
         return Err((-32000, "too few processes for a similarity graph".to_string()));
     }
-    let mut pids = Vec::with_capacity(n);
-    let mut cmds = Vec::with_capacity(n);
-    let mut feat = vec![0.0f64; n * 3];
-    for (i, p) in procs.iter().enumerate() {
-        pids.push(p.get("pid").and_then(Value::as_f64).unwrap_or(0.0) as i64);
-        cmds.push(p.get("cmd").and_then(Value::as_str).unwrap_or("").to_string());
-        feat[i * 3] = p.get("cpu_pct").and_then(Value::as_f64).unwrap_or(0.0);
-        feat[i * 3 + 1] = p.get("rss_kb").and_then(Value::as_f64).unwrap_or(0.0);
-        feat[i * 3 + 2] = p.get("gpu_util_pct").and_then(Value::as_f64).unwrap_or(0.0);
+    // Fuller cmdlines for the displayed subset; the per-row comm names the rest.
+    let mut cmd_by_pid: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    if let Some(top) = snap.get("processes").and_then(|p| p.get("top")).and_then(Value::as_array) {
+        for p in top {
+            if let (Some(pid), Some(cmd)) =
+                (p.get("pid").and_then(Value::as_f64), p.get("cmd").and_then(Value::as_str))
+            {
+                if !cmd.is_empty() {
+                    cmd_by_pid.insert(pid as i64, cmd.to_string());
+                }
+            }
+        }
     }
+
+    const DIM: usize = 6;
+    // THE BOUND IS MEASURED, NOT GUESSED, and it is stated in `basis` below
+    // rather than hidden here. Effective resistance is O(n^3): a full call costs
+    // 379 ms at n=311 and ~2.9 s at n=512, but 50 s at n=1024 -- unusable as an
+    // interactive answer. Above the cap the candidate set is narrowed to the
+    // query's CAP nearest by plain standardized distance before the graph is
+    // built. That pre-filter is sound for this question specifically: the tool
+    // returns nearest neighbours, and a process far away in raw feature space is
+    // not going to become the answer once commute-time distances are computed.
+    const CAP: usize = 512;
+
+    let read_row = |p: &Value| -> (i64, [f64; DIM]) {
+        let pid = p.get("pid").and_then(Value::as_f64).unwrap_or(0.0) as i64;
+        let g = |k: &str| p.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+        (pid, [g("cpu_pct"), g("rss_kb"), g("gpu_util_pct"), g("fault_delta"),
+               g("thread_count"), g("ctxsw_delta")])
+    };
+    let all: Vec<(i64, [f64; DIM])> = procs.iter().map(read_row).collect();
+
     // AN ERROR THAT NAMES THE VALID INPUTS lets the caller correct itself on the
     // next turn. A small model reliably READS a pid out of a prior result and
     // then fails to carry it into the next call's arguments -- three rounds of
     // prompting did not fix that, but a bare "not in the list" gives it nothing
     // to retry with, while listing the candidates does.
-    let qi = pids.iter().position(|&p| p == query_pid).ok_or_else(|| {
-        let known: Vec<String> = pids.iter().take(10).map(|p| p.to_string()).collect();
+    let q_all = all.iter().position(|(p, _)| *p == query_pid).ok_or_else(|| {
+        let known: Vec<String> = all.iter().take(10).map(|(p, _)| p.to_string()).collect();
         (
             -32602,
             format!(
-                "pid {query_pid} not in the top process list; valid pids are {}",
+                "pid {query_pid} is not in montauk's current process population \
+                 ({} processes); it may have exited. Example live pids: {}",
+                all.len(),
                 known.join(", ")
             ),
         )
     })?;
+
+    // Column means and spreads over the FULL population, so the pre-filter ranks
+    // on the same standardized footing the affinity graph will use.
+    let rows = all.len();
+    let mut mean = [0.0f64; DIM];
+    let mut sd = [0.0f64; DIM];
+    for (_, f) in &all {
+        for j in 0..DIM {
+            mean[j] += f[j];
+        }
+    }
+    for m in &mut mean {
+        *m /= rows as f64;
+    }
+    for (_, f) in &all {
+        for j in 0..DIM {
+            let e = f[j] - mean[j];
+            sd[j] += e * e;
+        }
+    }
+    for s in &mut sd {
+        *s = (*s / rows as f64).sqrt();
+        if *s <= 0.0 {
+            *s = 1.0;
+        }
+    }
+
+    let selected: Vec<(i64, [f64; DIM])> = if rows <= CAP {
+        all.clone()
+    } else {
+        let qf = all[q_all].1;
+        let mut by_dist: Vec<(usize, f64)> = all
+            .iter()
+            .enumerate()
+            .map(|(i, (_, f))| {
+                let d: f64 = (0..DIM).map(|j| {
+                    let e = (f[j] - qf[j]) / sd[j];
+                    e * e
+                }).sum();
+                (i, d)
+            })
+            .collect();
+        by_dist.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        by_dist.truncate(CAP);
+        by_dist.into_iter().map(|(i, _)| all[i].clone()).collect()
+    };
+
+    let n = selected.len();
+    let mut pids = Vec::with_capacity(n);
+    let mut cmds = Vec::with_capacity(n);
+    let mut feat = vec![0.0f64; n * DIM];
+    for (i, (pid, f)) in selected.iter().enumerate() {
+        pids.push(*pid);
+        cmds.push(cmd_by_pid.get(pid).cloned().unwrap_or_else(|| {
+            procs
+                .iter()
+                .find(|p| p.get("pid").and_then(Value::as_f64) == Some(*pid as f64))
+                .and_then(|p| p.get("comm").and_then(Value::as_str))
+                .unwrap_or("")
+                .to_string()
+        }));
+        feat[i * DIM..i * DIM + DIM].copy_from_slice(f);
+    }
+    let qi = pids.iter().position(|&p| p == query_pid).expect("query is always retained");
     // The affinity graph is sublimation's algorithm, not vector's: the learn/
     // spectral core standardizes the columns and builds a SELF-TUNING (local-
     // scaling) RBF affinity, each node scaled by the distance to its knn-th
@@ -347,7 +498,7 @@ pub fn call_montauk_similar(args: &Value) -> Result<Value, (i64, String)> {
     // edges to the floor and make the commute-time distances saturate. knn = 7
     // is the Zelnik-Manor default, clamped to the population by the core.
     let knn = 7u32.min((n - 1) as u32);
-    let w = ffi::self_tuning_affinity(&feat, n, 3, knn)
+    let w = ffi::self_tuning_affinity(&feat, n, DIM, knn)
         .ok_or((-32000, "self-tuning affinity failed".to_string()))?;
     let reff = ffi::effective_resistance(&w, n)
         .ok_or((-32000, "effective resistance failed (degenerate graph)".to_string()))?;
@@ -379,12 +530,22 @@ pub fn call_montauk_similar(args: &Value) -> Result<Value, (i64, String)> {
         ("similar", Value::Array(items)),
         (
             "basis",
-            Value::String(
+            Value::String(format!(
                 "effective-resistance (commute-time) nearest over a self-tuning \
                  (local-scaling) affinity graph of the live processes (cpu, rss, \
-                 gpu); lower resistance is more similar"
-                    .to_string(),
-            ),
+                 gpu, page-fault rate, thread count, involuntary context \
+                 switches); lower resistance is more similar. Graph built over \
+                 {n} of {rows} processes{}",
+                if rows > n {
+                    format!(
+                        ", the {n} nearest to the query by standardized distance -- \
+                         the graph solve is O(n^3) and is capped at {CAP} to stay \
+                         interactive"
+                    )
+                } else {
+                    " (the whole population)".to_string()
+                }
+            )),
         ),
     ]);
     Ok(text_content(result.to_string()))
@@ -522,7 +683,15 @@ pub fn call_sublimation(args: &Value) -> Result<Value, (i64, String)> {
                 ("run_count", Value::Number(profile.run_count as f64)),
             ])
         }
-        "grep" => {
+        // NAMED `find`, NOT `grep`. It returns ONE span over the whole text --
+        // ^ and $ anchor to the text, `.` crosses newlines -- which is not what
+        // grep's name promises and not what the CLI face does: `sublimation
+        // search -i '^al.*a$'` over the same four lines returns three of them
+        // where this returns a single 23-byte span. sublimation REPLACES grep;
+        // borrowing the name while failing its contract makes a caller act on a
+        // wrong belief, which is the same defect class as an option reported as
+        // unknown when it merely wanted a different form.
+        "find" => {
             let pattern = arg_str(args, "pattern").ok_or((-32602, "missing 'pattern' argument".to_string()))?;
             let text = arg_str(args, "text").ok_or((-32602, "missing 'text' argument".to_string()))?;
             // A compile failure is a JSON-RPC error, never matched:false --
@@ -689,9 +858,25 @@ pub fn call_sublimation(args: &Value) -> Result<Value, (i64, String)> {
                 }
             }
         }
+        // A NAME A CALLER WOULD REASONABLY TRY GETS ITS OWN ANSWER. "unknown op
+        // 'grep'" would read as "this server cannot match text", which is the
+        // opposite of true and terminates the inquiry; the two ops that DO
+        // match text are right here. Same rule the CLI's option parser follows:
+        // distinguish "does not exist" from "you asked for it by the wrong
+        // name", because only one of those is recoverable.
+        legacy @ ("grep" | "search" | "match") => {
+            return Err((-32602, format!(
+                "there is no '{legacy}' op -- sublimation REPLACES grep rather than \
+                 reimplementing it, so this surface does not promise grep's contract. \
+                 Use 'find' for the first match span over the whole text (start, len; \
+                 ^ and $ anchor to the TEXT, not to lines), or 'contains' for a yes/no. \
+                 LINE-ORIENTED matching -- one result per matching line, grep's actual \
+                 semantics -- is the CLI: 'sublimation search PATTERN FILE'."
+            )));
+        }
         other => {
             return Err((-32602, format!(
-                "unknown op '{other}' -- expected one of sort|classify|grep|contains|\
+                "unknown op '{other}' -- expected one of sort|classify|find|contains|\
                  sum|mean|stdev|variance|min|max|quantile|describe|outliers|histogram|\
                  characterize|count|distinct|tally"
             )));

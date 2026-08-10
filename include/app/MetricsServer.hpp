@@ -20,6 +20,18 @@ namespace montauk::app {
 struct AnomalyFeatureRow {
   int64_t pid;
   double cpu_pct, rss_kb, gpu_util_pct, fault_delta, thread_count, ctxsw_delta;
+  // A NAME FOR EVERY RANKED PROCESS. The fusion ranks this whole population but
+  // only the 64 rows in top_procs carried an identity, so a consumer scoring a
+  // pid outside it got a rank and an empty string -- which reads as a process
+  // with no command rather than a name the build declined to look up. Measured
+  // 2026-08-10: 246 of 310 rows, 79%, were outside top_procs.
+  //
+  // Fixed 16 bytes, not a std::string: this is copied under the seqlock for
+  // every process in the population, and 300-odd heap allocations per scrape is
+  // not a trade worth making for a name. 16 is the kernel's own comm width, so
+  // nothing is lost for the rows that only ever had a comm; the enriched full
+  // cmdline still reaches consumers through top_procs for the rows that have it.
+  std::array<char, 16> comm{};
 };
 
 // Bounded snapshot for metrics serialization.
@@ -86,11 +98,28 @@ struct MetricsSnapshot {
     // Carry the FULL fused population's features (not just the displayed top_procs)
     // so the anomaly score is reproducible against the same set it was judged on.
     ms.anomaly_features.reserve(s.procs.processes.size());
-    for (const auto& p : s.procs.processes)
-      ms.anomaly_features.push_back({p.pid, p.cpu_pct, static_cast<double>(p.rss_kb),
-                                     p.has_gpu_util ? p.gpu_util_pct : 0.0,
-                                     p.fault_delta, static_cast<double>(p.thread_count),
-                                     p.ctxsw_delta});
+    for (const auto& p : s.procs.processes) {
+      AnomalyFeatureRow row{p.pid, p.cpu_pct, static_cast<double>(p.rss_kb),
+                            p.has_gpu_util ? p.gpu_util_pct : 0.0,
+                            p.fault_delta, static_cast<double>(p.thread_count),
+                            p.ctxsw_delta, {}};
+      // The PROGRAM, not the first 15 bytes of a command line. p.cmd is the
+      // full cmdline for enriched rows, so a raw truncation yields things like
+      // "python3 -c \nimp" -- a cut mid-argument, newline included. Take the
+      // first token, and its basename when that token is an absolute path
+      // (/usr/lib/firefox/firefox -> firefox). Kernel threads like
+      // "kworker/4:0H" carry slashes but no leading one, so they pass through.
+      std::string_view name{p.cmd};
+      name = name.substr(0, name.find_first_of(" \t\n"));
+      if (name.starts_with('/')) {
+        const size_t slash = name.find_last_of('/');
+        if (slash != std::string_view::npos && slash + 1 < name.size())
+          name = name.substr(slash + 1);
+      }
+      const size_t n_cmd = std::min(name.size(), row.comm.size() - 1);
+      std::copy_n(name.begin(), n_cmd, row.comm.begin());
+      ms.anomaly_features.push_back(row);
+    }
     return ms;
   });
 }

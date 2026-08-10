@@ -156,9 +156,14 @@ inline montauk::app::MetricsSnapshot make_fixture_snapshot() {
   // (columns: cpu%, rss, gpu%, fault delta, threads, involuntary ctxsw delta).
   // The last one is non-zero on the second row so the fixture exercises a
   // populated axis rather than freezing a column of zeros.
+  //
+  // comm is populated for the same reason: every ranked row carries a name, and
+  // a fixture that left it empty would freeze a golden that cannot tell whether
+  // names are emitted at all.
   s.anomaly_features = {
-    {805, 1.5, 45548.0, 0.0, 0.0, 1.0, 0.0},
-    {939, 0.5, 267992.0, 9.0, 0.0, 1.0, 42.0},
+    {805, 1.5, 45548.0, 0.0, 0.0, 1.0, 0.0, {'m', 'o', 'n', 't', 'a', 'u', 'k'}},
+    {939, 0.5, 267992.0, 9.0, 0.0, 1.0, 42.0,
+     {'g', 'p', 'u', '-', 'p', 'r', 'o', 'c', 'e', 's', 's'}},
   };
 
   return s;

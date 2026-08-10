@@ -136,8 +136,14 @@ def layer_gate():
     learn = run([sys.executable, str(subt / "test_learn.py")]) == 0
     spectral = run([sys.executable, str(subt / "test_spectral.py")]) == 0
     signal = run([sys.executable, str(subt / "test_signal.py")]) == 0
+    # stats.c/tally.c had byte-stability from the corpus gate but no proof of
+    # CORRECTNESS -- byte-parity freezes a wrong answer just as faithfully.
+    stats = run([sys.executable, str(subt / "test_stats_oracle.py")]) == 0
+    # C++ consumer gate. Nothing else here compiles the public headers as C++,
+    # which is how a bare unreachable() macro reached an outside consumer.
+    cxx = run([sys.executable, str(subt / "test_cxx_headers.py")]) == 0
     return (corpus and parity and pop and semantic and golden and match
-            and learn and spectral and signal)
+            and learn and spectral and signal and stats and cxx)
 
 
 def layer_perf():

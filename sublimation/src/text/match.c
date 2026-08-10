@@ -1,4 +1,4 @@
-// match.c -- tri-face text matcher (sublimation_search.h face of sublimation_text.h).
+// match.c -- tri-face text matcher (sublimation_locate.h face of sublimation_text.h).
 // Ported from the proven research prototype (sublimation/tests/search/search_research.c):
 // the data-relative anchor scan (exact face), the Glushkov bit-parallel position-NFA
 // with its reach-closure memo and literal prefilter (regex face) and the brute plus

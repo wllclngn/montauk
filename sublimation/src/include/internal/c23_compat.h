@@ -70,11 +70,23 @@
 #endif
 #endif
 
-// unreachable() -- guarded: gcc 13's glibc stddef.h defines unreachable() in
-// C23 mode even when SUB_HAVE_C23's own detection says otherwise, so an
-// unconditional redefine here dies on -Werror (confirmed on gcc 13.3 /
-// Ubuntu 24.04). Respect an existing definition wherever it came from.
-#if !SUB_HAVE_C23 && !defined(unreachable)
+// unreachable() -- guarded three ways.
+//
+// NOT IN C++, which has std::unreachable and never wanted this shim. SUB_HAVE_C23
+// is false in a C++ TU (it keys off __STDC_VERSION__), so without the __cplusplus
+// test the macro is defined for every C++ consumer. Where <utility> is first seen
+// AFTER a sublimation header that rewrites libstdc++'s own std::unreachable
+// declaration into std::__builtin_unreachable. It does not error there: it errors
+// wherever something later CALLS std::unreachable and inlining is required, as
+// "inlining failed in call to always_inline 'void std::__builtin_unreachable()'"
+// -- on a line that names none of the code responsible. OUROBOROS paid for this
+// with two #undef unreachable lines in its public headers before it was found.
+//
+// And guarded: gcc 13's glibc stddef.h defines unreachable() in C23 mode even
+// when SUB_HAVE_C23's own detection says otherwise, so an unconditional redefine
+// here dies on -Werror (confirmed on gcc 13.3 / Ubuntu 24.04). Respect an
+// existing definition wherever it came from.
+#if !defined(__cplusplus) && !SUB_HAVE_C23 && !defined(unreachable)
 #if defined(__GNUC__)
 #define unreachable() __builtin_unreachable()
 #else
@@ -89,29 +101,12 @@
 #endif
 #endif
 
-// typeof (C23 or GCC extension)
-#if !SUB_HAVE_C23 && defined(__GNUC__)
-#define typeof __typeof__
-#endif
-
-// Checked arithmetic
-#if SUB_HAVE_C23 && __has_include(<stdckdint.h>)
-#include <stdckdint.h>
-#elif defined(__GNUC__) && __GNUC__ >= 5
-#define ckd_add(r, a, b) __builtin_add_overflow((a), (b), (r))
-#define ckd_sub(r, a, b) __builtin_sub_overflow((a), (b), (r))
-#define ckd_mul(r, a, b) __builtin_mul_overflow((a), (b), (r))
-#endif
-
-// Bit manipulation
-#if SUB_HAVE_C23 && __has_include(<stdbit.h>)
-#include <stdbit.h>
-#else
-#define stdc_count_ones_ui(x)     ((unsigned)__builtin_popcount(x))
-#define stdc_leading_zeros_ui(x)  ((x) ? (unsigned)__builtin_clz(x) : 32u)
-#define stdc_trailing_zeros_ui(x) ((x) ? (unsigned)__builtin_ctz(x) : 32u)
-#define stdc_has_single_bit_ui(x) ((x) != 0 && ((x) & ((x) - 1)) == 0)
-#endif
+// typeof, ckd_add/sub/mul and the stdc_*_ui bit helpers were removed 2026-08-10.
+// All eight were unused across the whole library and all eight escaped into C++
+// for the same reason unreachable() did -- SUB_HAVE_C23 is false in a C++ TU, so
+// every `!SUB_HAVE_C23` fallback fires there. Guarding dead macros would have
+// kept the hazard shape around to be copied; anything genuinely needed later
+// comes back with the __cplusplus test the survivors above carry.
 
 // Inline hint
 #if defined(__GNUC__)

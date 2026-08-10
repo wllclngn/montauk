@@ -106,18 +106,24 @@ def main():
     note(f"  reconstruction {'ok' if ok else 'DIVERGED'} (max|d|={np.max(np.abs(R-A)):.1e})")
     fails += not ok
 
-    W = np.abs(rng.normal(size=(9, 9)))
-    W = (W + W.T) / 2.0
-    np.fill_diagonal(W, 0.0)
-    note("effective_resistance vs numpy pseudoinverse")
-    got = np.array([[float(t) for t in ln.split()] for ln in run(["reff"], W)])
-    L = np.diag(W.sum(1)) - W
-    Lp = np.linalg.pinv(L)
-    dd = np.diag(Lp)
-    ref = dd[:, None] + dd[None, :] - 2 * Lp
-    ok = np.allclose(got, ref, rtol=1e-6, atol=1e-6)
-    note(f"  effective resistance {'ok' if ok else 'DIVERGED'} (n={W.shape[0]})")
-    fails += not ok
+    # BOTH PARITIES, deliberately. The Jacobi core runs even n through a padded
+    # odd row stride (a power-of-two stride aliases one cache set and made a
+    # n=512 call 19x its own neighbours), so odd and even are two code paths and
+    # an odd-only check could not fail on the padded one.
+    for n in (9, 16):
+        W = np.abs(rng.normal(size=(n, n)))
+        W = (W + W.T) / 2.0
+        np.fill_diagonal(W, 0.0)
+        note(f"effective_resistance vs numpy pseudoinverse (n={n}, "
+             f"{'padded' if n % 2 == 0 else 'unpadded'})")
+        got = np.array([[float(t) for t in ln.split()] for ln in run(["reff"], W)])
+        L = np.diag(W.sum(1)) - W
+        Lp = np.linalg.pinv(L)
+        dd = np.diag(Lp)
+        ref = dd[:, None] + dd[None, :] - 2 * Lp
+        ok = np.allclose(got, ref, rtol=1e-6, atol=1e-6)
+        note(f"  effective resistance {'ok' if ok else 'DIVERGED'} (n={n})")
+        fails += not ok
 
     note("fiedler (lambda2, partitions) vs numpy")
     out = run(["fiedler"], W)[0].split()

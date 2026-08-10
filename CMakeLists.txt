@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 8.7.0 LANGUAGES C CXX)
+project(montauk VERSION 8.8.0 LANGUAGES C CXX)
 # (7.17.0: kick-capture honesty -- the storm report no longer manufactures a
 #  false kick/s=0 when the scx storm probes are unattached, and kick-latency
 #  surfaces the KICK_ISSUE->RESCHED pairing (availability, unanswered share,
@@ -84,52 +84,15 @@ option(MONTAUK_KERNEL "Build with kernel module collector support (requires mont
 
 # sublimation
 # montauk's adaptive sort and search core, an in-tree sub-system
-# (sublimation/). Built as a C23 static library from its own sources with its
-# own flags, NOT montauk's -Werror/-Wshadow (a new toolchain's fresh warnings
-# must degrade loudly, never break every consumer at once). No system install,
-# no find_package, no fetch: the code lives here.
-add_library(sublimation STATIC
-    sublimation/src/classify.c
-    sublimation/src/merge.c
-    sublimation/src/pack.c
-    sublimation/src/radix.c
-    sublimation/src/randomness.c
-    sublimation/src/search.c
-    sublimation/src/select.c
-    sublimation/src/small.c
-    sublimation/src/sort.c
-    sublimation/src/spectral_kernel.c
-    sublimation/src/spectral_typed.c
-    sublimation/src/stats.c
-    sublimation/src/tally.c
-    sublimation/src/text/match.c
-    sublimation/src/parallel/wsdeque.c
-    sublimation/src/parallel/dfspool.c
-    sublimation/src/parallel/radix_par.c
-    sublimation/src/strings/msd_radix.c
-    sublimation/src/strings/sort_strings.c
-    sublimation/src/learn/detect.c
-    sublimation/src/learn/signal.c
-)
-set_target_properties(sublimation PROPERTIES
-    C_STANDARD 23
-    C_STANDARD_REQUIRED ON
-    POSITION_INDEPENDENT_CODE ON)
-# Public headers (sublimation.h / _pack.h / _strings.h) on the include path
-# for consumers; src/ is private for the implementation's internal includes.
-target_include_directories(sublimation
-    PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src/include
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src)
-# No optimization level here: Release's own -O3 stands. The previous -O2 in
-# this list came AFTER -O3 on the command line and silently won, leaving the
-# hottest code in the tree at the lowest optimization level by flag-ordering
-# accident. First-party code also gets a warning wall now (non-fatal for the
-# lib, so a new toolchain's fresh warnings degrade loudly rather than break
-# every consumer at once).
-target_compile_options(sublimation PRIVATE
-    -march=native -fvisibility=hidden -Wall -Wextra
-    -fstack-protector-strong -fstack-clash-protection -fcf-protection)
-target_link_libraries(sublimation PUBLIC pthread m)
+# (sublimation/). The target is defined by sublimation's OWN CMakeLists so that
+# montauk consumes the same artifact every outside consumer does -- which is the
+# only arrangement in which that artifact stays honest. Spelling the sources and
+# flags out here instead left every consumer holding a copy that drifted.
+#
+# The explicit binary dir is required, not stylistic: the CLI executable is
+# itself named `sublimation` and lands at build/sublimation, so letting this
+# default would make CMake try to create a directory over that file.
+add_subdirectory(sublimation ${CMAKE_CURRENT_BINARY_DIR}/sublimation-lib)
 
 set(MONTAUK_CORE_SRCS
     src/util/Procfs.cpp
