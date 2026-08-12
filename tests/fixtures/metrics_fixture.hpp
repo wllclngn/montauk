@@ -160,9 +160,13 @@ inline montauk::app::MetricsSnapshot make_fixture_snapshot() {
   // comm is populated for the same reason: every ranked row carries a name, and
   // a fixture that left it empty would freeze a golden that cannot tell whether
   // names are emitted at all.
+  // The live-axis mask is set here for the same reason comm is: a fixture that
+  // left it zero would freeze a golden that cannot tell whether the basis is
+  // published at all. cpu|rss|gpu|threads -- the four a kernel-module box has.
+  s.anomaly_axis_mask = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 4);
   s.anomaly_features = {
-    {805, 1.5, 45548.0, 0.0, 0.0, 1.0, 0.0, {'m', 'o', 'n', 't', 'a', 'u', 'k'}},
-    {939, 0.5, 267992.0, 9.0, 0.0, 1.0, 42.0,
+    {805, 1.5, 45548.0, 0.0, 0.0, 1.0, 0.0, 0.42, 0, {'m', 'o', 'n', 't', 'a', 'u', 'k'}},
+    {939, 0.5, 267992.0, 9.0, 0.0, 1.0, 42.0, 0.87, 2,
      {'g', 'p', 'u', '-', 'p', 'r', 'o', 'c', 'e', 's', 's'}},
   };
 

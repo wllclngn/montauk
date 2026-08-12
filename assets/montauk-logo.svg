@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="montauk">
+<title>montauk</title>
+<!--
+  Seven cells in hexagonal close packing: six around one. That is not a chosen
+  shape. It is how the elements of a multi-frequency antenna feed are laid out,
+  because hex packing is the densest arrangement of circular apertures and
+  wastes no face. The same constraint puts the James Webb primary mirror in 18
+  hexagonal segments. The AN/FPS-35 at Camp Hero, the radar montauk is named
+  after and the last intact large frequency-diversity radar in the country,
+  defeated jamming by transmitting across 420 to 450 MHz at once: many
+  simultaneous views of one target, so no single channel can be fooled.
+  montauk's anomaly fusion is that same idea, six features through three
+  detectors, rank-averaged for the same reason.
+
+  ONE HUE, ONE RAMP. The colour is kitty's color14, the blue neither sibling
+  claims: OUROBOROS holds the yellow-amber-orange band, PANDEMONIUM holds violet
+  and mint-teal, and this sits 52 degrees of hue from the nearest of them.
+    #5FA0FC  light    hue 215
+    #217CFA  base     hue 215, kitty color14
+    #0449AA  dark     hue 215
+  To recolour a release, change these three and only these; the geometry never
+  moves. A replacement should stay one hue across the whole ramp.
+
+  The centre cell is NOT singled out by colour. An earlier pass gave it its own
+  treatment so it would read as the conclusion the six inputs resolve to, and
+  that survives in spirit only: here the seam alone marks it, and the mark
+  states the packing rather than the fusion. Lightening the core one notch is
+  the way back if that reading is wanted again.
+
+  EVERY GRADIENT IS userSpaceOnUse ACROSS THE WHOLE CLUSTER, and that is
+  load-bearing rather than incidental. Left on the default objectBoundingBox,
+  each cell gets its own ramp over its own box: seven independent light sources,
+  every cell lit at its top-left and shaded at its bottom-right. Flat facets
+  then read as BUBBLES, seven little domes instead of one object. Spanning one
+  ramp over the cluster means each cell shows a slice of a single light, which
+  is what makes the faces read flat. Do not convert this back to percentages.
+
+  The seams are gaps, not strokes, so the mark sits on any background.
+-->
+<defs>
+  <linearGradient id="mtk" gradientUnits="userSpaceOnUse" x1="43" y1="52" x2="469" y2="460">
+    <stop offset="0%" stop-color="#5FA0FC"/>
+    <stop offset="50%" stop-color="#217CFA"/>
+    <stop offset="100%" stop-color="#0449AA"/>
+  </linearGradient>
+</defs>
+<path d="M401.49,177.88 L333.84,216.94 L333.84,295.06 L401.49,334.12 L469.15,295.06 L469.15,216.94 Z" fill="url(#mtk)"/>
+<path d="M328.75,51.88 L261.09,90.94 L261.09,169.06 L328.75,208.12 L396.40,169.06 L396.40,90.94 Z" fill="url(#mtk)"/>
+<path d="M183.25,51.88 L115.60,90.94 L115.60,169.06 L183.25,208.12 L250.91,169.06 L250.91,90.94 Z" fill="url(#mtk)"/>
+<path d="M110.51,177.88 L42.85,216.94 L42.85,295.06 L110.51,334.12 L178.16,295.06 L178.16,216.94 Z" fill="url(#mtk)"/>
+<path d="M183.25,303.88 L115.60,342.94 L115.60,421.06 L183.25,460.12 L250.91,421.06 L250.91,342.94 Z" fill="url(#mtk)"/>
+<path d="M328.75,303.88 L261.09,342.94 L261.09,421.06 L328.75,460.12 L396.40,421.06 L396.40,342.94 Z" fill="url(#mtk)"/>
+<path d="M256.00,177.88 L188.35,216.94 L188.35,295.06 L256.00,334.12 L323.65,295.06 L323.65,216.94 Z" fill="url(#mtk)"/>
+</svg>

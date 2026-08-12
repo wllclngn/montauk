@@ -489,7 +489,7 @@ fn subprocess_backed_tools_happy_paths() {
 }
 
 #[test]
-fn montauk_anomalies_computes_the_fusion_over_the_feature_matrix() {
+fn montauk_anomalies_reports_montauks_own_score() {
     // Synthetic `montauk --json`: pid 100 is a pure CPU outlier against a quiet
     // population (rss/threads normal), so the in-process fusion must rank it
     // first and name cpu as its axis. >= 8 rows so the population gate passes.
@@ -497,15 +497,15 @@ fn montauk_anomalies_computes_the_fusion_over_the_feature_matrix() {
     let json = r#"{"processes":{
         "top":[{"pid":100,"cmd":"hog"}],
         "anomaly_features":[
-          {"pid":100,"cpu_pct":98.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0},
-          {"pid":101,"cpu_pct":0.5,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0},
-          {"pid":102,"cpu_pct":0.4,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0},
-          {"pid":103,"cpu_pct":0.3,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":2,"ctxsw_delta":0},
-          {"pid":104,"cpu_pct":0.6,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0},
-          {"pid":105,"cpu_pct":0.2,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0},
-          {"pid":106,"cpu_pct":0.5,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":2,"ctxsw_delta":0},
-          {"pid":107,"cpu_pct":0.4,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0},
-          {"pid":108,"cpu_pct":0.3,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0}
+          {"pid":100,"cpu_pct":98.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"anomaly_score":1.48,"anomaly_axis":0},
+          {"pid":101,"cpu_pct":0.5,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"anomaly_score":0.505,"anomaly_axis":0},
+          {"pid":102,"cpu_pct":0.4,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"anomaly_score":0.504,"anomaly_axis":0},
+          {"pid":103,"cpu_pct":0.3,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":2,"ctxsw_delta":0,"anomaly_score":0.503,"anomaly_axis":0},
+          {"pid":104,"cpu_pct":0.6,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"anomaly_score":0.506,"anomaly_axis":0},
+          {"pid":105,"cpu_pct":0.2,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"anomaly_score":0.502,"anomaly_axis":0},
+          {"pid":106,"cpu_pct":0.5,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":2,"ctxsw_delta":0,"anomaly_score":0.505,"anomaly_axis":0},
+          {"pid":107,"cpu_pct":0.4,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"anomaly_score":0.504,"anomaly_axis":0},
+          {"pid":108,"cpu_pct":0.3,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":0,"anomaly_score":0.503,"anomaly_axis":0}
         ]}}"#;
     let result = vector::tools::anomalies_reduce(json, 3).expect("anomalies_reduce ok");
     let inner = vector::json::parse(tool_text(&result)).expect("inner json parses");
@@ -553,15 +553,15 @@ fn montauk_anomalies_fuses_the_context_switch_axis() {
     let json = r#"{"processes":{
         "top":[{"pid":200,"cmd":"preempted"}],
         "anomaly_features":[
-          {"pid":200,"cpu_pct":1.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":90000},
-          {"pid":201,"cpu_pct":1.1,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
-          {"pid":202,"cpu_pct":0.9,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
-          {"pid":203,"cpu_pct":1.0,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":4},
-          {"pid":204,"cpu_pct":1.2,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
-          {"pid":205,"cpu_pct":0.8,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
-          {"pid":206,"cpu_pct":1.0,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":5},
-          {"pid":207,"cpu_pct":1.1,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
-          {"pid":208,"cpu_pct":0.9,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2}
+          {"pid":200,"cpu_pct":1.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":90000,"anomaly_score":0.95,"anomaly_axis":5},
+          {"pid":201,"cpu_pct":1.1,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3,"anomaly_score":0.511,"anomaly_axis":0},
+          {"pid":202,"cpu_pct":0.9,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2,"anomaly_score":0.509,"anomaly_axis":0},
+          {"pid":203,"cpu_pct":1.0,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":4,"anomaly_score":0.51,"anomaly_axis":0},
+          {"pid":204,"cpu_pct":1.2,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3,"anomaly_score":0.512,"anomaly_axis":0},
+          {"pid":205,"cpu_pct":0.8,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2,"anomaly_score":0.508,"anomaly_axis":0},
+          {"pid":206,"cpu_pct":1.0,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":5,"anomaly_score":0.51,"anomaly_axis":0},
+          {"pid":207,"cpu_pct":1.1,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3,"anomaly_score":0.511,"anomaly_axis":0},
+          {"pid":208,"cpu_pct":0.9,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2,"anomaly_score":0.509,"anomaly_axis":0}
         ]}}"#;
     let result = vector::tools::anomalies_reduce(json, 3).expect("anomalies_reduce ok");
     let inner = vector::json::parse(tool_text(&result)).expect("inner json parses");
@@ -582,15 +582,15 @@ fn montauk_anomalies_names_a_process_outside_the_displayed_top_set() {
     let json = r#"{"processes":{
         "top":[{"pid":200,"cmd":"/usr/lib/firefox/firefox --tab"}],
         "anomaly_features":[
-          {"pid":200,"comm":"firefox","cpu_pct":1.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":90000},
-          {"pid":201,"comm":"kworker/2:1","cpu_pct":1.1,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
-          {"pid":202,"comm":"sshd","cpu_pct":0.9,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
-          {"pid":203,"comm":"systemd","cpu_pct":1.0,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":4},
-          {"pid":204,"comm":"dbus-daemon","cpu_pct":1.2,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
-          {"pid":205,"comm":"pipewire","cpu_pct":0.8,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
-          {"pid":206,"comm":"chrome","cpu_pct":1.0,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":5},
-          {"pid":207,"comm":"bash","cpu_pct":1.1,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
-          {"pid":208,"comm":"nvidia-smi","cpu_pct":0.9,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2}
+          {"pid":200,"comm":"firefox","cpu_pct":1.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":90000,"anomaly_score":0.95,"anomaly_axis":5},
+          {"pid":201,"comm":"kworker/2:1","cpu_pct":1.1,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3,"anomaly_score":0.511,"anomaly_axis":0},
+          {"pid":202,"comm":"sshd","cpu_pct":0.9,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2,"anomaly_score":0.509,"anomaly_axis":0},
+          {"pid":203,"comm":"systemd","cpu_pct":1.0,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":4,"anomaly_score":0.51,"anomaly_axis":0},
+          {"pid":204,"comm":"dbus-daemon","cpu_pct":1.2,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3,"anomaly_score":0.512,"anomaly_axis":0},
+          {"pid":205,"comm":"pipewire","cpu_pct":0.8,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2,"anomaly_score":0.508,"anomaly_axis":0},
+          {"pid":206,"comm":"chrome","cpu_pct":1.0,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":5,"anomaly_score":0.51,"anomaly_axis":0},
+          {"pid":207,"comm":"bash","cpu_pct":1.1,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3,"anomaly_score":0.511,"anomaly_axis":0},
+          {"pid":208,"comm":"nvidia-smi","cpu_pct":0.9,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2,"anomaly_score":0.509,"anomaly_axis":0}
         ]}}"#;
     let result = vector::tools::anomalies_reduce(json, 9).expect("anomalies_reduce ok");
     let inner = vector::json::parse(tool_text(&result)).expect("inner json parses");
@@ -616,15 +616,15 @@ fn montauk_anomalies_does_not_mistake_comm_for_a_fusion_axis() {
     let json = r#"{"processes":{
         "top":[],
         "anomaly_features":[
-          {"pid":1,"comm":"a","cpu_pct":1.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":9},
-          {"pid":2,"comm":"b","cpu_pct":1.1,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
-          {"pid":3,"comm":"c","cpu_pct":0.9,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
-          {"pid":4,"comm":"d","cpu_pct":1.0,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":4},
-          {"pid":5,"comm":"e","cpu_pct":1.2,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
-          {"pid":6,"comm":"f","cpu_pct":0.8,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
-          {"pid":7,"comm":"g","cpu_pct":1.0,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":5},
-          {"pid":8,"comm":"h","cpu_pct":1.1,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
-          {"pid":9,"comm":"i","cpu_pct":0.9,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2}
+          {"pid":1,"comm":"a","cpu_pct":1.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":9,"anomaly_score":0.51,"anomaly_axis":0},
+          {"pid":2,"comm":"b","cpu_pct":1.1,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3,"anomaly_score":0.511,"anomaly_axis":0},
+          {"pid":3,"comm":"c","cpu_pct":0.9,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2,"anomaly_score":0.509,"anomaly_axis":0},
+          {"pid":4,"comm":"d","cpu_pct":1.0,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":4,"anomaly_score":0.51,"anomaly_axis":0},
+          {"pid":5,"comm":"e","cpu_pct":1.2,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3,"anomaly_score":0.512,"anomaly_axis":0},
+          {"pid":6,"comm":"f","cpu_pct":0.8,"rss_kb":1300,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2,"anomaly_score":0.508,"anomaly_axis":0},
+          {"pid":7,"comm":"g","cpu_pct":1.0,"rss_kb":1150,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":5,"anomaly_score":0.51,"anomaly_axis":0},
+          {"pid":8,"comm":"h","cpu_pct":1.1,"rss_kb":1250,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3,"anomaly_score":0.511,"anomaly_axis":0},
+          {"pid":9,"comm":"i","cpu_pct":0.9,"rss_kb":1080,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2,"anomaly_score":0.509,"anomaly_axis":0}
         ]}}"#;
     assert!(vector::tools::anomalies_reduce(json, 3).is_ok(),
             "comm names the row; it is not an axis and must not be refused as one");
@@ -719,6 +719,54 @@ fn montauk_similar_relates_the_whole_population_when_it_fits() {
     let basis = inner.get("basis").and_then(Value::as_str).expect("basis");
     assert!(basis.contains("200 of 200"), "no pre-filter below the cap: {basis}");
     assert!(basis.contains("whole population"), "and it says so: {basis}");
+}
+
+// VECTOR PRESENTS montauk's SCORE, IT DOES NOT RECOMPUTE ONE. Recomputing made
+// it a second implementation that drifted -- on one frozen snapshot the two
+// agreed on 1 of 10 rankings. This pins the ranking to montauk's published
+// numbers so a future "optimisation" back to a local fusion fails here.
+#[test]
+fn montauk_anomalies_ranking_is_montauks_published_order() {
+    let json = r#"{"processes":{"top":[],"anomaly_features":[
+      {"pid":10,"comm":"a","cpu_pct":1.0,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":1,"anomaly_score":0.10,"anomaly_axis":0},
+      {"pid":20,"comm":"b","cpu_pct":1.0,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":1,"anomaly_score":0.90,"anomaly_axis":1},
+      {"pid":30,"comm":"c","cpu_pct":1.0,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":1,"anomaly_score":0.50,"anomaly_axis":2},
+      {"pid":40,"comm":"d","cpu_pct":1.0,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":1,"anomaly_score":0.70,"anomaly_axis":0},
+      {"pid":50,"comm":"x0","cpu_pct":1.0,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":1,"anomaly_score":0.01,"anomaly_axis":0},
+      {"pid":51,"comm":"x1","cpu_pct":1.0,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":1,"anomaly_score":0.02,"anomaly_axis":0},
+      {"pid":52,"comm":"x2","cpu_pct":1.0,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":1,"anomaly_score":0.03,"anomaly_axis":0},
+      {"pid":53,"comm":"x3","cpu_pct":1.0,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":1,"anomaly_score":0.04,"anomaly_axis":0},
+      {"pid":54,"comm":"x4","cpu_pct":1.0,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":1,"anomaly_score":0.05,"anomaly_axis":0},
+      {"pid":55,"comm":"x5","cpu_pct":1.0,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":1,"anomaly_score":0.06,"anomaly_axis":0}
+    ]}}"#;
+    let out = vector::tools::anomalies_reduce(json, 4).expect("reduce ok");
+    let inner = vector::json::parse(tool_text(&out)).expect("parses");
+    let a = inner.get("anomalies").and_then(Value::as_array).unwrap();
+    let order: Vec<i64> = a.iter().map(|r| r.get("pid").and_then(Value::as_f64).unwrap() as i64).collect();
+    assert_eq!(order, vec![20, 40, 30, 10], "ranking must be montauk's score order");
+    assert_eq!(a[0].get("anomaly_score").and_then(Value::as_f64), Some(0.90),
+               "the score reported is montauk's, unmodified");
+    assert_eq!(a[0].get("axis").and_then(Value::as_str), Some("rss"),
+               "axis 1 maps to the rss column of montauk's feature table");
+}
+
+#[test]
+fn montauk_anomalies_refuses_when_montauk_publishes_no_score() {
+    // An older montauk that does not publish the score must produce a refusal,
+    // never a silently recomputed second opinion.
+    let json = r#"{"processes":{"top":[],"anomaly_features":[
+      {"pid":1,"comm":"a","cpu_pct":1.0,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":1},
+      {"pid":2,"comm":"b","cpu_pct":2.0,"rss_kb":1100,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
+      {"pid":3,"comm":"c","cpu_pct":3.0,"rss_kb":1200,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
+      {"pid":10,"comm":"y0","cpu_pct":1.0,"rss_kb":1000,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":1},
+      {"pid":11,"comm":"y1","cpu_pct":2.0,"rss_kb":1010,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":2},
+      {"pid":12,"comm":"y2","cpu_pct":3.0,"rss_kb":1020,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":3},
+      {"pid":13,"comm":"y3","cpu_pct":4.0,"rss_kb":1030,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":4},
+      {"pid":14,"comm":"y4","cpu_pct":5.0,"rss_kb":1040,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":5},
+      {"pid":15,"comm":"y5","cpu_pct":6.0,"rss_kb":1050,"gpu_util_pct":0,"fault_delta":0,"thread_count":1,"ctxsw_delta":6}
+    ]}}"#;
+    let err = vector::tools::anomalies_reduce(json, 9).expect_err("must refuse");
+    assert!(err.1.contains("anomaly_score"), "got: {}", err.1);
 }
 
 #[test]

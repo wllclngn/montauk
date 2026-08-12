@@ -1,13 +1,8 @@
-```
-███╗   ███╗  ██████╗  ███╗   ██╗ ████████╗  █████╗  ██╗   ██╗ ██╗  ██╗
-████╗ ████║ ██╔═══██╗ ████╗  ██║ ╚══██╔══╝ ██╔══██╗ ██║   ██║ ██║ ██╔╝
-██╔████╔██║ ██║   ██║ ██╔██╗ ██║    ██║    ███████║ ██║   ██║ █████╔╝ 
-██║╚██╔╝██║ ██║   ██║ ██║╚██╗██║    ██║    ██╔══██║ ██║   ██║ ██╔═██╗ 
-██║ ╚═╝ ██║ ╚██████╔╝ ██║ ╚████║    ██║    ██║  ██║ ╚██████╔╝ ██║  ██╗
-╚═╝     ╚═╝  ╚═════╝  ╚═╝  ╚═══╝    ╚═╝    ╚═╝  ╚═╝  ╚═════╝  ╚═╝  ╚═╝
-```
+<p align="center">
+  <img src="assets/montauk-logo.svg" alt="montauk logo" width="30%" />
+</p>
 
-## Overview
+## montauk
 
 montauk is a Linux observability platform in one statically-linked C++23 binary: An event-driven system monitor, an eBPF flight recorder, an offline analyzer, built on sublimation, its in-tree sort, search, learn core and an MCP stdio JSON-RPC 2.0 server, vector.
 
@@ -198,13 +193,17 @@ montauk composes its modes from CLI flags:
 | `montauk --headless --log /var/log/montauk` | Daemon mode: logging only |
 | `montauk --headless` | Error: requires --metrics or --log |
 | `montauk --trace firefox` | Trace mode: per-thread diagnostics for process group |
-| `montauk --trace myapp --metrics 9101` | Trace mode + Prometheus endpoint |
-| `montauk --trace myapp --log /tmp/trace` | Trace mode + flight recorder |
-| `montauk --trace myapp --trace-out FILE.bin` | Trace mode + raw binary event log |
-| `montauk --trace myapp --trace-ring-bytes 64M` | Size the BPF ring (K/M/G; default 1M) |
-| `montauk --trace myapp --trace-classes sched,exec` | Capture only the named event classes |
-| `montauk --trace myapp --stream-out /dev/ttyS1` | Second binary stream to a character device |
+| `montauk --trace APP --metrics 9101` | Trace mode + Prometheus endpoint |
+| `montauk --trace APP --log /tmp/trace` | Trace mode + flight recorder |
+| `montauk --trace APP --trace-out FILE.bin` | Trace mode + raw binary event log |
+| `montauk --trace APP --trace-ring-bytes 64M` | Size the BPF ring (K/M/G; default 1M) |
+| `montauk --trace APP --trace-classes sched,exec` | Capture only the named event classes |
+| `montauk --trace APP --stream-out /dev/ttyS1` | Second binary stream to a character device |
 | `montauk --json` | One-shot structured system snapshot (JSON), then exit. |
+| `montauk --anomalies 5` | Rank what is anomalous right now, with the dominant axis |
+| `montauk --similar PID` | Processes behaving like PID (`--similar-top N` for how many) |
+| `montauk --regime 64` | Did the load regime shift recently, and when |
+| `montauk --cpu-window 64` | Sample aggregate CPU N times, emit the series |
 | `montauk --pmu-comm SUBSTR` | Attach per-process hardware counters (no root, no sysctl) |
 | `montauk_trace_decode FILE.bin` | Decode a binary log to text (--csv for CSV) |
 | `montauk_analyze FILE.bin --json`  | Emit the diagnostic reports as one JSON envelope. |
@@ -216,115 +215,25 @@ montauk composes its modes from CLI flags:
 | `montauk_analyze RECORDING_DIR --l2-by-cpu` | Localize L2 misses per CPU over the busy window |
 | `montauk_analyze DIR --by LABEL` | Population statistics across many runs |
 | `montauk --init-theme` | Detect terminal palette, write config.toml |
+| `montauk --iterations N` | Render N frames then exit (scripting and self-test) |
 
-**Prometheus Metrics Endpoint:**
+**Live output.** `--metrics PORT` serves Prometheus exposition (0.0.4) at `/metrics` over io_uring — ~55 `montauk_` families across CPU, memory, network, disk, filesystems, process states, per-process top-N and per-device GPU. `--log DIR` writes the same text to disk, rotating hourly as `montauk_YYYY-MM-DD_HH.prom`. Both read the TUI's own lock-free buffers and compose with each other and with `--trace`.
 
-With `--metrics PORT`, montauk serves Prometheus exposition format (text/plain; version=0.0.4) at `http://localhost:PORT/metrics`. The endpoint reads the same lock-free SnapshotBuffers the TUI uses: No mutexes, no additional overhead. io_uring drives all socket I/O (requires liburing at build time).
+**Structured JSON.** `montauk --json` prints one live snapshot and exits (two producer cycles warmed first, so rate deltas are real); with `--trace` a second JSON-lines record carries the trace snapshot. `montauk_analyze FILE --json` emits the reports as one envelope. JSON is a renderer over the same typed result as text and Prometheus, gated byte-identically — montauk writes JSON, never parses it.
 
-Exported metric families (~55 gauges, all prefixed `montauk_`): CPU aggregate and per-core with user/system/iowait/irq/steal breakdown, context switches and interrupts; memory (bytes and percent); per-interface and aggregate network throughput; per-device disk throughput and utilization; per-mount filesystem usage; process state counts; per-process top-N CPU, resident memory, GPU utilization and GPU memory (labeled by PID and command); per-device GPU VRAM, temperature, fan, power and encoder/decoder load.
+**Conclusions, not payloads.** Four modes answer a question directly instead of returning the state to derive it from — `--anomalies N` ranks the fused anomaly score montauk already computes, naming each process's dominant axis; `--similar PID` returns effective-resistance nearest neighbours over a self-tuning affinity graph of the live population; `--regime N` runs a spectral residual over a sampled CPU window and reports whether load shifted and when; and `montauk_analyze DIR --digest` does the same for a recording. They exist because the answer is small and the state is not: `--anomalies` costs about 600 bytes where the snapshot it derives from costs 67,000. `--similar` collapses identical feature vectors before solving, since a process table is mostly idle duplicates and an uncollapsed graph returns the same resistance for every one of them; the reply carries `identical_peers` and the true `graph_nodes` count. `--cpu-window N` exposes the raw sampled series when the window itself is wanted rather than a verdict.
 
-**Log Writer:**
+**Trace mode.** `--trace PATTERN` runs headless, attaching BPF to scheduler, syscall, signal and fd/mmap tracepoints plus libc uprobes; no `/proc` scanning after attach. Matching is in-kernel at exec, first syscall, `prctl(PR_SET_NAME)` and fork, so thread pools, container runtimes and self-renaming daemons are caught and children auto-track. Captures per-thread state, syscalls with decoded arguments, on-CPU time, fds, file I/O, futexes, heap traffic, signals with stack snapshots, mmap, scheduler decisions, per-CCX migrations and ntsync. `--sched-detail` adds the per-switch stream the placement, slice and stall reports need (~6x cost). Requires root.
 
-With `--log DIR`, montauk writes timestamped Prometheus exposition snapshots to disk, rotating hourly as `montauk_YYYY-MM-DD_HH.prom`, each block prefixed with a `# montauk_scrape_timestamp_ms` comment for replay. The LogWriter reads the same SnapshotBuffers; it works independently of or alongside `--metrics`.
+**Capture sizing.** `--trace-ring-bytes N` (K/M/G) sizes the BPF ring: on one workload the 1M default dropped 46,214 events where 64M dropped zero. `--trace-classes LIST` mutes classes so a loud one cannot drown the one being captured; an excluded class is not counted as a drop. `--trace-out FILE` writes raw records in ~256 KB batches with monotonic/realtime anchors; `--stream-out DEVICE` mirrors to a character device so a capture survives a filesystem hang.
 
-**Structured JSON (`--json`):**
+**Offline analysis.** `montauk_trace_decode FILE.bin` renders a text event stream (`--csv` for CSV). `montauk_analyze` runs single-pass reports, each folding the file once, narrowed by `--sig`, `--comm`, `--pid`, `--tid` or `--window`: `summary`; sync (`waits`, `spins`, `pairing`, `endstate`, `futex`, `keyedevt`); heap (`heapstk`, `doublefree`, `abortpm`); `signals`; I/O (`iolat`, `iowait`); scheduler (`sched`, `slice`, `service`, `wakers`, `work-conservation`, `placement-race`, `dispatch-stall`, `kick-latency`, `storm`, `kstrand`, `locality`, `classmix`, `field-persist`, `fractal`). Over a recording directory: `--digest [--redact]`, `--l2-by-cpu`, `--by LABEL`.
 
-Both the monitor and the analyzer emit their state as JSON, so an agent or a script consumes montauk without scraping the TUI or parsing prose.
+**Behavioral goldens.** `--golden FILE` has two lanes. `--functional` (default) freezes each report's categorical class and compares it exactly — a class flip is a different defect, not a degree. `--performance` is opt-in, freezing gauges picked with `--watch` within `max(tolerance%, floor)`. Exit is 0 pass, 1 a frozen fact moved, 2 DECLINED, the third distinct because "this regressed" and "this was never checked" differ. It declines below 95% completeness, on UNKNOWN completeness (`--allow-unknown` overrides), on an uninterpretable line, and on a frozen report the run did not produce. Over a recording directory it also reaches the `montauk_pmu_*` counters in the sibling scrapes, recording a reduction per line (`last`, `mean`, `point`, `--reduce`).
 
-- `montauk --json` prints one structured snapshot of live system state and exits. It warms two producer cycles so the rate deltas (context switches, network and disk throughput) are real, then serializes system specs, CPU (with per-core), PMU, memory, GPU, thermal, network, disk, filesystems and the ranked top processes as one JSON object. No TUI, no server, no daemon. Paired with `--trace PATTERN`, a second JSON-lines record follows with the live trace snapshot (threads, migrations, ntsync, fds, sched-op counts), one shared walk with the Prometheus renderer so the two surfaces cannot drift apart on a field.
-- `montauk_analyze FILE --json` emits the diagnostic reports as one JSON envelope: A `schema_version`, the trace context (path, pattern, event count, format version, start time) and a `reports` array, each report carrying its verdict, typed findings, gauges (with the same help text the Prometheus export uses) and offenders.
+**Hardware counters.** Trace mode samples per-CPU L2, instructions, cycles, context switches, migrations, branch misses and per-CCX L3 where available, as `montauk_pmu_*` rates plus cumulative `_total`s, alongside RAPL power/energy, frequency, idle residency and energy-per-instruction. Needs `perf_event_paranoid <= 0` or `CAP_PERFMON`. **`--pmu-comm SUBSTR` / `--pmu-pid N` are the unprivileged half**, not gated behind trace mode: they open at the ordinary paranoid of 2 and attach instructions, cycles, dTLB load misses and cache misses per matching process, re-resolved each tick. Whether kernel time is excluded is published (`montauk_pmu_per_process_user_only`).
 
-The JSON is a renderer, not a second computation. Every report computes a typed result once; the text, Prometheus and JSON surfaces all render from that one result, so they cannot disagree on a number. A byte-identical corpus gate freezes the `json` surface and a per-report parity pass verifies identical gauges in text and JSON (see [Testing](#testing)). The writer is one in-tree serializer (`include/util/json.h`, ~140 lines, no third-party dependency); montauk only ever writes JSON, never parses it.
-
-**Trace Mode (eBPF):**
-
-With `--trace PATTERN`, montauk runs headless and attaches BPF programs to kernel tracepoints (`sched_process_fork/exec/exit`, `raw_syscalls sys_enter/exit`, `sched_switch`, `sched_wakeup`, `signal_deliver`, scheduler-decision tracepoints and per-syscall tracepoints for fd and mmap tracking) and to libc uprobes (heap allocation, the abort path). No `/proc` scanning, no text parsing, no TOCTOU races.
-
-Discovery is event-driven with zero userspace roundtrip on the critical path. The pattern lives in a BPF array map and matches in-kernel, case-insensitively, at four points: The `sched_process_exec` handler (against the exec'd filename and `task->comm`), a process's first syscall (catches `clone()` without `exec()`), `prctl(PR_SET_NAME)` (catches processes that rename themselves) and `sched_process_fork` (children of a tracked parent auto-track; the parent is tracked before it can fork, so children are never missed). Userspace rescan remains as a fallback for edge cases. If no matching process is running, montauk waits for one; it excludes its own process chain. This works for any process model on Linux: Thread pools, container runtimes, daemons that rename themselves.
-
-Per-thread capture: Thread state (R/S/D/T/Z) from `sched_switch`; the current syscall with decoded arguments; on-CPU time; open fds via the openat/close/socket/eventfd2 tracepoints; file I/O (`read`/`write`/`lseek`/`pread64`/`fstat` with fd, byte count, offset and return value); futex ops with op/val/uaddr for wait/wake correlation; heap traffic (`malloc`/`free`/`realloc`/`calloc` via uprobes, size paired with address, realloc moves tracked); signals with a user-mode stack snapshot, abnormal-exit postmortem stacks and the libc abort path (`__assert_fail`/`__libc_message`/`abort`); file-backed mmap (anonymous mappings filtered); scheduler decisions (enqueue / pick / preempt / wakeup / wake-to-run latency, bound by generic role to whatever decision tracepoints the active scheduler exposes; montauk names no scheduler in source); per-thread core and migration counts bucketed intra / cross / unknown-CCX against a sysfs-derived L3-domain map; and ntsync (Wine/Proton NT synchronization ioctls with the waited-on object fds). Scheduler decisions aggregate per-CPU by default (one counter increment, near-zero overhead); `--sched-detail` opts into the heavy per-switch stream (per-CPU idle boundaries, the EEVDF pick fallback) that the placement, slice and stall reports need, at ~6× cost on CPU-cycling workloads.
-
-Trace mode composes with `--metrics` and `--log`: The Prometheus endpoint appends the trace families alongside the system metrics, and the hourly `.prom` files become a flight recorder. The families: `montauk_trace_process_info`, `_thread_state`, `_thread_cpu_percent`, `_thread_syscall`, `_thread_io`, `_fd_target`, `_thread_cpu`, `_thread_migrations`, `_migrations_intra_ccx`/`_cross_ccx`/`_unknown_ccx`, `_ntsync`, `montauk_sched_op_total{op}`, the `montauk_pmu_*` gauges (below) and the group-metadata gauges (`montauk_trace_group_size`, `_thread_total`, `_waiting`).
-
-The trace subsystem runs as a parallel pipeline with its own lock-free seqlock double buffer, independent of the main monitoring pipeline. BPF programs maintain per-thread state maps in the kernel; userspace reads them every 500ms to publish snapshots. Zero `/proc` reads after attach. No impact on the TUI or system metrics when `--trace` is not used.
-
-Runtime requires root (`CAP_SYS_ADMIN` on most configurations). Build requires `libbpf`, `bpftool` and `clang` (BPF target), auto-detected by CMake; if unavailable, `--trace` prints an error.
-
-**Binary Event Log (`--trace-out`):**
-
-The periodic Prometheus snapshot carries aggregate per-thread state. For high-rate event streams (scheduler decisions, heap traffic), formatting each event to text at trace time is a syscall-per-event firehose that perturbs the workload being measured. `--trace-out FILE` writes the raw ring records verbatim, batched into ~256 KB writes (one syscall per batch); trace-time cost per event drops to a memcpy. The header captures `CLOCK_MONOTONIC` and `CLOCK_REALTIME` anchors at trace start, so readers reconstruct absolute wall-clock per event and correlate against external logs. `--stream-out DEVICE` opens a second, independent stream in the same format, meant for a character device (a qemu-backed serial port), so capture survives a hang that takes `--trace-out`'s filesystem down with it. Both are independent of `MONTAUK_TRACE_VERBOSE` (the per-event stderr aid) and `--log` (the Prometheus flight recorder). The offline tools that read the log are covered under Offline Analysis below.
-
-**Offline Analysis (`montauk_analyze`, `montauk_trace_decode`):**
-
-Two standalone tools read a binary trace log offline: No privileges, no live target, no external dependencies. Both share one length-authoritative record walk (validate magic+version; an older decoder skips newer event types cleanly) and build without a `montauk_core` or BPF link, so they decode a capture anywhere. They install alongside `montauk` and must track its version (`montauk_analyze --version` prints it), since a newer `montauk` emits event types an older decoder would silently drop.
-
-`montauk_trace_decode` renders a log to a human-readable event stream, one line per event with elapsed and wall timestamps, or CSV with `--csv`. `montauk_analyze` runs single-pass diagnostic reports: each folds the file once, so analysis scales to captures of 450 MB+, and generic row qualifiers (`--sig`, `--comm`, `--pid`, `--tid`, `--window`) narrow a report to one signal, task or time window.
-
-The report suite, by domain:
-
-- **`summary`**: Header, duration, throughput, per type+subtype event counts and the trace-derived dispatch/preempt rates.
-- **Sync**: `waits` (per `(tid,fd)` ntsync wait-completion stats), `spins` (livelock detector: Streaks of sub-tick wait completions sustained past a threshold, with a verdict), `pairing` (per object fd, waits vs signal-side ops, to find a signal that never reaches a waiter), `endstate` (who was parked in what wait when the trace ended, and for how long), `futex` (per-uaddr wait/wake stats and who is still blocked), `keyedevt` (keyed-event waits vs releases by critical-section address).
-- **Heap**: `heapstk` (unique allocation sites of a size-filtered `malloc`/`calloc`, ranked by count), `doublefree` (an address freed while not live, with both freeing tids/comms; realloc moves tracked so a moved chunk isn't mis-flagged), `abortpm` (per-abort arena post-mortem: Replays the heap stream up to each abort and names the glibc top-chunk overrun victim allocation).
-- **Signals**: `signals` (every delivered signal decomposed, with the row qualifiers).
-- **I/O**: `iolat` (per-syscall I/O completion latency), `iowait` (who sat parked in a blocking I/O-wait syscall).
-- **Scheduler**: `sched` (wake-to-run latency distribution with percentiles, plus a structure classification of the latency sequence through sublimation), `slice` (per-CPU dispatched-slice length between consecutive picks, p50/p90/p99/worst/mean, idle strands excluded), `service` (per-PID CPU service from dispatched slices), `wakers` (localizes request-level latency to the waker's critical path), `work-conservation` (per-CPU idle strands and how each ended), `placement-race` and `dispatch-stall` (decompose tick-floored wakeups into their mechanism), `kick-latency` (kick-issue to response), `storm` (sched_ext cpu_release kick storms), `kstrand` (per-CPU kernel-thread dispatch strands), `locality` (CCX locality of each placement migration), `classmix` (per-class distribution of enqueued tasks), `field-persist` (an adaptive scheduler's structural-reclassification gate over time), `fractal` (self-similarity of the dispatch and migration timeline). The placement, slice and stall reports need a capture taken with `--sched-detail`.
-
-**Over a recording directory**, `montauk_analyze` reads a whole `--trace` recording, the `montauk_*.prom` scrapes beside the sibling `.events`:
-
-- `RECORDING_DIR --digest [--redact]` is the one-call shareable report: A SCHEDULER STABILITY block (ejection and clean-room state, what invalidates every number under it) leads above SYSTEM specs, then the ranked POORLY-BEHAVING ITEMS (a consolidated `montauk_offender{}` view over the spin / pairing / idle-strand detectors and the L2 hot-CPU), CROSS-CCX PLACEMENT, THERMAL/POWER (temperature, fan, package power, window-integral energy, clock, idle residency, scheduler churn) and KEY METRICS (the wake-to-run verdict and the dispatch-stall mechanism). Stability-first and KB-scale; `--redact` swaps process comms for stable FNV-1a hash handles for public sharing. With no `.events` present it still reports stability, specs, thermal/power and the offenders derivable from the scrapes.
-- `RECORDING_DIR --l2-by-cpu` localizes L2 misses per CPU over the busy window: Which cores eat the misses, and how concentrated.
-- `DIR | *.prom [--by LABEL] [--metric SUBSTR] [--full]` computes population statistics across many runs: Cross-version / cross-scheduler inference (Cliff's delta, permutation tests, Monte-Carlo run-count power) over the `.prom` archives, the inferential unit being one run. The `capture` axis splits by filename timestamp, so an uncommitted A/B on the same version still separates instead of folding into one cell.
-
-**Behavioral Goldens (`--golden`):**
-
-A benchmark gate that compares numbers cannot see a failure MECHANISM change underneath a stable number. montauk has shipped that failure: a dispatch stall went from PREEMPT-STARVED with zero pass-overs to 90% ORDER-STARVED averaging 4.2, survived ten days and several gated benchmark runs, and was found by reading a report by hand. Every gate in the path compared numbers, and the numbers barely moved.
-
-So there are two lanes, with separate flags, because they fail for different reasons and the difference is the diagnosis.
-
-- `--functional` **is the default and is a real golden.** It freezes each report's CATEGORICAL class and compares it EXACTLY: no tolerance, no bands, no knobs. A classification does not drift; PREEMPT-STARVED either still holds or it does not. Fourteen reports publish a class, and the tokens name different DEFECTS rather than degrees: `storm`'s REAL-IPI-STORM (burning interrupts) against IDLE-REENQUEUE-CHURN (kicks that are no-ops), `placement-race`'s PLACEMENT-MISS (an idle CPU was free, so a placement fix moves it) against SATURATED (only a busy-CPU fix cuts it). Each pair is two different remedies.
-- `--performance` **is opt-in and is not a golden, it is a baseline gate.** It freezes named numeric gauges within `max(tolerance%, absolute floor)`. The floor is not decoration: a percentage band alone trips on noise over small values, which is how these gates come to be ignored. Gauges are opt-in per key (`--watch PATTERN` at freeze time), so the frozen set contains only numbers somebody chose to watch, and each gauge is keyed by (name, labels) rather than name, since `montauk_analysis_locality_tier_moves` appears once per cache tier.
-
-A number moving 8% with the class unchanged is tuning. The class flipping with the number unchanged is a different bug wearing the same p99.
-
-**The freeze is gated exactly as the check is** — same completeness rule, same override. Refusing to compare data you would nonetheless canonize is backwards: a declined check costs one run, a baseline frozen from a capture that saw 30% of its workload silently invalidates every check built on it, and it fails later as "why does every check decline" rather than "this golden was never valid". A lossy capture still yields *plausible* classes, which is what makes it dangerous — stability measured over dropped events is indistinguishable from consistently dropping the same ones.
-
-Exit status is 0 pass, 1 a frozen fact moved, 2 DECLINED. The third is distinct on purpose: "this regressed" and "this was never actually checked" are different answers. montauk declines rather than comparing when the capture is under 95% complete (loss lands in the busy windows, so tail quantiles are biased downward and absence-of-anomaly classes are qualified rather than clean); when completeness is UNKNOWN, which is its own state and not a synonym for whole, since absence of the drop counter correlates with the older captures most likely to be lossy (`--allow-unknown` overrides); when the golden contains a line this build cannot interpret, because silently comparing the subset it understands is how a gate comes to pass while checking nothing; and when a frozen report or gauge is one the run did not produce. It also refuses to FREEZE a capture-limitation class (NO-TOPOLOGY, NO-PICK-STREAM, NO-IDLE-STREAM, NO-WAKER-EDGES), since those record the trace's shape rather than the workload's.
-
-`--golden` also runs over a whole recording directory (`montauk_analyze RECORDING_DIR --golden FILE`), and that is not a convenience — it is the only place the deterministic tier can be reached. The single-trace form freezes what the *reports* emit (`montauk_analysis_*`); the `montauk_pmu_*` counters a hardware baseline is actually about are collected by the monitor and land in the `.prom` scrapes beside the `.events`. The recording form folds both: the event stream for the classes, the reduced scrape series for the gauges.
-
-A gauge from a recording is a **series**, so freezing one is a choice rather than a read. The golden records the reduction per line instead of leaving a reader to infer it — `last` for a cumulative counter (the run total), `mean` for an instantaneous gauge, `--reduce` to override, and `point` for a single trace's single-valued report gauges. An unknown reduction is an error, not a fallback.
-
-The golden file is line-oriented text, not JSON, for two reasons: montauk writes JSON and never parses it, and a golden is a file a human reviews in a diff, where one frozen fact per line means `git diff` names exactly what moved. It records a workload label (identity; a mismatch refuses), the freezing build's version (recorded, never compared) and an environment fingerprint whose mismatch WARNS rather than fails, because a kernel bump is news and not a regression. It is hand-editable: per-key tolerance is editing one line.
-
-**Choosing what to freeze is the consumer's job, and it has two axes.** A class must be *stable* — it should not flip across captures of the same workload on an unchanged build, or the gate cries wolf; `tests/research/goldens_stability.py` measures that per-report flip rate for any workload. It must also *discriminate* — a class that reads the same for both things you are comparing cannot ever fail, so freezing it proves nothing. The two failures are opposite and both are silent, which is why `--exclude` exists: montauk supplies the mechanism and the operator, who knows what is being compared, supplies the policy. A report whose class is a capture limitation is handled by montauk itself — it is recorded as `skipped` with its token rather than aborting the freeze, since re-capturing cannot fix a property of the workload.
-
-Goldens are **versioned**, and a format bump refuses rather than guessing: the error names the remedy (re-freeze with `--update`) and why an in-place upgrade is impossible.
-
-Division of labor stays what it is everywhere else: the project drives the workload, montauk measures and judges. montauk does not become a test runner. CI is a non-goal; the counter tier's determinism holds on identical hardware, and a shared runner is not that.
-
-**Hardware Performance Counters (PMU):**
-
-Trace mode additionally samples hardware counters via `perf_event_open`: Per-CPU L2 cache misses/references (AMD Zen raw events), instructions, cycles, context switches, CPU migrations, branch misses and, where the `amd_uncore` module exposes the `amd_l3` PMU, per-CCX L3 accesses/misses. Derived rates (IPC, L2 miss percent, cycles-per-L2-miss, per-second rates) export as the `montauk_pmu_*` gauges, beside cumulative `_total` counters (instructions, cycles, context switches, CPU migrations, branch misses, L2 misses) typed as Prometheus counters. The pair is deliberate: a rate divides by wall time and inherits every source of variance a latency gauge has, while a total is invariant to clock scaling and thermals on fixed hardware, which is what a counter baseline rests on. The `amd_l3` event encoding comes entirely from sysfs; nothing is hardcoded but the documented Zen2 fallback. This is the cache-placement signal that pairs with the CCX-migration counters: Misses explain why cross-CCX moves hurt.
-
-On the same recording stream montauk derives the efficiency picture from sysfs: Package power from the powercap RAPL counters (`montauk_power_watts`), a wrap-safe cumulative package energy (`montauk_package_energy_joules_total`, whose delta is the digest's window-integral energy), average CPU frequency (`montauk_cpu_frequency_mhz_avg`), per-state idle residency (`montauk_cstate_residency_percent{state}`) and energy-per-instruction (`montauk_energy_per_instruction_pj`). One capture carries temperature, power, clock, idle depth, scheduler churn and the efficiency they imply.
-
-PMU sampling requires `kernel.perf_event_paranoid <= 0` or `CAP_PERFMON` and is exclusive to trace mode by design; the plain monitor never calls `perf_event_open`. If the permission check fails, PMU is disabled with a one-line notice and tracing continues.
-
-**Per-process counters (`--pmu-comm`, `--pmu-pid`)** are the unprivileged half, and they are not gated behind trace mode. The counters above open `perf_event_open(pid=-1, cpu=N)` — system-wide per-CPU — which `perf_event_paranoid >= 1` forbids, so on an ordinary distro box (paranoid 2) the system-wide PMU is simply off. But `perf_event_open(pid=<owned>, cpu=-1)` is permitted at paranoid 2 with no privilege and no sysctl, and it answers the more useful question: which process is thrashing the TLB rather than that someone is. `montauk --pmu-comm SUBSTR` attaches instructions, cycles, dTLB load misses and cache misses to every process whose command matches, re-resolved each tick so a workload started later is picked up, and publishes them per process as totals since attach plus the scale-free per-thousand-instructions forms. At paranoid >= 2 the counts exclude kernel time — the right measure for a compute kernel and the wrong one for a syscall-bound workload, so which form is in force is published (`montauk_pmu_per_process_user_only`) rather than left to be guessed. One counter follows a whole thread pool (`inherit`), but only threads created after the attach, so a measurement attaches before the pool spawns.
-
-This is the attribution the rest of montauk always had and the PMU alone lacked, and it earned itself immediately: on its first real use it refuted a standing performance theory about sublimation's parallel radix (that dTLB misses dominated at 100M, making hugepages the largest available lever) by measuring 0.15 dTLB misses per thousand instructions, and located the actual defect — a `num_threads` argument that silently fell through to the serial path and cost 2.8x.
-
-**Sizing the capture (`--trace-ring-bytes`, `--trace-classes`):**
-
-The BPF ring was a hardcoded 1MB with no operator knob and no way to mute a class. That default was never sized against a real offered rate: one scheduler-messaging capture offered roughly 2.8M events/s against 254k/s drained and kept **5.7%** of its stream, and three arms of the same workload came back 5.70%, 8.24% and 8.44% complete — not even sampled at comparable rates, which makes them incomparable rather than merely lossy. Pinning the drain core was the existing mitigation and it was never the binding constraint; ring residency was.
-
-`--trace-ring-bytes N` takes a K/M/G suffix and rounds up to a power of two. Measured on one workload: the 1M default dropped 46,214 events (94.7% complete) where a 64M ring dropped **zero**.
-
-`--trace-classes LIST` is the other half, and it addresses the sharper problem — **one loud class drowning the class the capture is for**. In the run above roughly 18.2M of 19.1M dropped events were `io` from a messaging flood, and they took about a million `sched` events down with them. Narrowing to `sched,fork,exec,exit` on the same workload captured 1,382,610 events with zero dropped. An excluded class is never reserved and is **not** counted as a drop: a deliberately narrowed capture is not a damaged one, and reporting it as loss would make the two indistinguishable. The mask applies at the single reserve choke point every emit already funnels through, so a class cannot be suppressed at nine sites and forgotten at the tenth.
-
-**External Metrics Providers:**
-
-montauk ingests external programs' own metrics. `ProviderCollector` scrapes unix sockets named `<name>.sock` in `$XDG_RUNTIME_DIR/montauk/providers/` (fallback `/run/montauk/providers/`): Connect, read one full Prometheus-text snapshot to EOF. Providers self-identify by socket filename; montauk names none in source, and a missing directory or unreachable provider is a silent per-scrape no-op. Provider text passes through montauk's Prometheus exposition verbatim and embeds into the binary trace stream as provider-snapshot records, so a capture carries the external program's self-reported state inline with the kernel events. Export-only: Not shown in the TUI.
+**External providers.** `ProviderCollector` reads one Prometheus-text snapshot from each `<name>.sock` under `$XDG_RUNTIME_DIR/montauk/providers/` (fallback `/run/montauk/providers/`). Providers self-identify by filename; a missing directory is a silent no-op. Text passes through verbatim and embeds into the binary trace stream. Export-only.
 
 ## Installation
 

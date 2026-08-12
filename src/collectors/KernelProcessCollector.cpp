@@ -269,7 +269,13 @@ bool KernelProcessCollector::recv_snapshot(montauk::model::ProcessSnapshot& out)
                     break;
                 }
                 case MONTAUK_ATTR_THREADS:
-                    // Thread count available for future use
+                    // The module has always sent this and the collector always
+                    // dropped it, so every process published thread_count = 1
+                    // (its default) while /proc reported 36, 26, 18. That is one
+                    // of the six axes the anomaly fusion runs on, and this is
+                    // the DEFAULT collector wherever the module is loaded, so
+                    // the fusion has been ranking on a constant column.
+                    ps.thread_count = (int)(*(uint32_t*)data);
                     break;
                 case MONTAUK_ATTR_EXE_PATH:
                     ps.exe_path = std::string(data);
@@ -299,6 +305,7 @@ bool KernelProcessCollector::recv_snapshot(montauk::model::ProcessSnapshot& out)
                 }
             }
 
+            out.total_threads += (uint64_t)(ps.thread_count > 0 ? ps.thread_count : 1);
             out.processes.push_back(std::move(ps));
         } else if (attr_type == MONTAUK_ATTR_PROC_COUNT) {
             out.total_processes = *(uint32_t*)((char*)nla + NLA_HDRLEN);

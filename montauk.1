@@ -1,4 +1,4 @@
-.TH MONTAUK 1 "August 2026" "montauk 8.8.0" "User Commands"
+.TH MONTAUK 1 "August 2026" "montauk 8.9.0" "User Commands"
 .SH NAME
 montauk \- Linux observability platform: monitor, eBPF tracer and analyzer
 .SH SYNOPSIS
@@ -185,6 +185,40 @@ object. The live-monitor analog of
 .B montauk_analyze \-\-json
 (which emits the diagnostic reports as JSON): a structured surface for an agent
 or a script to read instead of scraping the TUI. No TUI, no server, no daemon.
+.TP
+.B \-\-anomalies [\fIN\fR]
+Rank what is anomalous on the machine right now (default 5) as JSON, each
+process with its dominant feature axis. montauk fuses MAD, Mahalanobis and
+Half-Space Trees over the live population and publishes a score per process;
+this sorts and names it. The conclusion rather than the state it came from: a
+five-row answer runs about 600 bytes where the
+.B \-\-json
+snapshot it derives from runs about 67,000.
+.TP
+.B \-\-similar \fIPID\fR
+Processes behaving like \fIPID\fR, ranked by effective-resistance
+(commute-time) distance over a self-tuning affinity graph of the live population
+across all six anomaly axes. Identical feature vectors collapse to a single node
+before the solve, because a process table is mostly idle duplicates and an
+uncollapsed graph returns the same resistance for every one of them; each reply
+carries \fBidentical_peers\fR and the true \fBgraph_nodes\fR count. The solve
+is O(n^3), so the candidate set is capped and the bound is stated in the reply.
+.TP
+.B \-\-similar\-top \fIN\fR
+How many neighbours
+.B \-\-similar
+returns (default 5).
+.TP
+.B \-\-regime [\fIN\fR]
+Whether the machine's load regime shifted recently, and when. Samples aggregate
+CPU \fIN\fR times (default 64, clamped to 16\-256 and rounded to a power of
+two, 100ms apart) through montauk's own collector, then runs sublimation's
+Spectral Residual over the series and reports each flagged point with how long
+ago it happened.
+.TP
+.B \-\-cpu\-window \fIN\fR
+Sample aggregate CPU \fIN\fR times at 100ms and emit the raw series as JSON,
+for a caller that wants the window itself rather than a verdict over it.
 .TP
 .B \-\-init\-theme
 Detect terminal palette and write ~/.config/montauk/config.toml with
@@ -847,6 +881,6 @@ Report issues at: https://github.com/wllclngn/montauk/issues
 .SH COPYRIGHT
 MIT License. See LICENSE file in repository.
 .SH VERSION
-montauk 8.8.0
+montauk 8.9.0
 .br
 August 2026

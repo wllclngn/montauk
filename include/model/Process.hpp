@@ -59,6 +59,12 @@ struct ProcessSnapshot {
   size_t state_zombie{};    // 'Z'
   // System-wide thread statistics
   size_t total_threads{};      // Total threads across all processes
+  // Which anomaly feature axes actually carried signal this tick, one bit per
+  // column of the feature table (cpu, rss, gpu, faults, threads, ctxsw). A
+  // collector that cannot supply an axis leaves it constant, and a constant
+  // column is excluded from the fusion rather than diluting it -- so the basis
+  // is whatever this says, never the full six by assumption.
+  uint32_t anomaly_axis_mask{};
 };
 
 } // namespace montauk::model

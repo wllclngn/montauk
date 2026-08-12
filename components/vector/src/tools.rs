@@ -8,7 +8,8 @@
 // compute their conclusion IN-PROCESS via FFI into sublimation's learn/spectral
 // lanes (the anomaly fusion and effective resistance -- the same primitives
 // montauk's own C++ calls, so the numbers agree by construction); montauk_regime
-// samples /proc/stat directly and runs the spectral residual over FFI;
+// asks montauk for the CPU window (`--cpu-window N`) and runs the spectral
+// residual over FFI -- vector never reads /proc itself;
 // montauk_analyze_report and montauk_digest shell out to `montauk_analyze`. `sublimation` runs the sort/match/stat/characterize ops --
 // including count/distinct/tally -- through direct FFI into libsublimation.a
 // (an agent looping on it would otherwise pay a full process spawn per call);
@@ -32,11 +33,11 @@ pub const TOOLS_LIST: &[(&str, &str)] = &[
     ),
     (
         "montauk_similar",
-        "Processes behaving like a given one, by effective-resistance (commute-time) distance over a self-tuning (local-scaling) affinity graph of the live process population (CPU, RSS, GPU). Read-only, wraps `montauk --json` plus a direct FFI into sublimation's spectral core. Arguments: pid (number, required), top (number, optional, default 5).",
+        "Processes behaving like a given one, by effective-resistance (commute-time) distance over a self-tuning (local-scaling) affinity graph of the live process population (CPU, RSS, GPU, page-fault rate, thread count, involuntary context switches) -- the same six axes montauk_anomalies fuses, so a pid surfaced there can be handed straight here. The graph solve is O(n^3), so above 512 processes the candidate set is narrowed to the query's nearest by standardized distance first; the returned `basis` states which happened and over how many. Read-only, wraps `montauk --json` plus a direct FFI into sublimation's spectral core. Arguments: pid (number, required), top (number, optional, default 5).",
     ),
     (
         "montauk_regime",
-        "Did the machine's load regime shift recently, and when. Samples aggregate CPU utilization over a short window and runs sublimation's Spectral Residual (direct FFI) to locate shifts, returning each flagged point with how many seconds ago it happened. Read-only, an active measurement (about 6s). Arguments: samples (number, optional, clamped to 16-256 then rounded to a power of two, default 64, sampled 100ms apart).",
+        "Did the machine's load regime shift recently, and when. Asks montauk for a windowed aggregate-CPU series (`montauk --cpu-window N`, montauk's own CpuCollector) and runs sublimation's Spectral Residual (direct FFI) over it to locate shifts, returning each flagged point with how many seconds ago it happened. Read-only, an active measurement (about 6s). Arguments: samples (number, optional, clamped to 16-256 then rounded to a power of two, default 64, sampled 100ms apart).",
     ),
     (
         "montauk_analyze_report",
@@ -260,11 +261,12 @@ pub fn anomalies_reduce(out: &str, top_n: usize) -> Result<Value, (i64, String)>
         let unknown: Vec<&str> = row
             .iter()
             .map(|(k, _)| k.as_str())
-            // pid and comm are IDENTITY, not features -- they name the row
-            // rather than contributing an axis to the fusion, so they are not
-            // part of the matrix this check guards.
+            // pid/comm are IDENTITY and anomaly_score/anomaly_axis are the
+            // RESULT montauk already computed. Neither is an input axis, so
+            // neither belongs to the matrix this check guards.
             .filter(|k| {
-                *k != "pid" && *k != "comm" && !FEATURES.iter().any(|(fk, _, _)| fk == k)
+                !matches!(*k, "pid" | "comm" | "anomaly_score" | "anomaly_axis")
+                    && !FEATURES.iter().any(|(fk, _, _)| fk == k)
             })
             .collect();
         if !unknown.is_empty() {
@@ -285,10 +287,28 @@ pub fn anomalies_reduce(out: &str, top_n: usize) -> Result<Value, (i64, String)>
             x[i * d + j] = field(row, k)?;
         }
     }
-    // The conclusion, computed IN-PROCESS over the learn core -- the same
-    // sublimation_anomaly_fuse montauk's enrichment calls.
-    let (scores, axes) = crate::ffi::anomaly_fuse(&x, n, d)
-        .ok_or((-32000, "anomaly fusion failed".to_string()))?;
+    // READ montauk's score, do not recompute it. This used to call
+    // sublimation_anomaly_fuse over the same matrix, which made vector a SECOND
+    // IMPLEMENTATION of a computation montauk already does: fed one frozen
+    // snapshot, the two agreed on 1 of 10 rankings and shared only 6 of 10
+    // processes. Same primitive, same feature order, different answer, because
+    // nothing forced them to see identical input. montauk now publishes
+    // anomaly_score and anomaly_axis on every feature row, so there is one
+    // computation and vector presents it. Fusing here again could only ever
+    // reintroduce the drift.
+    let scores: Vec<f64> = feats.iter()
+        .map(|r| r.get("anomaly_score").and_then(Value::as_f64).unwrap_or(f64::NAN))
+        .collect();
+    let axes: Vec<i8> = feats.iter()
+        .map(|r| r.get("anomaly_axis").and_then(Value::as_f64).unwrap_or(-1.0) as i8)
+        .collect();
+    if scores.iter().any(|v| v.is_nan()) {
+        return Err((-32000,
+            "montauk --json is not publishing anomaly_score on its feature rows; \
+             this vector build reads montauk's score rather than recomputing it, \
+             so it refuses rather than answering with a second opinion. Update \
+             montauk to a build that publishes it.".to_string()));
+    }
     let mut rows: Vec<(f64, i64, i8, f64, f64)> = (0..n)
         .map(|i| (scores[i], pids[i], axes[i], x[i * d], x[i * d + 1]))
         .collect();
@@ -453,7 +473,44 @@ pub fn similar_reduce(out: &str, query_pid: i64, top_n: usize) -> Result<Value, 
         }
     }
 
-    let selected: Vec<(i64, [f64; DIM])> = if rows <= CAP {
+    // COLLAPSE IDENTICAL VECTORS FIRST -- the same fix montauk's --similar
+    // carries, and it is not optional. A process table is mostly idle
+    // duplicates: measured here, 221 of 302 processes share the exact vector
+    // (0,0,0,0,1,0) and only 82 distinct points exist. Identical points ARE one
+    // node, so effective resistance from an outlier to each of them is equal by
+    // symmetry, and an uncollapsed graph returns ONE resistance for the whole
+    // top-N and ranks kernel threads by whatever order the tie broke in.
+    // Verified against the CLI on the same pid at the same moment: collapsed
+    // gave 6 distinct resistances over 82 nodes and named hydrogen/kitty;
+    // uncollapsed gave 1 distinct over 6 and named kworkers.
+    let mut collapsed: Vec<(i64, [f64; DIM])> = Vec::new();
+    let mut peers: Vec<usize> = Vec::new();
+    for (i, (pid, f)) in all.iter().enumerate() {
+        match collapsed.iter().position(|(_, g)| g == f) {
+            Some(u) => {
+                peers[u] += 1;
+                if i == q_all {
+                    collapsed[u].0 = *pid;   // the query represents its own class
+                }
+            }
+            None => {
+                collapsed.push((*pid, *f));
+                peers.push(1);
+            }
+        }
+    }
+    let q_pid = all[q_all].0;
+    let all = collapsed;
+    let rows_distinct = all.len();
+    if rows_distinct < 3 {
+        return Err((-32000,
+            "the live population has fewer than three distinct behaviours; \
+             there is nothing to rank".to_string()));
+    }
+    let q_all = all.iter().position(|(p, _)| *p == q_pid)
+        .ok_or((-32000, "query lost during collapse".to_string()))?;
+
+    let selected: Vec<(i64, [f64; DIM])> = if rows_distinct <= CAP {
         all.clone()
     } else {
         let qf = all[q_all].1;
@@ -550,26 +607,6 @@ pub fn similar_reduce(out: &str, query_pid: i64, top_n: usize) -> Result<Value, 
     ]);
     Ok(text_content(result.to_string()))
 }
-
-// Aggregate CPU busy/total jiffies from the first line of /proc/stat. montauk's
-// one-shot snapshot is instantaneous and carries no history, so a temporal "did
-// anything shift" query samples this directly. Read-only.
-fn read_cpu_totals() -> Option<(u64, u64)> {
-    let stat = std::fs::read_to_string("/proc/stat").ok()?;
-    let line = stat.lines().next()?;
-    let mut it = line.split_whitespace();
-    if it.next()? != "cpu" {
-        return None;
-    }
-    let vals: Vec<u64> = it.filter_map(|t| t.parse().ok()).collect();
-    if vals.len() < 5 {
-        return None;
-    }
-    let idle = vals[3] + vals[4]; // idle + iowait
-    let total: u64 = vals.iter().sum();
-    Some((idle, total))
-}
-
 pub fn call_montauk_regime(args: &Value) -> Result<Value, (i64, String)> {
     let req = args
         .get("samples")
@@ -577,17 +614,25 @@ pub fn call_montauk_regime(args: &Value) -> Result<Value, (i64, String)> {
         .map(|f| f as usize)
         .unwrap_or(64);
     let n = req.next_power_of_two().clamp(16, 256);
-    let interval = std::time::Duration::from_millis(100);
-    let mut prev = read_cpu_totals().ok_or((-32000, "cannot read /proc/stat".to_string()))?;
-    let mut signal = Vec::with_capacity(n);
-    for _ in 0..n {
-        std::thread::sleep(interval);
-        let cur = read_cpu_totals().ok_or((-32000, "cannot read /proc/stat".to_string()))?;
-        let dt = cur.1.saturating_sub(prev.1);
-        let di = cur.0.saturating_sub(prev.0);
-        let pct = if dt > 0 { (1.0 - di as f64 / dt as f64) * 100.0 } else { 0.0 };
-        signal.push(pct);
-        prev = cur;
+    // MONTAUK DOES THE SAMPLING. This used to read /proc/stat directly, n times,
+    // which made vector a second telemetry collector inside a project whose
+    // whole thesis is that montauk is the instrument. `montauk --cpu-window N`
+    // exists for exactly this: it samples montauk's own CpuCollector and returns
+    // the series, so vector makes one call and reads a result rather than
+    // growing a collector of its own.
+    let out = run_subprocess("montauk", &["--cpu-window", &n.to_string()])?;
+    let win = crate::json::parse(&out)
+        .map_err(|e| (-32000, format!("parse montauk --cpu-window: {e}")))?;
+    let signal: Vec<f64> = win
+        .get("samples")
+        .and_then(Value::as_array)
+        .ok_or((-32000, "montauk --cpu-window returned no samples".to_string()))?
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect();
+    if signal.len() != n {
+        return Err((-32000, format!(
+            "montauk --cpu-window returned {} samples, expected {n}", signal.len())));
     }
     let z = (n / 4).max(1);
     let (sal, flags) = ffi::spectral_residual(&signal, 3, 3.0, z)

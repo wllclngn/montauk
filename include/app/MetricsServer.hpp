@@ -20,6 +20,13 @@ namespace montauk::app {
 struct AnomalyFeatureRow {
   int64_t pid;
   double cpu_pct, rss_kb, gpu_util_pct, fault_delta, thread_count, ctxsw_delta;
+  // montauk's OWN score for this row, published for the whole population rather
+  // than only the 64 displayed rows. vector used to recompute the fusion to
+  // reach the rest, which made it a second implementation: fed one frozen
+  // snapshot, the two agreed on 1 of 10 rankings. One computation, read by
+  // everyone, cannot drift from itself.
+  double anomaly_score;
+  int anomaly_axis;
   // A NAME FOR EVERY RANKED PROCESS. The fusion ranks this whole population but
   // only the 64 rows in top_procs carried an identity, so a consumer scoring a
   // pid outside it got a rank and an empty string -- which reads as a process
@@ -54,6 +61,8 @@ struct MetricsSnapshot {
   // The full population the anomaly fusion ran over (up to max_procs), so the
   // emitted score is reproducible against the same set it was judged against.
   std::vector<AnomalyFeatureRow> anomaly_features;
+  // Which feature axes actually carried signal (see ProcessSnapshot).
+  uint32_t anomaly_axis_mask{};
 };
 
 // Serialize a MetricsSnapshot into Prometheus text exposition format (version 0.0.4).
@@ -97,12 +106,13 @@ struct MetricsSnapshot {
     ms.top_procs_count = n;
     // Carry the FULL fused population's features (not just the displayed top_procs)
     // so the anomaly score is reproducible against the same set it was judged on.
+    ms.anomaly_axis_mask = s.procs.anomaly_axis_mask;
     ms.anomaly_features.reserve(s.procs.processes.size());
     for (const auto& p : s.procs.processes) {
       AnomalyFeatureRow row{p.pid, p.cpu_pct, static_cast<double>(p.rss_kb),
                             p.has_gpu_util ? p.gpu_util_pct : 0.0,
                             p.fault_delta, static_cast<double>(p.thread_count),
-                            p.ctxsw_delta, {}};
+                            p.ctxsw_delta, p.anomaly_score, p.anomaly_axis, {}};
       // The PROGRAM, not the first 15 bytes of a command line. p.cmd is the
       // full cmdline for enriched rows, so a raw truncation yields things like
       // "python3 -c \nimp" -- a cut mid-argument, newline included. Take the
