@@ -32,7 +32,7 @@ from pathlib import Path
 
 import harness
 
-ANALYZE = harness.MONTAUK_ANALYZE
+ANALYZE = harness.ANALYZE
 TRACE = harness.ROOT / "tests" / "fixtures" / "synthetic.mtk"
 # No CPU_IDLE stream, so placement-race reports NO-IDLE-STREAM: the one class
 # the freeze refuses to freeze.
@@ -44,7 +44,7 @@ failures = []
 
 def check(label, argv, want_exit, want_in=(), want_not_in=(), target=None):
     """Run the analyzer and assert exit status plus output phrases."""
-    r = harness.run_text([str(ANALYZE), str(target or TRACE)] + argv)
+    r = harness.run_text([*ANALYZE, str(target or TRACE)] + argv)
     blob = r.stdout + r.stderr
     if r.returncode != want_exit:
         failures.append(f"{label}: exit {r.returncode}, want {want_exit}")
@@ -68,7 +68,7 @@ def check(label, argv, want_exit, want_in=(), want_not_in=(), target=None):
 
 
 def main():
-    missing = harness.missing_bins(ANALYZE)
+    missing = harness.missing_bins(harness.MONTAUK)
     if missing or not TRACE.exists():
         note(f"SKIP -- missing {[str(m) for m in missing] or str(TRACE)}")
         return 0
@@ -93,7 +93,7 @@ def main():
               ["--golden", str(g), "--update", "--label", "synthetic"], 2,
               ["DECLINED", "will not freeze", "UNKNOWN"])
         check("freeze", ["--golden", str(g), "--update", "--label", "synthetic",
-                         "--allow-unknown"], 0, ["froze 14 class(es)"])
+                         "--allow-unknown"], 0, ["froze 29 class(es)"])
 
         # The fixture predates drop accounting, which makes it the exact case
         # the three-state rule exists for: absence of the counter is not
@@ -108,7 +108,7 @@ def main():
         check("unknown completeness declines", ["--golden", str(g)], 2,
               ["DECLINED", "UNKNOWN"])
         check("round trip", ["--golden", str(g), "--allow-unknown"], 0,
-              ["PASS 14 frozen fact(s)"])
+              ["PASS 29 frozen fact(s)"])
 
         # A CLASS THAT MOVED IS EXIT 1, not 2, and the failure names golden,
         # actual and the accept command on the same screen.
@@ -202,7 +202,7 @@ def main():
         # pair gets one verdict rather than two half-answers.
         blob = check("both lanes",
                      ["--golden", str(perf), "--functional", "--performance",
-                      "--allow-unknown"], 0, ["PASS 34 frozen fact(s)"])
+                      "--allow-unknown"], 0, ["PASS 49 frozen fact(s)"])
 
         # A lane flag with no --golden is an error, never a no-op.
         # THE REDUCTION IS PART OF THE FORMAT, not a default the reader has to
@@ -285,12 +285,18 @@ def main():
                "--allow-unknown"], 2, ["--reduce takes"], target=rec)
 
         # --exclude. Without it, excluding ONE report means naming the other
-        # 29 by hand -- the friction that gets a gate abandoned.
+        # 28 by hand -- the friction that gets a gate abandoned.
+        #
+        # THESE COUNTS MOVED IN v8.10.0, from 14 classes to 29. Every report
+        # publishes a class token now, so the behavioral lane covers all of them
+        # rather than the half that happened to have one. A count here is a
+        # coverage assertion, not a magic number -- if it drops, the lane got
+        # narrower and that is the thing worth failing on.
         exg = d / "excl.golden"
         check("exclude drops reports from the freeze",
               ["--golden", str(exg), "--update", "--label", "t",
                "--exclude", "slice,storm", "--allow-unknown"], 0,
-              ["froze 12 class(es)"])
+              ["froze 27 class(es)"])
         check("unknown --exclude name is an error",
               ["--golden", str(exg), "--update", "--label", "t",
                "--exclude", "nosuch", "--allow-unknown"], 2,
@@ -311,7 +317,7 @@ def main():
         skipg.write_text(text + "skipped placement-race NO-IDLE-STREAM\n")
         check("a skipped report is accepted and not compared",
               ["--golden", str(skipg), "--allow-unknown"], 0,
-              ["PASS 14 frozen fact(s)"])
+              ["PASS 29 frozen fact(s)"])
         # The fixture's placement-race carries a REAL class, so the golden's
         # skip is stale -- that must read as news to act on, never as a failure
         # of the run under test.

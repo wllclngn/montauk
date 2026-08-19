@@ -9,8 +9,6 @@ The kernel module and eBPF trace build unless opted out (--no-kernel,
 --no-bpf). When a feature is requested its prereqs are mandatory: kernel
 headers for the module, the eBPF toolchain (clang, bpftool, libbpf, kernel
 BTF) for trace; a missing prereq aborts the install with the fix to run.
-vector (the MCP server) builds via cargo when cargo is on PATH and is
-skipped by name when it is not.
 
 Usage:
     ./install.py              # Build and install (kernel module + eBPF trace by default)
@@ -30,6 +28,7 @@ import sys
 import shutil
 import subprocess
 import multiprocessing
+import tempfile
 from pathlib import Path
 from datetime import datetime
 
@@ -288,16 +287,18 @@ def uninstall_kernel_module() -> bool:
         log_info("Unloading kernel module...")
         run_cmd_sudo([find_kmod_tool("rmmod"), "montauk"])
 
+    # Report what actually happened. These used to log "Removed" and set the flag
+    # without looking at the return code, so a failed rm -- the ordinary case when
+    # the sudo is refused -- printed success and returned True.
     removed = False
-    if ko_path.exists():
-        run_cmd_sudo(["rm", str(ko_path)])
-        log_info(f"Removed {ko_path}")
-        removed = True
-
-    if conf_path.exists():
-        run_cmd_sudo(["rm", str(conf_path)])
-        log_info(f"Removed {conf_path}")
-        removed = True
+    for path in (ko_path, conf_path):
+        if not path.exists():
+            continue
+        if run_cmd_sudo(["rm", str(path)]) == 0:
+            log_info(f"Removed {path}")
+            removed = True
+        else:
+            log_error(f"Failed to remove {path}")
 
     if removed:
         run_cmd_sudo([find_kmod_tool("depmod"), "-a"])
@@ -373,33 +374,6 @@ def resolve_kernel(args, source_dir: Path) -> bool:
         print("         Fedora:        sudo dnf install kernel-devel")
         print()
         return False
-    return True
-
-
-def build_mcp(source_dir: Path) -> bool:
-    """Build vector, the MCP server -- a sibling cargo crate that links
-    the CMake-built libsublimation.a, so it must run after the main build.
-    cargo is optional: absent cargo skips the crate by name; present cargo
-    must build it cleanly."""
-    mcp_dir = source_dir / "components" / "vector"
-    if not mcp_dir.exists():
-        log_warn("vector source not found -- MCP server skipped")
-        return True
-    if shutil.which("cargo") is None:
-        log_warn("cargo not found -- vector (MCP server) skipped")
-        return True
-
-    log_info("BUILDING MCP SERVER (vector)")
-    ret = run_cmd(["cargo", "build", "--release"], cwd=mcp_dir)
-    if ret != 0:
-        log_error("vector build failed!")
-        return False
-
-    mcp_bin = mcp_dir / "target" / "release" / "vector"
-    if not mcp_bin.exists():
-        log_error("vector binary not found after build!")
-        return False
-    log_info(f"Built {mcp_bin}")
     return True
 
 
@@ -503,10 +477,6 @@ def cmd_build(args, source_dir: Path) -> bool:
     size = binary.stat().st_size
     log_info(f"Built {binary} ({size} bytes)")
 
-    # vector links libsublimation.a out of build/, so it builds last.
-    if not build_mcp(source_dir):
-        return False
-
     # Stash decisions for cmd_install to use
     args._use_kernel = use_kernel
     return True
@@ -525,6 +495,56 @@ def install_atomic(src: Path, dst: Path) -> int:
     return run_cmd_sudo(["mv", "-f", str(tmp), str(dst)])
 
 
+# THE MANIFEST. cmd_uninstall used to carry its own hardcoded list of targets,
+# and a second list of the same thing drifts -- provably: a live install here
+# carried an orphaned bin/montauk-mcp from the retired MCP server, a
+# share/montauk/ this installer never creates, and the manpage at BOTH
+# share/man/man1/ and man/man1/. Every one of them survived an uninstall that
+# reported success. The same root cause shipped in PANDEMONIUM (Issue #17) and
+# PRISM, so this is a family bug, not a montauk one.
+#
+# The fix is derivation, not three more entries: install RECORDS each path it
+# places, uninstall reads that record back. A list that is written by the code
+# that does the placing cannot disagree with it.
+MANIFEST_REL = Path("lib") / "montauk" / "install_manifest.txt"
+
+# Paths older installers placed that the manifest cannot know about, since they
+# predate it. Swept on uninstall so an upgrade-in-place still cleans up after its
+# ancestors; each is a path THIS installer no longer writes.
+LEGACY_TARGETS = [
+    Path("bin") / "montauk_analyze",      # folded into `montauk --analyze`
+    Path("bin") / "montauk_trace_decode", # folded into `montauk --decode`
+    Path("bin") / "montauk-mcp",          # the retired MCP server, pre-rename
+    Path("bin") / "vector",               # the retired MCP server
+    Path("man") / "man1" / "montauk.1",   # moved under share/
+    Path("share") / "montauk",            # logo dir, no longer installed
+]
+
+
+def manifest_record(prefix: Path, placed: list) -> None:
+    """Write the list of installed paths so uninstall can derive its targets."""
+    dest = prefix / MANIFEST_REL
+    body = "".join(f"{p}\n" for p in placed)
+    tmp = Path(tempfile.gettempdir()) / "montauk_install_manifest"
+    tmp.write_text(body)
+    if run_cmd_sudo(["install", "-Dm644", str(tmp), str(dest)]) == 0:
+        log_info(f"Recorded {len(placed)} installed paths in {dest}")
+    else:
+        log_warn("Failed to record the install manifest -- uninstall will fall "
+                 "back to scanning known paths")
+    tmp.unlink(missing_ok=True)
+
+
+def manifest_read(prefix: Path) -> list | None:
+    """Read back what install placed. None when no manifest exists (an install
+    predating it), which is the caller's cue to fall back rather than to treat
+    the install as empty."""
+    src = prefix / MANIFEST_REL
+    if not src.exists():
+        return None
+    return [Path(line) for line in src.read_text().split("\n") if line.strip()]
+
+
 def cmd_install(args, source_dir: Path) -> bool:
     """Build and install montauk."""
     if not cmd_build(args, source_dir):
@@ -534,6 +554,7 @@ def cmd_install(args, source_dir: Path) -> bool:
     binary = build_dir / "montauk"
     prefix = Path(args.prefix) if args.prefix else Path("/usr/local")
     install_path = prefix / "bin" / "montauk"
+    placed = []  # every path this run writes, recorded for uninstall
 
     log_info("INSTALLING")
     log_info(f"Destination: {install_path}")
@@ -547,32 +568,22 @@ def cmd_install(args, source_dir: Path) -> bool:
 
     size = binary.stat().st_size
     log_info(f"Installed {install_path} ({size} bytes)")
+    placed.append(install_path.relative_to(prefix))
 
-    # The trace tools ship with the tracer (a montauk newer than the deployed
-    # decoder silently drops newer event types from decoded output, so they MUST
-    # track the installed montauk version), and `sublimation` is the CLI front
-    # door to the in-tree sort sub-system -- it ships beside them.
-    for tool in ("montauk_trace_decode", "montauk_analyze", "sublimation"):
-        tool_bin = binary.parent / tool
-        if tool_bin.exists():
-            if install_atomic(tool_bin, prefix / "bin" / tool) == 0:
-                log_info(f"Installed {prefix / 'bin' / tool}")
-            else:
-                log_warn(f"Failed to install {tool}")
+    # `sublimation` is the CLI front door to the in-tree sort sub-system and is
+    # its own binary -- it ships beside montauk.
+    tool_bin = binary.parent / "sublimation"
+    if tool_bin.exists():
+        if install_atomic(tool_bin, prefix / "bin" / "sublimation") == 0:
+            log_info(f"Installed {prefix / 'bin' / 'sublimation'}")
+            placed.append(Path("bin") / "sublimation")
         else:
-            log_warn(f"{tool} missing from build dir — not installed")
-
-    # vector (the MCP server) ships beside montauk when cargo built it;
-    # a cargo-less box already got the named skip in build_mcp.
-    mcp_bin = source_dir / "components" / "vector" / "target" / "release" / "vector"
-    if mcp_bin.exists():
-        if install_atomic(mcp_bin, prefix / "bin" / "vector") == 0:
-            log_info(f"Installed {prefix / 'bin' / 'vector'}")
-        else:
-            log_warn("Failed to install vector")
+            log_warn("Failed to install sublimation")
+    else:
+        log_warn("sublimation missing from build dir — not installed")
 
     # The generic profile harness (montauk_profile): a montauk feature any
-    # application uses to turn a montauk capture into a montauk_analyze report --
+    # application uses to turn a montauk capture into a `montauk --analyze` report --
     # capture (launch/attach/existing trace), run the reports, assemble. Installed
     # importable as a module (apps add this dir to sys.path for their own diagnose
     # script) plus a `montauk-profile` CLI shim for the generic command/attach/
@@ -584,6 +595,8 @@ def cmd_install(args, source_dir: Path) -> bool:
         if run_cmd_sudo(["install", "-Dm755", str(profile_src), str(lib_dest)]) == 0:
             run_cmd_sudo(["ln", "-sf", str(lib_dest), str(cli_dest)])
             log_info(f"Installed {cli_dest} (importable: {lib_dest})")
+            placed.append(lib_dest.relative_to(prefix))
+            placed.append(cli_dest.relative_to(prefix))
         else:
             log_warn("Failed to install montauk-profile")
 
@@ -610,9 +623,12 @@ def cmd_install(args, source_dir: Path) -> bool:
         ret = run_cmd_sudo(["install", "-Dm644", str(manpage_src), str(manpage_dest)])
         if ret == 0:
             log_info(f"Installed manpage to {manpage_dest}")
+            placed.append(manpage_dest.relative_to(prefix))
             run_cmd_sudo(["mandb", "-q"])  # refresh man index, best-effort
         else:
             log_warn("Failed to install manpage (in-app help overlay will be empty)")
+
+    manifest_record(prefix, placed)
 
     # Detect terminal palette and write config.toml on first install
     if init_theme(install_path):
@@ -656,33 +672,48 @@ def cmd_clean(args, source_dir: Path) -> bool:
 
 
 def cmd_uninstall(args, source_dir: Path) -> bool:
-    """Remove everything install placed: the binary, the trace tools, and the
-    manpage -- plus the kernel module."""
+    """Remove everything install placed, read back from the manifest install
+    wrote -- plus the paths older installers placed, and the kernel module."""
     prefix = Path(args.prefix) if args.prefix else Path("/usr/local")
-    install_path = prefix / "bin" / "montauk"
 
     log_info("UNINSTALLING")
 
-    # The trace tools ship beside montauk (cmd_install copies them), so uninstall
-    # must take them too -- otherwise a stale montauk_analyze/decode is left to
-    # drift out of sync with a later montauk.
-    targets = [install_path,
-               prefix / "bin" / "montauk_analyze",
-               prefix / "bin" / "montauk_trace_decode",
-               prefix / "bin" / "sublimation",
-               prefix / "bin" / "vector",
-               prefix / "bin" / "montauk-profile",
-               prefix / "lib" / "montauk" / "montauk_profile.py",
-               prefix / "share" / "man" / "man1" / "montauk.1"]
+    rel = manifest_read(prefix)
+    if rel is None:
+        # An install predating the manifest. Fall back to the paths this
+        # installer is known to have placed across its history -- stated once,
+        # here, and reachable only on this path.
+        log_warn("No install manifest found (installed by an older montauk); "
+                 "falling back to the historical path set")
+        rel = [Path("bin") / n for n in ("montauk", "sublimation",
+                                         "montauk-profile")]
+        rel += [Path("lib") / "montauk" / "montauk_profile.py",
+                Path("share") / "man" / "man1" / "montauk.1"]
+    else:
+        log_info(f"Manifest lists {len(rel)} installed paths")
+        rel = rel + [MANIFEST_REL]  # the manifest goes last, with everything else
+
+    targets = [prefix / r for r in rel + LEGACY_TARGETS]
+
     removed = 0
     for t in targets:
-        if t.exists():
-            if run_cmd_sudo(["rm", str(t)]) == 0:
-                log_info(f"Removed {t}")
-                removed += 1
-            else:
-                log_error(f"Failed to remove {t}")
-                return False
+        if not t.exists() and not t.is_symlink():
+            continue
+        cmd = ["rm", "-r", str(t)] if t.is_dir() else ["rm", str(t)]
+        if run_cmd_sudo(cmd) == 0:
+            log_info(f"Removed {t}")
+            removed += 1
+        else:
+            log_error(f"Failed to remove {t}")
+            return False
+
+    # Prune the directories install created, but only when they are empty --
+    # lib/montauk and share/man/man1 are shared with other software on a real
+    # prefix, so rmdir (which refuses a non-empty directory) is the safe verb.
+    for d in (prefix / "lib" / "montauk", prefix / "share" / "montauk"):
+        if d.is_dir():
+            run_cmd_sudo(["rmdir", str(d)])  # best-effort; non-empty is fine
+
     if removed:
         run_cmd_sudo(["mandb", "-q"])  # refresh man index after dropping the page
     else:
@@ -702,7 +733,7 @@ def cmd_uninstall(args, source_dir: Path) -> bool:
 
 def cmd_test(args, source_dir: Path) -> bool:
     """Run the full suite via tests/run.py -- all five layers (unit, gate,
-    perf, trace, mcp), not just the montauk_tests binary. run.py does its
+    perf, trace), not just the test binary. run.py does its
     own configure-and-build of the test targets."""
     log_info("RUNNING TESTS")
 
@@ -743,7 +774,7 @@ Commands:
   clean       Remove build directory
   uninstall   Remove installed binary and kernel module
   test        Run the full test suite (python3 tests/run.py: unit, gate,
-              perf, trace, mcp layers)
+              perf, trace layers)
 
 Examples:
   ./install.py                    # Build and install (kernel module + eBPF trace by default)
@@ -754,7 +785,7 @@ Examples:
   ./install.py clean              # Clean build
 
 The kernel module and eBPF trace build by default; --no-kernel / --no-bpf
-opt out. vector (the MCP server) builds when cargo is on PATH.
+opt out.
 """
     )
 

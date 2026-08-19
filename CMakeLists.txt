@@ -99,6 +99,7 @@ set(MONTAUK_CORE_SRCS
     src/util/Churn.cpp
     src/util/SortDispatch.cpp
     src/util/Log.cpp
+    src/util/FmtDouble.cpp
     src/util/NvmlDyn.cpp
     src/model/TraceReader.cpp
     src/ui/Terminal.cpp
@@ -155,27 +156,36 @@ target_link_libraries(montauk_core PUBLIC montauk_hardening)
 
 # Always attempt NVML (NVIDIA) support by default; if not found, build continues without it.
 # Try common locations for NVML headers. On Arch/others, CUDA installs nvml.h under /opt/cuda/include.
+# The HEADER is the build dependency; the library is dlopen'd by util/NvmlDyn at
+# first use, so libnvidia-ml stays out of DT_NEEDED and a box with no NVIDIA
+# driver can still exec montauk. Detection is therefore on the header alone --
+# gating on find_library would refuse to compile GPU support on a build host that
+# merely lacks the runtime, which is exactly the coupling this removes.
 find_path(NVML_INCLUDE_DIR nvml.h PATHS /usr/include /usr/local/include /usr/include/nvidia /opt/cuda/include)
-find_library(NVML_LIBRARY nvidia-ml PATHS /usr/lib /usr/lib64 /usr/local/lib /usr/local/lib64)
-if(NVML_INCLUDE_DIR AND NVML_LIBRARY)
+if(NVML_INCLUDE_DIR)
   target_compile_definitions(montauk_core PUBLIC MONTAUK_HAVE_NVML=1)
   target_include_directories(montauk_core PUBLIC ${NVML_INCLUDE_DIR})
-  target_link_libraries(montauk_core PUBLIC ${NVML_LIBRARY})
-  message(STATUS "NVML detected: enabling per-process and device GPU metrics")
+  target_link_libraries(montauk_core PUBLIC ${CMAKE_DL_LIBS})
+  message(STATUS "NVML headers detected: enabling per-process and device GPU metrics (loaded at run time)")
 else()
   message(STATUS "NVML not found: building without NVML (device VRAM/util via sysfs if available)")
 endif()
 
-# io_uring support (Prometheus metrics endpoint)
-find_library(URING_LIBRARY uring)
-if(URING_LIBRARY)
-  target_sources(montauk_core PRIVATE src/app/MetricsServer.cpp)
-  target_link_libraries(montauk_core PUBLIC ${URING_LIBRARY})
+# io_uring support (Prometheus metrics endpoint).
+# The HEADER is the build dependency -- `struct io_uring` needs a layout -- but
+# the library is dlopen'd at first use by util/UringDyn, so liburing stays out of
+# montauk's DT_NEEDED. Linking it made a box without liburing unable to EXEC
+# montauk at all, for every mode, including ones that never open a socket.
+find_path(URING_INCLUDE_DIR liburing.h)
+if(URING_INCLUDE_DIR)
+  target_sources(montauk_core PRIVATE src/app/MetricsServer.cpp src/util/UringDyn.cpp)
+  target_include_directories(montauk_core PUBLIC ${URING_INCLUDE_DIR})
+  target_link_libraries(montauk_core PUBLIC ${CMAKE_DL_LIBS})
   target_compile_definitions(montauk_core PUBLIC MONTAUK_HAVE_URING=1)
-  message(STATUS "liburing detected: enabling Prometheus metrics endpoint")
+  message(STATUS "liburing headers detected: enabling Prometheus metrics endpoint (loaded at run time)")
 else()
   target_sources(montauk_core PRIVATE src/app/MetricsServerStub.cpp)
-  message(STATUS "liburing not found: building without metrics endpoint")
+  message(STATUS "liburing headers not found: building without metrics endpoint")
 endif()
 
 # Kernel module collector support (opt-in)
@@ -232,7 +242,11 @@ if(LIBBPF_LIBRARY AND LIBBPF_INCLUDE AND BPFTOOL AND CLANG_BPF)
 
   target_sources(montauk_core PRIVATE src/collectors/BpfTraceCollector.cpp)
   target_include_directories(montauk_core PUBLIC ${CMAKE_BINARY_DIR} ${LIBBPF_INCLUDE} ${CMAKE_SOURCE_DIR}/src/bpf)
-  target_link_libraries(montauk_core PUBLIC ${LIBBPF_LIBRARY} elf z)
+  # libbpf is dlopen'd by util/BpfDyn at first use, so it stays out of
+  # DT_NEEDED -- the property that lets one binary start on a box that cannot
+  # trace. libelf/libz were only ever transitive through libbpf; they go with it.
+  target_sources(montauk_core PRIVATE src/util/BpfDyn.cpp)
+  target_link_libraries(montauk_core PUBLIC ${CMAKE_DL_LIBS})
   target_compile_definitions(montauk_core PUBLIC MONTAUK_HAVE_BPF=1)
   add_dependencies(montauk_core bpf_skel)
   message(STATUS "libbpf detected: enabling eBPF trace mode (--trace)")
@@ -258,38 +272,24 @@ set_target_properties(montauk PROPERTIES OUTPUT_NAME montauk)
 install(TARGETS montauk RUNTIME DESTINATION bin)
 
 
-# Trace-analysis report suite (trace-only; the old live /proc analyzer is
-# gone). Same dependency footprint as the decoder: event headers + the
-# TraceReader record walk, no montauk_core link, no BPF.
-add_executable(montauk_analyze
+# The analyzer and the decoder are COMPILED INTO montauk, not shipped as their
+# own executables. They were split off because montauk hard-linked libbpf,
+# liburing and NVML: a merged binary would have failed to load on a box missing
+# any of them, even to run --decode, which needs none of the three. All three are
+# dlopen'd now (util/BpfDyn, util/UringDyn, util/NvmlDyn), so the split protects
+# nothing and the platform can finally match its own first sentence -- one binary.
+#
+# TraceReader and Log already live in montauk_core, so only the tool sources and
+# the two prom_* helpers are added here.
+target_sources(montauk PRIVATE
     src/tools/trace_analyze.cpp
     src/tools/prom_stats.cpp
     src/tools/prom_population.cpp
-    src/model/TraceReader.cpp
-    src/util/Log.cpp)
-target_include_directories(montauk_analyze PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/bpf)
-# sublimation is montauk's sort -- the sched report sorts wake2run latencies
-# through its direct u64 entry. Links the in-tree sub-system.
-target_link_libraries(montauk_analyze PRIVATE sublimation)
+    src/tools/trace_decode.cpp)
+target_include_directories(montauk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/bpf)
 # Stamp the project version into the analysis .prom _info metric (house style).
-target_compile_definitions(montauk_analyze PRIVATE MONTAUK_VERSION="${PROJECT_VERSION}")
-target_link_libraries(montauk_analyze PRIVATE montauk_warnings)
-target_link_libraries(montauk_analyze PRIVATE montauk_hardening)
-set_target_properties(montauk_analyze PROPERTIES OUTPUT_NAME montauk_analyze)
+target_compile_definitions(montauk PRIVATE MONTAUK_VERSION="${PROJECT_VERSION}")
 
-# Binary trace-log decoder (no external deps, no BPF link). Reads --trace-out
-# files and renders them to text/CSV. Pure struct decoding — only needs the
-# shared event headers (model/TraceBinary.hpp + src/bpf/montauk_trace.h) and the
-# TraceReader record walk, so it builds even when BPF tracing isn't compiled
-# into montauk itself.
-add_executable(montauk_trace_decode src/tools/trace_decode.cpp src/model/TraceReader.cpp src/util/Log.cpp)
-target_include_directories(montauk_trace_decode PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/bpf)
-target_link_libraries(montauk_trace_decode PRIVATE montauk_warnings)
-target_link_libraries(montauk_trace_decode PRIVATE montauk_hardening)
 
 # ── sublimation CLI ─────────────────────────────────────────────────────────
 # The command-line front door to the sort sub-system: pipe a numeric stream in,
@@ -354,13 +354,16 @@ if(MONTAUK_BUILD_TESTS)
   target_include_directories(montauk_sink_c_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(montauk_sink_c_test PRIVATE montauk_warnings)
 
-  add_executable(montauk_json_test tests/test_json.c)
+  # json.h calls montauk_fmt_double, so the C test links the C++ TU that
+  # implements it -- the point of the split is that ONE formatter serves both
+  # the C JSON header and the C++ Prometheus sink.
+  add_executable(montauk_json_test tests/test_json.c src/util/FmtDouble.cpp)
   set_target_properties(montauk_json_test PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
   target_include_directories(montauk_json_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(montauk_json_test PRIVATE montauk_warnings)
 
   # Stats-kernel characterization tests: prom_stats.cpp only compiles into
-  # montauk_analyze, so it gets its own small test executable (the
+  # the analyzer, so it gets its own small test executable (the
   # montauk_sink_c_test pattern) rather than a montauk_core dependency.
   # test_percentile_agreement.cpp rides this target because it needs the same
   # two things: prom_stats.cpp's interpolating percentile and sublimation's
@@ -465,5 +468,5 @@ if(MONTAUK_BUILD_TESTS)
   # below already builds the binaries run.py invokes.
   add_custom_target(check
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/run.py --no-build
-    DEPENDS montauk montauk_tests montauk_sink_c_test montauk_json_test montauk_stats_test sublimation_fuzz_diff test_wsdeque test_dfspool test_radix test_radix_par test_smerge_par test_pack test_basic test_tier1 test_tier2 test_tier4 test_tier5 test_adversarial test_adversarial_types test_bentley_mcilroy test_antiqsort test_types test_sorted_perturbed test_zipfian test_saw_mixed test_strings test_randomness test_profile_contract test_search test_affinity test_types_asan test_tier5_asan test_wsdeque_tsan test_dfspool_tsan test_radix_par_tsan test_stress_tsan montauk_analyze montauk_trace_decode sublimation_cli)
+    DEPENDS montauk montauk_tests montauk_sink_c_test montauk_json_test montauk_stats_test sublimation_fuzz_diff test_wsdeque test_dfspool test_radix test_radix_par test_smerge_par test_pack test_basic test_tier1 test_tier2 test_tier4 test_tier5 test_adversarial test_adversarial_types test_bentley_mcilroy test_antiqsort test_types test_sorted_perturbed test_zipfian test_saw_mixed test_strings test_randomness test_profile_contract test_search test_affinity test_types_asan test_tier5_asan test_wsdeque_tsan test_dfspool_tsan test_radix_par_tsan test_stress_tsan sublimation_cli)
 endif()

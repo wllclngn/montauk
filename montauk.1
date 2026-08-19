@@ -29,7 +29,7 @@ montauk \- Linux observability platform: monitor, eBPF tracer and analyzer
 .B montauk
 is a C++23 Linux observability platform \(em an event-driven monitor, an eBPF
 flight-recorder tracer and an offline analyzer \(em over sublimation, its in-tree
-flow-model sort/search/match core. A custom kernel module gives zero-overhead
+in-tree sort, search and learn core. A custom kernel module gives zero-overhead
 process telemetry, with multi-vendor GPU attribution and eBPF-level system
 tracing.
 .PP
@@ -41,7 +41,7 @@ Three-tier process collection: Kernel Module > Netlink proc_connector > /proc po
 .IP \(bu 2
 Lock-free snapshot pipeline with churn detection (PROC CHURN alerts)
 .IP \(bu 2
-sublimation (flow-model adaptive sort) keeping 4K+ processes deterministically ordered in <1ms
+sublimation (two-pole entropy-routed sort) keeping 4K+ processes deterministically ordered in <1ms
 .IP \(bu 2
 GPU attribution across NVIDIA (NVML/nvidia-smi), AMD, and Intel via DRM fdinfo
 .IP \(bu 2
@@ -162,7 +162,10 @@ Write a raw binary event log to FILE (requires \-\-trace). Records are the
 ring-buffer events verbatim, batched into large writes for near-zero
 trace-time overhead \(em suited to high-rate scheduler-decision tracing
 where text formatting would perturb the workload. Decode offline with
-.BR montauk_trace_decode (1).
+.B montauk \-\-decode
+(the historical
+.B montauk_trace_decode
+name is a symlink onto the same binary).
 See TRACE MODE for details.
 .TP
 .BI \-\-stream\-out " DEVICE"
@@ -182,7 +185,7 @@ Warms two producer cycles so the rate deltas (CPU context switches, network and
 disk throughput) are real, then serializes system specs, CPU, PMU, memory, GPU,
 thermal, network, disk, filesystems and the ranked top processes as one JSON
 object. The live-monitor analog of
-.B montauk_analyze \-\-json
+.B montauk \-\-analyze \-\-json
 (which emits the diagnostic reports as JSON): a structured surface for an agent
 or a script to read instead of scraping the TUI. No TUI, no server, no daemon.
 .TP
@@ -356,13 +359,13 @@ montauk --trace myapp --metrics 9101 --log /tmp/trace
 
 # Raw binary event log (low-overhead; decode offline)
 montauk --trace myapp --trace-out /tmp/myapp.mtktrace
-montauk_trace_decode /tmp/myapp.mtktrace        # human-readable text
-montauk_trace_decode /tmp/myapp.mtktrace --csv  # CSV for tooling
-montauk_analyze /tmp/myapp.mtktrace             # diagnostic reports
-montauk_analyze /tmp/rec --digest               # shareable digest
-montauk_analyze /tmp/rec --golden g.golden --update --label mywork
-montauk_analyze /tmp/rec --golden g.golden      # compare; 0 pass 1 moved 2 declined
-montauk_analyze --version                       # print version, exit
+montauk --decode /tmp/myapp.mtktrace            # human-readable text
+montauk --decode /tmp/myapp.mtktrace --csv      # CSV for tooling
+montauk --analyze /tmp/myapp.mtktrace           # diagnostic reports
+montauk --analyze /tmp/rec --digest             # shareable digest
+montauk --analyze /tmp/rec --golden g.golden --update --label mywork
+montauk --analyze /tmp/rec --golden g.golden    # compare; 0 pass 1 moved 2 declined
+montauk --analyze --version                     # print version, exit
 
 # Per-process hardware counters, no root and no sysctl
 montauk --pmu-comm mywork --headless --metrics 9101
@@ -382,19 +385,19 @@ syscall-per-event firehose that perturbs the very workload being measured.
 \-\-trace-out FILE writes the raw ring-buffer event records verbatim to a
 binary log, batched into large writes (one syscall per ~256 KB rather than
 per event). All formatting is deferred to the
-.B montauk_trace_decode
-tool, which reads the log offline and renders text or CSV. The log header
+.B montauk \-\-decode
+mode, which reads the log offline and renders text or CSV. The log header
 captures both CLOCK_MONOTONIC and CLOCK_REALTIME anchors at trace start, so
 the decoder reconstructs absolute wall-clock time per event and lets you
 correlate against external traces (schbench output, scheduler logs, etc.).
 .PP
 The
-.B montauk_analyze
-tool reads the same log \(em and a whole \-\-trace recording directory \(em
+.B montauk \-\-analyze
+mode reads the same log \(em and a whole \-\-trace recording directory \(em
 offline, producing single-pass diagnostic reports (waits, spins, pairing,
 sched, slice and more) and, over a recording, a one-call \-\-digest that leads
 with scheduler-stability and clean-room state above the system specs.
-.B montauk_analyze \-\-version
+.B montauk \-\-analyze \-\-version
 prints the project version and exits, so a consumer can tell a current install
 from a stale one.
 .SS Behavioral goldens (\-\-golden)
@@ -405,7 +408,7 @@ dispatch stall went from PREEMPT-STARVED with zero pass-overs to 90%
 ORDER-STARVED averaging 4.2, survived ten days of gated runs, and was found by
 reading a report by hand.
 .PP
-.B montauk_analyze
+.B montauk \-\-analyze
 .I TRACE|RECORDING_DIR
 .B \-\-golden
 .I FILE
@@ -445,7 +448,7 @@ capture limitation is recorded as
 with its token rather than aborting the freeze, since re-capturing cannot fix a
 property of the workload.
 .PP
-.B montauk_analyze \-\-json
+.B montauk \-\-analyze \-\-json
 emits the same reports as one structured JSON envelope (schema_version, trace
 context and a reports array) instead of the text report. It renders the same
 typed results the text and Prometheus renderers read, so an agent or a script
@@ -740,20 +743,36 @@ DRM /proc/[pid]/fdinfo stats (AMD, Intel, NVIDIA)
 .PP
 Automatically identifies MIG partitions, containers, and browser GPU processes.
 .SS Sorting
-sublimation — montauk's sort algorithm, a flow-model adaptive sort and an
-in-tree sub-system (montauk/sublimation), built with montauk and linked
-unconditionally (no fallback). Numeric columns use a
+sublimation \(em montauk's in-tree sort, search and learn core
+(montauk/sublimation), built with montauk and linked unconditionally (no
+fallback).
+.PP
+THE SORT is two poles behind a disorder classifier: one O(n) pass reads how much
+order the input already carries and sends it to the pole that order earns \(em a
+distribution radix for high-entropy data, a natural-run merge closed by an
+effective-resistance spectral merge for structured data. Both fork onto one
+Chase-Lev work-stealing engine at scale. montauk's numeric columns use the
 pack-key index sort (keys pack with their index; montauk permutes a uint32_t
 index array, stable on the packed index); the name column uses a hybrid
-prefix-pack + MSD radix string sort. Requires a Haswell-or-newer CPU
-(BMI2 + AVX2). The same engines are exposed on the command line by the
+prefix-pack + MSD radix string sort.
+.PP
+THE MATCHER is one engine wearing three faces \(em literal, regex and fuzzy
+k-mismatch. The regex face is a Glushkov position-NFA compiled into a bitset
+field (NOT a Thompson construction, which it replaced in v8.0.0): epsilon-free,
+so every state is a position and a match step is a shift and an AND. Nothing
+backtracks, so runtime is linear in the input. The field is one 64-bit word and
+widens to two when the pattern earns it, giving a 128-position budget; the width
+is decided at compile time from the exact position count. \-i folds beyond ASCII
+and agrees with grep \-i exactly.
+.PP
+The same engines are exposed on the command line by the
 .B sublimation
-CLI (installed on PATH): a stream sort with quantile / select / reductions
-(sum / mean / stdev / min / max / count), plus regex
-.B grep
-(Thompson NFA) and substring
-.B contains
-(Boyer-Moore-Horspool) line filters \(em the stream side of grep and awk.
+CLI (installed on PATH), which is a full stream surface rather than a sort:
+order and quantiles, the reductions, structure classification, text (search,
+replace, field, where, cut, column, uniq, tac, paste, head, tail, count,
+distinct, tally) and a relational lane (group, intersect, subtract, union,
+join). Exit status is grep's: 0 produced output, 1 nothing matched, 2 a usage
+error.
 .SH TROUBLESHOOTING
 .SS Kernel Module Not Detected
 .nf

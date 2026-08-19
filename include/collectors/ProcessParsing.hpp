@@ -180,6 +180,19 @@ struct StatusInfo {
 };
 
 // User name and thread count from /proc/PID/status.
+// THE COMMAND LINE CAP, one rule for every collector. 512 bytes is enough for
+// display and for Security's scan of it, and an unbounded cmdline is a process's
+// to choose -- so the cap belongs beside the read, not at one of two call sites.
+//
+// It was applied in ProcessCollector and NOT in NetlinkProcessCollector, so
+// which collector auto-detect picked decided whether a multi-kilobyte command
+// line reached the snapshot. Same field, same consumers, two answers.
+inline constexpr size_t kCmdlineMax = 512;
+
+inline void cap_cmdline(std::string& cmd) {
+  if (cmd.size() > kCmdlineMax) cmd.resize(kCmdlineMax);
+}
+
 inline StatusInfo info_from_status(int32_t pid) {
   StatusInfo info;
   auto path = std::string("/proc/") + std::to_string(pid) + "/status";

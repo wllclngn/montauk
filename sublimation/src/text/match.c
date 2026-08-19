@@ -232,6 +232,39 @@ static uint8_t fold_alt_last(uint32_t cp) {
     return 0;
 }
 
+// The other members of `cp`'s case-fold class, when the class needs an
+// ALTERNATION rather than a single position with two byte members. Returns how
+// many were written (0 when the cheap path covers it).
+static int fold_alt_members(uint32_t cp, uint32_t *out) {
+    size_t lo = 0, hi = SUB_FOLD_ALT_PAIRS;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (sub_fold_alt_table[mid].cp == cp) {
+            int n = 0;
+            for (int i = 0; i < 3; i++)
+                if (sub_fold_alt_table[mid].alt[i]) out[n++] = sub_fold_alt_table[mid].alt[i];
+            return n;
+        }
+        if (sub_fold_alt_table[mid].cp < cp) lo = mid + 1; else hi = mid;
+    }
+    return 0;
+}
+
+// Encode `cp` as UTF-8 into buf (<= 4 bytes). Returns the length, 0 if invalid.
+static int u8_encode(uint32_t cp, unsigned char *buf) {
+    if (cp < 0x80)      { buf[0] = (unsigned char)cp; return 1; }
+    if (cp < 0x800)     { buf[0] = (unsigned char)(0xC0 | (cp >> 6));
+                          buf[1] = (unsigned char)(0x80 | (cp & 0x3F)); return 2; }
+    if (cp < 0x10000)   { buf[0] = (unsigned char)(0xE0 | (cp >> 12));
+                          buf[1] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+                          buf[2] = (unsigned char)(0x80 | (cp & 0x3F)); return 3; }
+    if (cp < 0x110000)  { buf[0] = (unsigned char)(0xF0 | (cp >> 18));
+                          buf[1] = (unsigned char)(0x80 | ((cp >> 12) & 0x3F));
+                          buf[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+                          buf[3] = (unsigned char)(0x80 | (cp & 0x3F)); return 4; }
+    return 0;
+}
+
 // Set byte b in the position set, plus its ASCII case-swap under icase. Case is
 // folded into the class SET at compile time (before any negation), so a negated
 // class like (?i)[^a] correctly excludes both 'a' and 'A' -- folding at match
@@ -292,11 +325,60 @@ static int shorthand_set(char c, uint8_t *S) {
     return 1;
 }
 
+// POSIX character classes INSIDE a bracket expression: [[:alpha:]], [[:digit:]]
+// and kin. `search '[[:alpha:]]+'` used to match nothing at all, because
+// class_span read "[[:alpha:]]" as the literal member set {'[',':','a','l','p','h'}
+// and stopped at the first ']' -- a silently wrong answer rather than a refusal.
+//
+// Membership is ASCII / LC_ALL=C, the same basis the \w and \s shorthands
+// already use (this file documents \w as [[:alnum:]_] and \s as [[:space:]]),
+// so the two spellings agree by construction.
+//
+// Returns the index just past the closing ":]", or 0 when `p+i` does not open a
+// class. An UNKNOWN name is reported through *bad so the caller can reject the
+// whole pattern: POSIX says an unrecognized class is an error, and guessing at
+// it would reintroduce exactly the quiet mismatch this closes.
+static size_t posix_class_span(const char *p, size_t len, size_t i,
+                               uint8_t *S, int icase, int *bad) {
+    if (i + 1 >= len || p[i] != '[' || p[i+1] != ':') return 0;
+    size_t j = i + 2;
+    while (j + 1 < len && !(p[j] == ':' && p[j+1] == ']')) j++;
+    if (j + 1 >= len) return 0;              // no ":]" -- not a class, treat literally
+    size_t n = j - (i + 2);
+    const char *nm = p + i + 2;
+
+    #define NAME_IS(lit) (n == sizeof(lit) - 1 && memcmp(nm, lit, n) == 0)
+    for (unsigned b = 0; b < 256; b++) {
+        int in = 0;
+        if      (NAME_IS("alpha"))  in = (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z');
+        else if (NAME_IS("digit"))  in = (b >= '0' && b <= '9');
+        else if (NAME_IS("alnum"))  in = (b >= '0' && b <= '9') || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z');
+        else if (NAME_IS("upper"))  in = (b >= 'A' && b <= 'Z');
+        else if (NAME_IS("lower"))  in = (b >= 'a' && b <= 'z');
+        else if (NAME_IS("space"))  in = (b == ' ' || b == '\t' || b == '\n' || b == '\v' || b == '\f' || b == '\r');
+        else if (NAME_IS("blank"))  in = (b == ' ' || b == '\t');
+        else if (NAME_IS("print"))  in = (b >= 0x20 && b <= 0x7E);
+        else if (NAME_IS("graph"))  in = (b >= 0x21 && b <= 0x7E);
+        else if (NAME_IS("cntrl"))  in = (b <= 0x1F || b == 0x7F);
+        else if (NAME_IS("punct"))  in = (b >= 0x21 && b <= 0x7E)
+                                      && !((b >= '0' && b <= '9') || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z'));
+        else if (NAME_IS("xdigit")) in = (b >= '0' && b <= '9') || (b >= 'A' && b <= 'F') || (b >= 'a' && b <= 'f');
+        else { *bad = 1; return 0; }
+        if (in && S) gset_byte(S, (unsigned char)b, icase);
+    }
+    #undef NAME_IS
+    return j + 2;
+}
+
 static size_t class_span(const char *p, size_t len, size_t i, uint8_t *S, int icase) {
     i++;
     int neg = 0;
     if (i < len && p[i] == '^') { neg = 1; i++; }
     for (int first = 1; i < len && (first || p[i] != ']'); first = 0) {
+        int bad = 0;
+        size_t after = posix_class_span(p, len, i, S, icase, &bad);
+        if (bad) return 0;                   // unknown [:name:] -- reject the pattern
+        if (after) { i = after; continue; }
         unsigned char lo = (unsigned char)p[i];
         if (i + 2 < len && p[i+1] == '-' && p[i+2] != ']') {
             unsigned char hi = (unsigned char)p[i+2];
@@ -360,243 +442,117 @@ static size_t scan_classfield(const uint8_t *hay, size_t n, uint8_t sets[][32], 
 }
 
 typedef sublimation_search_gnfa gnfa_t;
-typedef struct { int nullable; uint64_t first, last; } gattr_t;
+typedef struct {
+    int nullable;
+    uint64_t first[SUBLIMATION_SEARCH_POS_WORDS];
+    uint64_t last[SUBLIMATION_SEARCH_POS_WORDS];
+} gattr_t;
 // fold_left counts bytes until the one that differs under icase; fold_byte is
 // the counterpart to admit there. Only the LAST byte of a folded character
 // ever differs (see case_fold_table.h), so one pending byte is enough.
 typedef struct { const char *p; gnfa_t *g; int fold_left; unsigned char fold_byte; } gpar_t;
 
-static gattr_t g_alt(gpar_t *x);
-
-static gattr_t g_atom(gpar_t *x) {
-    gattr_t a = {0, 0, 0};
-    char c = *x->p;
-    int icase = x->g->icase;
-    if (c == '(') {
-        x->p++; a = g_alt(x);
-        if (*x->p == ')') x->p++; else x->g->ok = 0;
-        return a;
-    }
-    if (x->g->npos >= 64) { x->g->ok = 0; return a; }
-    int pos = x->g->npos++;
-    uint8_t *S = x->g->setb[pos]; memset(S, 0, 32);
-    if (c == '.') { memset(S, 0xff, 32); x->p++; }
-    else if (c == '[') {
-        // strlen of the REMAINING pattern, not the whole one: x->p is the
-        // parser's cursor. Patterns are capped at 64 positions, so this is a
-        // few tens of bytes at compile time, never in a scan.
-        size_t rem = strlen(x->p);
-        size_t e = class_span(x->p, rem, 0, S, icase);
-        // On an unterminated class the cursor still advances to the end: the
-        // enclosing concat loop only stops on NUL, '|' or ')', not on ok.
-        x->p += e ? e : rem;
-        if (!e) x->g->ok = 0;
-    } else {
-        if (c == '\\' && x->p[1]) {
-            x->p++; c = *x->p;
-            // \w \W \s \S fill the whole position set; every other escape is
-            // still "the next byte, literally".
-            if (shorthand_set(c, S)) { x->p++; goto atom_done; }
-        }
-        unsigned char b = (unsigned char)c;
-        gset_byte(S, b, icase);
-        if (icase) {
-            if (x->fold_left > 0 && --x->fold_left == 0) {
-                // The differing byte of a character whose fold was resolved at
-                // its lead: admit the counterpart here, in this position's set.
-                gset_byte(S, x->fold_byte, 0);
-            } else if (x->fold_left == 0 && b >= 0xC0) {
-                uint32_t cp = 0;
-                int n = u8_decode((const unsigned char *)x->p, strlen(x->p), &cp);
-                uint8_t alt = n >= 2 ? fold_alt_last(cp) : 0;
-                if (alt) { x->fold_left = n - 1; x->fold_byte = alt; }
-            }
-        }
-        x->p++;
-    }
-atom_done:
-    a.nullable = 0; a.first = (1ull<<pos); a.last = (1ull<<pos);
-    return a;
-}
-
-static gattr_t g_repeat(gpar_t *x) {
-    int pos_before = x->g->npos;
-    gattr_t a = g_atom(x);
-    char c = *x->p;
-    if (c == '*' || c == '+') {
-        x->p++;
-        uint64_t t = a.last; while (t) { int i = __builtin_ctzll(t); x->g->follow[i] |= a.first; t &= t-1; }
-        if (c == '*') a.nullable = 1;
-    } else if (c == '?') { x->p++; a.nullable = 1; }
-    else if (c == '{') {
-        // Bounded repeat on a single-position atom: lo required plus (hi-lo)
-        // optional copies. {m,} unbounded is not supported here.
-        if (x->g->npos != pos_before + 1) { x->g->ok = 0; return a; }
-        x->p++;
-        int lo = 0, hi = -2, haslo = 0;
-        while (*x->p >= '0' && *x->p <= '9') { lo = lo*10 + (*x->p - '0'); x->p++; haslo = 1; }
-        if (*x->p == ',') {
-            x->p++; hi = -1;
-            if (*x->p >= '0' && *x->p <= '9') { hi = 0; while (*x->p >= '0' && *x->p <= '9') { hi = hi*10 + (*x->p - '0'); x->p++; } }
-        } else hi = lo;
-        if (!haslo || *x->p != '}' || hi == -1 || hi > 60) { x->g->ok = 0; return a; }
-        x->p++;
-        if (hi == 0) {
-            // {0} / {0,0}: zero copies. Reclaim the atom's single position so it
-            // contributes nothing -- leaving it nullable-but-present let it still
-            // match one copy.
-            x->g->npos = pos_before;
-            a.first = 0; a.last = 0; a.nullable = 1;
-            return a;
-        }
-        uint8_t setcopy[32]; memcpy(setcopy, x->g->setb[pos_before], 32);
-        if (lo == 0) a.nullable = 1;
-        for (int ci = 1; ci < hi; ci++) {
-            if (x->g->npos >= 64) { x->g->ok = 0; return a; }
-            int p = x->g->npos++;
-            memcpy(x->g->setb[p], setcopy, 32);
-            gattr_t b = { (ci >= lo) ? 1 : 0, (1ull<<p), (1ull<<p) };
-            uint64_t t = a.last; while (t) { int i = __builtin_ctzll(t); x->g->follow[i] |= b.first; t &= t-1; }
-            uint64_t nf = a.first | (a.nullable ? b.first : 0);
-            uint64_t nl = b.last | (b.nullable ? a.last : 0);
-            a.first = nf; a.last = nl; a.nullable = a.nullable && b.nullable;
-        }
-    }
-    return a;
-}
-
-static gattr_t g_concat(gpar_t *x) {
-    gattr_t a = {1, 0, 0}; int any = 0;
-    // `&& x->g->ok`: once a position-cap or syntax error trips ok, g_atom stops
-    // consuming input, so without this guard the loop spins forever on an
-    // over-64-position pattern instead of returning invalid.
-    while (*x->p && *x->p != '|' && *x->p != ')' && x->g->ok) {
-        gattr_t b = g_repeat(x);
-        if (!any) { a = b; any = 1; }
-        else {
-            uint64_t t = a.last; while (t) { int i = __builtin_ctzll(t); x->g->follow[i] |= b.first; t &= t-1; }
-            uint64_t nf = a.first | (a.nullable ? b.first : 0);
-            uint64_t nl = b.last | (b.nullable ? a.last : 0);
-            a.first = nf; a.last = nl; a.nullable = a.nullable && b.nullable;
-        }
-    }
-    return a;
-}
-
-static gattr_t g_alt(gpar_t *x) {
-    gattr_t a = g_concat(x);
-    while (*x->p == '|' && x->g->ok) {
-        x->p++; gattr_t b = g_concat(x);
-        a.first |= b.first; a.last |= b.last; a.nullable = a.nullable || b.nullable;
-    }
-    return a;
-}
-
-static int build_gnfa(const char *pat, gnfa_t *g, int icase) {
-    memset(g, 0, sizeof(*g)); g->ok = 1; g->icase = icase;
-    char buf[1024];
-    size_t len = strlen(pat), s = 0, e = len;
-    if (e > 0 && pat[0] == '^') { g->anchored_start = 1; s = 1; }
-    if (e > s && pat[e - 1] == '$') { g->anchored_end = 1; e--; }
-    if (e - s >= sizeof(buf)) return 0;
-    // Anchor-only / empty body ("^", "$", "^$", ""): a legal zero-width,
-    // nullable pattern with no positions. sed's own insertion idioms
-    // (s/^/P /, s/$/ S/) depend on it; the Thompson engine this replaced
-    // accepted it, so rejecting it was a v8.0.0 parity regression.
-    if (e == s) {
-        g->npos = 0; g->first = 0; g->last = 0; g->nullable_all = 1;
-        return 1;
-    }
-    memcpy(buf, pat + s, e - s); buf[e - s] = '\0';
-    gpar_t x = { buf, g, 0, 0 };
-    gattr_t a = g_alt(&x);
-    if (!g->ok || *x.p != '\0' || g->npos == 0) return 0;
-    g->first = a.first; g->last = a.last; g->nullable_all = a.nullable;
-    return 1;
-}
-
-// Build the per-byte position map. Case-insensitivity is already folded into
-// each position's set at compile time (see gset_byte), so this is a plain map.
-static void build_imap(const gnfa_t *g, uint64_t I[256]) {
-    for (int c = 0; c < 256; c++) {
-        uint64_t m = 0;
-        for (int i = 0; i < g->npos; i++) {
-            if ((g->setb[i][c>>3] >> (c&7)) & 1) m |= (1ull << i);
-        }
-        I[c] = m;
-    }
-}
-
 // Reach-closure memo. reach(D) = first | union(follow[i], i in D), memoized --
 // the position-NFA's transition closure cached on the fly, keyed by state set.
-typedef struct { uint64_t key, reach; } reach_ent;
+typedef struct {
+    uint64_t key[SUBLIMATION_SEARCH_POS_WORDS];
+    uint64_t reach[SUBLIMATION_SEARCH_POS_WORDS];
+    int used;
+} reach_ent;
 #define REACH_BITS 13
 #define REACH_CAP  (1u << REACH_BITS)
 
-static inline uint64_t reach_of(uint64_t D, const gnfa_t *g, reach_ent *cache) {
-    if (D == 0) return g->first;
-    size_t h = (size_t)((D * 0x9E3779B97F4A7C15ull) >> (64 - REACH_BITS));
-    size_t probes = 0;
-    while (cache[h].key && cache[h].key != D) {
-        h = (h + 1) & (REACH_CAP - 1);
-        // A pathological pattern can produce more than REACH_CAP distinct state
-        // sets and fill the table; compute the reach without memoizing rather
-        // than probe forever.
-        if (++probes >= REACH_CAP) {
-            uint64_t r = g->first, tt = D;
-            while (tt) { int i = __builtin_ctzll(tt); r |= g->follow[i]; tt &= tt - 1; }
-            return r;
-        }
+// THE MEMO IS REUSED, NOT REALLOCATED. It was calloc'd per non-anchored count
+// call -- 128 KB then, and 320 KB since the position set widened to two words,
+// because reach_ent grew from 16 bytes to 40. A `search` over many files paid
+// that per file.
+//
+// One thread-local block instead, cleared per use. Clearing is the whole cost
+// and calloc paid it anyway; what goes away is the allocation, the page faults
+// on first touch, and the free. Thread-local because the parallel search path
+// scans files concurrently, and the memo is scratch that must not be shared.
+static reach_ent *reach_cache_get(void) {
+    static _Thread_local reach_ent *cache = NULL;
+    if (!cache) {
+        cache = (reach_ent *)malloc((size_t)REACH_CAP * sizeof(reach_ent));
+        if (!cache) return NULL;
     }
-    if (cache[h].key == D) return cache[h].reach;
-    uint64_t reach = g->first, t = D;
-    while (t) { int i = __builtin_ctzll(t); reach |= g->follow[i]; t &= t - 1; }
-    cache[h].key = D; cache[h].reach = reach;
-    return reach;
+    memset(cache, 0, (size_t)REACH_CAP * sizeof(reach_ent));
+    return cache;
 }
 
-// Full-field match-end count over hay[0..n). Byte-parity reference for the regex
-// face; the prefilter and class fast path must reproduce this exactly. `I` is
-// the compile-time per-byte position map (sublimation_search.imap).
-static size_t scan_gnfa(const uint8_t *hay, size_t n, const gnfa_t *g,
-                        const uint64_t I[256]) {
-    if (g->nullable_all && !g->anchored_start && !g->anchored_end) return n + 1;
-    // Anchor-only pattern (npos == 0): exactly one zero-width match, at the
-    // start for ^ or the end for $; ^$ only matches the empty field.
-    if (g->npos == 0) {
-        if (g->anchored_start && g->anchored_end) return n == 0 ? 1 : 0;
-        return 1;
-    }
-    uint64_t D = 0; size_t count = 0;
-    if (g->anchored_start || g->anchored_end) {
-        for (size_t j = 0; j < n; j++) {
-            uint64_t seed = (!g->anchored_start || j == 0) ? g->first : 0;
-            uint64_t reach = seed, t = D;
-            while (t) { int i = __builtin_ctzll(t); reach |= g->follow[i]; t &= t-1; }
-            D = reach & I[(unsigned char)hay[j]];
-            if ((D & g->last) && (!g->anchored_end || j + 1 == n)) count++;
-        }
-        return count;
-    }
-    reach_ent *cache = calloc(REACH_CAP, sizeof(reach_ent));
-    if (!cache) {
-        // Allocation failure: no-cache scan (same fallback convention as the
-        // fuzzy face). Recomputes reach per step; byte-identical count.
-        for (size_t j = 0; j < n; j++) {
-            uint64_t reach = g->first, t = D;
-            while (t) { int i = __builtin_ctzll(t); reach |= g->follow[i]; t &= t - 1; }
-            D = reach & I[(unsigned char)hay[j]];
-            if (D & g->last) count++;
-        }
-        return count;
-    }
-    for (size_t j = 0; j < n; j++) {
-        D = reach_of(D, g, cache) & I[(unsigned char)hay[j]];
-        if (D & g->last) count++;
-    }
-    free(cache);
-    return count;
+// Width-independent helpers the instantiated engine calls. Declared here so the
+// two includes below can precede their definitions.
+static int regex_maxlen(const char *p);
+static int extract_literal(const char *p, uint8_t *out, int maxout);
+
+// TWO ENGINES, ONE SOURCE. field.inc is instantiated once per field width; the
+// pattern picks which at compile time (see the dispatchers below). The narrow
+// engine is the common path and is bit-for-bit what it was when the field was a
+// single uint64_t.
+#define FW(name) name##_w1
+#define PW 1
+static gattr_t FW(g_alt)(gpar_t *x);
+#include "field.inc"
+#undef PW
+#undef FW
+
+#define FW(name) name##_w2
+#define PW 2
+static gattr_t FW(g_alt)(gpar_t *x);
+#include "field.inc"
+#undef PW
+#undef FW
+
+// WIDTH SELECTION, exact rather than heuristic. Build narrow first; a pattern
+// that overruns 64 positions fails with ok = 0 and is rebuilt wide. The position
+// count is not estimated -- the parser IS the counter, so retrying is both the
+// simplest correct classifier and the cheapest one for the common case, which
+// never retries.
+static int build_gnfa(const char *pat, gnfa_t *g, int icase) {
+    if (build_gnfa_w1(pat, g, icase)) return 1;
+    // Only a position-cap overrun is worth a second pass; a syntax error fails
+    // identically at either width. npos stops exactly AT the narrow cap when the
+    // pattern outgrew it, which is what distinguishes the two.
+    if (g->npos < SUBLIMATION_SEARCH_NARROW_POS) return 0;
+    return build_gnfa_w2(pat, g, icase);
 }
+
+static void build_imap(const gnfa_t *g, uint64_t I[256][SUBLIMATION_SEARCH_POS_WORDS]) {
+    if (g->nwords == 2) build_imap_w2(g, I); else build_imap_w1(g, I);
+}
+static size_t regex_count(const sublimation_search *s, const uint8_t *hay, size_t n) {
+    return s->g.nwords == 2 ? regex_count_w2(s, hay, n) : regex_count_w1(s, hay, n);
+}
+static int gnfa_full(const gnfa_t *g, const uint64_t I[256][SUBLIMATION_SEARCH_POS_WORDS],
+                     const uint8_t *hay, size_t n) {
+    return g->nwords == 2 ? gnfa_full_w2(g, I, hay, n) : gnfa_full_w1(g, I, hay, n);
+}
+static long gnfa_start_longest(const gnfa_t *g,
+                               const uint64_t I[256][SUBLIMATION_SEARCH_POS_WORDS],
+                               const uint8_t *hay, size_t n, size_t start) {
+    return g->nwords == 2 ? gnfa_start_longest_w2(g, I, hay, n, start)
+                          : gnfa_start_longest_w1(g, I, hay, n, start);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 static int regex_maxlen(const char *p) {
     size_t i = 0, plen = strlen(p); int len = 0;
@@ -655,112 +611,15 @@ static int extract_literal(const char *p, uint8_t *out, int maxout) {
     return bl;
 }
 
-static size_t gnfa_range(const uint8_t *hay, size_t a, size_t b, const uint64_t I[256],
-                         const gnfa_t *g, reach_ent *cache) {
-    uint64_t D = 0; size_t count = 0;
-    for (size_t j = a; j < b; j++) {
-        D = reach_of(D, g, cache) & I[hay[j]];
-        if (D & g->last) count++;
-    }
-    return count;
-}
 
-// Prefiltered regex count: anchor on a required literal, run the field only over
-// coalesced regions around its occurrences. *used stays 0 (result meaningless) when
-// the pattern is outside the sound subset, so the caller falls back. Provably byte-
-// identical to the full field on the subset.
-static size_t regex_prefiltered(const uint8_t *hay, size_t n, const char *pat,
-                                const gnfa_t *g, const uint64_t I[256], int *used) {
-    *used = 0;
-    if (g->anchored_start || g->anchored_end || g->nullable_all) return 0;
-    int ml = regex_maxlen(pat);
-    if (ml < 1 || ml > 60) return 0;
-    uint8_t lit[64];
-    int litlen = extract_literal(pat, lit, 64);
-    if (litlen < 2) return 0;
-    // Data-relative rarest byte in the literal, same live histogram exact_count
-    // reads -- was the static english_freq table, unified 2026-07-27.
-    uint32_t hist[256]; byte_hist(hay, n, hist);
-    int probe_off = 0; uint32_t bestf = hist[lit[0]];
-    for (int i = 1; i < litlen; i++) {
-        uint32_t f = hist[lit[i]];
-        if (f < bestf) { bestf = f; probe_off = i; }
-    }
-    if (probe_off != 0 && bestf * 2 >= hist[lit[0]]) probe_off = 0;
-    unsigned char probe = lit[probe_off];
-    reach_ent *cache = calloc(REACH_CAP, sizeof(reach_ent));
-    if (!cache) return 0;
-    size_t count = 0, reg_start = 0, reg_end = 0; int have = 0;
-    const uint8_t *end = hay + n;
-    for (const uint8_t *q = hay; ; ) {
-        const uint8_t *hit = memchr(q, probe, (size_t)(end - q));
-        if (!hit) break;
-        size_t h = (size_t)(hit - hay);
-        if (h >= (size_t)probe_off && h - (size_t)probe_off + (size_t)litlen <= n
-            && memcmp(hay + h - probe_off, lit, (size_t)litlen) == 0) {
-            size_t p = h - (size_t)probe_off;
-            size_t ws = (p >= (size_t)(ml - 1)) ? p - (size_t)(ml - 1) : 0;
-            size_t we = (p + (size_t)ml < n) ? p + (size_t)ml : n;
-            if (!have) { reg_start = ws; reg_end = we; have = 1; }
-            else if (ws <= reg_end) { if (we > reg_end) reg_end = we; }
-            else { count += gnfa_range(hay, reg_start, reg_end, I, g, cache); reg_start = ws; reg_end = we; }
-        }
-        q = hit + 1;
-    }
-    if (have) count += gnfa_range(hay, reg_start, reg_end, I, g, cache);
-    free(cache);
-    *used = 1;
-    return count;
-}
 
-// Regex count dispatch. Prefilter where applicable, else the class fast path, else
-// the full field -- all byte-identical to the full field.
-static size_t regex_count(const sublimation_search *s, const uint8_t *hay, size_t n) {
-    // Anchor-only patterns have no positions for the prefilter or class field
-    // to anchor on; the full field handles their zero-width semantics directly.
-    if (s->g.npos == 0) return scan_gnfa(hay, n, &s->g, s->imap);
-    if (s->icase) return scan_gnfa(hay, n, &s->g, s->imap);
-    int used = 0;
-    size_t r = regex_prefiltered(hay, n, s->pattern, &s->g, s->imap, &used);
-    if (used) return r;
-    uint8_t sets[64][32];
-    int L = parse_classes(s->pattern, sets, 64);
-    if (L > 0) { size_t c = scan_classfield(hay, n, sets, L); if (c != (size_t)-1) return c; }
-    return scan_gnfa(hay, n, &s->g, s->imap);
-}
 
-// Fixed-start Glushkov walk: longest match-end for a match starting exactly at
-// `start`, or -1. No restart when the field goes empty (fixed start, not a scan).
-static long gnfa_start_longest(const gnfa_t *g, const uint64_t I[256],
-                               const uint8_t *hay, size_t n, size_t start) {
-    long best = -1;
-    if (g->nullable_all && (!g->anchored_end || start == n)) best = (long)start;
-    uint64_t D = 0; int consumed = 0;
-    for (size_t j = start; j < n; j++) {
-        uint64_t cand;
-        if (!consumed) cand = g->first;
-        else { cand = 0; uint64_t t = D; while (t) { int i = __builtin_ctzll(t); cand |= g->follow[i]; t &= t-1; } }
-        D = cand & I[hay[j]];
-        consumed = 1;
-        if (D == 0) break;
-        if (D & g->last) { if (!g->anchored_end || j + 1 == n) best = (long)(j + 1); }
-    }
-    return best;
-}
 
-// Whole-input match: does the regex match hay[0..n) end to end?
-static int gnfa_full(const gnfa_t *g, const uint64_t I[256], const uint8_t *hay, size_t n) {
-    if (n == 0) return g->nullable_all;
-    uint64_t D = g->first & I[hay[0]];
-    if (D == 0) return 0;
-    for (size_t j = 1; j < n; j++) {
-        uint64_t reach = 0, t = D;
-        while (t) { int i = __builtin_ctzll(t); reach |= g->follow[i]; t &= t-1; }
-        D = reach & I[hay[j]];
-        if (D == 0) return 0;
-    }
-    return (D & g->last) != 0;
-}
+
+
+
+
+
 
 // Public API
 
@@ -840,9 +699,16 @@ int sublimation_search_split_alternation(const char *pattern, char ***out, int *
 // struct as a byte buffer in Rust). The static assert pins the size the
 // mirror was written against; growth breaks THIS build, never a caller's
 // stack. The sizeof export lets a binding assert the contract at runtime.
-static_assert(sizeof(sublimation_search) == 5696,
-              "sublimation_search grew: update every foreign mirror "
-              "(components/vector/src/ffi.rs) and this assert together");
+// The struct is sized for the WIDE field: the engine is specialized for one- and
+// two-word position sets and the pattern picks, but a single public layout keeps
+// sublimation_search one value type a caller can still stack-allocate.
+//
+// The last foreign mirror of this struct went with the MCP server; the assert
+// stays because the property it guards -- growth is a deliberate act, never a
+// silent one -- outlives any particular consumer.
+static_assert(sizeof(sublimation_search) == 11352,
+              "sublimation_search changed size: that is a deliberate decision, "
+              "not an accident -- update this assert with the reason");
 
 size_t sublimation_search_sizeof(void) { return sizeof(sublimation_search); }
 
@@ -1220,23 +1086,15 @@ int sublimation_dispersion_field(const sublimation_match_span *spans, size_t n,
 }
 
 size_t sublimation_search_fold_gaps(const char *pat, size_t len) {
-    size_t gaps = 0;
-    for (size_t i = 0; i < len; ) {
-        uint32_t cp = 0;
-        int n = u8_decode((const unsigned char *)pat + i, len - i, &cp);
-        if (n <= 0) { i++; continue; }
-        i += (size_t)n;
-        if (n == 1) continue;                       // ASCII already folds
-        // Only CASED characters count. A caseless one (CJK, punctuation, emoji)
-        // is not a gap -- -i was never going to change it.
-        size_t lo = 0, hi = SUB_FOLD_EXCLUDED;
-        while (lo < hi) {
-            size_t mid = lo + (hi - lo) / 2;
-            if (sub_fold_excluded[mid] == cp) { gaps++; break; }
-            if (sub_fold_excluded[mid] < cp) lo = mid + 1; else hi = mid;
-        }
-    }
-    return gaps;
+    // ALWAYS 0 NOW, and the API stays so a caller need not care why. Every cased
+    // character in a fold class is covered: same-lead pairs by a single position
+    // with two byte members, the rest by an alternation over the class. -i no
+    // longer narrows, so there is nothing to warn about.
+    //
+    // Kept rather than deleted because the PROPERTY is worth asserting: if a
+    // future table ever fails to cover something, this is where that is said.
+    (void)pat; (void)len;
+    return 0;
 }
 
 // CAPTURE GROUPS, as a bounded post-pass over ONE match span.

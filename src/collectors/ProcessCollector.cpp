@@ -97,10 +97,7 @@ bool ProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     auto& ps = out.processes[i];
     auto cmd = read_cmdline(ps.pid);
     if (!cmd.empty()) {
-      // Truncate cmdline to 512 bytes (enough for display and security scanning)
-      if (cmd.size() > 512) {
-        cmd.resize(512);
-      }
+      cap_cmdline(cmd);
       ps.cmd = std::move(cmd);
     }
     auto info = info_from_status(ps.pid);

@@ -2,7 +2,7 @@
 """montauk_profile: generic capture -> analyze -> report harness.
 
 montauk measures; this orchestrates and assembles, nothing more. An application
-describes a Profile -- what to trace, which montauk_analyze reports to run, an
+describes a Profile -- what to trace, which `montauk --analyze` reports to run, an
 optional producer-marker hook for internal state the trace cannot see, and an
 optional report assembler -- and calls run_profile(). Generic applications need
 no code: the CLI builds a Profile from flags (command / attach / trace).
@@ -52,7 +52,9 @@ def _find_bin(name: str, env_key: str) -> str:
 
 
 MONTAUK = _find_bin("montauk", "MONTAUK_BIN")
-MONTAUK_ANALYZE = _find_bin("montauk_analyze", "MONTAUK_ANALYZE_BIN")
+# The analyzer is a MODE of montauk, not a binary. It used to be
+# `montauk_analyze`; that name is gone, so this is an argv prefix to splat.
+ANALYZE = [MONTAUK, "--analyze"]
 
 ATTACH_TIMEOUT = 10.0
 LOG_INTERVAL_MS = 100
@@ -75,7 +77,7 @@ def log_error(m: str) -> None:
 
 
 def montauk_available() -> bool:
-    return Path(MONTAUK).exists() and Path(MONTAUK_ANALYZE).exists()
+    return Path(MONTAUK).exists()
 
 
 def _chown_to_invoking_user(*paths) -> None:
@@ -186,7 +188,7 @@ class Profile:
     application hooks; everything else is generic."""
     name: str
     capture: CaptureSpec
-    reports: list = field(default_factory=list)   # montauk_analyze --report names
+    reports: list = field(default_factory=list)   # `montauk --analyze --report` names
     digest: bool = True                           # also run --digest (dir traces)
     redact: bool = True                           # hash process names in the digest
     # hook(record_path: Path) -> None: write producer-marker .prom into the
@@ -202,10 +204,10 @@ class Profile:
 
 def run_analyze(trace: str, report: Optional[str] = None,
                 digest: bool = False, redact: bool = False) -> str:
-    """Run montauk_analyze over a trace (recording dir or .bin/.events) and
+    """Run `montauk --analyze` over a trace (recording dir or .bin/.events) and
     return stdout. Either a single --report, or --digest. montauk owns the
     analysis; this only shells out and captures."""
-    cmd = [MONTAUK_ANALYZE, str(trace)]
+    cmd = [*ANALYZE, str(trace)]
     if digest:
         cmd.append("--digest")
         if redact:
@@ -214,7 +216,7 @@ def run_analyze(trace: str, report: Optional[str] = None,
         cmd += ["--report", report]
     r = subprocess.run(cmd, capture_output=True, text=True)
     out = r.stdout
-    # montauk_analyze logs two INFO lines (analyzed/written) to stdout before the
+    # the analyzer logs two INFO lines (analyzed/written) to stdout before the
     # report; drop them so an assembled report carries data, not run chatter.
     keep = [ln for ln in out.splitlines()
             if not ln.lstrip().startswith(("[")) or "analy" not in ln]
@@ -259,7 +261,7 @@ def run_profile(profile: Profile) -> Optional[Path]:
     file. Returns the report path, or None on a hard failure."""
     if not montauk_available():
         log_error(f"montauk not found (montauk={MONTAUK}, "
-                  f"montauk_analyze={MONTAUK_ANALYZE})")
+                  f"analyze={' '.join(ANALYZE)})")
         return None
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -337,7 +339,7 @@ def _finish(profile: Profile, trace: str, stamp: str) -> Optional[Path]:
         if d.strip():
             blocks["DIGEST"] = d
     for rep in profile.reports:
-        log_info(f"montauk_analyze --report {rep}")
+        log_info(f"montauk --analyze --report {rep}")
         blocks[f"REPORT {rep}"] = run_analyze(trace, report=rep)
 
     # 4. Assemble (app hook or generic default) and write.
@@ -387,7 +389,7 @@ def main(argv=None) -> int:
     def common(p):
         p.add_argument("--name", help="profile/report name")
         p.add_argument("--reports", default="",
-                       help="comma-separated montauk_analyze --report names")
+                       help="comma-separated `montauk --analyze --report` names")
         p.add_argument("--no-digest", action="store_true")
         p.add_argument("--no-redact", action="store_true")
 

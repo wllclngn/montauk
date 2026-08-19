@@ -237,3 +237,21 @@ void sublimation_pack_sort_f64(
     sublimation_pack_sort_f64_with_scratch(keys, indices, n, desc, scratch);
     free(scratch);
 }
+
+bool sublimation_refine_order_f64(uint32_t *order, const double *key_by_row,
+                                  size_t n, bool descending) {
+    if (!order || !key_by_row || n < 2) return true;   // nothing to reorder
+    double *gathered = (double *)malloc(n * sizeof(double));
+    uint32_t *idx = (uint32_t *)malloc(n * sizeof(uint32_t));
+    uint32_t *scattered = (uint32_t *)malloc(n * sizeof(uint32_t));
+    if (!gathered || !idx || !scattered) {
+        free(gathered); free(idx); free(scattered);
+        return false;
+    }
+    for (size_t j = 0; j < n; j++) { gathered[j] = key_by_row[order[j]]; idx[j] = (uint32_t)j; }
+    sublimation_pack_sort_f64(gathered, idx, n, descending);
+    for (size_t j = 0; j < n; j++) scattered[j] = order[idx[j]];
+    memcpy(order, scattered, n * sizeof(uint32_t));
+    free(gathered); free(idx); free(scattered);
+    return true;
+}

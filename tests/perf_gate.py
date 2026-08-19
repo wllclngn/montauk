@@ -28,7 +28,7 @@ from pathlib import Path
 import gen_synthetic_prom as gen
 import harness
 
-ANALYZE = harness.ROOT / "build" / "montauk_analyze"
+ANALYZE = harness.ANALYZE
 SUB = harness.ROOT / "build" / "sublimation"
 FIXTURE = harness.ROOT / "tests" / "fixtures" / "synthetic.mtk"
 note = harness.logger("perf")
@@ -49,7 +49,7 @@ def cpu_seconds(argv, stdin_file=None, env=None) -> float:
 
 
 def main() -> int:
-    missing = [str(p) for p in (ANALYZE, SUB) if not p.exists()]
+    missing = [str(p) for p in (harness.MONTAUK, SUB) if not p.exists()]
     if missing:
         note(f"FAIL: missing {', '.join(missing)} -- build first")
         return 1
@@ -69,23 +69,30 @@ def main() -> int:
         big = td / "arch-big"
         gen.write_archive(small, versions=10, runs=3)     # 30 files
         gen.write_archive(big, versions=20, runs=3)       # 60 files, 2x
-        base = [str(ANALYZE), "--by", "version", "--seed", "1729", "--no-emit"]
-        t_small = cpu_seconds([base[0], str(small)] + base[1:])
-        t_big = cpu_seconds([base[0], str(big)] + base[1:])
+        # FLAGS ONLY. This used to be one `base` list with the binary at [0] and
+        # the archive spliced in as [base[0], archive] + base[1:]. That idiom
+        # broke the moment the analyzer became a MODE of montauk rather than its
+        # own binary: base[0] is the montauk path and base[1] is "--analyze", so
+        # splicing produced `montauk ARCHIVE --analyze ...`, argv[1] was not a
+        # mode word, and montauk fell through to the TUI and span forever.
+        # Keeping the flags separate from the argv prefix makes that unspellable.
+        flags = ["--by", "version", "--seed", "1729", "--no-emit"]
+        t_small = cpu_seconds([*ANALYZE, str(small), *flags])
+        t_big = cpu_seconds([*ANALYZE, str(big), *flags])
         check("population-ceiling", t_small < 60.0, f"{t_small:.2f}s cpu")
         # Guard the ratio against sub-resolution timings on fast boxes.
         ratio = t_big / max(t_small, 0.05)
         check("population-growth", ratio < 4.0, f"2x files -> {ratio:.2f}x cpu")
 
         # Trajectory ceiling: the permutation scan over the same archive.
-        t_traj = cpu_seconds([base[0], str(small)] + base[1:] + ["--trajectory"])
+        t_traj = cpu_seconds([*ANALYZE, str(small), *flags, "--trajectory"])
         check("trajectory-ceiling", t_traj < 60.0, f"{t_traj:.2f}s cpu")
 
         # Analyzer ceiling on the deterministic trace fixture: full default
         # report set. Small fixture, so the bound is a coarse tripwire for
         # a superlinear finalize (the idle-interval scan class).
         if FIXTURE.exists():
-            t_an = cpu_seconds([str(ANALYZE), str(FIXTURE)])
+            t_an = cpu_seconds([*ANALYZE, str(FIXTURE)])
             check("analyzer-ceiling", t_an < 30.0, f"{t_an:.2f}s cpu")
         else:
             note("skip analyzer-ceiling (no synthetic.mtk; run corpus_check)")

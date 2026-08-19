@@ -227,13 +227,14 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
       auto it = pid_to_comm_.find(ps.pid);
       if (it != pid_to_comm_.end() && !it->second.empty()) {
         ps.cmd = it->second;
+        cap_cmdline(ps.cmd);
         need_cmdline = false;
       }
     }
     
     if (need_cmdline) {
       auto cmd = read_cmdline(ps.pid);
-      if (!cmd.empty()) ps.cmd = std::move(cmd);
+      if (!cmd.empty()) { cap_cmdline(cmd); ps.cmd = std::move(cmd); }
     }
     
     // User name and thread count from /proc/[pid]/status

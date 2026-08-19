@@ -1,4 +1,5 @@
 #include "app/MetricsServer.hpp"
+#include "util/UringDyn.hpp"
 #include "util/Log.hpp"
 #include <liburing.h>
 #include <sys/socket.h>
@@ -82,9 +83,21 @@ void MetricsServer::run(std::stop_token st) {
     return;
   }
 
+  // liburing is loaded at first use, not at link time, so a box without it
+  // still runs every other montauk mode instead of failing to exec.
+  auto& uring = montauk::util::UringDyn::instance();
+  if (!uring.load_once()) {
+    montauk::util::log_error("metrics server: liburing unavailable, endpoint disabled");
+    ::close(stop_eventfd_);
+    stop_eventfd_ = -1;
+    ::close(listen_fd_);
+    listen_fd_ = -1;
+    return;
+  }
+
   // Initialize io_uring
   struct io_uring ring{};
-  if (io_uring_queue_init(16, &ring, 0) < 0) {
+  if (uring.queue_init(16, &ring, 0) < 0) {
     montauk::util::log_error("metrics server: io_uring_queue_init() failed: %s", std::strerror(errno));
     ::close(stop_eventfd_);
     stop_eventfd_ = -1;
@@ -102,14 +115,14 @@ void MetricsServer::run(std::stop_token st) {
 
   submit_poll(listen_fd_, UringTag::ListenPoll);
   submit_poll(stop_eventfd_, UringTag::StopPoll);
-  io_uring_submit(&ring);
+  uring.submit(&ring);
 
   montauk::util::log_info("metrics server listening on :%d", port_);
 
   // Event loop
   while (!st.stop_requested()) {
     struct io_uring_cqe* cqe = nullptr;
-    int ret = io_uring_wait_cqe(&ring, &cqe);
+    int ret = uring.wait_cqe(&ring, &cqe);
     if (ret < 0) {
       if (ret == -EINTR) continue;
       break;
@@ -132,12 +145,12 @@ void MetricsServer::run(std::stop_token st) {
       }
       // Re-arm listen poll
       submit_poll(listen_fd_, UringTag::ListenPoll);
-      io_uring_submit(&ring);
+      uring.submit(&ring);
     }
   }
 
   // Cleanup
-  io_uring_queue_exit(&ring);
+  uring.queue_exit(&ring);
   if (stop_eventfd_ >= 0) { ::close(stop_eventfd_); stop_eventfd_ = -1; }
   if (listen_fd_ >= 0) { ::close(listen_fd_); listen_fd_ = -1; }
 }

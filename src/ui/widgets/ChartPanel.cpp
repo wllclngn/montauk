@@ -1,4 +1,5 @@
 #include "ui/widgets/ChartPanel.hpp"
+#include "ui/Formatting.hpp"
 #include "ui/Config.hpp"
 #include "ui/widget/GraphicsProtocol.hpp"
 #include "app/ChartHistories.hpp"
@@ -180,13 +181,6 @@ void ChartPanel::render(widget::Canvas& canvas,
   // a soft dip instead of a vertical cliff), high enough that the latest
   // sample still lands near its true value. Applied per frame over the
   // whole window — idempotent given the same history, no state kept.
-  auto ema_smooth = [](std::vector<float>& v, float a) {
-    if (v.size() < 2) return;
-    for (size_t i = 1; i < v.size(); ++i) {
-      v[i] = a * v[i] + (1.0f - a) * v[i - 1];
-    }
-  };
-
   // Copy samples under the history mutex (the producer writes these buffers under
   // the same lock), then rasterize after release. Chart::update_dual normalizes
   // separately by caller for NETWORK.
@@ -203,8 +197,8 @@ void ChartPanel::render(widget::Canvas& canvas,
     for (float v : tx) if (v > peak) peak = v;
     for (float& v : rx) v /= peak;
     for (float& v : tx) v /= peak;
-    ema_smooth(rx, 0.4f);
-    ema_smooth(tx, 0.4f);
+    montauk::ui::ema_smooth(rx, 0.4f);
+    montauk::ui::ema_smooth(tx, 0.4f);
     chart_.update_dual(rx, tx, style);
   } else if (sources_.primary != nullptr) {
     std::vector<float> samples;
@@ -229,12 +223,9 @@ void ChartPanel::render(widget::Canvas& canvas,
   //
   // First frame and resizes always emit to establish the placement.
   const bool must_emit = !has_emitted_once_ || chart_.dirty_full();
-  const bool throttle_emit = (frame_counter_ % 4) == 0;
+  const bool emit_now = montauk::ui::chart_should_emit(frame_counter_, must_emit);
   frame_counter_++;
-
-  if (!must_emit && !throttle_emit) {
-    return;
-  }
+  if (!emit_now) return;
 
   std::string escape = gfx.emit_full(chart_id_, inner.x, inner.y,
                                       inner.width, inner.height,

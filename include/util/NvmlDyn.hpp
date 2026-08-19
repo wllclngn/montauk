@@ -25,6 +25,16 @@ public:
   // Populate device-level GPU metrics via NVML. Returns true if any data found.
   [[nodiscard]] bool read_devices(montauk::model::GpuVram& out);
 
+  // Resolve an arbitrary NVML symbol from the already-open handle, or nullptr.
+  //
+  // This exists so there is exactly ONE dlopen of libnvidia-ml in the process,
+  // and one place that honours MONTAUK_DISABLE_NVML / MONTAUK_NVML_PATH.
+  // GpuAttributor needs the per-process entry points, whose signatures use
+  // nvml.h types this header deliberately does not include -- so it builds its
+  // own typed table from this accessor rather than opening a second handle or
+  // linking NVML back into DT_NEEDED.
+  [[nodiscard]] void* sym(const char* name);
+
 private:
   NvmlDyn() = default;
   NvmlDyn(const NvmlDyn&) = delete;

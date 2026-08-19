@@ -1,4 +1,6 @@
 #include "ui/Formatting.hpp"
+#include <span>
+#include <string_view>
 #include "ui/Config.hpp"
 #include "ui/widget/Canvas.hpp"
 #include "util/Procfs.hpp"
@@ -235,55 +237,69 @@ CpuFreqInfo read_cpu_freq_info() {
 }
 
 
-// EMA smoother for bar fill only
+// EMA smoother for bar fill only.
+//
+// Called once PER PROCESS PER FRAME, so the cost here is multiplied by the
+// process count at the frame rate. It used to do two hash lookups and two list
+// splices per call -- get() found the entry and moved it to the front, then
+// put() found it again and moved it again -- on a key the caller built with a
+// fresh std::string per process. That is four avoidable operations and one
+// allocation per process per frame, for an exponential moving average.
+//
+// Now: one lookup, one splice, and a TRANSPARENT hash so the caller can probe
+// with a string_view over a stack buffer and allocate nothing. A std::string is
+// constructed only when a key is genuinely new, which is bounded by MAX_SIZE.
 namespace {
+  struct SvHash {
+    using is_transparent = void;
+    size_t operator()(std::string_view s) const noexcept {
+      return std::hash<std::string_view>{}(s);
+    }
+  };
+
   struct LRUCache {
     static constexpr size_t MAX_SIZE = 512;
-    
+
     using Item = std::pair<std::string, double>;
     std::list<Item> items_;
-    std::unordered_map<std::string, decltype(items_)::iterator> index_;
-    
-    double* get(const std::string& key) {
+    std::unordered_map<std::string, decltype(items_)::iterator, SvHash,
+                       std::equal_to<>> index_;
+
+    // Find-or-insert and update in ONE pass. Returns the smoothed value.
+    double smooth(std::string_view key, double raw, double alpha) {
       auto it = index_.find(key);
-      if (it == index_.end()) return nullptr;
-      
-      items_.splice(items_.begin(), items_, it->second);
-      return &it->second->second;
-    }
-    
-    void put(const std::string& key, double value) {
-      auto it = index_.find(key);
-      
       if (it != index_.end()) {
         items_.splice(items_.begin(), items_, it->second);
-        it->second->second = value;
-      } else {
-        items_.emplace_front(key, value);
-        index_[key] = items_.begin();
-        
-        if (items_.size() > MAX_SIZE) {
-          const auto& last = items_.back();
-          index_.erase(last.first);
-          items_.pop_back();
-        }
+        double sm = alpha * raw + (1.0 - alpha) * it->second->second;
+        it->second->second = sm;
+        return sm;
       }
+      // First sighting: seed with the raw value, exactly as before.
+      items_.emplace_front(std::string(key), raw);
+      index_.emplace(items_.front().first, items_.begin());
+      if (items_.size() > MAX_SIZE) {
+        index_.erase(items_.back().first);
+        items_.pop_back();
+      }
+      return raw;
     }
   };
 }
 
-double smooth_value(const std::string& key, double raw, double alpha) {
+double smooth_value(std::string_view key, double raw, double alpha) {
   static LRUCache cache;
-  
-  double* prev = cache.get(key);
-  if (!prev) {
-    cache.put(key, raw);
-    return raw;
-  }
-  
-  double smoothed = alpha * raw + (1.0 - alpha) * (*prev);
-  cache.put(key, smoothed);
-  return smoothed;
+  return cache.smooth(key, raw, alpha);
+}
+
+void ema_smooth(std::span<float> v, float alpha) {
+  if (v.size() < 2) return;
+  for (size_t i = 1; i < v.size(); ++i)
+    v[i] = alpha * v[i] + (1.0f - alpha) * v[i - 1];
+}
+
+// Every 4th frame, or whenever the caller forces it.
+bool chart_should_emit(uint64_t frame_tick, bool forced) {
+  return forced || (frame_tick % 4) == 0;
 }
 
 widget::Style severity_style(int severity) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """montauk test runner -- one entry point for the whole suite.
 
-Five layers, one command, a clear split:
+Four layers, one command, a clear split:
   unit   -- the C++ montauk_tests aggregate, the C23 montauk_sink_c_test,
             sublimation_fuzz_diff (seeded sort differential vs std::sort, all
             types, multiset + order, heavy on few-unique / NaN / signed-zero),
@@ -16,8 +16,6 @@ Five layers, one command, a clear split:
             growth bound and the sort-vs-sort oracle
   trace  -- the live BPF trace harness (trace_loadtest.py); needs root, so it is
             skipped (not failed) when not run as root
-  mcp    -- the MCP server's own `cargo test`; skipped (not failed) if the crate
-            isn't built yet (no Cargo.toml)
 
 Usage:
   python3 tests/run.py                 # build, then run every layer (trace skipped w/o root)
@@ -51,12 +49,26 @@ TARGETS = ["montauk", "montauk_tests", "montauk_sink_c_test",
            "test_smerge_par", "test_pack",
            *SUB_CORE_TESTS, "test_types_asan", "test_tier5_asan",
            "test_wsdeque_tsan", "test_dfspool_tsan", "test_radix_par_tsan",
-           "montauk_analyze", "montauk_trace_decode", "sublimation_cli"]
+           "sublimation_cli"]
 
 
-def run(cmd):
+# A HUNG TEST MUST FAIL, NOT WAIT. Every invocation below is wrapped, because an
+# infinite loop inside one test used to stall the whole suite silently -- the
+# runner sat on a single binary for half an hour with no output and no verdict,
+# which is worse than a failure because it looks like slowness. The bound is
+# deliberately generous: the slowest legitimate step here is a TSan build, and
+# nothing honest comes close to it.
+STEP_TIMEOUT = 1800  # seconds, per invocation
+
+
+def run(cmd, timeout=STEP_TIMEOUT, **kwargs):
     print(f"  $ {' '.join(str(c) for c in cmd)}", flush=True)
-    return subprocess.run(cmd).returncode
+    try:
+        return subprocess.run(cmd, timeout=timeout, **kwargs).returncode
+    except subprocess.TimeoutExpired:
+        print(f"[run] TIMEOUT after {timeout}s: {cmd[0]} -- treating as FAIL "
+              f"(a test that cannot finish has not passed)", flush=True)
+        return 124
 
 
 def build():
@@ -103,7 +115,7 @@ def layer_unit():
             ok = False
             continue
         print(f"  $ {p}")
-        ok = (subprocess.run([str(p)], env=asan_env).returncode == 0) and ok
+        ok = (run([str(p)], env=asan_env) == 0) and ok
     # Work-stealing DFS engine race gate (ThreadSanitizer). A smaller size is
     # deliberate: a data race shows at any concurrency, and TSan's ~15x slowdown
     # makes full-size runs wasteful. test_psort's correctness is covered plain
@@ -119,7 +131,7 @@ def layer_unit():
         # parallel frames and keeps TSan's ~15x slowdown bounded.
         cmd = [str(p)] + (["40000"] if exe == "test_radix_par_tsan" else [])
         print(f"  $ {' '.join(cmd)}")
-        ok = (subprocess.run(cmd, env=tsan_env).returncode == 0) and ok
+        ok = (run(cmd, env=tsan_env) == 0) and ok
     return ok
 
 
@@ -129,6 +141,14 @@ def layer_gate():
     pop = run([sys.executable, str(ROOT / "tests" / "pop_gate.py")]) == 0
     semantic = run([sys.executable, str(ROOT / "tests" / "semantic_check.py")]) == 0
     golden = run([sys.executable, str(ROOT / "tests" / "golden_gate.py")]) == 0
+    # install/uninstall symmetry: the removal list is derived from what install
+    # recorded, not maintained by hand beside it. Needs no build and no root.
+    inst = run([sys.executable, str(ROOT / "tests" / "install_manifest_check.py")]) == 0
+    # One binary, and it must exec on a box without libbpf/liburing/NVML.
+    bare = run([sys.executable, str(ROOT / "tests" / "bare_box_check.py")]) == 0
+    # Which reports the fixture actually EXERCISES. Not a correctness check -- a
+    # check that the correctness checks run at all.
+    cover = run([sys.executable, str(ROOT / "tests" / "report_coverage_check.py")]) == 0
     # Shipped sublimation-API byte-parity gates (self-build libsublimation and a
     # harness that touches only the public API, then diff against numpy oracles).
     subt = ROOT / "sublimation" / "tests"
@@ -142,7 +162,7 @@ def layer_gate():
     # C++ consumer gate. Nothing else here compiles the public headers as C++,
     # which is how a bare unreachable() macro reached an outside consumer.
     cxx = run([sys.executable, str(subt / "test_cxx_headers.py")]) == 0
-    return (corpus and parity and pop and semantic and golden and match
+    return (corpus and parity and pop and semantic and golden and inst and bare and cover and match
             and learn and spectral and signal and stats and cxx)
 
 
@@ -157,17 +177,8 @@ def layer_trace():
     return run([sys.executable, str(ROOT / "tests" / "trace_loadtest.py")]) == 0
 
 
-def layer_mcp():
-    mcp_dir = ROOT / "components" / "vector"
-    if not (mcp_dir / "Cargo.toml").exists():
-        print("[run] mcp: SKIP (components/vector/Cargo.toml not present)")
-        return True  # a skip is not a failure
-    print(f"  $ cargo test --release  (in {mcp_dir})")
-    return subprocess.run(["cargo", "test", "--release"], cwd=str(mcp_dir)).returncode == 0
-
-
 LAYERS = {"unit": layer_unit, "gate": layer_gate, "perf": layer_perf,
-          "trace": layer_trace, "mcp": layer_mcp}
+          "trace": layer_trace}
 
 
 def main():

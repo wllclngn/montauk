@@ -1,4 +1,4 @@
-// montauk_trace_decode — render a binary --trace-out log to text.
+// montauk --decode — render a binary --trace-out log to text.
 //
 // The trace collector writes raw ring-buffer event records to a file at
 // trace time (no formatting, batched writes, minimal observer effect).
@@ -8,8 +8,8 @@
 // header's clock anchors.
 //
 // Usage:
-//   montauk_trace_decode FILE          # text, all events
-//   montauk_trace_decode FILE --csv    # CSV (type,ts_ns,wall_ns,fields...)
+//   montauk --decode FILE          # text, all events
+//   montauk --decode FILE --csv    # CSV (type,ts_ns,wall_ns,fields...)
 
 #include "model/TraceReader.hpp"
 #include "model/TraceEnumNames.hpp"
@@ -50,11 +50,13 @@ std::string wall_str(uint64_t wall_ns) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+#include "tools/Entrypoints.hpp"
+
+int montauk_decode_main(int argc, char** argv) {
   montauk_sink_init(&g_out, 1);
   std::atexit(drain_out);
   if (argc < 2) {
-    montauk::util::log_error("usage: montauk_trace_decode FILE [--csv]");
+    montauk::util::log_error("usage: montauk --decode FILE [--csv]");
     return 2;
   }
   const char* path = argv[1];

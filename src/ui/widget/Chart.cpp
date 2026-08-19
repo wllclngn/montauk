@@ -117,6 +117,33 @@ inline void blend_pixel(uint8_t* buf, int w, int x, int y, Rgb rgb, double alpha
   px[3] = static_cast<uint8_t>(out_a * 255.0 + 0.5);
 }
 
+// The anti-aliased line stamp: a horizontal strip of kLineThickness centred on
+// y_px. For each integer row it touches, coverage is the length of the strip's
+// overlap with that row -- a soft fractional line rather than a hard 2-pixel
+// stamp, so sample-to-sample transitions read smoothly.
+//
+// This existed VERBATIM in two places, with kLineThickness declared separately
+// in each, so the primary curve and the secondary overlay could drift apart
+// silently. One definition now serves both.
+constexpr double kLineThickness = 1.5;
+constexpr double kHalfThick = kLineThickness * 0.5;
+
+inline void stamp_line(uint8_t* buf, int w, int h, int x, double y_px, Rgb rgb) {
+  const double line_top = y_px - kHalfThick;
+  const double line_bot = y_px + kHalfThick;
+  int y_first = std::max(0, static_cast<int>(std::floor(line_top)));
+  int y_last  = std::min(h - 1, static_cast<int>(std::ceil(line_bot)) - 1);
+  for (int y = y_first; y <= y_last; ++y) {
+    double overlap = std::min(line_bot, double(y + 1))
+                   - std::max(line_top, double(y));
+    if (overlap <= 0.0) continue;
+    double cov = overlap / kLineThickness;
+    if (cov > 1.0) cov = 1.0;
+    blend_pixel(buf, w, x, y, rgb, cov);
+  }
+}
+
+
 // Set pixel directly (opaque).
 inline void set_pixel(uint8_t* buf, int w, int x, int y, Rgb rgb, uint8_t alpha = 255) {
   uint8_t* px = buf + (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4;
@@ -173,8 +200,6 @@ void Chart::rasterize_single(std::span<const float> samples,
   // Curve-line thickness in pixels. 1.5 gives a visibly solid line that
   // still anti-aliases cleanly at the edges — 1.0 renders too thin at
   // sparkline density, 2.0 tends to look chunky.
-  constexpr double kLineThickness = 1.5;
-  const double kHalfThick = kLineThickness * 0.5;
 
   for (int x = x_start_px; x < x_end_px; ++x) {
     // Map pixel x → sample-space position s ∈ [0, n_segments]
@@ -221,23 +246,7 @@ void Chart::rasterize_single(std::span<const float> samples,
       }
     }
 
-    // Anti-aliased line: a horizontal strip of thickness kLineThickness
-    // centered on y_px. For each integer row touched, the coverage is the
-    // length of the strip's overlap with that row. This replaces the hard
-    // 2-pixel stamp with a soft, fractional line that visually smooths
-    // sample-to-sample transitions.
-    const double line_top = y_px - kHalfThick;
-    const double line_bot = y_px + kHalfThick;
-    int y_first = std::max(0, static_cast<int>(std::floor(line_top)));
-    int y_last  = std::min(h_ - 1, static_cast<int>(std::ceil(line_bot)) - 1);
-    for (int y = y_first; y <= y_last; ++y) {
-      double overlap = std::min(line_bot, double(y + 1))
-                     - std::max(line_top, double(y));
-      if (overlap <= 0.0) continue;
-      double cov = overlap / kLineThickness;
-      if (cov > 1.0) cov = 1.0;
-      blend_pixel(buffer_.data(), w_, x, y, line_rgb, cov);
-    }
+    stamp_line(buffer_.data(), w_, h_, x, y_px, line_rgb);
   }
 }
 
@@ -262,8 +271,6 @@ void Chart::update_dual(std::span<const float> primary,
   // the primary. Same thickness so RX and TX curves read equally on the
   // NETWORK panel.
   if (!secondary.empty()) {
-    constexpr double kLineThickness = 1.5;
-    const double kHalfThick = kLineThickness * 0.5;
     const Rgb alt_rgb = color_to_rgb(style.line_alt);
     std::vector<double> tangents;
     monotone_tangents(secondary, tangents);
@@ -277,18 +284,7 @@ void Chart::update_dual(std::span<const float> primary,
         double y_norm = clamp01(hermite(secondary[i], tangents[i],
                                         secondary[i + 1], tangents[i + 1], t));
         double y_px = (1.0 - y_norm) * double(h_ - 1);
-        const double line_top = y_px - kHalfThick;
-        const double line_bot = y_px + kHalfThick;
-        int y_first = std::max(0, static_cast<int>(std::floor(line_top)));
-        int y_last  = std::min(h_ - 1, static_cast<int>(std::ceil(line_bot)) - 1);
-        for (int y = y_first; y <= y_last; ++y) {
-          double overlap = std::min(line_bot, double(y + 1))
-                         - std::max(line_top, double(y));
-          if (overlap <= 0.0) continue;
-          double cov = overlap / kLineThickness;
-          if (cov > 1.0) cov = 1.0;
-          blend_pixel(buffer_.data(), w_, x, y, alt_rgb, cov);
-        }
+        stamp_line(buffer_.data(), w_, h_, x, y_px, alt_rgb);
       }
     }
   }

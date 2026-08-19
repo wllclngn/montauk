@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 
 import harness
-from harness import ROOT, MONTAUK_ANALYZE as ANALYZE, MONTAUK_TRACE_DECODE as DECODE, SUBLIMATION
+from harness import ROOT, ANALYZE, DECODE, SUBLIMATION
 
 GEN_SRC = ROOT / "tests" / "gen_synthetic_trace.cpp"
 FIXTURE = ROOT / "tests" / "fixtures" / "synthetic.mtk"
@@ -53,6 +53,8 @@ _ALT_IN = ("#define SUBLIMATION_SEARCH_MAX_POS 64\n"
            "long sublimation_search_find_from(const sublimation_search *s);\n"
            "typedef struct { uint64_t key; } slot;\n"
            "static inline unsigned char fold(unsigned char c);\n")
+_POSIX_IN = "abc\n123\nA1_\n  \t\n!@#\nDEADbeef\nxyz 9\n"
+
 CLI_CASES = [
     (["sort"], _NUMS),
     (["sort", "--desc"], _NUMS),
@@ -194,6 +196,73 @@ CLI_CASES = [
     (["search", "-c", r"\d"], "123\nd9\nabc\n"),
     # Inside brackets the backslash is a member, not an escape.
     (["search", "-c", r"[\w]"], "w\n\\\nabc\n"),
+    # v8.10.0: --lines, the absolute window. The one sed form (`sed -n 'A,Bp'`)
+    # sublimation had no answer for, so it kept surviving the shell wrapper's
+    # routing. Pinned across all four spellings plus composition, because the
+    # window has to apply BEFORE every other flag sees a line.
+    (["search", "--lines", "2,4"], "a\nb\nc\nd\ne\nf\ng\n"),
+    (["search", "--lines", ",3"], "a\nb\nc\nd\ne\n"),
+    (["search", "--lines", "4,"], "a\nb\nc\nd\ne\n"),
+    (["search", "--lines", "3"], "a\nb\nc\nd\ne\n"),
+    (["search", "-n", "--lines", "2,6", "-e", "[bdf]"], "a\nb\nc\nd\ne\nf\ng\n"),
+    (["search", "--lines", "2,5", "-c", "-e", "."], "a\nb\nc\nd\ne\nf\n"),
+    (["search", "--lines", "2,4", "-v", "-e", "c"], "a\nb\nc\nd\ne\n"),
+    # A range past EOF selects nothing and must say so with grep's exit 1, not
+    # succeed silently.
+    (["search", "--lines", "99,200"], "a\nb\nc\n"),
+    # v8.10.0: replace's escape language, which used to change meaning based on
+    # distant context -- `\\` was a literal backslash only when a \1 appeared
+    # elsewhere in the SAME replacement, and two raw characters otherwise.
+    (["replace", "x", "a\\\\b"], "x\n"),
+    (["replace", "(x)", "a\\\\b\\1"], "x\n"),
+    (["replace", "([a-z]+)=([a-z]+)", "\\2:\\1"], "foo=bar\n"),
+    (["replace", "b", "[\\0]"], "abc\n"),
+    (["replace", "x", "<\\3>"], "x\n"),
+    # v8.10.0: POSIX character classes inside a bracket expression. These used to
+    # match NOTHING -- class_span read "[[:alpha:]]" as the literal member set
+    # {'[', ':', 'a', 'l', 'p', 'h'} and stopped at the first ']', a silently
+    # wrong answer rather than a refusal. Every case below was verified against
+    # `grep -E` before freezing, membership being ASCII/LC_ALL=C, the same basis
+    # \w and \s already use.
+    (["search", "[[:alpha:]]"], _POSIX_IN),
+    (["search", "[[:digit:]]"], _POSIX_IN),
+    (["search", "[[:alnum:]]"], _POSIX_IN),
+    (["search", "[[:upper:]]"], _POSIX_IN),
+    (["search", "[[:lower:]]"], _POSIX_IN),
+    (["search", "[[:space:]]"], _POSIX_IN),
+    (["search", "[[:blank:]]"], _POSIX_IN),
+    (["search", "[[:punct:]]"], _POSIX_IN),
+    (["search", "[[:print:]]"], _POSIX_IN),
+    (["search", "[[:graph:]]"], _POSIX_IN),
+    (["search", "[[:cntrl:]]"], _POSIX_IN),
+    (["search", "[[:xdigit:]]"], _POSIX_IN),
+    # Composition: quantified, negated, mixed with an ordinary range, and paired.
+    (["search", "-o", "[[:alpha:]]+"], _POSIX_IN),
+    (["search", "[^[:digit:]]"], _POSIX_IN),
+    (["search", "[[:alpha:]0-9]"], _POSIX_IN),
+    (["search", "-o", "[[:upper:]][[:lower:]]"], _POSIX_IN),
+    # \w is documented as [[:alnum:]_]; the two spellings must agree exactly.
+    (["search", "-o", "[[:alnum:]_]+"], _POSIX_IN),
+    (["search", "-o", "\\w+"], _POSIX_IN),
+    # v8.10.0: -i folding for the pairs a single byte-set cannot express. These
+    # need an ALTERNATION per character -- the two UTF-8 encodings differ before
+    # the last byte, or in length -- which is why the field engine had to learn a
+    # second width first. Every case here was verified against `grep -i`.
+    (["search", "-i", "-c", "\u0130"], "x\u0130y\nx\u0069y\nzz\n"),
+    (["search", "-i", "-o", "\u03a3"], "a\u03a3b\na\u03c3b\n"),
+    (["search", "-i", "-c", "\u1e9e"], "x\u1e9ey\nx\u00dfy\nzz\n"),
+    # A three-member class: capital phi, small phi, phi symbol. A pair table can
+    # only relate two of them, and answered grep with 1 where it wanted 2.
+    (["search", "-i", "-c", "\u03a6"], "a\u03a6b\na\u03c6b\na\u03d5b\nzz\n"),
+    (["search", "-i", "-c", "\u03d5"], "a\u03a6b\na\u03c6b\na\u03d5b\nzz\n"),
+    # NOT folded, and that is the point: these share a towlower but differ in
+    # towupper, and grep does not fold them either.
+    (["search", "-i", "-c", "\u212a"], "aKb\nakb\na\u212ab\n"),
+    (["search", "-i", "-c", "\u0398"], "a\u0398b\na\u03b8b\na\u03f4b\n"),
+    # The cheap last-byte path must still work, and quantifiers over a folded
+    # alternation atom must too.
+    (["search", "-i", "-c", "\u00e9"], "x\u00c9y\nx\u00e9y\nzz\n"),
+    (["search", "-i", "-o", "\u03a3+"], "a\u03c3\u03a3b\n"),
 ]
 
 note = harness.logger("corpus")
@@ -215,23 +284,27 @@ def regenerate_fixture(tmp: Path) -> None:
     subprocess.run([str(gen), str(FIXTURE_NOIDLE), "--no-idle"], capture_output=True)
 
 
-def run_stdout(binary: Path, args: list) -> str:
+def run_stdout(cmd: list, args: list) -> str:
     """Run a tool over the fixture, returning stdout only (stderr discarded).
+
+    `cmd` is an ARGV PREFIX (`[montauk, --analyze]`), not a path: the analyzer
+    and decoder are modes of montauk rather than binaries of their own.
     TZ is pinned to UTC: the summary report renders the capture's fixed epoch
     as wall-clock text, so an unpinned gate freezes the freezing machine's
     timezone into the golden and fails everywhere else (confirmed: the one
     divergent line under TZ=UTC was `start 10:06:40` vs `15:06:40`). The
     product keeps local time for humans; the gate is hermetic."""
     env = {**os.environ, "TZ": "UTC"}
-    return harness.run_text([str(binary), str(FIXTURE), *args], env=env).stdout
+    return harness.run_text([*cmd, str(FIXTURE), *args], env=env).stdout
 
 
 def check_surface(label: str, update: bool) -> bool:
-    binary, golden, args = SURFACES[label]
-    if harness.missing_bins(binary):
-        note(f"FAIL: missing {binary.relative_to(ROOT)} (build first)")
+    cmd, golden, args = SURFACES[label]
+    exe = Path(cmd[0])
+    if harness.missing_bins(exe):
+        note(f"FAIL: missing {exe.relative_to(ROOT)} (build first)")
         return False
-    got = run_stdout(binary, args)
+    got = run_stdout(cmd, args)
 
     # The json surface must also be well-formed, not just byte-stable -- an agent
     # parses it. A malformed envelope fails the gate even if it matches a stale
@@ -287,6 +360,42 @@ def cli_blob() -> str:
     return "".join(parts)
 
 
+# tally and distinct share the CLI's one StrMap, which doubles at 50% load. Both
+# used to write through the freed table once a grow happened mid-scan, because
+# `m.nums[smap_intern(...)]++` leaves the base pointer and the index unsequenced:
+# the compiler may load nums BEFORE the call, and the call can free it.
+#
+# This cannot be a golden case -- a golden freezes bytes, and the crash was a
+# SIGSEGV, which produces no bytes to freeze. It also cannot sample one size: the
+# earliest grows land in a block that is still mapped, so nothing visible breaks
+# until a later one. Walk ACROSS several boundaries and check the row count.
+GROW_SIZES = (510, 511, 512, 1022, 1023, 1024, 1025, 2047, 2048, 4095, 4096, 8192)
+
+
+def check_grow_boundary() -> bool:
+    if harness.missing_bins(SUBLIMATION):
+        note(f"FAIL: missing {SUBLIMATION.relative_to(ROOT)} (build first)")
+        return False
+    bad = []
+    for n in GROW_SIZES:
+        data = "".join(f"{i}\n" for i in range(n))
+        t = harness.run_text([str(SUBLIMATION), "tally"], input=data, cwd=ROOT)
+        d = harness.run_text([str(SUBLIMATION), "distinct"], input=data, cwd=ROOT)
+        rows = sum(1 for line in t.stdout.split("\n") if line.strip())
+        if t.returncode != 0 or rows != n:
+            bad.append(f"tally n={n} rc={t.returncode} rows={rows}")
+        if d.returncode != 0 or d.stdout.strip() != str(n):
+            bad.append(f"distinct n={n} rc={d.returncode} out={d.stdout.strip()!r}")
+    if bad:
+        note("FAIL grow-boundary -- tally/distinct diverged:")
+        for b in bad:
+            note(f"  {b}")
+        return False
+    note(f"PASS grow-boundary ({len(GROW_SIZES)} sizes, "
+         f"{GROW_SIZES[0]}..{GROW_SIZES[-1]})")
+    return True
+
+
 def check_cli(update: bool) -> bool:
     if harness.missing_bins(SUBLIMATION):
         note(f"FAIL: missing {SUBLIMATION.relative_to(ROOT)} (build first)")
@@ -331,11 +440,14 @@ def main() -> int:
                     CLI_GOLDEN.write_text(cli_blob())
                     note(f"updated cli golden ({len(CLI_CASES)} cases)")
                     return 0
-                return 0 if check_cli(False) else 1
+                # not a golden, so it runs on the check path either way
+                return 0 if (check_cli(False) and check_grow_boundary()) else 1
             ok = check_surface(args.surface, args.update)
             return 0 if ok else 1
         ok = all(check_surface(label, args.update) for label in SURFACES)
         ok = check_cli(args.update) and ok
+        # call first, then fold: a crash gate must run even when the goldens failed
+        ok = check_grow_boundary() and ok
 
     if args.update:
         return 0

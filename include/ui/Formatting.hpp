@@ -1,4 +1,6 @@
 #pragma once
+#include <span>
+#include <string_view>
 
 #include "ui/widget/Color.hpp"
 
@@ -31,7 +33,38 @@ struct CpuFreqInfo {
 [[nodiscard]] CpuFreqInfo read_cpu_freq_info();
 
 // EMA smoother for UI (bar fill smoothing)
-[[nodiscard]] double smooth_value(const std::string& key, double raw, double alpha = 0.25);
+// key is probed without allocating: the cache hashes transparently, so a
+// string_view over a caller's stack buffer is enough.
+[[nodiscard]] double smooth_value(std::string_view key, double raw, double alpha = 0.25);
+
+// Forward-pass EMA over a series, in place. Idempotent given the same history --
+// no state is kept between frames, so applying it per frame over the whole
+// window is well defined.
+//
+// ChartPanel and CpuGrid each carried a byte-identical copy of this lambda (the
+// same 0.4 alpha, the loop variable renamed), so the PROCESSOR chart and the
+// per-core mini-charts could drift apart in character without anyone noticing.
+// It stays a plain function over a span: sublimation cannot absorb it, because
+// sublimation_ewma_scores is a per-row ANOMALY SCORE over a row-major matrix,
+// not a smoother, and it allocates.
+void ema_smooth(std::span<float> v, float alpha);
+
+// GRAPHICS EMISSION THROTTLE, one policy for every chart surface.
+//
+// Charts re-emit only every Nth frame (roughly 1 Hz at the 4 Hz producer
+// cadence). The producer's 4 MB/s of escape data was saturating the PTY and
+// starving input polling; at 1 Hz it is ~125 KB/s, which the PTY handles. On a
+// skipped frame Kitty keeps displaying the last-transmitted image -- placements
+// persist until explicitly deleted -- so the chart stays visible, and system
+// metrics updating at 1 Hz instead of 4 Hz is imperceptible.
+//
+// `forced` is the escape hatch a first frame or a resize needs: the placement
+// has to be established before throttling means anything. ChartPanel and CpuGrid
+// each carried this rule inline, so the PROCESSOR panel and the per-core grid
+// could have drifted to different cadences without anyone noticing.
+[[nodiscard]] bool chart_should_emit(uint64_t frame_tick, bool forced);
+
+
 
 // Security: sanitize strings for terminal display
 [[nodiscard]] std::string sanitize_for_display(const std::string& s, size_t max_len = 512);

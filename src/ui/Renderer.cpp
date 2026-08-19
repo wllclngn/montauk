@@ -1,4 +1,5 @@
 #include "ui/Renderer.hpp"
+#include <charconv>
 #include "ui/HelpOverlay.hpp"
 #include "ui/Terminal.hpp"
 #include "ui/Config.hpp"
@@ -54,6 +55,31 @@ void append_sgr(std::string& frame, const widget::Style& s) {
   frame += 'm';
 }
 
+// Cursor-position escape, appended WITHOUT a temporary. std::format returns a
+// std::string, and this sits in the per-cell diff loop -- one allocation per
+// changed-cell run, every frame, to write at most a dozen bytes the frame
+// buffer already has room for.
+//
+// to_chars' result is CHECKED rather than assumed. The compiler cannot prove a
+// conversion left room for the separator, and it was right to insist: the first
+// version of this used a 24-byte buffer where the worst case is 26.
+void append_cup(std::string& out, int row, int col) {
+  char buf[32];
+  char* const lim = buf + sizeof buf;
+  char* q = buf;
+  *q++ = '\x1B';
+  *q++ = '[';
+  auto r = std::to_chars(q, lim, row);
+  if (r.ec != std::errc{} || r.ptr >= lim - 2) return;
+  q = r.ptr;
+  *q++ = ';';
+  r = std::to_chars(q, lim, col);
+  if (r.ec != std::errc{} || r.ptr >= lim - 1) return;
+  q = r.ptr;
+  *q++ = 'H';
+  out.append(buf, static_cast<size_t>(q - buf));
+}
+
 // Build a frame buffer that contains only the cells that changed between
 // `prev` and `curr`. For each changed run, emit one cursor-position
 // escape, an SGR if the style differs from the last emitted style, and
@@ -94,7 +120,7 @@ std::string canvas_diff_to_frame(const widget::Canvas& curr,
       // Position the cursor (skip the move if we're already there from
       // the previous emit on this row).
       if (cursor_y != y || cursor_x != x) {
-        frame += std::format("\x1B[{};{}H", y + 1, x + 1);
+        append_cup(frame, y + 1, x + 1);
         cursor_x = x;
         cursor_y = y;
       }
@@ -119,7 +145,7 @@ std::string canvas_diff_to_frame(const widget::Canvas& curr,
   // Reset SGR so any out-of-band terminal output after our frame doesn't
   // inherit our last color, and park the cursor at the bottom-right.
   if (style_known) frame += "\x1b[0m";
-  frame += std::format("\x1B[{};{}H", rows, cols);
+  append_cup(frame, rows, cols);
   return frame;
 }
 

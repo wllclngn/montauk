@@ -12,6 +12,58 @@ extern "C" {
 
 #ifdef MONTAUK_HAVE_NVML
 #include <nvml.h>
+#include "util/NvmlDyn.hpp"
+
+// NVML is resolved at RUN time, not link time. Linking it put libnvidia-ml in
+// montauk's DT_NEEDED, so a box without an NVIDIA driver could not exec montauk
+// at all -- not even for modes that never look at a GPU. nvml.h stays a build
+// dependency for the types and constants; only the symbols are late-bound.
+//
+// The handle belongs to util::NvmlDyn, which is also where MONTAUK_DISABLE_NVML
+// and MONTAUK_NVML_PATH are honoured; this table just types what it hands back.
+namespace {
+struct NvmlProcApi {
+  nvmlReturn_t (*Init)(){};
+  nvmlReturn_t (*Shutdown)(){};
+  nvmlReturn_t (*DeviceGetCount)(unsigned int*){};
+  nvmlReturn_t (*DeviceGetHandleByIndex)(unsigned int, nvmlDevice_t*){};
+  nvmlReturn_t (*DeviceGetMigMode)(nvmlDevice_t, unsigned*, unsigned*){};
+  nvmlReturn_t (*DeviceGetGraphicsRunningProcesses)(nvmlDevice_t, unsigned int*,
+                                                    nvmlProcessInfo_t*){};
+  nvmlReturn_t (*DeviceGetComputeRunningProcesses)(nvmlDevice_t, unsigned int*,
+                                                   nvmlProcessInfo_t*){};
+  nvmlReturn_t (*DeviceGetProcessUtilization)(nvmlDevice_t,
+                                              nvmlProcessUtilizationSample_t*,
+                                              unsigned int*, unsigned long long){};
+  nvmlReturn_t (*SystemGetDriverVersion)(char*, unsigned int){};
+  nvmlReturn_t (*SystemGetNVMLVersion)(char*, unsigned int){};
+  bool ok{false};
+};
+
+const NvmlProcApi& nvml_api() {
+  static const NvmlProcApi api = [] {
+    NvmlProcApi a{};
+    auto& dyn = montauk::util::NvmlDyn::instance();
+    auto L = [&](const char* n) { return dyn.sym(n); };
+    a.Init = reinterpret_cast<decltype(a.Init)>(L("nvmlInit_v2"));
+    a.Shutdown = reinterpret_cast<decltype(a.Shutdown)>(L("nvmlShutdown"));
+    a.DeviceGetCount = reinterpret_cast<decltype(a.DeviceGetCount)>(L("nvmlDeviceGetCount_v2"));
+    a.DeviceGetHandleByIndex = reinterpret_cast<decltype(a.DeviceGetHandleByIndex)>(L("nvmlDeviceGetHandleByIndex_v2"));
+    a.DeviceGetMigMode = reinterpret_cast<decltype(a.DeviceGetMigMode)>(L("nvmlDeviceGetMigMode"));
+    a.DeviceGetGraphicsRunningProcesses = reinterpret_cast<decltype(a.DeviceGetGraphicsRunningProcesses)>(L("nvmlDeviceGetGraphicsRunningProcesses_v3"));
+    a.DeviceGetComputeRunningProcesses = reinterpret_cast<decltype(a.DeviceGetComputeRunningProcesses)>(L("nvmlDeviceGetComputeRunningProcesses_v3"));
+    a.DeviceGetProcessUtilization = reinterpret_cast<decltype(a.DeviceGetProcessUtilization)>(L("nvmlDeviceGetProcessUtilization"));
+    a.SystemGetDriverVersion = reinterpret_cast<decltype(a.SystemGetDriverVersion)>(L("nvmlSystemGetDriverVersion"));
+    a.SystemGetNVMLVersion = reinterpret_cast<decltype(a.SystemGetNVMLVersion)>(L("nvmlSystemGetNVMLVersion"));
+    // The version queries are cosmetic; the rest are what attribution needs.
+    a.ok = a.Init && a.Shutdown && a.DeviceGetCount && a.DeviceGetHandleByIndex
+        && a.DeviceGetGraphicsRunningProcesses && a.DeviceGetComputeRunningProcesses
+        && a.DeviceGetProcessUtilization;
+    return a;
+  }();
+  return api;
+}
+}  // namespace
 #endif
 
 using namespace std::chrono;
@@ -86,20 +138,21 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
   // NVML path (NVIDIA)
   ensure_nvml_init();
   const bool log_nvml = montauk::ui::config().nvidia.log_nvml;
+  const auto& A = nvml_api();
   if (nvml_ok_) {
-    unsigned int ndev=0; if (nvmlDeviceGetCount_v2(&ndev)==NVML_SUCCESS) {
+    unsigned int ndev=0; if (A.DeviceGetCount(&ndev)==NVML_SUCCESS) {
       if (nvml_last_proc_ts_per_dev_.size() != ndev) nvml_last_proc_ts_per_dev_.assign(ndev, 0ull);
       bool mig_enabled_global = false;
       std::unordered_set<int> nvml_running;
       for (unsigned int di=0; di<ndev; ++di) {
-        nvmlDevice_t dev{}; if (nvmlDeviceGetHandleByIndex_v2(di, &dev) != NVML_SUCCESS) continue;
+        nvmlDevice_t dev{}; if (A.DeviceGetHandleByIndex(di, &dev) != NVML_SUCCESS) continue;
         unsigned currentMode = 0, pendingMode = 0;
-        if (nvmlDeviceGetMigMode(dev, &currentMode, &pendingMode) == NVML_SUCCESS) { if (currentMode == 1) mig_enabled_global = true; }
+        if (A.DeviceGetMigMode && A.DeviceGetMigMode(dev, &currentMode, &pendingMode) == NVML_SUCCESS) { if (currentMode == 1) mig_enabled_global = true; }
         // graphics
-        unsigned int gcount = 0; auto grv = nvmlDeviceGetGraphicsRunningProcesses(dev, &gcount, nullptr);
+        unsigned int gcount = 0; auto grv = A.DeviceGetGraphicsRunningProcesses(dev, &gcount, nullptr);
         if (grv == NVML_ERROR_INSUFFICIENT_SIZE && gcount > 0) {
           std::vector<nvmlProcessInfo_t> gbuf(gcount);
-          grv = nvmlDeviceGetGraphicsRunningProcesses(dev, &gcount, gbuf.data());
+          grv = A.DeviceGetGraphicsRunningProcesses(dev, &gcount, gbuf.data());
           if (grv == NVML_SUCCESS) {
             for (unsigned int i=0;i<gcount;i++) {
               int pid = (int)gbuf[i].pid; nvml_running.insert(pid);
@@ -109,10 +162,10 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
           }
         }
         // compute
-        unsigned int ccount = 0; auto crv = nvmlDeviceGetComputeRunningProcesses(dev, &ccount, nullptr);
+        unsigned int ccount = 0; auto crv = A.DeviceGetComputeRunningProcesses(dev, &ccount, nullptr);
         if (crv == NVML_ERROR_INSUFFICIENT_SIZE && ccount > 0) {
           std::vector<nvmlProcessInfo_t> cbuf(ccount);
-          crv = nvmlDeviceGetComputeRunningProcesses(dev, &ccount, cbuf.data());
+          crv = A.DeviceGetComputeRunningProcesses(dev, &ccount, cbuf.data());
           if (crv == NVML_SUCCESS) {
             for (unsigned int i=0;i<ccount;i++) {
               int pid = (int)cbuf[i].pid; nvml_running.insert(pid);
@@ -124,10 +177,10 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
         if (!mig_enabled_global) {
           unsigned long long& last_ts = nvml_last_proc_ts_per_dev_[di];
           unsigned long long query_ts = (last_ts > 200000ull) ? (last_ts - 200000ull) : 0ull;
-          unsigned int count = 0; auto ret = nvmlDeviceGetProcessUtilization(dev, nullptr, &count, query_ts);
+          unsigned int count = 0; auto ret = A.DeviceGetProcessUtilization(dev, nullptr, &count, query_ts);
           if (ret == NVML_ERROR_INSUFFICIENT_SIZE && count > 0) {
             std::vector<nvmlProcessUtilizationSample_t> buf(count);
-            ret = nvmlDeviceGetProcessUtilization(dev, buf.data(), &count, query_ts);
+            ret = A.DeviceGetProcessUtilization(dev, buf.data(), &count, query_ts);
             if (ret == NVML_SUCCESS) {
               unsigned long long newest = last_ts;
               for (unsigned int i=0;i<count;i++) {
@@ -163,11 +216,11 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
         nvml_versions_cached_ = true;
         // Driver version
         char vbuf[128];
-        if (nvmlSystemGetDriverVersion(vbuf, sizeof(vbuf)) == NVML_SUCCESS) {
+        if (A.SystemGetDriverVersion && A.SystemGetDriverVersion(vbuf, sizeof(vbuf)) == NVML_SUCCESS) {
           cached_driver_version_ = vbuf;
         }
         // NVML version
-        if (nvmlSystemGetNVMLVersion(vbuf, sizeof(vbuf)) == NVML_SUCCESS) {
+        if (A.SystemGetNVMLVersion && A.SystemGetNVMLVersion(vbuf, sizeof(vbuf)) == NVML_SUCCESS) {
           cached_nvml_version_ = vbuf;
         }
         // CUDA version via nvidia-smi (as headers may not expose CUDA driver query across versions)
@@ -462,9 +515,15 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
 
 #ifdef MONTAUK_HAVE_NVML
 void GpuAttributor::ensure_nvml_init() {
-  if (!nvml_inited_) { nvml_inited_ = true; nvml_ok_ = (nvmlInit_v2() == NVML_SUCCESS); }
+  if (!nvml_inited_) {
+    nvml_inited_ = true;
+    const auto& A = nvml_api();
+    nvml_ok_ = A.ok && A.Init() == NVML_SUCCESS;
+  }
 }
-void GpuAttributor::nvml_shutdown_if_needed() { if (nvml_inited_ && nvml_ok_) { nvmlShutdown(); nvml_ok_ = false; } }
+void GpuAttributor::nvml_shutdown_if_needed() {
+  if (nvml_inited_ && nvml_ok_) { nvml_api().Shutdown(); nvml_ok_ = false; }
+}
 #endif
 
 } // namespace montauk::app

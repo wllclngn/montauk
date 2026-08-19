@@ -103,6 +103,40 @@ void ntsync_evt(uint8_t op, int32_t fd, uint64_t obj_ptr, int64_t result,
   emit(&e, sizeof(e));
 }
 
+void signal_evt(uint32_t kind, int32_t signal_nr, uint32_t tid, uint64_t ts,
+                const char* comm, int32_t exit_code = 0) {
+  montauk_signal_event e{};
+  e.type = TRACE_EVT_SIGNAL;
+  e.pid = 1000;
+  e.tid = tid;
+  e.kind = kind;
+  e.signal_nr = signal_nr;
+  e.sender_pid = 0;
+  e.exit_code = exit_code;
+  e.stack_depth = 0;
+  e.timestamp_ns = ts;
+  e.syscall_nr = -1;
+  e.io_fd = -1;
+  set_comm(e.comm, comm);
+  emit(&e, sizeof(e));
+}
+
+void abort_evt(uint32_t func, uint32_t line, uint32_t tid, uint64_t ts,
+               const char* comm, const char* msg, const char* loc) {
+  montauk_abort_event e{};
+  e.type = TRACE_EVT_ABORT;
+  e.pid = 1000;
+  e.tid = tid;
+  e.func = func;
+  e.line = line;
+  e.stack_depth = 0;
+  e.timestamp_ns = ts;
+  set_comm(e.comm, comm);
+  std::snprintf(e.msg, sizeof(e.msg), "%s", msg);
+  std::snprintf(e.loc, sizeof(e.loc), "%s", loc);
+  emit(&e, sizeof(e));
+}
+
 void io_evt(int32_t syscall_nr, int32_t fd, int64_t result, uint64_t count,
             uint32_t tid, uint64_t ts) {
   montauk_io_event e{};
@@ -183,10 +217,45 @@ int main(int argc, char** argv) {
     sched_evt(SCHED_OP_PREEMPT_TICK, cpu, wakee, -1, 0, run, /*budget*/1'000'000, ts + 3000);
   }
 
-  // A stranded per-CPU kthread (kstrand): emitted via the sched stream as a
-  // wake2run on its bound CPU with a long latency.
+  // STRANDED PER-CPU KTHREADS (kstrand). These are TRACE_EVT_KSTRAND records,
+  // not sched records: KStrandReport::fold() returns immediately on
+  // TRACE_EVT_SCHED and only accepts TRACE_EVT_KSTRAND.
+  //
+  // This used to emit a SCHED wake2run and call it a strand, so the event never
+  // reached the report at all -- kstrand ran its EMPTY path on every gate run,
+  // and every edit to its aggregation, ranking and quantiles passed by never
+  // executing. Two kthreads on different CPUs, with both outcomes represented:
+  // two kthreads on different CPUs so the ranking has something to order.
+  //
+  // Both land HELD (the CPU was busy through the wait), because DARK needs
+  // CPU_IDLE intervals overlapping the strand window and this fixture has none
+  // there. The DARK branch is therefore still uncovered -- stated rather than
+  // implied, since the whole point of this block is that kstrand used to look
+  // covered and was not.
   ts += 100'000;
   sched_evt(SCHED_OP_WAKE2RUN, 0, 7, -1, 0, /*lat*/5'000'000, 0, ts + 5'000'000);
+  {
+    auto kstrand_evt = [&](uint32_t tid, uint32_t cpu, uint64_t lat,
+                           uint64_t when, const char* comm) {
+      montauk_kstrand_event k{};
+      k.type = TRACE_EVT_KSTRAND;
+      k.tid = tid;
+      k.cpu = cpu;
+      k.nr_cpus_allowed = 1;
+      k.latency_ns = lat;
+      k.timestamp_ns = when;
+      std::snprintf(k.comm, sizeof(k.comm), "%s", comm);
+      emit(&k, sizeof(k));
+    };
+    // Timestamps stay INSIDE the existing window: latency_ns is the strand
+    // duration and does not have to be spanned by the trace, so placing these
+    // milliseconds apart keeps the fixture's duration -- and therefore every
+    // rate derived from it -- exactly where it was.
+    ts += 100'000;
+    kstrand_evt(801, 0,  60'000'000, ts + 1'000'000, "kworker/0:1H");
+    kstrand_evt(801, 0,  95'000'000, ts + 2'000'000, "kworker/0:1H");
+    kstrand_evt(802, 2, 140'000'000, ts + 3'000'000, "kworker/2:0H");
+  }
 
   // A cache_topology provider snapshot. Without it LocalityReport early-outs
   // with "cannot map migration distance" and its whole interval/quantile path
@@ -293,6 +362,36 @@ int main(int argc, char** argv) {
   // A worker parked on the event forever (wait enter, no matching signal after):
   ntsync_evt(NTS_WAIT_ANY, 10, 0xE0000, -999, 1002, ts + 500'000, /*count*/1, 0xE0000);
 
+  // WAIT COMPLETIONS, which the fixture had none of. result == -999 is the
+  // ENTRY sentinel, so every ntsync wait above was an entry and `waits` and
+  // `spins` never had a completion to aggregate -- they rendered their empty
+  // path on every gate run. A completion carries the signaled object index.
+  //
+  // Two shapes deliberately: a slow lock, and a TIGHT retry streak on one
+  // (tid,obj) pair, which is what `spins` looks for -- consecutive completions
+  // with a small inter-wait gap. Without the streak spins stays empty even
+  // though waits fills.
+  for (int i = 0; i < 24; ++i)
+    ntsync_evt(NTS_WAIT_ANY, 11, 0x50000, /*signaled idx*/0, 1001,
+               ts + 520'000 + static_cast<uint64_t>(i) * 40'000, 1, 0x50000);
+  // The livelock streak has to CLEAR THE DETECTOR, not merely look like one:
+  // spins wants kSpinMinIters (1000) consecutive completions on one (tid,fd)
+  // with each inter-wait gap under kSpinGapNs (1ms). A 40-iteration streak reads
+  // as a spin to a human and to nothing else -- checked, and it left spins on
+  // its empty path. 5us apart over 1000 iterations is 5ms of trace.
+  for (int i = 0; i < 1200; ++i)
+    ntsync_evt(NTS_WAIT_ANY, 12, 0xA0000, 0, 1003,
+               ts + 560'000 + static_cast<uint64_t>(i) * 5'000, 1, 0xA0000);
+
+  // FUTEX WAITS reach the same reports by the other door: an IO record whose
+  // syscall_nr is futex(202) and whose low fd bits carry a wait op. `futex` had
+  // no input at all, so its blocked-thread scan never ran.
+  for (int i = 0; i < 12; ++i)
+    io_evt(/*futex*/202, /*op FUTEX_WAIT*/0, 0, 0xF00000,
+           1004, ts + 600'000 + static_cast<uint64_t>(i) * 30'000);
+  // One left open at trace end: a thread still blocked on a futex.
+  io_evt(202, 0, -999, 0xF00000, 1005, ts + 980'000);
+
   // io: read/write pairs, then a poll left pending at trace end (iowait).
   ts += 600'000;
   for (int i = 0; i < 32; ++i) {
@@ -300,6 +399,26 @@ int main(int argc, char** argv) {
     io_evt(/*write*/1, 6, 256, 256, 1001, ts + static_cast<uint64_t>(i) * 2000 + 500);
   }
   io_evt(/*ppoll pending*/271, 9, -999, 0, 1002, ts + 100'000); // parked in poll
+
+  // SIGNALS, which the fixture carried none of -- so `signals` rendered "no
+  // signal events in trace" on every gate run and `abortpm`, which correlates a
+  // SIGABRT against the aborting thread's live allocations, never correlated
+  // anything. Two shapes: deliveries inside the trailing teardown window, and
+  // one MID-TRACE death, which is the distinction the report exists to draw.
+  ts += 50'000;
+  signal_evt(/*SIGEVT_DELIVER*/0, /*SIGSEGV*/11, 1006, ts, "crasher");
+  signal_evt(/*SIGEVT_EXIT_ABNL*/1, /*SIGSEGV*/11, 1006, ts + 1'000, "crasher", 139);
+  // SIGABRT with live allocations outstanding: the abort-postmortem case.
+  heap_evt(HEAP_OP_MALLOC, 0xABC000, 4096, 1007, ts + 2'000);
+  heap_evt(HEAP_OP_MALLOC, 0xABD000, 8192, 1007, ts + 3'000);
+  signal_evt(/*SIGEVT_DELIVER*/0, /*SIGABRT*/6, 1007, ts + 4'000, "aborter");
+  signal_evt(/*SIGEVT_EXIT_ABNL*/1, /*SIGABRT*/6, 1007, ts + 5'000, "aborter", 134);
+  // abortpm reads TRACE_EVT_ABORT, a record of its own -- a SIGABRT delivery is
+  // NOT one, which is why adding signals alone left it on its empty path. The
+  // report correlates the abort against the thread's live allocations, so the
+  // two mallocs above are its evidence.
+  abort_evt(/*abort_fn*/0, /*line*/42, 1007, ts + 4'500, "aborter",
+            "buf != nullptr", "src/render/mesh.c");
 
   // heap: matched malloc/free, then a double free.
   ts += 200'000;

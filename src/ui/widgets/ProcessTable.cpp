@@ -1,4 +1,7 @@
 #include "ui/widgets/ProcessTable.hpp"
+#include <string_view>
+#include <cstring>
+#include <charconv>
 #include "ui/Config.hpp"
 #include "ui/Terminal.hpp"
 #include "ui/Formatting.hpp"
@@ -185,16 +188,30 @@ void ProcessTable::render(widget::Canvas& canvas,
   // 1. Smooth + sort + filter. Each process is smoothed exactly once per
   // frame; the smoothed value is carried through to render via `sm` so the
   // rendered CPU% always matches the sort key.
-  std::vector<size_t> order(s.procs.processes.size());
+  // Reused across frames rather than reallocated on each. render() runs once per
+  // frame on the UI thread, and these two vectors are sized by the process
+  // count -- so a fresh pair every frame is two allocations and two frees per
+  // frame for buffers whose size barely changes. thread_local keeps the
+  // function reentrant-by-thread while letting the capacity persist; the
+  // pattern the sort dispatch already uses for its scratch.
+  thread_local std::vector<size_t> order;
+  thread_local std::vector<double> sm;
+  order.resize(s.procs.processes.size());
   std::iota(order.begin(), order.end(), 0);
-  std::vector<double> sm(order.size(), 0.0);
+  sm.assign(order.size(), 0.0);
   {
-    std::string key;
+    // The key is built in a stack buffer, not a std::string: this runs once per
+    // process per frame, and std::to_string allocated a temporary every time.
+    // smooth_value hashes transparently, so a view over these bytes is enough.
+    char keybuf[32];
+    std::memcpy(keybuf, "proc.cpu.", 9);
     for (size_t i = 0; i < order.size(); ++i) {
       const auto& p = s.procs.processes[i];
-      key.assign("proc.cpu.");
-      key += std::to_string(p.pid);
-      sm[i] = montauk::ui::smooth_value(key, scale_proc_cpu(p.cpu_pct), 0.35);
+      auto [end, ec] = std::to_chars(keybuf + 9, keybuf + sizeof keybuf, p.pid);
+      if (ec != std::errc{}) continue;       // pid longer than the buffer: cannot happen
+      sm[i] = montauk::ui::smooth_value(
+          std::string_view(keybuf, static_cast<size_t>(end - keybuf)),
+          scale_proc_cpu(p.cpu_pct), 0.35);
     }
   }
 

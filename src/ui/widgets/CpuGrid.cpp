@@ -1,4 +1,5 @@
 #include "ui/widgets/CpuGrid.hpp"
+#include "ui/Formatting.hpp"
 #include "ui/Config.hpp"
 #include "ui/widget/GraphicsProtocol.hpp"
 #include "app/ChartHistories.hpp"
@@ -209,12 +210,9 @@ void CpuGrid::render(widget::Canvas& canvas,
     }
   }
 
-  // Forward-pass EMA smoother — same alpha as ChartPanel uses on the
-  // PROCESSOR chart so per-core mini-charts read with the same character.
-  auto ema_smooth = [](std::vector<float>& v, float a) {
-    if (v.size() < 2) return;
-    for (size_t k = 1; k < v.size(); ++k) v[k] = a * v[k] + (1.0f - a) * v[k - 1];
-  };
+  // Same alpha as ChartPanel uses on the PROCESSOR chart, and now literally the
+  // same function, so per-core mini-charts cannot drift from it.
+  using montauk::ui::ema_smooth;
 
   // Render each visible cell.
   for (int row = first_row; row < last_row; ++row) {
@@ -275,10 +273,11 @@ void CpuGrid::render(widget::Canvas& canvas,
 
       // Throttled emit (1 Hz at 4 Hz producer) — same cadence ChartPanel
       // uses. First frame and resizes always emit.
-      const bool must_emit     = !cell.placed || cell.chart.dirty_full();
-      const bool throttle_emit = (cell.frame_tick % 4) == 0;
+      const bool must_emit = !cell.placed || cell.chart.dirty_full();
+      const bool emit_now =
+          montauk::ui::chart_should_emit(cell.frame_tick, must_emit);
       cell.frame_tick++;
-      if (!must_emit && !throttle_emit) continue;
+      if (!emit_now) continue;
 
       std::string esc = gfx.emit_full(cell.image_id,
                                        cell_inner.x, cell_inner.y,

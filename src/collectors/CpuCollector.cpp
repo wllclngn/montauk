@@ -1,4 +1,5 @@
 #include "collectors/CpuCollector.hpp"
+#include <charconv>
 #include "util/Procfs.hpp"
 #include <string>
 #include <sstream>
@@ -25,7 +26,15 @@ static void parse_cpu_line(const std::string_view& line, montauk::model::CpuTime
     size_t end = start;
     while (end < rest.size() && rest[end] >= '0' && rest[end] <= '9') ++end;
     if (end > start) {
-      vals[i++] = std::strtoull(std::string(rest.substr(start, end - start)).c_str(), nullptr, 10);
+      // from_chars over the view: the bounds above are already digit-delimited,
+      // so building a std::string just to null-terminate it was one allocation
+      // per FIELD per core per tick. Disk, Net and ProcessParsing already parse
+      // this way; this collector was the odd one out.
+      uint64_t v = 0;
+      auto [ptr, ec] = std::from_chars(rest.data() + start, rest.data() + end, v);
+      (void)ptr;
+      if (ec == std::errc{}) vals[i] = v;
+      ++i;
     }
     start = end + 1;
   }
@@ -98,7 +107,8 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
     else if (line.starts_with("ctxt ")) {
       size_t pos = line.find(' ');
       if (pos != std::string::npos) {
-        ctxt = std::strtoull(std::string(line.substr(pos + 1)).c_str(), nullptr, 10);
+        std::string_view t = line.substr(pos + 1);
+        std::from_chars(t.data(), t.data() + t.size(), ctxt);
       }
     }
     else if (line.starts_with("intr ")) {
@@ -108,9 +118,9 @@ bool CpuCollector::sample(montauk::model::CpuSnapshot& out) {
         std::string_view rest = line.substr(pos + 1);
         size_t space_pos = rest.find(' ');
         if (space_pos != std::string::npos) {
-          intr = std::strtoull(std::string(rest.substr(0, space_pos)).c_str(), nullptr, 10);
+          std::from_chars(rest.data(), rest.data() + space_pos, intr);
         } else {
-          intr = std::strtoull(std::string(rest).c_str(), nullptr, 10);
+          std::from_chars(rest.data(), rest.data() + rest.size(), intr);
         }
       }
     }

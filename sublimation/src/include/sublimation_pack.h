@@ -127,6 +127,23 @@ SUB_API void sublimation_pack_sort_f64_with_scratch(
     const double *keys, uint32_t *indices, size_t n, bool descending,
     sublimation_pack64_slot *scratch);
 
+// MULTI-KEY STABLE SORT, composed from the single-key one above.
+//
+// Stably refines an existing row-index permutation `order` (n entries) by one
+// more key column, applied LEAST significant first. Gather each row's key in
+// the CURRENT order, sort with an identity payload so ties fall back to the
+// order earlier passes established, then scatter the row indices back through
+// the resulting permutation. Called once per key with the primary key LAST, it
+// composes into a full lexicographic sort -- no new sort algorithm.
+//
+// This lived in the CLI, which put a sorting algorithm in a front end where no
+// second caller could reach it and where its only coverage was an end-to-end
+// golden. Best-effort: `order` is left unchanged if scratch cannot be
+// allocated. Returns true when the refinement was applied.
+SUB_API bool sublimation_refine_order_f64(
+    uint32_t *order, const double *key_by_row, size_t n, bool descending);
+
+
 #ifdef __cplusplus
 }
 #endif

@@ -368,8 +368,65 @@ static void test_f64_shape(size_t n, bool desc, shape_t s, const char *name) {
     free(keys); free(indices); free(ref);
 }
 
+// MULTI-KEY COMPOSITION. sublimation_refine_order_f64 is the lexicographic sort
+// built from the single-key one: applied once per key, LEAST significant first,
+// it must produce a full multi-key ordering. This lived in the CLI and was
+// covered only end-to-end through a golden, so a composition bug could only
+// ever surface as a diff in a text file.
+//
+// The oracle is an explicit two-key comparison over the same rows -- not a
+// second call to the same function, which would prove nothing.
+typedef struct { double primary, secondary; uint32_t index; } row2_t;
+
+static int row2_cmp(const void *a, const void *b) {
+    const row2_t *x = (const row2_t *)a, *y = (const row2_t *)b;
+    if (x->primary < y->primary) return -1;
+    if (x->primary > y->primary) return 1;
+    if (x->secondary < y->secondary) return -1;
+    if (x->secondary > y->secondary) return 1;
+    return (x->index < y->index) ? -1 : (x->index > y->index);
+}
+
+static void test_refine_multikey(size_t n, const char *name) {
+    double *primary = (double *)malloc(n * sizeof(double));
+    double *secondary = (double *)malloc(n * sizeof(double));
+    uint32_t *order = (uint32_t *)malloc(n * sizeof(uint32_t));
+    row2_t *ref = (row2_t *)malloc(n * sizeof(row2_t));
+    for (size_t i = 0; i < n; i++) {
+        // Few distinct primaries, so ties are the common case -- ties are the
+        // whole reason the composition has to be stable.
+        primary[i] = (double)(lcg_next() % 5);
+        secondary[i] = (double)(lcg_next() % 50);
+        order[i] = (uint32_t)i;
+        ref[i].primary = primary[i];
+        ref[i].secondary = secondary[i];
+        ref[i].index = (uint32_t)i;
+    }
+    qsort(ref, n, sizeof(row2_t), row2_cmp);
+
+    // Least significant first, primary last: the documented call order.
+    sublimation_refine_order_f64(order, secondary, n, false);
+    sublimation_refine_order_f64(order, primary, n, false);
+
+    int ok = 1;
+    for (size_t i = 0; i < n; i++) {
+        if (order[i] != ref[i].index) {
+            fprintf(stderr, "  [FAIL] %s: position %zu: got idx %u (%.0f,%.0f); "
+                    "expected idx %u (%.0f,%.0f)\n", name, i,
+                    order[i], primary[order[i]], secondary[order[i]],
+                    ref[i].index, ref[i].primary, ref[i].secondary);
+            ok = 0; break;
+        }
+    }
+    if (ok) { printf("  %-50s PASS\n", name); _pass++; } else { _fail++; }
+    free(primary); free(secondary); free(order); free(ref);
+}
+
 int main(void) {
     lcg_seed(0xC0DEFEEDull);
+    test_refine_multikey(64, "refine_multikey_64");
+    test_refine_multikey(4096, "refine_multikey_4k");
+
     test_u32(100, false, "u32_asc_100");
     test_u32(100, true,  "u32_desc_100");
     test_u32(10000, false, "u32_asc_10k");

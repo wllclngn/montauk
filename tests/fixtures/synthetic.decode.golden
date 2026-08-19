@@ -8286,212 +8286,170 @@
 [   118.001] SCHED SWITCH_IN      cpu=3   pid=1001   
 [   100.003] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3740000 budget=1000000
 [   105.100] SCHED WAKE2RUN       cpu=0   pid=7       wake2run=5000us
-[   100.200] PROVIDER cache_topology snapshot bytes=228
-[   100.257] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
-[   100.311] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
-[   100.372] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
-[   100.440] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
-[   100.480] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
-[   100.527] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
-[   100.581] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
-[   100.642] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
-[   100.710] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
-[   100.750] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
-[   100.797] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
-[   100.851] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
-[   100.912] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
-[   100.980] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
-[   101.020] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
-[   101.067] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
-[   101.121] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
-[   101.182] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
-[   101.250] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
-[   101.290] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
-[   101.337] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
-[   101.391] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
-[   101.452] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
-[   101.520] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
-[   101.560] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
-[   101.607] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
-[   101.661] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
-[   101.722] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
-[   101.790] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
-[   101.830] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
-[   101.877] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
-[   101.931] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
-[   101.992] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
-[   102.060] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
-[   102.100] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
-[   102.250] SCHED KICK_ISSUE     cpu=0   pid=-1      issuing_cpu=-1 flags=0x0
-[   102.253] SCHED RESCHED        cpu=0   pid=-1      calling_cpu=-1
-[   102.300] SCHED KICK_ISSUE     cpu=1   pid=-1      issuing_cpu=-1 flags=0x0
-[   102.305] SCHED RESCHED        cpu=1   pid=-1      calling_cpu=-1
-[   102.350] SCHED KICK_ISSUE     cpu=2   pid=-1      issuing_cpu=-1 flags=0x0
-[   102.356] SCHED RESCHED        cpu=2   pid=-1      calling_cpu=-1
-[   102.400] SCHED KICK_ISSUE     cpu=3   pid=-1      issuing_cpu=-1 flags=0x0
-[   102.407] SCHED RESCHED        cpu=3   pid=-1      calling_cpu=-1
-[   102.450] SCHED KICK_ISSUE     cpu=0   pid=-1      issuing_cpu=-1 flags=0x0
-[   102.500] SCHED KICK_ISSUE     cpu=1   pid=-1      issuing_cpu=-1 flags=0x0
-[   102.504] SCHED RESCHED        cpu=1   pid=-1      calling_cpu=-1
-[   102.550] SCHED KICK_ISSUE     cpu=2   pid=-1      issuing_cpu=-1 flags=0x0
-[   102.556] SCHED RESCHED        cpu=2   pid=-1      calling_cpu=-1
-[   102.600] SCHED KICK_ISSUE     cpu=3   pid=-1      issuing_cpu=-1 flags=0x0
-[   102.608] SCHED RESCHED        cpu=3   pid=-1      calling_cpu=-1
-[   102.650] SCHED KICK_ISSUE     cpu=0   pid=-1      issuing_cpu=-1 flags=0x0
-[   102.653] SCHED RESCHED        cpu=0   pid=-1      calling_cpu=-1
-[   102.700] SCHED KICK_ISSUE     cpu=1   pid=-1      issuing_cpu=-1 flags=0x0
-[   102.750] SCHED KICK_ISSUE     cpu=2   pid=-1      issuing_cpu=-1 flags=0x0
-[   102.756] SCHED RESCHED        cpu=2   pid=-1      calling_cpu=-1
-[   102.800] SCHED KICK_ISSUE     cpu=3   pid=-1      issuing_cpu=-1 flags=0x0
-[   102.808] SCHED RESCHED        cpu=3   pid=-1      calling_cpu=-1
-[   102.901] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.902] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.903] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.904] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.905] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.906] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.907] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.908] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.909] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.910] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.911] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.912] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.913] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.914] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.915] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.916] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.917] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.918] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.919] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.920] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.921] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.922] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.923] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.924] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.925] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.926] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.927] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.928] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.929] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.930] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.931] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.932] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.933] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.934] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.935] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.936] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.937] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.938] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.939] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.940] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.941] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.942] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.943] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.944] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.945] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.946] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.947] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.948] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.949] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.950] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.951] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.952] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.953] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.954] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.955] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.956] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.957] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.958] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.959] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.960] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.961] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.962] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.963] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.964] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.965] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.966] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.967] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.968] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.969] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.970] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.971] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.972] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.973] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.974] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.975] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.976] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.977] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.978] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.979] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.980] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.981] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.982] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.983] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.984] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.985] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.986] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.987] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.988] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.989] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.990] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.991] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.992] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.993] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.994] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   102.995] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   102.996] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
-[   102.997] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
-[   102.998] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
-[   102.999] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
-[   103.000] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
-[   103.100] NTSYNC create_event  pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.101] NTSYNC create_sem    pid=1000    tid=1001    fd=11   result=0 objptr=0x50000
-[   103.102] NTSYNC create_mutex  pid=1000    tid=1001    fd=12   result=0 objptr=0xa0000
-[   103.110] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.111] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.112] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   103.115] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.116] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.120] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.121] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.125] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.126] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.130] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.131] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.132] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   103.135] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.136] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.140] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.141] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.145] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.146] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.150] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.151] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.152] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   103.155] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.156] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.160] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.161] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.165] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.166] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.170] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.171] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.172] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   103.175] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.176] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.180] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.181] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.185] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.186] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.190] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.191] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.192] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
-[   103.195] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.196] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.200] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.201] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.205] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.206] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   101.200] KSTRAND cpu=0   tid=801     kworker/0:1H     strand=60000us
+[   102.200] KSTRAND cpu=0   tid=801     kworker/0:1H     strand=95000us
+[   103.200] KSTRAND cpu=2   tid=802     kworker/2:0H     strand=140000us
+[   100.300] PROVIDER cache_topology snapshot bytes=228
+[   100.357] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   100.411] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   100.472] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
+[   100.540] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   100.580] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   100.627] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
+[   100.681] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   100.742] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   100.810] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
+[   100.850] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   100.897] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   100.951] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
+[   101.012] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   101.080] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.120] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
+[   101.167] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.221] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   101.282] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
+[   101.350] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   101.390] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.437] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
+[   101.491] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.552] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   101.620] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
+[   101.660] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   101.707] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.761] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
+[   101.822] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   101.890] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   101.930] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
+[   101.977] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   102.031] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   102.092] SCHED WAKE2RUN       cpu=3   pid=1002    wake2run=12us
+[   102.160] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=12us
+[   102.200] SCHED WAKE2RUN       cpu=1   pid=1002    wake2run=12us
+[   102.350] SCHED KICK_ISSUE     cpu=0   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.353] SCHED RESCHED        cpu=0   pid=-1      calling_cpu=-1
+[   102.400] SCHED KICK_ISSUE     cpu=1   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.404] SCHED RESCHED        cpu=1   pid=-1      calling_cpu=-1
+[   102.450] SCHED KICK_ISSUE     cpu=2   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.456] SCHED RESCHED        cpu=2   pid=-1      calling_cpu=-1
+[   102.500] SCHED KICK_ISSUE     cpu=3   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.507] SCHED RESCHED        cpu=3   pid=-1      calling_cpu=-1
+[   102.550] SCHED KICK_ISSUE     cpu=0   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.600] SCHED KICK_ISSUE     cpu=1   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.605] SCHED RESCHED        cpu=1   pid=-1      calling_cpu=-1
+[   102.650] SCHED KICK_ISSUE     cpu=2   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.656] SCHED RESCHED        cpu=2   pid=-1      calling_cpu=-1
+[   102.700] SCHED KICK_ISSUE     cpu=3   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.707] SCHED RESCHED        cpu=3   pid=-1      calling_cpu=-1
+[   102.750] SCHED KICK_ISSUE     cpu=0   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.753] SCHED RESCHED        cpu=0   pid=-1      calling_cpu=-1
+[   102.800] SCHED KICK_ISSUE     cpu=1   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.850] SCHED KICK_ISSUE     cpu=2   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.856] SCHED RESCHED        cpu=2   pid=-1      calling_cpu=-1
+[   102.900] SCHED KICK_ISSUE     cpu=3   pid=-1      issuing_cpu=-1 flags=0x0
+[   102.907] SCHED RESCHED        cpu=3   pid=-1      calling_cpu=-1
+[   103.001] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.002] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.003] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.004] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.005] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.006] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.007] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.008] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.009] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.010] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.011] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.012] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.013] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.014] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.015] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.016] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.017] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.018] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.019] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.020] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.021] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.022] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.023] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.024] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.025] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.026] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.027] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.028] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.029] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.030] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.031] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.032] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.033] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.034] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.035] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.036] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.037] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.038] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.039] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.040] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.041] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.042] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.043] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.044] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.045] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.046] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.047] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.048] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.049] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.050] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.051] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.052] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.053] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.054] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.055] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.056] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.057] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.058] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.059] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.060] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.061] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.062] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.063] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.064] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.065] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.066] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.067] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.068] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.069] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.070] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.071] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.072] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.073] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.074] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.075] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.076] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.077] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.078] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.079] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.080] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.081] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.082] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.083] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.084] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.085] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.086] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.087] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.088] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.089] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.090] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.091] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.092] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.093] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.094] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.095] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.096] SCHED ENQUEUE        cpu=0   pid=1000    last_cpu=-1 sub=0 score=9007199254740992
+[   103.097] SCHED ENQUEUE        cpu=0   pid=1001    last_cpu=-1 sub=0 score=2251799813685248
+[   103.098] SCHED ENQUEUE        cpu=0   pid=1002    last_cpu=-1 sub=0 score=2251799813685248
+[   103.099] SCHED ENQUEUE        cpu=0   pid=1003    last_cpu=-1 sub=0 score=1125899906842624
+[   103.100] SCHED ENQUEUE        cpu=0   pid=1004    last_cpu=-1 sub=0 score=281474976710656
+[   103.200] NTSYNC create_event  pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.201] NTSYNC create_sem    pid=1000    tid=1001    fd=11   result=0 objptr=0x50000
+[   103.202] NTSYNC create_mutex  pid=1000    tid=1001    fd=12   result=0 objptr=0xa0000
 [   103.210] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
 [   103.211] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
 [   103.212] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
@@ -8591,75 +8549,1364 @@
 [   103.421] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
 [   103.425] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
 [   103.426] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
-[   103.600] NTSYNC wait_any      pid=1000    tid=1002    fd=10   result=-999 objs=[10] objptrs=[0xe0000]
-[   103.700] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.701] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.702] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.703] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.704] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.704] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.706] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.707] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.708] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.709] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.710] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.710] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.712] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.713] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.714] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.715] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.716] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.716] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.718] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.719] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.720] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.721] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.722] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.722] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.724] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.725] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.726] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.727] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.728] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.728] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.730] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.731] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.732] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.733] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.734] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.734] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.736] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.737] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.738] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.739] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.740] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.740] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.742] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.743] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.744] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.745] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.746] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.746] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.748] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.749] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.750] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.751] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.752] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.752] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.754] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.754] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.756] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.757] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.758] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.758] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.760] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.760] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.762] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
-[   103.763] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
-[   103.800] IO     ppoll         pid=1000    tid=1002    fd=9    count=0 result=-999 comm='worker'
-[   103.900] HEAP   malloc    pid=1000    tid=1001    addr=0x0000000000aaaa00 size=128 comm='worker'
-[   103.901] HEAP   free      pid=1000    tid=1001    addr=0x0000000000aaaa00 size=0 comm='worker'
-[   103.902] HEAP   malloc    pid=1000    tid=1001    addr=0x0000000000bbbb00 size=256 comm='worker'
-[   103.903] HEAP   free      pid=1000    tid=1001    addr=0x0000000000bbbb00 size=0 comm='worker'
-[   103.904] HEAP   free      pid=1000    tid=1001    addr=0x0000000000bbbb00 size=0 comm='worker'
-# 8667 events
+[   103.430] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.431] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.432] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.435] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.436] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.440] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.441] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.445] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.446] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.450] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.451] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.452] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.455] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.456] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.460] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.461] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.465] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.466] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.470] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.471] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.472] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.475] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.476] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.480] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.481] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.485] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.486] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.490] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.491] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.492] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.495] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.496] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.500] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.501] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.505] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.506] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.510] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.511] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.512] NTSYNC sem_release   pid=1000    tid=1001    fd=11   result=1 objptr=0x50000
+[   103.515] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.516] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.520] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.521] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.525] NTSYNC event_set     pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.526] NTSYNC event_reset   pid=1000    tid=1001    fd=10   result=0 objptr=0xe0000
+[   103.700] NTSYNC wait_any      pid=1000    tid=1002    fd=10   result=-999 objs=[10] objptrs=[0xe0000]
+[   103.720] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   103.760] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   103.800] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   103.840] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   103.880] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   103.920] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   103.960] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.000] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.040] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.080] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.120] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.160] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.200] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.240] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.280] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.320] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.360] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.400] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.440] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.480] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.520] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.560] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.600] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   104.640] NTSYNC wait_any      pid=1000    tid=1001    fd=11   result=0 objs=[11] objptrs=[0x50000]
+[   103.760] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.765] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.770] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.775] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.780] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.785] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.790] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.795] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.800] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.805] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.810] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.815] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.820] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.825] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.830] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.835] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.840] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.845] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.850] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.855] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.860] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.865] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.870] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.875] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.880] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.885] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.890] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.895] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.900] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.905] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.910] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.915] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.920] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.925] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.930] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.935] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.940] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.945] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.950] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.955] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.960] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.965] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.970] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.975] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.980] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.985] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.990] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.995] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.000] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.005] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.010] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.015] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.020] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.025] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.030] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.035] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.040] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.045] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.050] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.055] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.060] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.065] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.070] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.075] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.080] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.085] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.090] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.095] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.100] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.105] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.110] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.115] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.120] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.125] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.130] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.135] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.140] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.145] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.150] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.155] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.160] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.165] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.170] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.175] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.180] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.185] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.190] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.195] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.200] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.205] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.210] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.215] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.220] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.225] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.230] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.235] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.240] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.245] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.250] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.255] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.260] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.265] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.270] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.275] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.280] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.285] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.290] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.295] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.300] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.305] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.310] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.315] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.320] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.325] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.330] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.335] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.340] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.345] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.350] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.355] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.360] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.365] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.370] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.375] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.380] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.385] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.390] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.395] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.400] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.405] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.410] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.415] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.420] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.425] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.430] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.435] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.440] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.445] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.450] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.455] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.460] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.465] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.470] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.475] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.480] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.485] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.490] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.495] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.500] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.505] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.510] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.515] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.520] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.525] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.530] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.535] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.540] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.545] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.550] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.555] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.560] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.565] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.570] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.575] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.580] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.585] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.590] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.595] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.600] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.605] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.610] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.615] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.620] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.625] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.630] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.635] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.640] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.645] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.650] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.655] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.660] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.665] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.670] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.675] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.680] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.685] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.690] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.695] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.700] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.705] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.710] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.715] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.720] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.725] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.730] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.735] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.740] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.745] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.750] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.755] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.760] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.765] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.770] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.775] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.780] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.785] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.790] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.795] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.800] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.805] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.810] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.815] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.820] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.825] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.830] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.835] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.840] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.845] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.850] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.855] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.860] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.865] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.870] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.875] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.880] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.885] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.890] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.895] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.900] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.905] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.910] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.915] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.920] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.925] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.930] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.935] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.940] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.945] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.950] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.955] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.960] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.965] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.970] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.975] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.980] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.985] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.990] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   104.995] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.000] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.005] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.010] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.015] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.020] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.025] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.030] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.035] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.040] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.045] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.050] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.055] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.060] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.065] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.070] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.075] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.080] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.085] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.090] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.095] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.100] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.105] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.110] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.115] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.120] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.125] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.130] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.135] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.140] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.145] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.150] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.155] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.160] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.165] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.170] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.175] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.180] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.185] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.190] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.195] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.200] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.205] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.210] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.215] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.220] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.225] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.230] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.235] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.240] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.245] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.250] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.255] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.260] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.265] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.270] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.275] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.280] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.285] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.290] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.295] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.300] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.305] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.310] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.315] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.320] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.325] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.330] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.335] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.340] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.345] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.350] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.355] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.360] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.365] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.370] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.375] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.380] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.385] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.390] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.395] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.400] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.405] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.410] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.415] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.420] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.425] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.430] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.435] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.440] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.445] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.450] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.455] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.460] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.465] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.470] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.475] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.480] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.485] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.490] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.495] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.500] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.505] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.510] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.515] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.520] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.525] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.530] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.535] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.540] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.545] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.550] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.555] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.560] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.565] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.570] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.575] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.580] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.585] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.590] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.595] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.600] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.605] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.610] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.615] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.620] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.625] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.630] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.635] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.640] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.645] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.650] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.655] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.660] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.665] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.670] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.675] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.680] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.685] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.690] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.695] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.700] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.705] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.710] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.715] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.720] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.725] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.730] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.735] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.740] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.745] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.750] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.755] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.760] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.765] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.770] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.775] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.780] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.785] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.790] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.795] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.800] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.805] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.810] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.815] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.820] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.825] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.830] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.835] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.840] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.845] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.850] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.855] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.860] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.865] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.870] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.875] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.880] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.885] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.890] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.895] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.900] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.905] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.910] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.915] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.920] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.925] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.930] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.935] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.940] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.945] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.950] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.955] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.960] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.965] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.970] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.975] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.980] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.985] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.990] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   105.995] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.000] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.005] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.010] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.015] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.020] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.025] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.030] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.035] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.040] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.045] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.050] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.055] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.060] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.065] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.070] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.075] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.080] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.085] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.090] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.095] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.100] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.105] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.110] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.115] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.120] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.125] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.130] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.135] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.140] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.145] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.150] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.155] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.160] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.165] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.170] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.175] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.180] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.185] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.190] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.195] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.200] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.205] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.210] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.215] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.220] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.225] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.230] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.235] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.240] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.245] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.250] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.255] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.260] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.265] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.270] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.275] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.280] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.285] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.290] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.295] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.300] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.305] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.310] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.315] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.320] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.325] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.330] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.335] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.340] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.345] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.350] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.355] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.360] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.365] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.370] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.375] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.380] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.385] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.390] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.395] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.400] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.405] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.410] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.415] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.420] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.425] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.430] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.435] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.440] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.445] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.450] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.455] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.460] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.465] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.470] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.475] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.480] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.485] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.490] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.495] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.500] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.505] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.510] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.515] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.520] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.525] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.530] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.535] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.540] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.545] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.550] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.555] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.560] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.565] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.570] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.575] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.580] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.585] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.590] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.595] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.600] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.605] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.610] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.615] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.620] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.625] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.630] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.635] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.640] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.645] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.650] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.655] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.660] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.665] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.670] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.675] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.680] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.685] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.690] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.695] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.700] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.705] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.710] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.715] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.720] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.725] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.730] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.735] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.740] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.745] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.750] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.755] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.760] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.765] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.770] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.775] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.780] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.785] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.790] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.795] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.800] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.805] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.810] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.815] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.820] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.825] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.830] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.835] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.840] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.845] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.850] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.855] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.860] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.865] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.870] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.875] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.880] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.885] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.890] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.895] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.900] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.905] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.910] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.915] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.920] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.925] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.930] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.935] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.940] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.945] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.950] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.955] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.960] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.965] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.970] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.975] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.980] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.985] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.990] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   106.995] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.000] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.005] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.010] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.015] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.020] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.025] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.030] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.035] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.040] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.045] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.050] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.055] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.060] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.065] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.070] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.075] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.080] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.085] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.090] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.095] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.100] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.105] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.110] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.115] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.120] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.125] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.130] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.135] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.140] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.145] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.150] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.155] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.160] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.165] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.170] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.175] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.180] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.185] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.190] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.195] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.200] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.205] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.210] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.215] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.220] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.225] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.230] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.235] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.240] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.245] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.250] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.255] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.260] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.265] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.270] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.275] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.280] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.285] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.290] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.295] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.300] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.305] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.310] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.315] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.320] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.325] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.330] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.335] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.340] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.345] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.350] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.355] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.360] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.365] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.370] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.375] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.380] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.385] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.390] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.395] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.400] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.405] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.410] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.415] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.420] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.425] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.430] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.435] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.440] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.445] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.450] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.455] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.460] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.465] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.470] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.475] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.480] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.485] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.490] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.495] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.500] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.505] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.510] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.515] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.520] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.525] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.530] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.535] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.540] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.545] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.550] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.555] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.560] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.565] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.570] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.575] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.580] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.585] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.590] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.595] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.600] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.605] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.610] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.615] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.620] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.625] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.630] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.635] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.640] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.645] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.650] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.655] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.660] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.665] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.670] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.675] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.680] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.685] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.690] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.695] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.700] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.705] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.710] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.715] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.720] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.725] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.730] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.735] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.740] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.745] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.750] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.755] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.760] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.765] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.770] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.775] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.780] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.785] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.790] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.795] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.800] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.805] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.810] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.815] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.820] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.825] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.830] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.835] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.840] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.845] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.850] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.855] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.860] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.865] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.870] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.875] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.880] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.885] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.890] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.895] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.900] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.905] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.910] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.915] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.920] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.925] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.930] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.935] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.940] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.945] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.950] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.955] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.960] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.965] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.970] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.975] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.980] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.985] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.990] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   107.995] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.000] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.005] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.010] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.015] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.020] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.025] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.030] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.035] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.040] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.045] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.050] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.055] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.060] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.065] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.070] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.075] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.080] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.085] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.090] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.095] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.100] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.105] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.110] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.115] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.120] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.125] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.130] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.135] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.140] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.145] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.150] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.155] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.160] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.165] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.170] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.175] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.180] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.185] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.190] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.195] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.200] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.205] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.210] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.215] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.220] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.225] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.230] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.235] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.240] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.245] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.250] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.255] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.260] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.265] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.270] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.275] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.280] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.285] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.290] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.295] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.300] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.305] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.310] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.315] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.320] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.325] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.330] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.335] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.340] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.345] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.350] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.355] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.360] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.365] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.370] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.375] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.380] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.385] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.390] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.395] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.400] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.405] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.410] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.415] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.420] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.425] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.430] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.435] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.440] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.445] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.450] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.455] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.460] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.465] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.470] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.475] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.480] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.485] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.490] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.495] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.500] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.505] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.510] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.515] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.520] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.525] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.530] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.535] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.540] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.545] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.550] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.555] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.560] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.565] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.570] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.575] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.580] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.585] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.590] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.595] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.600] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.605] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.610] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.615] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.620] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.625] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.630] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.635] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.640] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.645] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.650] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.655] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.660] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.665] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.670] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.675] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.680] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.685] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.690] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.695] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.700] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.705] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.710] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.715] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.720] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.725] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.730] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.735] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.740] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.745] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.750] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.755] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.760] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.765] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.770] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.775] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.780] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.785] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.790] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.795] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.800] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.805] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.810] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.815] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.820] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.825] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.830] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.835] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.840] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.845] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.850] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.855] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.860] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.865] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.870] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.875] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.880] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.885] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.890] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.895] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.900] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.905] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.910] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.915] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.920] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.925] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.930] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.935] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.940] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.945] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.950] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.955] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.960] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.965] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.970] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.975] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.980] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.985] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.990] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   108.995] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.000] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.005] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.010] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.015] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.020] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.025] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.030] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.035] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.040] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.045] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.050] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.055] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.060] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.065] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.070] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.075] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.080] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.085] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.090] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.095] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.100] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.105] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.110] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.115] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.120] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.125] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.130] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.135] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.140] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.145] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.150] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.155] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.160] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.165] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.170] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.175] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.180] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.185] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.190] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.195] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.200] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.205] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.210] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.215] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.220] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.225] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.230] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.235] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.240] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.245] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.250] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.255] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.260] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.265] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.270] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.275] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.280] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.285] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.290] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.295] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.300] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.305] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.310] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.315] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.320] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.325] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.330] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.335] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.340] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.345] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.350] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.355] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.360] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.365] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.370] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.375] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.380] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.385] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.390] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.395] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.400] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.405] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.410] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.415] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.420] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.425] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.430] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.435] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.440] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.445] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.450] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.455] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.460] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.465] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.470] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.475] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.480] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.485] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.490] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.495] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.500] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.505] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.510] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.515] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.520] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.525] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.530] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.535] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.540] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.545] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.550] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.555] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.560] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.565] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.570] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.575] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.580] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.585] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.590] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.595] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.600] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.605] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.610] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.615] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.620] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.625] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.630] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.635] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.640] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.645] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.650] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.655] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.660] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.665] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.670] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.675] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.680] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.685] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.690] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.695] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.700] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.705] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.710] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.715] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.720] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.725] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.730] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.735] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.740] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.745] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.750] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   109.755] NTSYNC wait_any      pid=1000    tid=1003    fd=12   result=0 objs=[12] objptrs=[0xa0000]
+[   103.800] IO     ?             pid=1000    tid=1004    fd=0    count=15728640 result=0 comm='worker'
+[   103.830] IO     ?             pid=1000    tid=1004    fd=0    count=15728640 result=0 comm='worker'
+[   103.860] IO     ?             pid=1000    tid=1004    fd=0    count=15728640 result=0 comm='worker'
+[   103.890] IO     ?             pid=1000    tid=1004    fd=0    count=15728640 result=0 comm='worker'
+[   103.920] IO     ?             pid=1000    tid=1004    fd=0    count=15728640 result=0 comm='worker'
+[   103.950] IO     ?             pid=1000    tid=1004    fd=0    count=15728640 result=0 comm='worker'
+[   103.980] IO     ?             pid=1000    tid=1004    fd=0    count=15728640 result=0 comm='worker'
+[   104.010] IO     ?             pid=1000    tid=1004    fd=0    count=15728640 result=0 comm='worker'
+[   104.040] IO     ?             pid=1000    tid=1004    fd=0    count=15728640 result=0 comm='worker'
+[   104.070] IO     ?             pid=1000    tid=1004    fd=0    count=15728640 result=0 comm='worker'
+[   104.100] IO     ?             pid=1000    tid=1004    fd=0    count=15728640 result=0 comm='worker'
+[   104.130] IO     ?             pid=1000    tid=1004    fd=0    count=15728640 result=0 comm='worker'
+[   104.180] IO     ?             pid=1000    tid=1005    fd=0    count=15728640 result=-999 comm='worker'
+[   103.800] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.800] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.802] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.802] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.804] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.805] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.806] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.806] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.808] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.808] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.810] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.811] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.812] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.812] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.814] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.814] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.816] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.817] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.818] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.819] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.820] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.820] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.822] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.823] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.824] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.825] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.826] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.826] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.828] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.829] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.830] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.831] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.832] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.832] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.834] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.835] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.836] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.837] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.838] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.838] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.840] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.841] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.842] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.843] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.844] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.844] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.846] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.847] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.848] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.849] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.850] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.850] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.852] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.853] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.854] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.855] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.856] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.856] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.858] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.859] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.860] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.861] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.862] IO     read          pid=1000    tid=1001    fd=5    count=4096 result=4096 comm='worker'
+[   103.862] IO     write         pid=1000    tid=1001    fd=6    count=256 result=256 comm='worker'
+[   103.900] IO     ppoll         pid=1000    tid=1002    fd=9    count=0 result=-999 comm='worker'
+[   103.850] SIGNAL DELIVER pid=1000 tid=1006 sig=SIGSEGV(11) sender=0 exit_code=0x0 comm='crasher' stack_depth=0
+[   103.851] SIGNAL EXIT_ABNL pid=1000 tid=1006 sig=SIGSEGV(11) sender=0 exit_code=0x8b comm='crasher' stack_depth=0
+[   103.852] HEAP   malloc    pid=1000    tid=1007    addr=0x0000000000abc000 size=4096 comm='worker'
+[   103.853] HEAP   malloc    pid=1000    tid=1007    addr=0x0000000000abd000 size=8192 comm='worker'
+[   103.854] SIGNAL DELIVER pid=1000 tid=1007 sig=SIGABRT(6) sender=0 exit_code=0x0 comm='aborter' stack_depth=0
+[   103.855] SIGNAL EXIT_ABNL pid=1000 tid=1007 sig=SIGABRT(6) sender=0 exit_code=0x86 comm='aborter' stack_depth=0
+[   103.855] ABORT  __assert_fail pid=1000 tid=1007 comm='aborter' msg='buf != nullptr' loc='src/render/mesh.c' line=42 stack_depth=0
+[   104.050] HEAP   malloc    pid=1000    tid=1001    addr=0x0000000000aaaa00 size=128 comm='worker'
+[   104.051] HEAP   free      pid=1000    tid=1001    addr=0x0000000000aaaa00 size=0 comm='worker'
+[   104.052] HEAP   malloc    pid=1000    tid=1001    addr=0x0000000000bbbb00 size=256 comm='worker'
+[   104.053] HEAP   free      pid=1000    tid=1001    addr=0x0000000000bbbb00 size=0 comm='worker'
+[   104.054] HEAP   free      pid=1000    tid=1001    addr=0x0000000000bbbb00 size=0 comm='worker'
+# 9914 events

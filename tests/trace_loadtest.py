@@ -34,7 +34,7 @@ import time
 from pathlib import Path
 
 import harness
-from harness import ROOT, MONTAUK, MONTAUK_TRACE_DECODE as DECODE, SUBLIMATION as SUBL
+from harness import ROOT, MONTAUK, DECODE, SUBLIMATION as SUBL
 
 fails = 0
 
@@ -79,7 +79,7 @@ def op_counts(binpath):
     the pipe stays binary/native until sublimation has reduced it. tally is
     sublimation's sort|uniq -c|sort -rn, so each line is `count category`.
     """
-    dec = harness.run_text([str(DECODE), str(binpath)])
+    dec = harness.run_text([*DECODE, str(binpath)])
     if dec.returncode != 0:
         note(f"decode failed for {binpath} (rc={dec.returncode}): {dec.stderr.strip()}")
         return None
@@ -113,7 +113,7 @@ def run_capture(args):
     if os.geteuid() != 0:
         note("SKIP: capture needs root for BPF -- run: sudo python3 tests/trace_loadtest.py")
         return 0
-    need_bins(MONTAUK, DECODE)
+    need_bins(MONTAUK)
 
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
@@ -183,7 +183,7 @@ def run_capture(args):
         # neither the record nor zero drops is either pre-drop-accounting
         # montauk (a build problem here) or genuinely lossy.
         if out.exists() and out.stat().st_size > 0:
-            dec = harness.run_text([str(DECODE), str(out)])
+            dec = harness.run_text([*DECODE, str(out)])
             drops = [l for l in dec.stdout.splitlines() if "] DROPS " in l]
             check(bool(drops), f"final DROPS snapshot present ({len(drops)})")
             if drops:
@@ -202,7 +202,7 @@ def run_capture(args):
 
 
 def run_compare(args):
-    need_bins(DECODE, SUBL)
+    need_bins(MONTAUK, SUBL)
     a_path, b_path = Path(args.compare[0]), Path(args.compare[1])
     for p in (a_path, b_path):
         if not p.exists():

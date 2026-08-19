@@ -19,13 +19,13 @@ from pathlib import Path
 import gen_synthetic_prom as gen
 import harness
 
-ANALYZE = harness.MONTAUK_ANALYZE
+ANALYZE = harness.ANALYZE
 note = harness.logger("semantic")
 
 
 def main() -> int:
-    if harness.missing_bins(ANALYZE):
-        note(f"FAIL: missing {ANALYZE} -- build first")
+    if harness.missing_bins(harness.MONTAUK):
+        note(f"FAIL: missing {harness.MONTAUK} -- build first")
         return 1
     with tempfile.TemporaryDirectory(prefix="montauk-semantic-") as td:
         archive = Path(td) / "arch"
@@ -34,7 +34,7 @@ def main() -> int:
         env = dict(os.environ, XDG_CACHE_HOME=str(cache))
         # Emit both surfaces: the pairwise families and the trajectory ones.
         for extra in ([], ["--trajectory"]):
-            harness.run_text([str(ANALYZE), str(archive), "--by", "version",
+            harness.run_text([*ANALYZE, str(archive), "--by", "version",
                               "--seed", "1729", *extra], env=env, check=False)
         bad = []
         families = 0

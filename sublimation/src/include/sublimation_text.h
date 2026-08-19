@@ -24,7 +24,21 @@ extern "C" {
 // Per-call scratch (the field's reach-closure memo, the fuzzy dedup array) is
 // allocated and freed inside find/count; the program itself never heap-allocates.
 #define SUBLIMATION_SEARCH_MAX_PATTERN 1023
-#define SUBLIMATION_SEARCH_MAX_POS     64    // Glushkov positions (bits in the field)
+// GLUSHKOV POSITIONS. The field is a bit-vector of these, so the budget is
+// words x 64. It used to be one word, flat: a pattern needing a 65th position
+// was rejected as "bad pattern", which reads as a syntax error and is not one.
+//
+// The engine is now specialized for BOTH widths and the pattern picks -- the
+// same move the sort makes, routing an input to the pole its structure earns,
+// except here the classifier is EXACT: the position count is known during
+// compilation, before the field is built, so nothing is guessed.
+//
+// Storage is sized for the wide case always. A per-width struct would be a
+// second public type every consumer had to learn, and the narrow path still
+// reads only word 0, so the cost is memory rather than instructions.
+#define SUBLIMATION_SEARCH_POS_WORDS   2
+#define SUBLIMATION_SEARCH_MAX_POS     (64 * SUBLIMATION_SEARCH_POS_WORDS)
+#define SUBLIMATION_SEARCH_NARROW_POS  64    // one word: the common path
 
 enum {
     SUBLIMATION_SEARCH_FIXED = 1u,   // literal/anchor face (default is regex)
@@ -36,16 +50,21 @@ enum {
 // type the caller can stack/static-allocate.
 typedef struct {
     uint8_t  setb[SUBLIMATION_SEARCH_MAX_POS][32];  // byte-set per position
-    uint64_t follow[SUBLIMATION_SEARCH_MAX_POS];    // positions that may follow i
-    uint64_t first, last;                           // start / accept position sets
-    int npos, nullable_all, ok;
+    // Position SETS are words[SUBLIMATION_SEARCH_POS_WORDS]; the engine reads
+    // only the first `nwords` of each, which is what makes the narrow path
+    // scalar rather than a loop.
+    uint64_t follow[SUBLIMATION_SEARCH_MAX_POS][SUBLIMATION_SEARCH_POS_WORDS];
+    uint64_t first[SUBLIMATION_SEARCH_POS_WORDS];   // start position set
+    uint64_t last[SUBLIMATION_SEARCH_POS_WORDS];    // accept position set
+    int npos, nwords, nullable_all, ok;
     int anchored_start, anchored_end;               // leading ^ / trailing $
     int icase;                                      // fold ASCII case into setb[]
 } sublimation_search_gnfa;
 
 typedef struct {
     sublimation_search_gnfa g;                          // regex program (REGEX mode)
-    uint64_t imap[256];  // per-byte position map, built once at compile time
+    uint64_t imap[256][SUBLIMATION_SEARCH_POS_WORDS];  // per-byte position map,
+                         // built once at compile time
                          // (REGEX mode; depends only on pattern + icase)
     char    pattern[SUBLIMATION_SEARCH_MAX_PATTERN + 1];// NUL-terminated source
     size_t  pattern_len;
@@ -113,14 +132,12 @@ SUB_API long sublimation_search_next_any(const sublimation_search *set, int nset
                                          size_t off, int wword, long *end_out);
 
 // How many characters in `pat` CANNOT be case-folded by the -i face: non-ASCII
-// characters whose upper/lower counterpart changes the UTF-8 byte length or the
-// lead byte, which a byte-positional engine cannot admit without also admitting
-// sequences nobody wrote. Those characters match EXACTLY under -i, so the search
-// narrows rather than widens.
+// characters -i cannot fold. Returns 0 -- every cased character in a fold class
+// is now covered, same-lead pairs by one position with two byte members and
+// the rest by an alternation over the class, so -i no longer narrows.
 //
-// Exists so a caller can SAY that. An -i that quietly matches less than the user
-// asked for is the failure this reports; returning 0 means -i is fully honoured
-// for this pattern.
+// Exists so a caller can SAY when it does. An -i that quietly matches less
+// than the user asked for is the failure this reports.
 SUB_API size_t sublimation_search_fold_gaps(const char *pat, size_t len);
 
 // THE OCCURRENCE FIELD -- every match in a range, as POSITIONS, at MATCH

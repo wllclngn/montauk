@@ -109,7 +109,20 @@ static bool read_nvidia_smi_device(montauk::model::GpuVram& out) {
     std::string s(line);
     // split by comma
     std::vector<std::string> tok; tok.reserve(8);
-    size_t start = 0; while (start < s.size()) { size_t comma = s.find(',', start); std::string t = s.substr(start, (comma==std::string::npos? s.size() : comma) - start); while(!t.empty() && (t.back()=='\n'||t.back()=='\r'||t.back()==' '||t.back()=='\t')) t.pop_back(); while(!t.empty() && (t.front()==' '||t.front()=='\t')) t.erase(t.begin()); tok.push_back(t); if (comma==std::string::npos) break; start = comma + 1; }
+    // Trim each field's BOUNDS, then build the string once. The old form built
+    // a substring and then erased from its FRONT one character at a time, and
+    // erase(begin()) shifts the entire remainder on every call -- quadratic in
+    // the leading whitespace, to produce a string that was already known.
+    size_t start = 0;
+    while (start < s.size()) {
+      size_t comma = s.find(',', start);
+      size_t b = start, e = (comma == std::string::npos) ? s.size() : comma;
+      while (e > b && (s[e-1]=='\n' || s[e-1]=='\r' || s[e-1]==' ' || s[e-1]=='\t')) --e;
+      while (b < e && (s[b]==' ' || s[b]=='\t')) ++b;
+      tok.emplace_back(s, b, e - b);
+      if (comma == std::string::npos) break;
+      start = comma + 1;
+    }
     if (tok.size() < 8) continue;
     montauk::model::GpuVramDevice rec{};
     rec.name = tok[0];
@@ -149,8 +162,12 @@ static bool read_nvidia_smi_device(montauk::model::GpuVram& out) {
 
 static std::string trim(std::string s) {
   auto issp = [](unsigned char c){ return c==' '||c=='\t'||c=='\r'||c=='\n'; };
-  while (!s.empty() && issp(s.front())) s.erase(s.begin());
+  // One erase, not one per leading space: erase(begin()) shifts the whole
+  // string each time it is called.
   while (!s.empty() && issp(s.back())) s.pop_back();
+  size_t b = 0;
+  while (b < s.size() && issp(static_cast<unsigned char>(s[b]))) ++b;
+  if (b) s.erase(0, b);
   return s;
 }
 
@@ -251,11 +268,19 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out, double& sum_busy,
         if (f) { sum_busy += v; busy_cnt++; }
       }
     }
-    // Power via hwmon (all vendors): sum power1_average/input if present
+    // Power via hwmon (all vendors): sum power1_average/input if present.
+    //
+    // The hwmon directory is enumerated ONCE and its entries kept: the
+    // temperature pass below used to walk it a second time, paying another
+    // exists() plus a directory open/read/close per card per sample for a
+    // listing that cannot have changed in between.
+    std::vector<fs::path> hwmon_dirs;
     try {
       fs::path hwmons = dev / "hwmon";
       if (fs::exists(hwmons)) {
-        for (auto& hm : fs::directory_iterator(hwmons)) {
+        for (auto& hm : fs::directory_iterator(hwmons)) hwmon_dirs.push_back(hm.path());
+        for (auto& hmp : hwmon_dirs) {
+          struct { fs::path path() const { return p; } fs::path p; } hm{hmp};
           auto pavg = hm.path() / "power1_average";
           auto pinp = hm.path() / "power1_input";
           for (auto p : {pavg, pinp}) {
@@ -301,11 +326,11 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out, double& sum_busy,
     } catch(...) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); }
     if (friendly.empty()) friendly = name;
     montauk::model::GpuVramDevice rec{ friendly, t_mb, u_mb };
-    // Read temps via hwmon if exposed
+    // Read temps via hwmon if exposed, reusing the listing taken above.
     try {
-      fs::path hwmons = dev / "hwmon";
-      if (fs::exists(hwmons)) {
-        for (auto& hm : fs::directory_iterator(hwmons)) {
+      {
+        for (auto& hmp : hwmon_dirs) {
+          struct { fs::path path() const { return p; } fs::path p; } hm{hmp};
           for (auto& file : fs::directory_iterator(hm.path())) {
             auto fn = file.path().filename().string();
             if (fn.rfind("temp",0)==0 && fn.find("_input")!=std::string::npos) {
@@ -351,126 +376,6 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out, double& sum_busy,
   return any;
 }
 
-#ifdef MONTAUK_HAVE_NVML
-#include <nvml.h>
-static bool read_nvml_compiled(montauk::model::GpuVram& out) {
-  if (nvmlInit_v2() != NVML_SUCCESS) {
-    if (montauk::ui::config().nvidia.log_nvml) {
-      montauk::util::log_error("NVML: init failed in collector (device-level metrics disabled)");
-    }
-    return false;
-  }
-  unsigned int n = 0; if (nvmlDeviceGetCount_v2(&n) != NVML_SUCCESS) { nvmlShutdown(); return false; }
-  bool any = false; uint64_t total_mb_sum = 0, used_mb_sum = 0;
-  std::vector<std::string> model_names;
-  double total_power_w = 0.0; bool have_power = false;
-  double total_plimit_w = 0.0; bool have_plimit = false;
-  int first_pstate = -1; bool have_pstate = false;
-  // Utilization aggregates (average across devices)
-  double sum_gpu_util = 0.0; unsigned util_count = 0;
-  double sum_mem_util = 0.0; unsigned mem_util_count = 0;
-  double sum_enc_util = 0.0; unsigned enc_util_count = 0;
-  double sum_dec_util = 0.0; unsigned dec_util_count = 0;
-  for (unsigned int i = 0; i < n; ++i) {
-    nvmlDevice_t dev{}; if (nvmlDeviceGetHandleByIndex_v2(i, &dev) != NVML_SUCCESS) continue;
-    nvmlMemory_t mem{}; if (nvmlDeviceGetMemoryInfo(dev, &mem) != NVML_SUCCESS) continue;
-    uint64_t t_mb = mem.total / (1024ull * 1024ull);
-    uint64_t u_mb = mem.used  / (1024ull * 1024ull);
-    if (t_mb == 0) continue;
-    any = true; total_mb_sum += t_mb; used_mb_sum += u_mb;
-    char name[96]; name[0] = '\0';
-    montauk::model::GpuVramDevice rec{};
-    if (nvmlDeviceGetName(dev, name, sizeof(name)) == NVML_SUCCESS) {
-      rec.name = name; model_names.emplace_back(name);
-    } else {
-      rec.name = "GPU";
-    }
-    rec.total_mb = t_mb; rec.used_mb = u_mb;
-    // Temps (edge and memory if available) - use versioned API (NVML 13.0+)
-    nvmlTemperature_t temp_info = {};
-    temp_info.version = nvmlTemperature_v1;
-    temp_info.sensorType = NVML_TEMPERATURE_GPU;
-    if (nvmlDeviceGetTemperatureV(dev, &temp_info) == NVML_SUCCESS) { rec.has_temp_edge = true; rec.temp_edge_c = (double)temp_info.temperature; }
-#ifdef NVML_TEMPERATURE_MEMORY
-    temp_info.sensorType = NVML_TEMPERATURE_MEMORY;
-    if (nvmlDeviceGetTemperatureV(dev, &temp_info) == NVML_SUCCESS) { rec.has_temp_mem = true; rec.temp_mem_c = (double)temp_info.temperature; }
-#endif
-    // Thresholds: slowdown (treat as warning)
-    unsigned int tw = 0;
-    if (nvmlDeviceGetTemperatureThreshold(dev, NVML_TEMPERATURE_THRESHOLD_SLOWDOWN, &tw) == NVML_SUCCESS) {
-      rec.has_thr_edge = true; rec.thr_edge_c = (double)tw;
-    }
-#ifdef NVML_TEMPERATURE_THRESHOLD_MEM_MAX
-    if (nvmlDeviceGetTemperatureThreshold(dev, NVML_TEMPERATURE_THRESHOLD_MEM_MAX, &tw) == NVML_SUCCESS) {
-      rec.has_thr_mem = true; rec.thr_mem_c = (double)tw;
-    }
-#endif
-    // Fan speed (percent, first fan)
-    unsigned int fan_pct = 0;
-    if (nvmlDeviceGetFanSpeed_v2(dev, 0, &fan_pct) == NVML_SUCCESS) {
-      rec.has_fan = true; rec.fan_speed_pct = (double)fan_pct;
-    }
-    // Optional power (milliwatts -> watts)
-    unsigned int mw = 0;
-    if (nvmlDeviceGetPowerUsage(dev, &mw) == NVML_SUCCESS && mw > 0) {
-      total_power_w += static_cast<double>(mw) / 1000.0;
-      have_power = true;
-    }
-    // Optional power limit
-    unsigned int lim_mw = 0;
-    if (nvmlDeviceGetPowerManagementLimit(dev, &lim_mw) == NVML_SUCCESS && lim_mw > 0) {
-      total_plimit_w += static_cast<double>(lim_mw) / 1000.0;
-      have_plimit = true;
-    }
-    // Optional performance state (take first device's pstate)
-    nvmlPstates_t pst;
-    if (!have_pstate && nvmlDeviceGetPerformanceState(dev, &pst) == NVML_SUCCESS) {
-      first_pstate = (int)pst;
-      have_pstate = true;
-    }
-    out.devices.push_back(std::move(rec));
-    // Utilization (core + memory)
-    nvmlUtilization_t ur{};
-    if (nvmlDeviceGetUtilizationRates(dev, &ur) == NVML_SUCCESS) {
-      sum_gpu_util += ur.gpu; util_count++;
-      sum_mem_util += ur.memory; mem_util_count++;
-    }
-    // Encoder/Decoder utilization (optional)
-    unsigned int enc_util = 0, dec_util = 0; unsigned int samp_us = 0;
-    if (nvmlDeviceGetEncoderUtilization(dev, &enc_util, &samp_us) == NVML_SUCCESS) { sum_enc_util += enc_util; enc_util_count++; }
-    if (nvmlDeviceGetDecoderUtilization(dev, &dec_util, &samp_us) == NVML_SUCCESS) { sum_dec_util += dec_util; dec_util_count++; }
-  }
-  nvmlShutdown();
-  if (any) {
-    out.total_mb = total_mb_sum;
-    out.used_mb  = used_mb_sum;
-    out.used_pct = out.total_mb ? (100.0 * static_cast<double>(out.used_mb) / static_cast<double>(out.total_mb)) : 0.0;
-    if (!model_names.empty()) out.name = aggregate_gpu_name(model_names);
-    if (have_power) {
-      out.has_power = true;
-      out.power_draw_w = total_power_w;
-    }
-    if (have_plimit) {
-      out.has_power_limit = true;
-      out.power_limit_w = total_plimit_w;
-    }
-    if (have_pstate) {
-      out.has_pstate = true;
-      out.pstate = first_pstate;
-    }
-    if (util_count > 0) { out.has_util = true; out.gpu_util_pct = sum_gpu_util / util_count; }
-    if (mem_util_count > 0) { out.has_mem_util = true; out.mem_util_pct = sum_mem_util / mem_util_count; }
-    if (enc_util_count > 0 || dec_util_count > 0) {
-      out.has_encdec = true;
-      if (enc_util_count > 0) out.enc_util_pct = sum_enc_util / enc_util_count;
-      if (dec_util_count > 0) out.dec_util_pct = sum_dec_util / dec_util_count;
-    }
-  }
-  return any;
-}
-#else
-static bool read_nvml_compiled(montauk::model::GpuVram&) { return false; }
-#endif
 
 static bool read_nvml_dyn(montauk::model::GpuVram& out) {
   auto& nv = montauk::util::NvmlDyn::instance();
@@ -498,10 +403,14 @@ bool GpuCollector::sample(montauk::model::GpuVram& out) const {
   // cached config singleton, so it takes effect per call.
   const char* no_native = std::getenv("MONTAUK_GPU_DISABLE_NATIVE");
   if (!(no_native && no_native[0] == '1')) {
-    // Prefer runtime NVML loader if available
+    // NVML is reached ONLY through the runtime loader. There used to be a
+    // second, link-time NVML path behind this one, but it could never fire
+    // usefully: both paths open the same libnvidia-ml, so any box where the
+    // dlopen fails is a box where the linked path has no library either. All it
+    // actually did was put libnvidia-ml in montauk's DT_NEEDED, which stopped
+    // the binary from EXECING on a machine without an NVIDIA driver. It also
+    // read strictly less than the loader does -- it never filled out.devices.
     if (read_nvml_dyn(out)) { log_backend_once("nvml-dyn"); return true; }
-    // Fall back to compiled NVML if present
-    if (read_nvml_compiled(out)) { log_backend_once("nvml-compiled"); return true; }
   }
   // NVIDIA device-level fallback via nvidia-smi
   if (read_nvidia_smi_device(out)) { log_backend_once("smi-device"); return true; }

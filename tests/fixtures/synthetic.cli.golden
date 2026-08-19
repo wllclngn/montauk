@@ -344,3 +344,143 @@ $ sublimation search -c \d
 1
 $ sublimation search -c [\w]
 2
+$ sublimation search --lines 2,4
+b
+c
+d
+$ sublimation search --lines ,3
+a
+b
+c
+$ sublimation search --lines 4,
+d
+e
+$ sublimation search --lines 3
+c
+$ sublimation search -n --lines 2,6 -e [bdf]
+2:b
+4:d
+6:f
+$ sublimation search --lines 2,5 -c -e .
+4
+$ sublimation search --lines 2,4 -v -e c
+b
+d
+$ sublimation search --lines 99,200
+$ sublimation replace x a\\b
+a\b
+$ sublimation replace (x) a\\b\1
+a\bx
+$ sublimation replace ([a-z]+)=([a-z]+) \2:\1
+bar:foo
+$ sublimation replace b [\0]
+a[b]c
+$ sublimation replace x <\3>
+<>
+$ sublimation search [[:alpha:]]
+abc
+A1_
+DEADbeef
+xyz 9
+$ sublimation search [[:digit:]]
+123
+A1_
+xyz 9
+$ sublimation search [[:alnum:]]
+abc
+123
+A1_
+DEADbeef
+xyz 9
+$ sublimation search [[:upper:]]
+A1_
+DEADbeef
+$ sublimation search [[:lower:]]
+abc
+DEADbeef
+xyz 9
+$ sublimation search [[:space:]]
+  	
+xyz 9
+$ sublimation search [[:blank:]]
+  	
+xyz 9
+$ sublimation search [[:punct:]]
+A1_
+!@#
+$ sublimation search [[:print:]]
+abc
+123
+A1_
+  	
+!@#
+DEADbeef
+xyz 9
+$ sublimation search [[:graph:]]
+abc
+123
+A1_
+!@#
+DEADbeef
+xyz 9
+$ sublimation search [[:cntrl:]]
+  	
+$ sublimation search [[:xdigit:]]
+abc
+123
+A1_
+DEADbeef
+xyz 9
+$ sublimation search -o [[:alpha:]]+
+abc
+A
+DEADbeef
+xyz
+$ sublimation search [^[:digit:]]
+abc
+A1_
+  	
+!@#
+DEADbeef
+xyz 9
+$ sublimation search [[:alpha:]0-9]
+abc
+123
+A1_
+DEADbeef
+xyz 9
+$ sublimation search -o [[:upper:]][[:lower:]]
+Db
+$ sublimation search -o [[:alnum:]_]+
+abc
+123
+A1_
+DEADbeef
+xyz
+9
+$ sublimation search -o \w+
+abc
+123
+A1_
+DEADbeef
+xyz
+9
+$ sublimation search -i -c İ
+1
+$ sublimation search -i -o Σ
+Σ
+σ
+$ sublimation search -i -c ẞ
+1
+$ sublimation search -i -c Φ
+2
+$ sublimation search -i -c ϕ
+1
+$ sublimation search -i -c K
+1
+$ sublimation search -i -c Θ
+2
+$ sublimation search -i -c é
+2
+$ sublimation search -i -o Σ+
+σΣ

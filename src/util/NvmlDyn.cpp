@@ -65,6 +65,11 @@ bool NvmlDyn::load_once() {
   return true;
 }
 
+void* NvmlDyn::sym(const char* name) {
+  if (!load_once() || !handle_) return nullptr;
+  return ::dlsym(handle_, name);
+}
+
 bool NvmlDyn::dlsym_all() {
   auto L = [&](const char* sym){ return ::dlsym(handle_, sym); };
   p_nvmlInit_v2 = (nvmlReturn_t (*)())L("nvmlInit_v2");

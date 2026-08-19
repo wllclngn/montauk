@@ -1,3 +1,6 @@
+#include "tools/Entrypoints.hpp"
+#include <vector>
+#include <cstring>
 #include "app/SnapshotBuffers.hpp"
 #include "app/Producer.hpp"
 #include "collectors/CpuCollector.hpp"
@@ -64,7 +67,36 @@ static int parse_int_arg(const char* s, int fallback) {
   return static_cast<int>(v);
 }
 
+// The analyzer and the decoder are FLAGS on montauk, and that is the only way to
+// reach them. They were separate executables named montauk_analyze and
+// montauk_trace_decode; those names are gone rather than symlinked, because a
+// platform that means "one binary" cannot keep shipping the second and third
+// names as aliases and still claim it.
+//
+// Dispatch happens before ANY montauk setup: no locale, no signal handlers, no
+// output sink. The tools own their whole process when they run, exactly as they
+// did as separate binaries, so their behaviour cannot drift from what the corpus
+// goldens froze.
+static int dispatch_tool(int argc, char** argv) {
+  if (argc <= 1) return -1;
+  // The tool is handed argv as if it had been called directly: argv[0] set to
+  // the mode name for its own usage text, the flag dropped, the rest passed
+  // through untouched. That keeps every one of the tool's own flags working
+  // without re-parsing any of them here.
+  auto forward = [&](const char* name, int (*entry)(int, char**)) {
+    std::vector<char*> fwd;
+    fwd.push_back(const_cast<char*>(name));
+    for (int i = 2; i < argc; ++i) fwd.push_back(argv[i]);
+    return entry(static_cast<int>(fwd.size()), fwd.data());
+  };
+  if (std::strcmp(argv[1], "--analyze") == 0) return forward("montauk --analyze", montauk_analyze_main);
+  if (std::strcmp(argv[1], "--decode") == 0) return forward("montauk --decode", montauk_decode_main);
+  return -1;  // not a tool invocation; fall through to montauk proper
+}
+
 int main(int argc, char** argv) {
+  if (int rc = dispatch_tool(argc, argv); rc >= 0) return rc;
+
   std::setlocale(LC_ALL, "");  // Required for wcwidth() to work correctly
   std::signal(SIGINT, on_sigint);
   // SIGTERM too (systemd/kill default): run the same graceful teardown -- the
@@ -278,7 +310,7 @@ int main(int argc, char** argv) {
       montauk_sink_appendf(&g_out, "       --log-interval-ms MS  Write interval in ms (default: 1000)\n");
       montauk_sink_appendf(&g_out, "       --headless            Daemon mode (no TUI, requires --metrics or --log)\n");
       montauk_sink_appendf(&g_out, "       --trace PATTERN       Trace process group matching PATTERN (headless)\n");
-      montauk_sink_appendf(&g_out, "       --trace-out FILE      Write raw binary event log; decode with montauk_trace_decode\n");
+      montauk_sink_appendf(&g_out, "       --trace-out FILE      Write raw binary event log; decode with --decode\n");
       montauk_sink_appendf(&g_out, "       --stream-out DEVICE   Second, independent binary stream (same format as --trace-out), meant for a character device (e.g. a qemu-backed serial port) so capture survives a hang that takes --trace-out's filesystem down with it\n");
       montauk_sink_appendf(&g_out, "       --trace-ring-bytes N  BPF ring size (default 1M; accepts K/M/G). The default was never sized against a real offered rate: one sched-messaging capture offered ~2.8M events/s against ~254k/s drained and kept 5.7%% of its stream. Rounded up to a power of two\n");
       montauk_sink_appendf(&g_out, "       --trace-classes LIST  Capture only these event classes (comma-separated: fork,exec,exit,comm,io,ntsync,sched,heap,signal,mmap,provider,abort,heapstack,keyedevt). Stops one loud class drowning the one the capture is FOR -- excluded classes are never reserved, and are NOT counted as drops\n");
@@ -294,9 +326,42 @@ int main(int argc, char** argv) {
       montauk_sink_appendf(&g_out, "       --cpu-window N        Sample aggregate CPU N times at 100ms and emit the raw series, for a caller that wants the window rather than a verdict\n");
       return 0;
     }
+    // AN UNRECOGNIZED ARGUMENT IS FATAL. It used to be silently ignored, and
+    // montauk went on to start the TUI -- so a caller that misspelled a flag, or
+    // passed a file where a mode word belonged, got an interactive UI that spins
+    // forever instead of an error. In a test harness with stdout captured that
+    // is indistinguishable from a slow run: one such invocation
+    // (`montauk ARCHIVE --analyze ...`, from a splice that assumed argv[0] was
+    // the whole binary) burned twenty-five minutes of a gate before anyone
+    // looked at what the child process actually was.
+    //
+    // montauk takes no positional arguments -- --analyze and --decode are
+    // handled before this loop -- so anything unconsumed here is a mistake, and
+    // saying so costs nothing.
+    else {
+      montauk::util::log_error("unrecognized argument '%s' (see --help)", a.c_str());
+      return 2;
+    }
   }
   // --trace implies headless
   if (!trace_pattern.empty()) headless = true;
+
+  // A TUI WITH NOWHERE TO DRAW CANNOT WORK, so refuse rather than spin. Without
+  // this, redirecting montauk's stdout starts a full render loop against a pipe
+  // that no one is reading -- the same silent-hang failure as above, reached a
+  // different way. --headless, --json and the conclusion modes all still work
+  // when piped; only the interactive UI needs a terminal.
+  // The one-shot modes PRINT AND EXIT; none of them draws a UI, and every one is
+  // meant to be piped. Guarding on `headless` alone was wrong -- it rejected
+  // --json, the very mode the message below recommends.
+  const bool one_shot = json_once || cpu_window > 0 || anomalies_n > 0
+                     || similar_pid > 0 || regime_n > 0;
+  if (!headless && !one_shot && !::isatty(STDOUT_FILENO)) {
+    montauk::util::log_error(
+        "stdout is not a terminal: the TUI needs one. Use --headless with "
+        "--metrics/--log, or --json / --anomalies / --regime for piped output");
+    return 2;
+  }
 
   if (headless && metrics_port == 0 && log_dir.empty() && trace_pattern.empty()) {
     montauk::util::log_error("--headless requires --metrics PORT or --log DIR");
@@ -344,7 +409,7 @@ int main(int argc, char** argv) {
     // --json: one-shot structured snapshot. Warm up two producer cycles so the
     // rate deltas (cpu ctxt/s, net bps, disk bps) are real, read one snapshot
     // via the seqlock, serialize to JSON, print and exit. No TUI, no server, no
-    // daemon -- the agent-facing analog of `montauk_analyze --json` for the live
+    // daemon -- the agent-facing analog of `montauk --analyze --json` for the live
     // monitor. With --trace PATTERN also given, a second JSON line follows with
     // the trace snapshot (JSON-lines style: one structured record per line).
     // --cpu-window N: a TEMPORAL window montauk's one-shot cannot otherwise

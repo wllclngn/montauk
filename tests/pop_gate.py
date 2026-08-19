@@ -26,7 +26,7 @@ from pathlib import Path
 import gen_synthetic_prom as gen
 import harness
 
-ANALYZE = harness.MONTAUK_ANALYZE
+ANALYZE = harness.ANALYZE
 note = harness.logger("pop")
 
 VERSIONS = 10
@@ -35,7 +35,7 @@ BOUNDARY_B = f"1.{gen.SHIFT_AT}.0"
 
 
 def run(archive: Path, *args: str) -> str:
-    proc = harness.run_text([str(ANALYZE), str(archive), "--by", "version",
+    proc = harness.run_text([*ANALYZE, str(archive), "--by", "version",
                              "--seed", "1729", "--no-emit", *args])
     return proc.stdout
 
@@ -56,8 +56,8 @@ def pair_lines(text: str, family: str) -> int:
 
 
 def main() -> int:
-    if harness.missing_bins(ANALYZE):
-        note(f"FAIL: missing {ANALYZE} -- build first")
+    if harness.missing_bins(harness.MONTAUK):
+        note(f"FAIL: missing {harness.MONTAUK} -- build first")
         return 1
     fails = []
 
@@ -114,7 +114,7 @@ def main() -> int:
 
         # diagnostics: a missing axis label names itself instead of "no
         # usable gauges"
-        proc = harness.run_text([str(ANALYZE), str(archive), "--by", "host",
+        proc = harness.run_text([*ANALYZE, str(archive), "--by", "host",
                                  "--no-emit"])
         check("missing-axis-diagnostic",
               "no series carried label 'host'" in proc.stderr)
@@ -128,12 +128,12 @@ def main() -> int:
                 "# TYPE bench_latency_us gauge\n"
                 f'bench_latency_us{{scheduler="{sched}",stamp="s{i:04d}"}} '
                 f"{100 + i * 5}.0\n")
-        fp = harness.run_text([str(ANALYZE), str(frag), "--by", "scheduler",
+        fp = harness.run_text([*ANALYZE, str(frag), "--by", "scheduler",
                                "--no-emit"])
         check("fragmenting-label-named",
               "--drop-label stamp" in fp.stderr and
               "stamp' is unique per file" in fp.stderr)
-        fp2 = harness.run_text([str(ANALYZE), str(frag), "--by", "scheduler",
+        fp2 = harness.run_text([*ANALYZE, str(frag), "--by", "scheduler",
                                 "--drop-label", "stamp", "--no-emit"])
         check("fragmenting-label-fix-works",
               " vs " in fp2.stdout and "[N=2" in fp2.stdout)

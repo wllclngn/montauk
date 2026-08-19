@@ -16,8 +16,15 @@ ROOT = Path(__file__).resolve().parent.parent
 # for the sublimation binary alone (SUBLIMATION, SUB, SUBL) across
 # corpus_check.py/parity_check.py/trace_loadtest.py.
 MONTAUK = ROOT / "build" / "montauk"
-MONTAUK_ANALYZE = ROOT / "build" / "montauk_analyze"
-MONTAUK_TRACE_DECODE = ROOT / "build" / "montauk_trace_decode"
+# The analyzer and the decoder are MODES of montauk, not binaries. These are
+# argv prefixes, not paths: callers splat them (`[*ANALYZE, file, ...]`).
+# They were paths to separate executables; when those became symlinks and then
+# were deleted, a stale build/montauk_analyze kept resolving -- to montauk
+# PROPER, which launched the TUI and hung the gate for twenty minutes instead of
+# failing. A missing binary is a loud failure; a binary that means something else
+# is a silent one.
+ANALYZE = [str(MONTAUK), "--analyze"]
+DECODE = [str(MONTAUK), "--decode"]
 SUBLIMATION = ROOT / "build" / "sublimation"
 
 

@@ -7,6 +7,9 @@
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include <bpf/btf.h>
+// Must sit between the libbpf headers and the skeleton: it decltypes the
+// declarations above, and redirects the skeleton's own libbpf calls below.
+#include "util/BpfDyn.hpp"
 #include "montauk_trace.skel.h"
 #include <cstdio>
 #include <cstdlib>

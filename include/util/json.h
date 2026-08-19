@@ -10,6 +10,7 @@
 // comma; mj_pre_ suppresses it via after_key.
 #pragma once
 #include "util/sink.h"
+#include "util/fmt_double.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <locale.h>
@@ -111,18 +112,15 @@ static inline void montauk_json_num(montauk_json* j, double v) {
   // JSON has no NaN / Infinity -- the only valid encoding is null. Guard on the
   // true bounds (DBL_MAX), so a large-but-finite double still formats.
   if (v != v || v > DBL_MAX || v < -DBL_MAX) { montauk_sink_append(j->sink, "null", 4); return; }
-  // Format locale-independently. montauk calls setlocale(LC_ALL,"") at startup,
-  // so under a comma-decimal LC_NUMERIC (de_DE, fr_FR, ...) "%g" would emit
-  // "3,14" -- invalid JSON. Format, then normalize the locale radix char to '.'
-  // (%g emits no thousands separators, so the radix is the only locale artifact;
-  // in the C locale decimal_point is "." and this is a no-op).
+  // ONE formatter, shared with the Prometheus face. This used to be
+  // snprintf("%.12g") while Prometheus used std::to_chars, so the two surfaces
+  // rendered the same double differently -- 1/3 as 0.333333333333 here and
+  // 0.3333333333333333 there. montauk_fmt_double is shortest round-trip and
+  // locale-independent, which also retires the radix-character fixup this
+  // needed under a comma-decimal LC_NUMERIC.
   char buf[32];
-  int n = snprintf(buf, sizeof buf, "%.12g", v);
+  int n = montauk_fmt_double(buf, sizeof buf, v);
   if (n < 0) { montauk_sink_append(j->sink, "null", 4); return; }
-  if (n > (int)sizeof buf - 1) n = (int)sizeof buf - 1;
-  const char* dp = localeconv()->decimal_point;
-  if (dp && dp[0] && dp[0] != '.')
-    for (int i = 0; i < n; ++i) if (buf[i] == dp[0]) { buf[i] = '.'; break; }
   montauk_sink_append(j->sink, buf, (unsigned)n);
 }
 

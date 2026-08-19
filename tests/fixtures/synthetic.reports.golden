@@ -29,17 +29,18 @@ VERDICT: 100.0% of migrations stay cache-local (same-L2/L3); density decays with
 
 
 REPORT summary
-VERDICT: 8.7k events in 0.1 s (73.5k/s), dominated by SCHED WAKE2RUN (23%)
+VERDICT: 9.9k events in 0.1 s (84.1k/s), dominated by SCHED WAKE2RUN (21%)
 pattern         synthetic
 start           15:06:40.000
 format_version  1
 first_event_ms  0.050
 duration_s      0.118
-events          8667
-events_per_sec  73480
+events          9914
+events_per_sec  84052
 type    subtype          count
 NTSYNC  create_sem                  1
 NTSYNC  sem_release                16
+NTSYNC  wait_any                 1224
 NTSYNC  wait_any.enter              1
 NTSYNC  create_mutex                1
 NTSYNC  create_event                1
@@ -47,6 +48,7 @@ NTSYNC  event_set                  64
 NTSYNC  event_reset                64
 IO      read                       32
 IO      write                      32
+IO      nr=202                     13
 IO      ppoll                       1
 SCHED   ENQUEUE                   100
 SCHED   PREEMPT_TICK             2000
@@ -56,8 +58,12 @@ SCHED   CPU_IDLE                  286
 SCHED   SWITCH_IN                2000
 SCHED   KICK_ISSUE                 12
 SCHED   RESCHED                    10
-HEAP    malloc                      2
+HEAP    malloc                      4
 HEAP    free                        3
+SIGNAL  deliver                     2
+SIGNAL  exit_abnormal               2
+ABORT   __assert_fail               1
+KSTRAND pcpu_kthread                3
 PROVIDER cache_topology              1
 UNKNOWN type=18                     4
 
@@ -96,12 +102,16 @@ REPORT kick-latency
 answered kick->resched latency: p50=6.0us p99=7.5us worst=7.5us
 
 unanswered kicks (ranked, tick-stop-raced first):
-  cpu=1   t=1102.700ms
-  cpu=0   t=1102.450ms
+  cpu=1   t=1102.800ms
+  cpu=0   t=1102.550ms
 
 
 REPORT kstrand
-VERDICT: no per-CPU kthread strands over threshold (no I/O-completion starvation captured)
+3 strands across 2 per-CPU kthreads (threshold-crossing dispatch waits)
+worst HELD strand 140.0ms (CPU busy through the wait -- I/O-completion freeze signature)
+kthread            cpu   strands max_ms    p99_ms    held   dark   held_by
+kworker/2:0H       2     1       140.0     140.0     1      0      worker.B 73%
+kworker/0:1H       0     2       95.0      95.0      2      0      worker.B 100%
 
 
 REPORT slice
@@ -129,24 +139,48 @@ VERDICT: 1 waker pids, 0 hot (messengers, >=16000 wakes); 2.0k total wakes
 
 
 REPORT waits
-VERDICT: no sync wait completions in trace (NTSYNC or futex)
+VERDICT: tid=1003 obj=0x000000000000000c (ntsync fd 12) dominates — 1.2k of 1.2k wait completions (97%) across 4 tid/obj pairs
+result legend: >=0 signaled object index, -110 ETIMEDOUT, other negative -errno
+tid      obj                waits      gap_med_ms gap_p99_ms results
+1003     0x000000000000000c 1200       0.005      0.005      0:1200  ntsync fd 12
+1001     0x000000000000000b 24         0.040      0.040      0:24  ntsync fd 11
+1004     0x0000000000f00000 12         0.030      0.030      0:12
+1005     0x0000000000f00000 1          -          -          -999:1
 
 REPORT spins
-VERDICT: no spin runs detected
+VERDICT: livelock — 1 instant-success spin runs, all tid=1003 obj=0x000000000000000c (ntsync fd 12), peak 200k waits/s
 criteria: inter-wait gap < 1.0 ms sustained >= 1000 iterations
+tid      obj                iters      start_ms     span_ms    rate_per_s dominant              verdict
+1003     0x000000000000000c 1200       103.760      5.995      200167     success:1200          instant-success spin (stuck-signaled object suspected)  ntsync fd 12
 
 REPORT pairing
-VERDICT: all waited fds have plausible signalers
+VERDICT: fd 12 stuck-signaled — 1.2k waits, 0 signals
 flag: waits > 100x signals (min 1000 waits) = waits with no plausible signaler
 fd     waits      event_set  event_reset sem_release mutex_unlock signals    flag
+12     1200       0          0           0           0            0          waits with no plausible signaler
+11     24         0          0           16          0            16         
 10     0          64         64          0           0            128        
-11     0          0          0           16          0            16         
 
 REPORT abortpm
-VERDICT: no abort events in trace
+VERDICT: 1 abort(s); victim chunk = highest live allocation in the aborting arena
+ABORT @1.104s pid=1000 tid=1007 comm='aborter'
+  arena window 0x0 (+64MB): 2 live chunks; top-adjacent first:
+    VICTIM? addr=0xabd000 size=8192     tid=1007 comm='worker'  <- header at addr+size is the corrupt top
+            addr=0xabc000 size=4096     tid=1007 comm='worker'
+  last events of aborting tid:
+    1.104s HEAP op=0 addr=0xabc000 size=4096
+    1.104s HEAP op=0 addr=0xabd000 size=8192
 
 REPORT signals
-VERDICT: no signal events in trace
+VERDICT: no mid-trace signal deaths — 2 abnormal exit(s) + 2 delivery(ies) across 2 thread(s), all signal deaths inside the trailing 2.0s teardown window
+comm             exits  delivers first_s   last_s    sigs
+aborter          1      1        0.104     0.104     SIGABRT
+crasher          1      1        0.104     0.104     SIGSEGV
+t_s        before_end_s kind    pid      tid      comm             signal     sender   status  state
+0.104      0.014        DELIVER 1000     1006     crasher          SIGSEGV    -        -       usermode
+0.104      0.014        EXIT    1000     1006     crasher          SIGSEGV    -        0       usermode
+0.104      0.014        DELIVER 1000     1007     aborter          SIGABRT    -        -       usermode
+0.104      0.014        EXIT    1000     1007     aborter          SIGABRT    -        0       usermode
 
 REPORT endstate
 VERDICT: 1 thread(s) stuck in an ntsync wait (1 genuine stall victims, 0 woke/lost-compl); longest tid=1002 'worker' parked 0.0s; EVENT last wakeup BEFORE the park — producer went quiet
@@ -158,7 +192,16 @@ tid      obj                  fd     type   signals  waits     verdict
 1002     0x00000000000e0000 10     EVENT  64       1         last signal -0.2ms BEFORE park by tid=1001 (event_set)
 
 REPORT futex
-VERDICT: no threads blocked on a futex at trace end
+VERDICT: 2 threads blocked on futexes (1 idle-park, 0 spin, 1 wait); worst uaddr=0xf00000 stuck 0.0s
+(op in fd, uaddr in count; addresses are opaque — join externally for lock identity)
+
+contended addresses (>=2 waiters):
+uaddr              waiters  wakes      max_stuck_s
+0x0000000000f00000 2        0          0.0         
+
+blocked threads (idle-park excluded):
+uaddr              tid      comm             stuck_s   retries  s/retry  class
+0x0000000000f00000 1004     worker           0.0       12       0.00     wait
 
 REPORT keyedevt
 VERDICT: no keyed-event activity (was a keyed-event uprobe configured when the trace was captured?)
@@ -174,7 +217,7 @@ addr               size     freed_by_1            freed_by_2           kind
 REPORT fractal
 TIMELINE: 2.0k dispatches, 667 cross-domain over 0.1s; bin 10us -> 11795 bins
 SERIES                 H(DFA)     H(R/S)    D=2-H  decades  VERDICT
-dispatch-rate        0.591±0.101      0.233    1.409     2.87  indistinguishable from uncorrelated
+dispatch-rate        0.590±0.099      0.233    1.410     2.87  indistinguishable from uncorrelated
 migration-rate       0.496±0.073      0.288    1.504     2.87  indistinguishable from uncorrelated
 NOTE: raw-event timeline spans 2.9 decades of scale -- a rigorous read, not the <1-decade .prom-scrape estimate
 
@@ -185,12 +228,17 @@ VERDICT: 2 ranked pids, 0 self-preempting (stints/wakes > 1.5); floored-wake sha
 
 
 REPORT matrix-profile
-VERDICT: 8444 sched events over 128 windows of 0.92ms; discord (most anomalous) window 102 at 94ms, profile 2.48 vs mean 1.21; motif (most recurring) windows 114~117 at distance 0.00
+VERDICT: 8444 sched events over 128 windows of 0.92ms; discord (most anomalous) window 102 at 94ms, profile 2.51 vs mean 1.21; motif (most recurring) windows 114~117 at distance 0.00
 
 
 POORLY-BEHAVING ITEMS (ranked)
 kind           id                 metric                    value  sev
+kthread-strand kworker/2:0H       max_strand_ms               140  HIGH
+spin           1003/0x000000000000000c (ntsync fd 12) waits_per_s              200167  HIGH
+unsignaled     0xc                waits                      1200  HIGH
+abort          1007/0x0000000000abd000 victim_bytes               8192  HIGH
 doublefree-logic 1001/0x0000000000bbbb00 bytes                       256  HIGH
 kick-latency   cpu1               unanswered_kicks              1  MED
-discord        94ms               profile_vs_mean         2.04958  MED
+discord        94ms               profile_vs_mean         2.07651  MED
 kick-latency   cpu0               unanswered_kicks              1  MED
+kthread-strand kworker/0:1H       max_strand_ms                95  MED

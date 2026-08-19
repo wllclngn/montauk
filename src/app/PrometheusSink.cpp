@@ -4,18 +4,19 @@
 #include <algorithm>
 #include <charconv>
 
+#include "util/fmt_double.h"
+
 namespace montauk::app {
 
 namespace {
 
 void append_double(std::string& out, double v) {
+  // The SAME formatter the JSON face calls -- see util/fmt_double.h. Two
+  // surfaces rendering one computed double must not produce two strings.
   char buf[32];
-  auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), v);
-  if (ec == std::errc{}) {
-    out.append(buf, ptr);
-  } else {
-    out += '0';
-  }
+  int n = montauk_fmt_double(buf, sizeof(buf), v);
+  if (n >= 0) out.append(buf, static_cast<size_t>(n));
+  else out += '0';
 }
 
 void append_uint(std::string& out, uint64_t v) {
