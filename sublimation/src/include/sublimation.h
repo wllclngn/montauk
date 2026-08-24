@@ -26,9 +26,9 @@ extern "C" {
 
 // Release version (source-of-truth for the library tag, pkgbuild, tests).
 #define SUBLIMATION_VERSION_MAJOR  3
-#define SUBLIMATION_VERSION_MINOR  1
+#define SUBLIMATION_VERSION_MINOR  2
 #define SUBLIMATION_VERSION_PATCH  0
-#define SUBLIMATION_VERSION_STRING "3.1.0"
+#define SUBLIMATION_VERSION_STRING "3.2.0"
 
 // ABI version. Bumped only when the library ABI breaks; independent from
 // the release version above. Readers should compare this value at runtime
@@ -38,7 +38,13 @@ extern "C" {
 // Advanced to 3: the generic qsort-compatible `sublimation()` entry point was
 // removed. It was a passthrough to glibc qsort, never the engine; libc sorting
 // is no longer linked anywhere in the library. Use the typed entry points.
-#define SUBLIMATION_API_VERSION 3
+// Advanced to 4: the k-way merge family was added (sublimation_merge_*,
+// sublimation_merge_stream_*, and the string and index faces in
+// sublimation_strings.h). Additive only -- nothing moved and no layout
+// changed -- but a caller compiled against this header and linked against a
+// pre-4 shared object resolves none of those symbols, which is exactly the
+// mismatch this constant exists to name.
+#define SUBLIMATION_API_VERSION 4
 
 // Disorder classification (the classifier's verdict)
 typedef enum {
@@ -224,6 +230,71 @@ SUB_API size_t sublimation_searchsorted_f64(const double   *sorted, size_t n, do
 // serial adaptive path. The serial `sublimation_<T>` entries auto-parallelize
 // large random the same way, using the hardware thread count.
 SUB_API void sublimation_i64_parallel(int64_t *SUB_RESTRICT arr, size_t n, size_t num_threads);
+
+// K-WAY MERGE OF ALREADY-SORTED RUNS.
+//
+// The sort entries above answer "order this array". A splitter that fans one
+// stage across N workers needs the other half: each worker's chunk comes back
+// ALREADY ordered, and the results have to become one ordered stream. Nothing
+// above expresses that -- sublimation_<T> sorts an array, _parallel sorts an
+// array with a thread count, and neither says "these N sequences are each
+// already ordered."
+//
+// STREAMING, NOT GATHERED. The engine pulls through a per-run cursor rather
+// than taking one concatenated array, because a caller able to concatenate has
+// already paid the cost the merge exists to avoid. `pull` fills at most `cap`
+// elements for run `run` and returns how many; returning 0 ends that run. A
+// short read is not the end -- only 0 is -- so a producer may hand back
+// whatever it has without padding. `emit` receives the merged output in
+// batches; a nonzero return stops the merge and is passed back to the caller.
+//
+// ORDERING IS THE PROMISE, and it is already this library's promise: the
+// parallel-for contract guarantees reading slots back in index order recovers
+// record order exactly. The merge owes the same, so merging the runs is
+// byte-identical to sorting the concatenation. The merge is STABLE by run
+// index -- equal keys leave in run order -- which is what makes that identity
+// hold for index-permutation callers too.
+//
+// Returns 0 on success, SUBLIMATION_MERGE_ENOMEM if scratch could not be
+// allocated, or whatever nonzero value `emit` returned.
+#define SUBLIMATION_MERGE_ENOMEM (-1)
+
+typedef size_t (*sublimation_merge_pull_i32)(void *ctx, size_t run, int32_t *buf, size_t cap);
+typedef size_t (*sublimation_merge_pull_i64)(void *ctx, size_t run, int64_t *buf, size_t cap);
+typedef size_t (*sublimation_merge_pull_u32)(void *ctx, size_t run, uint32_t *buf, size_t cap);
+typedef size_t (*sublimation_merge_pull_u64)(void *ctx, size_t run, uint64_t *buf, size_t cap);
+typedef size_t (*sublimation_merge_pull_f32)(void *ctx, size_t run, float *buf, size_t cap);
+typedef size_t (*sublimation_merge_pull_f64)(void *ctx, size_t run, double *buf, size_t cap);
+
+typedef int (*sublimation_merge_emit_i32)(void *ctx, const int32_t *buf, size_t n);
+typedef int (*sublimation_merge_emit_i64)(void *ctx, const int64_t *buf, size_t n);
+typedef int (*sublimation_merge_emit_u32)(void *ctx, const uint32_t *buf, size_t n);
+typedef int (*sublimation_merge_emit_u64)(void *ctx, const uint64_t *buf, size_t n);
+typedef int (*sublimation_merge_emit_f32)(void *ctx, const float *buf, size_t n);
+typedef int (*sublimation_merge_emit_f64)(void *ctx, const double *buf, size_t n);
+
+SUB_API int sublimation_merge_stream_i32(size_t k, sublimation_merge_pull_i32 pull,
+        void *pull_ctx, sublimation_merge_emit_i32 emit, void *emit_ctx);
+SUB_API int sublimation_merge_stream_i64(size_t k, sublimation_merge_pull_i64 pull,
+        void *pull_ctx, sublimation_merge_emit_i64 emit, void *emit_ctx);
+SUB_API int sublimation_merge_stream_u32(size_t k, sublimation_merge_pull_u32 pull,
+        void *pull_ctx, sublimation_merge_emit_u32 emit, void *emit_ctx);
+SUB_API int sublimation_merge_stream_u64(size_t k, sublimation_merge_pull_u64 pull,
+        void *pull_ctx, sublimation_merge_emit_u64 emit, void *emit_ctx);
+SUB_API int sublimation_merge_stream_f32(size_t k, sublimation_merge_pull_f32 pull,
+        void *pull_ctx, sublimation_merge_emit_f32 emit, void *emit_ctx);
+SUB_API int sublimation_merge_stream_f64(size_t k, sublimation_merge_pull_f64 pull,
+        void *pull_ctx, sublimation_merge_emit_f64 emit, void *emit_ctx);
+
+// Span face: the same engine over k in-memory runs. `out` must hold the sum of
+// `lens`. This is NOT the gathered form the note above rejects -- the runs stay
+// separate, and only the result is contiguous.
+SUB_API int sublimation_merge_i32(const int32_t *const *runs, const size_t *lens, size_t k, int32_t *out);
+SUB_API int sublimation_merge_i64(const int64_t *const *runs, const size_t *lens, size_t k, int64_t *out);
+SUB_API int sublimation_merge_u32(const uint32_t *const *runs, const size_t *lens, size_t k, uint32_t *out);
+SUB_API int sublimation_merge_u64(const uint64_t *const *runs, const size_t *lens, size_t k, uint64_t *out);
+SUB_API int sublimation_merge_f32(const float *const *runs, const size_t *lens, size_t k, float *out);
+SUB_API int sublimation_merge_f64(const double *const *runs, const size_t *lens, size_t k, double *out);
 
 // THE SHARED WORK-STEALING ENGINE, as a public entry point.
 //

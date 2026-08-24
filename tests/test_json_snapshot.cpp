@@ -18,11 +18,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
-#include <vector>
 #include <string>
 #include <unistd.h>
 
@@ -72,7 +70,27 @@ void write_golden(const char* path, const std::string& text) {
   f << text;
 }
 
-void assert_matches_golden(const char* path, const std::string& got) {
+// The rendered output carries MONTAUK_VERSION, compiled in (MetricsRender.cpp
+// stamps it into both faces). Frozen literally, every release bumps a byte in
+// two goldens and the compare fails for a reason that is not a regression --
+// which is exactly what happened: these goldens sat at 8.9.0 through the whole
+// of v8.10.0, failing, unnoticed because the build directory had
+// MONTAUK_BUILD_TESTS=OFF. Substituting a fixed token makes the version
+// hermetic, the same treatment and for the same reason as the kernel and
+// scheduler strings above: an identity fact should not leak into a
+// byte-identical compare. Everything else stays byte-exact.
+std::string pin_version(std::string text) {
+  const std::string live = MONTAUK_VERSION;
+  const std::string pinned = "X.Y.Z";
+  for (std::size_t at = text.find(live); at != std::string::npos;
+       at = text.find(live, at + pinned.size())) {
+    text.replace(at, live.size(), pinned);
+  }
+  return text;
+}
+
+void assert_matches_golden(const char* path, const std::string& got_raw) {
+  const std::string got = pin_version(got_raw);
   if (update_mode()) {
     write_golden(path, got);
   }

@@ -12,12 +12,21 @@
   montauk's anomaly fusion is that same idea, six features through three
   detectors, rank-averaged for the same reason.
 
-  ONE HUE, ONE RAMP. The colour is kitty's color14, the blue neither sibling
-  claims: OUROBOROS holds the yellow-amber-orange band, PANDEMONIUM holds violet
-  and mint-teal, and this sits 52 degrees of hue from the nearest of them.
-    #5FA0FC  light    hue 215
-    #217CFA  base     hue 215, kitty color14
-    #0449AA  dark     hue 215
+  ONE HUE, ONE RAMP. The colour is kitty's color11, terminal green:
+    #3AFFBA  light    hue 159
+    #00FFA6  base     hue 159, kitty color11
+    #009D66  dark     hue 159
+  The light and dark stops are not eyeballed. They are the base at the same
+  lightness ratios the previous blue ramp used (68.0/55.5 and 34.1/55.5), so the
+  gradient reads exactly as it did before the hue changed.
+
+  THE SIBLING SEPARATION IS DELIBERATELY BROKEN HERE, and it is worth saying so
+  rather than letting someone rediscover it. The blue this replaced sat 52
+  degrees from the nearest sibling; mint sits 4 degrees from PANDEMONIUM's
+  #32FAC1 (hue 163). OUROBOROS (hue 21 to 60), serpent (1, 50) and silica (290
+  to 322) are all still 99 degrees or more away. Every green in the kitty palette
+  is in the mint family, so "terminal green from this palette" and "clear of
+  PANDEMONIUM" cannot both hold. The collision is accepted, not overlooked.
   To recolour a release, change these three and only these; the geometry never
   moves. A replacement should stay one hue across the whole ramp.
 
@@ -39,9 +48,9 @@
 -->
 <defs>
   <linearGradient id="mtk" gradientUnits="userSpaceOnUse" x1="43" y1="52" x2="469" y2="460">
-    <stop offset="0%" stop-color="#5FA0FC"/>
-    <stop offset="50%" stop-color="#217CFA"/>
-    <stop offset="100%" stop-color="#0449AA"/>
+    <stop offset="0%" stop-color="#3AFFBA"/>
+    <stop offset="50%" stop-color="#00FFA6"/>
+    <stop offset="100%" stop-color="#009D66"/>
   </linearGradient>
 </defs>
 <path d="M401.49,177.88 L333.84,216.94 L333.84,295.06 L401.49,334.12 L469.15,295.06 L469.15,216.94 Z" fill="url(#mtk)"/>

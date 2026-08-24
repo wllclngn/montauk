@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 8.9.0 LANGUAGES C CXX)
+project(montauk VERSION 8.11.0 LANGUAGES C CXX)
 # (7.17.0: kick-capture honesty -- the storm report no longer manufactures a
 #  false kick/s=0 when the scx storm probes are unattached, and kick-latency
 #  surfaces the KICK_ISSUE->RESCHED pairing (availability, unanswered share,
@@ -401,6 +401,7 @@ if(MONTAUK_BUILD_TESTS)
   # side. Each is a single .c linking libsublimation, like the engine tests above.
   foreach(t
       test_wsdeque test_dfspool test_radix test_radix_par test_smerge_par test_pack
+      test_kmerge
       test_basic test_tier1 test_tier2 test_tier4 test_tier5
       test_adversarial test_adversarial_types test_bentley_mcilroy test_antiqsort
       test_types test_sorted_perturbed test_zipfian test_saw_mixed

@@ -53,6 +53,40 @@ SUB_API void sublimation_strings_indices(
 SUB_API void sublimation_strings_indices_len(
     const char **arr, const size_t *lens, uint32_t *indices, size_t n);
 
+// K-WAY MERGE OF ALREADY-SORTED STRING RUNS. The string half of the merge
+// family declared in sublimation.h, with the identical contract: merging k
+// already-ordered runs is byte-identical to sorting the concatenation, and the
+// merge is stable by run index so equal keys leave in run order. Returns 0 on
+// success, -1 if scratch could not be allocated, or whatever nonzero value
+// `emit` returned.
+//
+// `pull` fills at most `cap` pointers for run `run` and returns how many;
+// returning 0 ends that run, and a short read does not.
+typedef size_t (*sublimation_merge_pull_strings)(void *ctx, size_t run,
+                                                 const char **buf, size_t cap);
+typedef int (*sublimation_merge_emit_strings)(void *ctx, const char *const *buf,
+                                              size_t n);
+
+SUB_API int sublimation_merge_stream_strings(
+    size_t k, sublimation_merge_pull_strings pull, void *pull_ctx,
+    sublimation_merge_emit_strings emit, void *emit_ctx);
+
+// Span face: k in-memory runs of already-sorted pointers. `out` must hold the
+// sum of `lens`. String contents are untouched; only pointers move.
+SUB_API int sublimation_merge_strings(const char *const *const *runs,
+                                      const size_t *lens, size_t k,
+                                      const char **out);
+
+// Index face, for callers holding ROWS rather than keys: `arr` is the caller's
+// string array, each run is an already-ordered list of indices into it, and the
+// result is one ordered permutation. Not streamed -- an index only means
+// something against an array the caller already holds, so there is nothing to
+// pull. `out` must hold the sum of `lens`.
+SUB_API int sublimation_merge_strings_indices(const char **arr,
+                                              const uint32_t *const *runs,
+                                              const size_t *lens, size_t k,
+                                              uint32_t *out);
+
 #ifdef __cplusplus
 }
 #endif

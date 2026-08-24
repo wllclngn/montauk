@@ -16,6 +16,7 @@
 add_library(sublimation STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/classify.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/merge.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/kmerge.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pack.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/radix.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/randomness.c
@@ -31,6 +32,7 @@ add_library(sublimation STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parallel/wsdeque.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parallel/dfspool.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parallel/radix_par.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/strings/kmerge_strings.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/strings/msd_radix.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/strings/sort_strings.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/learn/detect.c

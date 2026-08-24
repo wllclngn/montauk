@@ -1,8 +1,9 @@
 #include "collectors/FdinfoProcessCollector.hpp"
 #include "util/Procfs.hpp"
 
+#include <charconv>
 #include <string>
-#include <sstream>
+#include <string_view>
 #include <cctype>
 
 using namespace std::chrono;
@@ -16,56 +17,71 @@ static bool is_number(const std::string& s) {
 }
 
 // Parse a single fdinfo content. Fills partial intel/amd counters and vram_kb if present.
+//
+// Runs once per GPU-owning fd per cycle, so it holds to the hot-path rule: no
+// allocation and no exceptions. The previous form built an istringstream, then
+// two std::string substrs per line for key and value, then reached stoull
+// inside try/catch -- and fdinfo is mostly lines this parser ignores, so the
+// allocations were paid overwhelmingly for keys that matched nothing. Views
+// into the caller's buffer and from_chars do the same job with neither.
 static void parse_fdinfo_text(const std::string& txt, FdinfoProcessCollector::IntelCycles& intel,
                               FdinfoProcessCollector::AmdEngines& amd, uint64_t& vram_kb) {
-  std::istringstream ss(txt);
-  std::string line;
-  auto starts_with = [](const std::string& s, const char* p){ return s.rfind(p, 0) == 0; };
-  while (std::getline(ss, line)) {
-    // Strip trailing CR
-    if (!line.empty() && (line.back()=='\r' || line.back()=='\n')) line.pop_back();
-    // split at ':'
-    auto colon = line.find(':');
-    if (colon == std::string::npos) continue;
-    std::string key = line.substr(0, colon);
-    std::string val = line.substr(colon + 1);
-    auto ltrim = [](std::string& s){ while(!s.empty() && (s.front()==' '||s.front()=='\t')) s.erase(s.begin()); };
-    auto rtrim = [](std::string& s){ while(!s.empty() && (s.back()==' '||s.back()=='\t')) s.pop_back(); };
-    ltrim(key); rtrim(key); ltrim(val); rtrim(val);
+  auto trim = [](std::string_view v) {
+    while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.remove_prefix(1);
+    while (!v.empty() && (v.back() == ' ' || v.back() == '\t' || v.back() == '\r'))
+      v.remove_suffix(1);
+    return v;
+  };
+  // Leading-integer parse. Returns false on no digits, so a malformed value
+  // leaves its counter untouched exactly as the catch-and-continue did.
+  auto to_u64 = [](std::string_view v, uint64_t& out) {
+    while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.remove_prefix(1);
+    auto res = std::from_chars(v.data(), v.data() + v.size(), out);
+    return res.ec == std::errc{} && res.ptr != v.data();
+  };
 
-    // Intel XE cycles
-    if (starts_with(key, "drm-cycles-")) {
-      uint64_t v = 0; try { v = std::stoull(val); } catch (...) { continue; }
+  std::string_view rest(txt);
+  while (!rest.empty()) {
+    std::string_view line = rest;
+    if (auto nl = rest.find('\n'); nl != std::string_view::npos) {
+      line = rest.substr(0, nl);
+      rest.remove_prefix(nl + 1);
+    } else {
+      rest = {};
+    }
+
+    auto colon = line.find(':');
+    if (colon == std::string_view::npos) continue;
+    std::string_view key = trim(line.substr(0, colon));
+    std::string_view val = trim(line.substr(colon + 1));
+
+    uint64_t v = 0;
+    if (key.starts_with("drm-cycles-")) {
+      if (!to_u64(val, v)) continue;
       if (key == "drm-cycles-rcs") intel.cycles_rcs = v;
       else if (key == "drm-cycles-ccs") intel.cycles_ccs = v;
       else if (key == "drm-cycles-vcs") intel.cycles_vcs = v;
-    } else if (starts_with(key, "drm-total-cycles-")) {
-      uint64_t v = 0; try { v = std::stoull(val); } catch (...) { continue; }
+    } else if (key.starts_with("drm-total-cycles-")) {
+      if (!to_u64(val, v)) continue;
       if (key == "drm-total-cycles-rcs") intel.total_rcs = v;
       else if (key == "drm-total-cycles-ccs") intel.total_ccs = v;
       else if (key == "drm-total-cycles-vcs") intel.total_vcs = v;
     }
-    // AMD new engines (nanoseconds busy time)
     else if (key == "drm-engine-gfx" || key == "gfx") {
-      uint64_t v = 0; try { v = std::stoull(val); } catch (...) { continue; } amd.gfx_ns = v; }
+      if (to_u64(val, v)) amd.gfx_ns = v;
+    }
     else if (key == "drm-engine-compute" || key == "compute") {
-      uint64_t v = 0; try { v = std::stoull(val); } catch (...) { continue; } amd.compute_ns = v; }
+      if (to_u64(val, v)) amd.compute_ns = v;
+    }
     else if (key == "drm-engine-enc" || key == "enc") {
-      uint64_t v = 0; try { v = std::stoull(val); } catch (...) { continue; } amd.enc_ns = v; }
+      if (to_u64(val, v)) amd.enc_ns = v;
+    }
     else if (key == "drm-engine-dec" || key == "dec") {
-      uint64_t v = 0; try { v = std::stoull(val); } catch (...) { continue; } amd.dec_ns = v; }
-    // Per-process VRAM (KiB)
+      if (to_u64(val, v)) amd.dec_ns = v;
+    }
+    // Per-process VRAM, "<num> kB|KiB" -- the trailing unit is ignored, as before.
     else if (key == "drm-memory-vram" || key == "vram mem") {
-      // Expect "<num> kB|KiB"
-      // Extract leading integer
-      size_t pos = 0; while (pos < val.size() && std::isspace((unsigned char)val[pos])) ++pos;
-      size_t end = pos; while (end < val.size() && std::isdigit((unsigned char)val[end])) ++end;
-      if (end > pos) {
-        try {
-          uint64_t kib = std::stoull(val.substr(pos, end-pos));
-          vram_kb = kib;
-        } catch (...) { /* ignore */ }
-      }
+      if (to_u64(val, v)) vram_kb = v;
     }
   }
 }

@@ -46,7 +46,7 @@ SUB_CORE_TESTS = ["test_basic", "test_tier1", "test_tier2", "test_tier4",
 TARGETS = ["montauk", "montauk_tests", "montauk_sink_c_test",
            "montauk_json_test", "montauk_stats_test", "sublimation_fuzz_diff",
            "test_wsdeque", "test_dfspool", "test_radix", "test_radix_par",
-           "test_smerge_par", "test_pack",
+           "test_smerge_par", "test_pack", "test_kmerge",
            *SUB_CORE_TESTS, "test_types_asan", "test_tier5_asan",
            "test_wsdeque_tsan", "test_dfspool_tsan", "test_radix_par_tsan",
            "sublimation_cli"]
@@ -91,12 +91,43 @@ def build():
         sys.exit(1)
 
 
+def assert_build_dir_can_produce_tests():
+    """A WRONG-CONFIGURED BUILD DIRECTORY MUST BE LOUD.
+
+    MONTAUK_BUILD_TESTS defaults OFF, so a build tree can configure, compile and
+    report success while producing no test binaries at all -- and
+    `cmake --build --target montauk_tests` then exits 0 having done nothing.
+    That pair once hid a six-day-stale test binary reporting a pass it had not
+    earned, and behind it two goldens failing since v8.9.0.
+
+    Reporting "missing <exe>" per binary is the wrong diagnosis for that: it
+    reads as an incomplete build when the real answer is that this build tree
+    was never going to build them. Name the option instead, and refuse to run.
+    """
+    cache = BUILD / "CMakeCache.txt"
+    if not cache.exists():
+        return  # not configured yet; the build step reports that itself
+    for line in cache.read_text().splitlines():
+        if line.startswith("MONTAUK_BUILD_TESTS:"):
+            if line.rsplit("=", 1)[-1].strip().upper() in ("OFF", "0", "FALSE", "NO"):
+                print(f"[run] REFUSING TO REPORT A RESULT: {BUILD} has "
+                      "MONTAUK_BUILD_TESTS=OFF, so it builds no tests and any "
+                      "binary sitting there is stale.")
+                print("[run] fix: cmake -B build -S . -DMONTAUK_BUILD_TESTS=ON")
+                sys.exit(2)
+            return
+    print(f"[run] REFUSING TO REPORT A RESULT: {BUILD}/CMakeCache.txt declares no "
+          "MONTAUK_BUILD_TESTS at all -- this is not a montauk build tree.")
+    sys.exit(2)
+
+
 def layer_unit():
+    assert_build_dir_can_produce_tests()
     ok = True
     for exe in ("montauk_tests", "montauk_sink_c_test", "montauk_json_test",
                 "montauk_stats_test", "sublimation_fuzz_diff",
                 "test_wsdeque", "test_dfspool", "test_radix", "test_radix_par",
-                "test_smerge_par", "test_pack", *SUB_CORE_TESTS):
+                "test_smerge_par", "test_pack", "test_kmerge", *SUB_CORE_TESTS):
         p = BUILD / exe
         if not p.exists():
             print(f"[run] unit: missing {exe} -- build first (drop --no-build)")
@@ -138,6 +169,9 @@ def layer_unit():
 def layer_gate():
     corpus = run([sys.executable, str(ROOT / "tests" / "corpus_check.py")]) == 0
     parity = run([sys.executable, str(ROOT / "tests" / "parity_check.py")]) == 0
+    # The public symbol set against the declared ABI number. Cheap, and the
+    # only thing in the tree that can catch a symbol added without a bump.
+    abi = run([sys.executable, str(ROOT / "tests" / "abi_check.py")]) == 0
     pop = run([sys.executable, str(ROOT / "tests" / "pop_gate.py")]) == 0
     semantic = run([sys.executable, str(ROOT / "tests" / "semantic_check.py")]) == 0
     golden = run([sys.executable, str(ROOT / "tests" / "golden_gate.py")]) == 0
@@ -163,7 +197,7 @@ def layer_gate():
     # which is how a bare unreachable() macro reached an outside consumer.
     cxx = run([sys.executable, str(subt / "test_cxx_headers.py")]) == 0
     return (corpus and parity and pop and semantic and golden and inst and bare and cover and match
-            and learn and spectral and signal and stats and cxx)
+            and learn and spectral and signal and stats and cxx and abi)
 
 
 def layer_perf():
