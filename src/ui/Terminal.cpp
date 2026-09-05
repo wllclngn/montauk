@@ -36,6 +36,23 @@ std::deque<std::string> g_write_queue;
 std::thread             g_writer_thread;
 std::atomic<bool>       g_writer_running{false};
 
+// TEARDOWN ORDERING, and the reason it is a flag rather than a join.
+//
+// on_sigint restores the terminal immediately -- deliberately, because BPF
+// detach across a large traced tree can take seconds and the user's terminal
+// must be usable meanwhile. But the writer thread is concurrently write()ing a
+// full frame to the same fd, so the restore sequence could land in the middle
+// of a frame, or a frame could land AFTER the restore and paint alt-screen
+// content onto the user's shell.
+//
+// The handler cannot join the writer or take g_writer_mtx: neither is
+// async-signal-safe, and locking a mutex a signalled thread may already hold
+// deadlocks. An atomic the writer checks before each write is the whole fix --
+// once muted, no further frame reaches fd 1 and the handler owns it alone.
+// A write already inside the kernel can still complete, which narrows the
+// window to one chunk instead of leaving it open for every frame that follows.
+std::atomic<bool>       g_writer_muted{false};
+
 // Bound the queue. If we ever pile up beyond this it means the terminal
 // is wedged or the producer is wildly faster than drain — drop oldest
 // frames so we don't unbound memory or stall the render loop.
@@ -56,6 +73,8 @@ void writer_loop() {
       chunk = std::move(g_write_queue.front());
       g_write_queue.pop_front();
     }
+
+    if (g_writer_muted.load()) continue;  // teardown owns the fd now
 
     size_t written = 0;
     while (written < chunk.size()) {
@@ -89,6 +108,7 @@ void stop_async_writer() {
 
 void enqueue_frame(std::string frame) {
   if (frame.empty()) return;
+  if (g_writer_muted.load()) return;  // never paint over a restored terminal
   if (!g_writer_running.load()) {
     // Fall back to synchronous write — early startup or after shutdown.
     best_effort_write(STDOUT_FILENO, frame.data(), frame.size());
@@ -134,6 +154,7 @@ void on_sigint(int){
   // nothing more a repeated graceful request can do -- so escalate to _exit so a
   // slow teardown can always be cut. Async-signal-safe: atomics, write(2), _exit.
   static std::atomic<int> hits{0};
+  g_writer_muted.store(true);   // must precede the restore: see g_writer_muted
   restore_terminal_minimal();
   if (hits.fetch_add(1) > 0) {
     const char* m = "\nmontauk: second interrupt -- forcing exit\n";

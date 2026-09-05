@@ -106,15 +106,31 @@ void MetricsServer::run(std::stop_token st) {
     return;
   }
 
-  // Submit poll requests for listen_fd and stop_eventfd
+  // Submit poll requests for listen_fd and stop_eventfd.
+  //
+  // io_uring_get_sqe returns NULL when the submission queue is full, and the
+  // result was dereferenced unchecked -- a NULL write rather than a failure.
+  // The ring is 16 deep against at most two in-flight polls, so a full queue
+  // means submissions are not being consumed; flush once and retry, and if the
+  // queue is still full, say so rather than crashing the server thread.
   auto submit_poll = [&](int fd, UringTag tag) {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&ring);
+    if (sqe == nullptr) {
+      uring.submit(&ring);
+      sqe = io_uring_get_sqe(&ring);
+    }
+    if (sqe == nullptr) {
+      montauk::util::log_error(
+          "metrics server: io_uring submission queue full, poll on fd %d dropped", fd);
+      return false;
+    }
     io_uring_prep_poll_add(sqe, fd, POLLIN);
     io_uring_sqe_set_data64(sqe, static_cast<uint64_t>(tag));
+    return true;
   };
 
-  submit_poll(listen_fd_, UringTag::ListenPoll);
-  submit_poll(stop_eventfd_, UringTag::StopPoll);
+  (void)submit_poll(listen_fd_, UringTag::ListenPoll);
+  (void)submit_poll(stop_eventfd_, UringTag::StopPoll);
   uring.submit(&ring);
 
   montauk::util::log_info("metrics server listening on :%d", port_);
@@ -144,7 +160,7 @@ void MetricsServer::run(std::stop_token st) {
         ::close(client_fd);
       }
       // Re-arm listen poll
-      submit_poll(listen_fd_, UringTag::ListenPoll);
+      (void)submit_poll(listen_fd_, UringTag::ListenPoll);
       uring.submit(&ring);
     }
   }

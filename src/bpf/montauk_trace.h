@@ -359,6 +359,23 @@ enum sched_trace_op {
                                 //   bitmask (TICK_DEP_MASK_*, valid only when sub_idx=0), pid=-1.
                                 //   Correlate against KICK_ISSUE/RESCHED on the same CPU to see whether
                                 //   a CPU went tickless right as a kick targeting it was in flight.
+  SCHED_OP_DSQ_INSERT     = 14, // a task was placed into a sched_ext dispatch queue (kfunc
+                                //   scx_bpf_dsq_insert / _vtime, any scx scheduler). pid=task,
+                                //   cpu=CPU executing the insert, score=the RAW dsq_id.
+                                //   The dsq_id is self-describing on every scx scheduler that
+                                //   uses per-CPU queues: an id below the CPU count names a
+                                //   specific CPU, anything above it is a shared pool. So this
+                                //   alone separates a placement that NAMES a destination from
+                                //   one that drops the task into a pool for whichever CPU wins
+                                //   the drain race -- the two produce migrations for entirely
+                                //   different reasons and admit opposite fixes.
+  SCHED_OP_DSQ_DRAIN      = 15, // a CPU consumed from a dispatch queue (kfunc
+                                //   scx_bpf_dsq_move_to_local). cpu=the DRAINING CPU,
+                                //   score=the raw dsq_id, pid=-1 (the kfunc does not name the
+                                //   task). Pair with the next SWITCH_IN on the same CPU to
+                                //   recover which task it was: if that task last ran elsewhere,
+                                //   the migration was decided at DRAIN time by the race, not at
+                                //   placement time by a policy.
 };
 
 // Per-CPU aggregation of scheduler-decision counts, indexed by sched_trace_op.
@@ -366,7 +383,7 @@ enum sched_trace_op {
 // (one bump, no shared ringbuf reserve) keeps tracing near-zero-overhead there.
 // Userspace sums across CPUs at snapshot time. Per-event streaming is opt-in
 // (binary --trace-out only); the contract struct above is the streamed form.
-#define MONTAUK_SCHED_OP_MAX 14  /* index by sched_trace_op (1..13); 0 unused */
+#define MONTAUK_SCHED_OP_MAX 16  /* index by sched_trace_op (1..15); 0 unused */
 struct sched_op_counters {
   __u64 op[MONTAUK_SCHED_OP_MAX];
 };

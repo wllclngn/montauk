@@ -90,8 +90,8 @@ static void duplicates_case(void) {
     free(all); free(cat); free(runs); free(lens); free(merged);
 }
 
-// Empty runs must not confuse the heap: a run that is empty from the start is
-// never seated, and one that empties mid-merge is removed.
+// Empty runs must not confuse the loser tree: a run empty from the start is
+// seated already exhausted, and one that empties mid-merge is marked so.
 static void empty_runs_case(void) {
     int64_t a[] = {1, 4, 9};
     int64_t b[] = {2, 3};

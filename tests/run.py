@@ -204,10 +204,19 @@ def layer_perf():
     return run([sys.executable, str(ROOT / "tests" / "perf_gate.py")]) == 0
 
 
+# A LAYER THAT DID NOT RUN IS NOT A LAYER THAT PASSED. The trace layer needs
+# root, so on every ordinary run it skipped and reported PASS -- the same shape
+# as a build directory that reported success while building no tests, and the
+# reason a stale binary went unnoticed for six days. SKIP is now its own verdict
+# in the summary, and the exit status still succeeds because a skip is not a
+# failure either. The distinction is what the summary owes a reader.
+SKIP = "SKIP"
+
+
 def layer_trace():
     if os.geteuid() != 0:
         print("[run] trace: SKIP (needs root -- sudo python3 tests/run.py --layer trace)")
-        return True  # a skip is not a failure
+        return SKIP
     return run([sys.executable, str(ROOT / "tests" / "trace_loadtest.py")]) == 0
 
 
@@ -255,8 +264,13 @@ def main():
 
     print("[run] summary")
     for name, ok in results.items():
-        print(f"  {name:8} {'PASS' if ok else 'FAIL'}")
-    return 0 if all(results.values()) else 1
+        verdict = SKIP if ok is SKIP else ("PASS" if ok else "FAIL")
+        print(f"  {name:8} {verdict}")
+    skipped = [n for n, ok in results.items() if ok is SKIP]
+    if skipped:
+        print(f"[run] {len(skipped)} layer(s) DID NOT RUN: {', '.join(skipped)} "
+              "-- this run proves nothing about them")
+    return 0 if all(ok is SKIP or ok for ok in results.values()) else 1
 
 
 if __name__ == "__main__":

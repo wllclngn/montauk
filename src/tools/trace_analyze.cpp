@@ -183,6 +183,17 @@ static int64_t g_qual_pid = -1;
 static int64_t g_qual_tid = -1;
 static double g_qual_window_s = 2.0;
 
+// THE WAKE-CLASSIFICATION FLOOR, in ns. placement-race and dispatch-stall
+// attribute a wake only when it waited at least this long. The default is one
+// CONFIG_HZ tick, which is the pathology those reports were built to name: a
+// wake that missed a whole tick. That default silently made them TAIL-ONLY
+// instruments -- on a 212k-wake capture it classified 757 of them, 0.36%, and
+// a reader asking where the MEDIAN wake goes got a verdict computed from the
+// worst third of a percent. The events were always folded and counted; only
+// the attribution was gated. Lowering the floor re-reads captures already on
+// disk, so this answers a median question with no new probes and no re-run.
+static uint64_t g_qual_floor_ns = 900000ULL;
+
 // Capture-loss accounting: the last TRACE_EVT_DROPS snapshot seen in the
 // fold. Snapshots carry free-running cumulative totals, so the last one IS
 // the whole recording's loss. Every surface (text block, gauges, JSON
@@ -378,6 +389,15 @@ int take_row_qualifier(int argc, char** argv, int i, int* consumed) {
   } else if (is("--tid") && val) {
     *consumed = 1;
     g_qual_tid = std::strtol(val, nullptr, 10);
+  } else if (is("--floor-us") && val) {
+    *consumed = 1;
+    char* end = nullptr;
+    double us = std::strtod(val, &end);
+    if (end == val || us < 0) {
+      log_error("--floor-us takes microseconds >= 0, got '%s'", val);
+      return 2;
+    }
+    g_qual_floor_ns = (uint64_t)(us * 1000.0);
   } else if (is("--window") && val) {
     *consumed = 1;
     g_qual_window_s = std::strtod(val, nullptr);
@@ -573,7 +593,7 @@ const char* prom_help(const char* name) {
     {"montauk_analysis_iolat_pwrite64_worst_ms",
      "pwrite64 completion latency, worst observed, in ms"},
     {"montauk_analysis_dispatches_per_sec",
-     "Scheduler dispatch (PICK) rate per second over the trace"},
+     "Scheduler dispatch rate per second over the trace, from PICK where the\n      scheduler binds it and from SWITCH_IN otherwise"},
     {"montauk_analysis_preempts_per_sec",
      "Preemption (tick + wakeup) rate per second over the trace"},
     {"montauk_analysis_waits_total",
@@ -1143,8 +1163,15 @@ struct SummaryReport final : Report {
       // PICK is a dispatch; preempt is tick + wakeup. Duration is the event-span.
       double dur_s = (max_ts_ > min_ts_) ? static_cast<double>(max_ts_ - min_ts_) / 1e9 : 0.0;
       if (dur_s > 0.0) {
+        // PICK is only populated when a scheduler exports a pick tracepoint, which
+        // no sched_ext scheduler does -- so this read 0 on every scx capture and
+        // the dispatch rate had to be recovered by hand from the fractal timeline.
+        // SWITCH_IN is the documented fallback and is emitted unconditionally from
+        // sched_switch for exactly this case; use it when PICK is unbound.
+        const uint64_t picks = sched_[SCHED_OP_PICK] ? sched_[SCHED_OP_PICK]
+                                                     : sched_[SCHED_OP_SWITCH_IN];
         g.push_back({"montauk_analysis_dispatches_per_sec", "",
-                       static_cast<double>(sched_[SCHED_OP_PICK]) / dur_s});
+                       static_cast<double>(picks) / dur_s});
         g.push_back({"montauk_analysis_preempts_per_sec", "",
                        static_cast<double>(sched_[SCHED_OP_PREEMPT_TICK] +
                                            sched_[SCHED_OP_PREEMPT_WAKEUP]) / dur_s});
@@ -3534,7 +3561,7 @@ struct WorkConservationReport final : Report {
 // queried at each floored wake's became-runnable instant. Requires a trace
 // captured by a montauk that streams CPU_IDLE; older traces report it absent.
 struct PlacementRaceReport final : Report {
-  static constexpr uint64_t kTickFloorNs = 900000ULL;  // >=900us ~ one tick: floored
+  // The floor is g_qual_floor_ns (--floor-us), one tick by default.
   // per-CPU idle boundaries: ts (ns) and flag (1=entered idle, 0=left idle)
   std::unordered_map<uint32_t, std::vector<std::pair<uint64_t, uint8_t>>> idle_evt_;
   std::vector<std::pair<uint64_t, uint32_t>> floored_;  // (wake_instant_ns, run_cpu)
@@ -3554,7 +3581,7 @@ struct PlacementRaceReport final : Report {
     if (s->op != SCHED_OP_WAKE2RUN) return;
     ++w2r_total_;
     uint64_t wait = s->runtime_ns;
-    if (wait < kTickFloorNs) return;
+    if (wait < g_qual_floor_ns) return;
     uint64_t run_ts = s->timestamp_ns;
     uint64_t wake_ts = (run_ts > wait) ? (run_ts - wait) : 0;
     floored_.push_back({wake_ts, s->cpu});
@@ -3628,7 +3655,8 @@ struct PlacementRaceReport final : Report {
       return;
     }
     if (floored_.empty()) {
-      set_verdict("NONE", "no tick-floored wakeups (>=900us) -- nothing to attribute");
+      set_verdict("NONE", "no wakeups over the %.0fus floor -- nothing to attribute",
+                  (double)g_qual_floor_ns / 1000.0);
       return;
     }
     // PLACEMENT-MISS is REROUTABLE (an idle CPU was free and a placement fix
@@ -3637,10 +3665,11 @@ struct PlacementRaceReport final : Report {
     set_verdict(miss_pct_ >= 66.0 ? "PLACEMENT-MISS"
                 : sat_pct_ >= 66.0 ? "SATURATED"
                                    : "MIXED",
-        "%s tick-floored wakes (>=900us); PLACEMENT-MISS %.0f%% "
+        "%s wakes over the %.0fus floor; PLACEMENT-MISS %.0f%% "
         "(idle CPU was free) / SATURATED %.0f%% (all busy); "
         "avg %.1f idle CPUs free at a miss",
-        fmt_count((double)floored_n_).c_str(), miss_pct_, sat_pct_, avg_idle_);
+        fmt_count((double)floored_n_).c_str(), (double)g_qual_floor_ns / 1000.0,
+        miss_pct_, sat_pct_, avg_idle_);
   }
 
   void emit(const montauk::model::TraceReader&) override {
@@ -3988,6 +4017,11 @@ static void fold_driver_state(uint32_t type, const uint8_t* data, uint32_t len) 
 }
 
 struct DispatchStallReport final : Report {
+  // ONE TICK, AND IT IS A LOOKAHEAD BOUND, NOT THE FLOOR. This is how far past
+  // a wake's run_ts the serving pick is searched for; it must not follow
+  // --floor-us down, or a floor of 0 would collapse the search window to zero
+  // and no wake would ever find the pick that served it. The floor that gates
+  // WHICH wakes are attributed is g_qual_floor_ns.
   static constexpr uint64_t kTickFloorNs = 900000ULL;
   // pick on a CPU: timestamp, picked pid, LANE (sub_idx: 0=primary, >0=steal), and
   // the dispatch score. The class occupies the high bits; within a class the
@@ -4031,7 +4065,7 @@ struct DispatchStallReport final : Report {
       return;  // all shared substrate, folded by the driver
     if (s->op != SCHED_OP_WAKE2RUN) return;
     uint64_t wait = s->runtime_ns;
-    if (wait < kTickFloorNs) return;
+    if (wait < g_qual_floor_ns) return;
     // Row qualifiers narrow WHICH floored wakes get analyzed, not the
     // pass-over context around them: picks_/idle_/holder_ above stay
     // unfiltered so the CLASS/CONCENTRATION/HELD-vs-DARK attribution below
@@ -4250,13 +4284,15 @@ struct DispatchStallReport final : Report {
     // The conclusion, composed here rather than at print time: --json calls
     // compute() then json() and never calls emit().
     if (floored_.empty()) {
-      set_verdict("NO-FLOORED", "no tick-floored wakes -- nothing to attribute");
+      set_verdict("NO-FLOORED", "no wakes over the %.0fus floor -- nothing to attribute",
+                  (double)g_qual_floor_ns / 1000.0);
     } else {
       set_verdict(preempt_pct_ >= order_pct_ ? "PREEMPT-STARVED" : "ORDER-STARVED",
-                  "%s saturated floored wakes; PREEMPT-STARVED %.0f%% "
+                  "%s saturated wakes over the %.0fus floor; PREEMPT-STARVED %.0f%% "
                   "(0 intervening picks) / ORDER-STARVED %.0f%% (CPU served others "
                   "first); avg %.1f pass-overs, p99 %llu pass-overs",
-                  fmt_count((double)n_).c_str(), preempt_pct_, order_pct_, avg_inter_,
+                  fmt_count((double)n_).c_str(), (double)g_qual_floor_ns / 1000.0,
+                  preempt_pct_, order_pct_, avg_inter_,
                   (unsigned long long)p99_);
     }
   }
@@ -4268,13 +4304,15 @@ struct DispatchStallReport final : Report {
   void build_verdict() {
     char b[512];
     if (floored_.empty()) {
-      std::snprintf(b, sizeof b, "no tick-floored wakes to attribute%s",
+      std::snprintf(b, sizeof b, "no wakes over the %.0fus floor to attribute%s",
+                    (double)g_qual_floor_ns / 1000.0,
                     censored_n_ ? "" : " (nothing pending)");
     } else {
       std::snprintf(b, sizeof b,
-          "%s saturated floored wakes; PREEMPT-STARVED %.0f%% / ORDER-STARVED "
-          "%.0f%%; avg %.1f pass-overs, p99 %llu",
-          fmt_count((double)n_).c_str(), preempt_pct_, order_pct_, avg_inter_,
+          "%s saturated wakes over the %.0fus floor; PREEMPT-STARVED %.0f%% / "
+          "ORDER-STARVED %.0f%%; avg %.1f pass-overs, p99 %llu",
+          fmt_count((double)n_).c_str(), (double)g_qual_floor_ns / 1000.0,
+          preempt_pct_, order_pct_, avg_inter_,
           (unsigned long long)p99_);
     }
     verdict_ = b;
@@ -7394,7 +7432,7 @@ int montauk_analyze_main(int argc, char** argv) {
     std::fprintf(want_help ? stdout : stderr,
         "usage: montauk --analyze TRACE [--report name[,name...]] [--json]\n"
         "                       [--sig N|NAME] [--comm SUBSTR] [--pid N] [--tid N]\n"
-        "                       [--window SECONDS]\n"
+        "                       [--window SECONDS] [--floor-us US]\n"
         "                       (--json emits the structured envelope instead of\n"
         "                        the text report. --pid/--tid narrow to one task's\n"
         "                        events in sched, locality, dispatch-stall, wakers\n"
@@ -7717,6 +7755,17 @@ int montauk_analyze_main(int argc, char** argv) {
                q != kQualNotMine) {
       if (q != 0) return q;
       i += used;
+    } else if (a == "--digest" || a == "--l2-by-cpu") {
+      // THE FLAG IS NOT UNKNOWN, THE TARGET IS THE WRONG SHAPE. These are
+      // RECORDING-DIR verbs: the digest joins the dir's .prom scrapes (SYSTEM
+      // specs, THERMAL/POWER, the L2 hot CPU) with the optional event stream,
+      // and a bare stream has no scrapes to join. Reporting it as an unknown
+      // flag sends the reader looking for a missing feature instead of a
+      // mismatched argument, which is the more expensive of the two searches.
+      log_error("'%s' applies to a RECORDING DIR, not a single trace file. "
+                "For a stream use: montauk --analyze %s [--report NAME] [--json]",
+                a.c_str(), path);
+      return 2;
     } else {
       log_error("unknown flag '%s' (see montauk --analyze --help)", a.c_str());
       return 2;

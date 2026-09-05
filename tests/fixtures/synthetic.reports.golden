@@ -29,14 +29,14 @@ VERDICT: 100.0% of migrations stay cache-local (same-L2/L3); density decays with
 
 
 REPORT summary
-VERDICT: 9.9k events in 0.1 s (84.1k/s), dominated by SCHED WAKE2RUN (21%)
+VERDICT: 10.3k events in 0.1 s (87.4k/s), dominated by SCHED WAKE2RUN (20%)
 pattern         synthetic
 start           15:06:40.000
 format_version  1
 first_event_ms  0.050
 duration_s      0.118
-events          9914
-events_per_sec  84052
+events          10314
+events_per_sec  87443
 type    subtype          count
 NTSYNC  create_sem                  1
 NTSYNC  sem_release                16
@@ -52,6 +52,7 @@ IO      nr=202                     13
 IO      ppoll                       1
 SCHED   ENQUEUE                   100
 SCHED   PREEMPT_TICK             2000
+SCHED   PREEMPT_WAKEUP            400
 SCHED   WAKEUP                   2000
 SCHED   WAKE2RUN                 2036
 SCHED   CPU_IDLE                  286
@@ -228,7 +229,7 @@ VERDICT: 2 ranked pids, 0 self-preempting (stints/wakes > 1.5); floored-wake sha
 
 
 REPORT matrix-profile
-VERDICT: 8444 sched events over 128 windows of 0.92ms; discord (most anomalous) window 102 at 94ms, profile 2.51 vs mean 1.21; motif (most recurring) windows 114~117 at distance 0.00
+VERDICT: 8844 sched events over 128 windows of 0.92ms; discord (most anomalous) window 103 at 95ms, profile 2.42 vs mean 1.35; motif (most recurring) windows 114~117 at distance 0.00
 
 
 POORLY-BEHAVING ITEMS (ranked)
@@ -239,6 +240,6 @@ unsignaled     0xc                waits                      1200  HIGH
 abort          1007/0x0000000000abd000 victim_bytes               8192  HIGH
 doublefree-logic 1001/0x0000000000bbbb00 bytes                       256  HIGH
 kick-latency   cpu1               unanswered_kicks              1  MED
-discord        94ms               profile_vs_mean         2.07651  MED
+discord        95ms               profile_vs_mean         1.80003  MED
 kick-latency   cpu0               unanswered_kicks              1  MED
 kthread-strand kworker/0:1H       max_strand_ms                95  MED

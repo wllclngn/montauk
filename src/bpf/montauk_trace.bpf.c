@@ -1556,8 +1556,19 @@ int handle_tick_stop(struct trace_event_raw_tick_stop *ctx)
   return 0;
 }
 
+// THE RETURN COMES FROM THE HELPER, NOT FROM A DECLARED ARGUMENT LIST. This was
+// BPF_PROG(handle_scx_reenq, u32 ret), which hardcodes the kfunc as taking no
+// arguments so that ctx[0] is the return. Kernel 7.2 changed
+// scx_bpf_reenqueue_local's signature -- the verifier now reports arg0 as
+// 'struct bpf_prog_aux *' -- so ctx[0] became a POINTER, the macro's unpacking
+// shifted it, and the load failed with "R6 pointer arithmetic with <<= operator
+// prohibited". One rejected program fails the WHOLE object, so every --trace
+// capture on a 7.2 box wrote a bare header and no events.
+//
+// bpf_get_func_ret() reads the return by asking the kernel where it is, so this
+// no longer encodes an argument count that only one kernel version agrees with.
 SEC("fexit/scx_bpf_reenqueue_local")
-int BPF_PROG(handle_scx_reenq, u32 ret)
+int handle_scx_reenq(unsigned long long *ctx)
 {
   if (!sched_stream)
     return 0;
@@ -1565,7 +1576,9 @@ int BPF_PROG(handle_scx_reenq, u32 ret)
   struct scx_storm_counters *c = bpf_map_lookup_elem(&scx_storm, &zero);
   if (!c)
     return 0;
-  c->reenq += ret;
+  u64 ret = 0;
+  bpf_get_func_ret(ctx, &ret);
+  c->reenq += (u32)ret;
   return 0;
 }
 

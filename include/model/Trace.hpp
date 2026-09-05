@@ -88,7 +88,12 @@ struct TraceSnapshot {
   // Scheduler-decision counts, indexed by sched_trace_op (1..6), summed across
   // CPUs. Non-zero only when the active scheduler binds decision tracepoints;
   // index 6 (wakeup) comes from the generic kernel sched_wakeup tracepoint.
-  std::array<uint64_t, 7> sched_op_total{};
+  // Sized to sched_trace_op's full range (montauk_trace.h MONTAUK_SCHED_OP_MAX).
+  // This was 7 while the BPF enum grew to 15, so kick_issue, resched, tick_stop
+  // and the dsq pair were bumped per-CPU in BPF and then discarded here -- the
+  // collector's copy loop is bounded by this array, so they never reached
+  // userspace at all. Widen with the enum.
+  std::array<uint64_t, 16> sched_op_total{};
 
   // Migration classification (cumulative since attach, summed across CPUs from
   // the BPF mig_ccx_counts map): a fork-storm's core-hopping split by whether

@@ -215,6 +215,17 @@ int main(int argc, char** argv) {
     uint64_t run = 800'000 + static_cast<uint64_t>(i % 50) * 60'000;
     if (i % 37 == 0) run = 9'000'000;
     sched_evt(SCHED_OP_PREEMPT_TICK, cpu, wakee, -1, 0, run, /*budget*/1'000'000, ts + 3000);
+
+    // PREEMPT_WAKEUP, and it is here to keep two gauges distinguishable.
+    // dispatches_per_sec falls back to SWITCH_IN when the scheduler binds no
+    // PICK tracepoint, and preempts_per_sec sums PREEMPT_TICK + PREEMPT_WAKEUP.
+    // With PREEMPT_WAKEUP absent those sums were both exactly 2000, so the two
+    // gauges rendered byte-identical and no test could tell the fallback from
+    // the preempt path -- a gate that cannot fail. A wakeup preempt on a
+    // fraction of iterations separates them for good.
+    if (i % 5 == 0)
+      sched_evt(SCHED_OP_PREEMPT_WAKEUP, cpu, wakee, -1, 0, run,
+                /*budget*/1'000'000, ts + 3500);
   }
 
   // STRANDED PER-CPU KTHREADS (kstrand). These are TRACE_EVT_KSTRAND records,

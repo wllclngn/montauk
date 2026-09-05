@@ -4,6 +4,7 @@
 [     0.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [     0.054] SCHED CPU_IDLE       cpu=0   pid=0      
 [     0.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=9000000 budget=1000000
+[     0.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [     0.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [     0.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [     0.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -24,6 +25,7 @@
 [     0.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us
 [     0.304] SCHED SWITCH_IN      cpu=1   pid=1001   
 [     0.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[     0.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [     0.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [     0.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us CROSS-DOMAIN
 [     0.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -45,6 +47,7 @@
 [     0.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us
 [     0.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [     0.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[     0.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [     0.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [     0.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [     0.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -66,6 +69,7 @@
 [     0.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us CROSS-DOMAIN
 [     0.807] SCHED SWITCH_IN      cpu=3   pid=1001   
 [     0.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[     0.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [     0.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [     0.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [     0.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -86,6 +90,7 @@
 [     1.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us
 [     1.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [     1.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[     1.054] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [     1.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [     1.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us CROSS-DOMAIN
 [     1.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -107,6 +112,7 @@
 [     1.310] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us
 [     1.310] SCHED SWITCH_IN      cpu=1   pid=1001   
 [     1.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[     1.304] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [     1.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [     1.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [     1.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -128,6 +134,7 @@
 [     1.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us CROSS-DOMAIN
 [     1.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [     1.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[     1.554] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [     1.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [     1.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [     1.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -149,6 +156,7 @@
 [     1.813] SCHED SWITCH_IN      cpu=3   pid=1001   
 [     1.815] SCHED CPU_IDLE       cpu=3   pid=0      
 [     1.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[     1.804] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [     1.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [     1.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us CROSS-DOMAIN
 [     1.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -169,6 +177,7 @@
 [     2.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us
 [     2.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [     2.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[     2.054] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [     2.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [     2.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [     2.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -190,6 +199,7 @@
 [     2.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us CROSS-DOMAIN
 [     2.317] SCHED SWITCH_IN      cpu=1   pid=1001   
 [     2.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[     2.304] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [     2.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [     2.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [     2.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -211,6 +221,7 @@
 [     2.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us
 [     2.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [     2.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[     2.554] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [     2.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [     2.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us CROSS-DOMAIN
 [     2.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -231,6 +242,7 @@
 [     2.818] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us
 [     2.820] SCHED SWITCH_IN      cpu=3   pid=1001   
 [     2.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[     2.804] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [     2.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [     2.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [     2.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -252,6 +264,7 @@
 [     3.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us CROSS-DOMAIN
 [     3.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [     3.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[     3.054] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [     3.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [     3.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [     3.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -273,6 +286,7 @@
 [     3.321] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us
 [     3.322] SCHED SWITCH_IN      cpu=1   pid=1001   
 [     3.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[     3.304] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [     3.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [     3.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us CROSS-DOMAIN
 [     3.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -294,6 +308,7 @@
 [     3.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [     3.575] SCHED CPU_IDLE       cpu=2   pid=0      
 [     3.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[     3.554] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [     3.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [     3.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [     3.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -314,6 +329,7 @@
 [     3.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us CROSS-DOMAIN
 [     3.825] SCHED SWITCH_IN      cpu=3   pid=1001   
 [     3.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[     3.804] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [     3.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [     3.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [     3.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -335,6 +351,7 @@
 [     4.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us
 [     4.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [     4.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[     4.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [     4.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [     4.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us CROSS-DOMAIN
 [     4.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -356,6 +373,7 @@
 [     4.327] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us
 [     4.329] SCHED SWITCH_IN      cpu=1   pid=1001   
 [     4.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[     4.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [     4.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [     4.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [     4.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -376,6 +394,7 @@
 [     4.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us CROSS-DOMAIN
 [     4.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [     4.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[     4.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [     4.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [     4.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [     4.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -397,6 +416,7 @@
 [     4.830] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us
 [     4.832] SCHED SWITCH_IN      cpu=3   pid=1001   
 [     4.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[     4.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [     4.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [     4.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us CROSS-DOMAIN
 [     4.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -418,6 +438,7 @@
 [     5.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us
 [     5.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [     5.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[     5.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [     5.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [     5.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [     5.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -439,6 +460,7 @@
 [     5.304] SCHED SWITCH_IN      cpu=1   pid=1001   
 [     5.306] SCHED CPU_IDLE       cpu=1   pid=0      
 [     5.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[     5.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [     5.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [     5.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [     5.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -459,6 +481,7 @@
 [     5.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us
 [     5.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [     5.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[     5.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [     5.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [     5.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us CROSS-DOMAIN
 [     5.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -480,6 +503,7 @@
 [     5.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us
 [     5.808] SCHED SWITCH_IN      cpu=3   pid=1001   
 [     5.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[     5.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [     5.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [     5.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [     5.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -501,6 +525,7 @@
 [     6.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us CROSS-DOMAIN
 [     6.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [     6.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[     6.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [     6.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [     6.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [     6.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -521,6 +546,7 @@
 [     6.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us
 [     6.311] SCHED SWITCH_IN      cpu=1   pid=1001   
 [     6.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[     6.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [     6.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [     6.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us CROSS-DOMAIN
 [     6.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -542,6 +568,7 @@
 [     6.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us
 [     6.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [     6.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[     6.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [     6.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [     6.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [     6.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -563,6 +590,7 @@
 [     6.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us CROSS-DOMAIN
 [     6.814] SCHED SWITCH_IN      cpu=3   pid=1001   
 [     6.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[     6.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [     6.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [     6.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [     6.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -584,6 +612,7 @@
 [     7.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [     7.066] SCHED CPU_IDLE       cpu=0   pid=0      
 [     7.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[     7.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [     7.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [     7.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us CROSS-DOMAIN
 [     7.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -604,6 +633,7 @@
 [     7.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us
 [     7.316] SCHED SWITCH_IN      cpu=1   pid=1001   
 [     7.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[     7.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [     7.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [     7.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [     7.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -625,6 +655,7 @@
 [     7.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us CROSS-DOMAIN
 [     7.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [     7.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[     7.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [     7.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [     7.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [     7.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -646,6 +677,7 @@
 [     7.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us
 [     7.819] SCHED SWITCH_IN      cpu=3   pid=1001   
 [     7.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[     7.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [     7.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [     7.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us CROSS-DOMAIN
 [     7.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -666,6 +698,7 @@
 [     8.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us
 [     8.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [     8.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[     8.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [     8.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [     8.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [     8.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -687,6 +720,7 @@
 [     8.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us CROSS-DOMAIN
 [     8.322] SCHED SWITCH_IN      cpu=1   pid=1001   
 [     8.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[     8.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [     8.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [     8.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [     8.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -708,6 +742,7 @@
 [     8.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us
 [     8.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [     8.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[     8.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [     8.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [     8.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us CROSS-DOMAIN
 [     8.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -729,6 +764,7 @@
 [     8.825] SCHED SWITCH_IN      cpu=3   pid=1001   
 [     8.826] SCHED CPU_IDLE       cpu=3   pid=0      
 [     8.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[     8.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [     8.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [     8.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [     8.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -749,6 +785,7 @@
 [     9.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us CROSS-DOMAIN
 [     9.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [     9.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[     9.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [     9.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [     9.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [     9.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -770,6 +807,7 @@
 [     9.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us
 [     9.329] SCHED SWITCH_IN      cpu=1   pid=1001   
 [     9.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=9000000 budget=1000000
+[     9.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [     9.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [     9.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us CROSS-DOMAIN
 [     9.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -791,6 +829,7 @@
 [     9.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us
 [     9.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [     9.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[     9.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [     9.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [     9.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [     9.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -811,6 +850,7 @@
 [     9.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us CROSS-DOMAIN
 [     9.832] SCHED SWITCH_IN      cpu=3   pid=1001   
 [     9.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[     9.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [     9.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [     9.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [     9.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -832,6 +872,7 @@
 [    10.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us
 [    10.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    10.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    10.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    10.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    10.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us CROSS-DOMAIN
 [    10.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -853,6 +894,7 @@
 [    10.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us
 [    10.305] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    10.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    10.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    10.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    10.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [    10.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -874,6 +916,7 @@
 [    10.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    10.557] SCHED CPU_IDLE       cpu=2   pid=0      
 [    10.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    10.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    10.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    10.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [    10.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -894,6 +937,7 @@
 [    10.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us
 [    10.807] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    10.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    10.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    10.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    10.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us CROSS-DOMAIN
 [    10.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -915,6 +959,7 @@
 [    11.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us
 [    11.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    11.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    11.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    11.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    11.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [    11.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -936,6 +981,7 @@
 [    11.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us CROSS-DOMAIN
 [    11.310] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    11.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    11.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    11.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    11.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [    11.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -956,6 +1002,7 @@
 [    11.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us
 [    11.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    11.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    11.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    11.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    11.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us CROSS-DOMAIN
 [    11.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -977,6 +1024,7 @@
 [    11.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us
 [    11.813] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    11.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    11.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    11.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    11.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [    11.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -998,6 +1046,7 @@
 [    12.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us CROSS-DOMAIN
 [    12.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    12.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    12.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    12.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    12.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [    12.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -1019,6 +1068,7 @@
 [    12.316] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    12.318] SCHED CPU_IDLE       cpu=1   pid=0      
 [    12.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    12.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    12.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    12.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us CROSS-DOMAIN
 [    12.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -1039,6 +1089,7 @@
 [    12.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us
 [    12.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    12.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    12.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    12.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    12.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [    12.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -1060,6 +1111,7 @@
 [    12.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us CROSS-DOMAIN
 [    12.819] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    12.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    12.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    12.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    12.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [    12.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -1081,6 +1133,7 @@
 [    13.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us
 [    13.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    13.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    13.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    13.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    13.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us CROSS-DOMAIN
 [    13.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -1101,6 +1154,7 @@
 [    13.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us
 [    13.322] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    13.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    13.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    13.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    13.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [    13.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -1122,6 +1176,7 @@
 [    13.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us CROSS-DOMAIN
 [    13.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    13.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    13.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    13.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    13.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [    13.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -1143,6 +1198,7 @@
 [    13.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us
 [    13.825] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    13.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    13.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    13.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    13.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us CROSS-DOMAIN
 [    13.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -1164,6 +1220,7 @@
 [    14.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    14.078] SCHED CPU_IDLE       cpu=0   pid=0      
 [    14.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    14.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    14.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    14.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [    14.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -1184,6 +1241,7 @@
 [    14.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us CROSS-DOMAIN
 [    14.329] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    14.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    14.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    14.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    14.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [    14.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -1205,6 +1263,7 @@
 [    14.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us
 [    14.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    14.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    14.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    14.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    14.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us CROSS-DOMAIN
 [    14.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -1226,6 +1285,7 @@
 [    14.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us
 [    14.832] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    14.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    14.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    14.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    14.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [    14.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -1246,6 +1306,7 @@
 [    15.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us CROSS-DOMAIN
 [    15.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    15.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    15.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    15.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    15.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [    15.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -1267,6 +1328,7 @@
 [    15.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us
 [    15.305] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    15.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    15.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    15.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    15.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us CROSS-DOMAIN
 [    15.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -1288,6 +1350,7 @@
 [    15.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us
 [    15.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    15.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    15.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    15.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    15.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [    15.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -1309,6 +1372,7 @@
 [    15.807] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    15.809] SCHED CPU_IDLE       cpu=3   pid=0      
 [    15.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    15.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    15.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    15.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [    15.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -1329,6 +1393,7 @@
 [    16.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us
 [    16.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    16.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    16.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    16.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    16.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us CROSS-DOMAIN
 [    16.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -1350,6 +1415,7 @@
 [    16.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us
 [    16.311] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    16.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    16.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    16.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    16.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [    16.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -1371,6 +1437,7 @@
 [    16.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us CROSS-DOMAIN
 [    16.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    16.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    16.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    16.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    16.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [    16.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -1391,6 +1458,7 @@
 [    16.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us
 [    16.814] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    16.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    16.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    16.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    16.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us CROSS-DOMAIN
 [    16.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -1412,6 +1480,7 @@
 [    17.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us
 [    17.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    17.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    17.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    17.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    17.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [    17.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -1433,6 +1502,7 @@
 [    17.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us CROSS-DOMAIN
 [    17.317] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    17.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    17.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    17.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    17.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [    17.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -1454,6 +1524,7 @@
 [    17.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    17.569] SCHED CPU_IDLE       cpu=2   pid=0      
 [    17.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    17.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    17.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    17.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us CROSS-DOMAIN
 [    17.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -1474,6 +1545,7 @@
 [    17.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us
 [    17.820] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    17.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    17.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    17.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    17.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [    17.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -1495,6 +1567,7 @@
 [    18.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us CROSS-DOMAIN
 [    18.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    18.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    18.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    18.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    18.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [    18.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -1516,6 +1589,7 @@
 [    18.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us
 [    18.323] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    18.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    18.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    18.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    18.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us CROSS-DOMAIN
 [    18.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -1536,6 +1610,7 @@
 [    18.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us
 [    18.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    18.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=9000000 budget=1000000
+[    18.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    18.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    18.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [    18.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -1557,6 +1632,7 @@
 [    18.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us CROSS-DOMAIN
 [    18.826] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    18.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    18.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    18.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    18.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [    18.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -1578,6 +1654,7 @@
 [    19.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us
 [    19.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    19.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    19.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    19.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    19.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us CROSS-DOMAIN
 [    19.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -1599,6 +1676,7 @@
 [    19.328] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    19.329] SCHED CPU_IDLE       cpu=1   pid=0      
 [    19.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    19.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    19.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    19.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [    19.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -1619,6 +1697,7 @@
 [    19.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us CROSS-DOMAIN
 [    19.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    19.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    19.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    19.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    19.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [    19.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -1640,6 +1719,7 @@
 [    19.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us
 [    19.831] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    19.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    19.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    19.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    19.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us CROSS-DOMAIN
 [    19.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -1661,6 +1741,7 @@
 [    20.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us
 [    20.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    20.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    20.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    20.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    20.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [    20.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -1681,6 +1762,7 @@
 [    20.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us CROSS-DOMAIN
 [    20.305] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    20.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    20.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    20.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    20.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [    20.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -1702,6 +1784,7 @@
 [    20.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us
 [    20.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    20.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    20.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    20.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    20.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us CROSS-DOMAIN
 [    20.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -1723,6 +1806,7 @@
 [    20.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us
 [    20.808] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    20.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    20.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    20.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    20.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [    20.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -1744,6 +1828,7 @@
 [    21.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    21.060] SCHED CPU_IDLE       cpu=0   pid=0      
 [    21.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    21.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    21.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    21.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [    21.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -1764,6 +1849,7 @@
 [    21.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us
 [    21.311] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    21.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    21.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    21.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    21.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us CROSS-DOMAIN
 [    21.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -1785,6 +1871,7 @@
 [    21.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us
 [    21.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    21.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    21.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    21.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    21.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [    21.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -1806,6 +1893,7 @@
 [    21.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us CROSS-DOMAIN
 [    21.814] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    21.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    21.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    21.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    21.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [    21.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -1826,6 +1914,7 @@
 [    22.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us
 [    22.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    22.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    22.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    22.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    22.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us CROSS-DOMAIN
 [    22.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -1847,6 +1936,7 @@
 [    22.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us
 [    22.317] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    22.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    22.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    22.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    22.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [    22.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -1868,6 +1958,7 @@
 [    22.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us CROSS-DOMAIN
 [    22.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    22.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    22.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    22.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    22.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [    22.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -1889,6 +1980,7 @@
 [    22.820] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    22.820] SCHED CPU_IDLE       cpu=3   pid=0      
 [    22.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    22.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    22.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    22.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us CROSS-DOMAIN
 [    22.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -1909,6 +2001,7 @@
 [    23.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us
 [    23.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    23.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    23.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    23.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    23.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [    23.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -1930,6 +2023,7 @@
 [    23.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us CROSS-DOMAIN
 [    23.323] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    23.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    23.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    23.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    23.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [    23.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -1951,6 +2045,7 @@
 [    23.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us
 [    23.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    23.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    23.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    23.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    23.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us CROSS-DOMAIN
 [    23.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -1971,6 +2066,7 @@
 [    23.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us
 [    23.826] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    23.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    23.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    23.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    23.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [    23.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -1992,6 +2088,7 @@
 [    24.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us CROSS-DOMAIN
 [    24.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    24.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    24.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    24.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    24.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [    24.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -2013,6 +2110,7 @@
 [    24.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us
 [    24.328] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    24.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    24.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    24.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    24.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us CROSS-DOMAIN
 [    24.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -2034,6 +2132,7 @@
 [    24.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    24.581] SCHED CPU_IDLE       cpu=2   pid=0      
 [    24.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    24.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    24.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    24.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [    24.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -2054,6 +2153,7 @@
 [    24.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us CROSS-DOMAIN
 [    24.831] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    24.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    24.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    24.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    24.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [    24.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -2075,6 +2175,7 @@
 [    25.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us
 [    25.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    25.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    25.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    25.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    25.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us CROSS-DOMAIN
 [    25.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -2096,6 +2197,7 @@
 [    25.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us
 [    25.305] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    25.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    25.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    25.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    25.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [    25.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -2116,6 +2218,7 @@
 [    25.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us CROSS-DOMAIN
 [    25.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    25.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    25.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    25.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    25.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [    25.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -2137,6 +2240,7 @@
 [    25.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us
 [    25.808] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    25.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    25.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    25.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    25.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us CROSS-DOMAIN
 [    25.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -2158,6 +2262,7 @@
 [    26.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us
 [    26.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    26.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    26.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    26.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    26.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [    26.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -2179,6 +2284,7 @@
 [    26.311] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    26.311] SCHED CPU_IDLE       cpu=1   pid=0      
 [    26.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    26.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    26.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    26.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [    26.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -2199,6 +2305,7 @@
 [    26.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us
 [    26.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    26.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    26.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    26.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    26.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us CROSS-DOMAIN
 [    26.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -2220,6 +2327,7 @@
 [    26.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us
 [    26.814] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    26.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    26.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    26.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    26.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [    26.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -2241,6 +2349,7 @@
 [    27.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us CROSS-DOMAIN
 [    27.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    27.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    27.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    27.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    27.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [    27.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -2261,6 +2370,7 @@
 [    27.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us
 [    27.317] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    27.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    27.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    27.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    27.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us CROSS-DOMAIN
 [    27.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -2282,6 +2392,7 @@
 [    27.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us
 [    27.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    27.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    27.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    27.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    27.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [    27.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -2303,6 +2414,7 @@
 [    27.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us CROSS-DOMAIN
 [    27.820] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    27.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=9000000 budget=1000000
+[    27.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    27.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    27.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [    27.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -2324,6 +2436,7 @@
 [    28.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    28.072] SCHED CPU_IDLE       cpu=0   pid=0      
 [    28.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    28.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    28.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    28.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us CROSS-DOMAIN
 [    28.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -2344,6 +2457,7 @@
 [    28.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us
 [    28.323] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    28.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    28.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    28.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    28.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [    28.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -2365,6 +2479,7 @@
 [    28.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us CROSS-DOMAIN
 [    28.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    28.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    28.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    28.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    28.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [    28.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -2386,6 +2501,7 @@
 [    28.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us
 [    28.826] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    28.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    28.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    28.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    28.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us CROSS-DOMAIN
 [    28.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -2406,6 +2522,7 @@
 [    29.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us
 [    29.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    29.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    29.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    29.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    29.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [    29.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -2427,6 +2544,7 @@
 [    29.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us CROSS-DOMAIN
 [    29.328] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    29.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    29.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    29.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    29.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [    29.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -2448,6 +2566,7 @@
 [    29.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us
 [    29.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    29.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    29.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    29.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    29.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us CROSS-DOMAIN
 [    29.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -2469,6 +2588,7 @@
 [    29.831] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    29.832] SCHED CPU_IDLE       cpu=3   pid=0      
 [    29.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    29.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    29.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    29.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [    29.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -2489,6 +2609,7 @@
 [    30.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us CROSS-DOMAIN
 [    30.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    30.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    30.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    30.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    30.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [    30.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -2510,6 +2631,7 @@
 [    30.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us
 [    30.305] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    30.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    30.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    30.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    30.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us CROSS-DOMAIN
 [    30.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -2531,6 +2653,7 @@
 [    30.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us
 [    30.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    30.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    30.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    30.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    30.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [    30.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -2551,6 +2674,7 @@
 [    30.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us CROSS-DOMAIN
 [    30.808] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    30.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    30.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    30.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    30.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [    30.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -2572,6 +2696,7 @@
 [    31.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us
 [    31.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    31.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    31.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    31.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    31.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us CROSS-DOMAIN
 [    31.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -2593,6 +2718,7 @@
 [    31.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us
 [    31.311] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    31.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    31.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    31.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    31.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [    31.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -2614,6 +2740,7 @@
 [    31.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    31.563] SCHED CPU_IDLE       cpu=2   pid=0      
 [    31.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    31.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    31.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    31.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [    31.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -2634,6 +2761,7 @@
 [    31.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us
 [    31.814] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    31.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    31.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    31.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    31.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us CROSS-DOMAIN
 [    31.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -2655,6 +2783,7 @@
 [    32.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us
 [    32.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    32.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    32.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    32.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    32.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [    32.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -2676,6 +2805,7 @@
 [    32.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us CROSS-DOMAIN
 [    32.316] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    32.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    32.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    32.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    32.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [    32.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -2696,6 +2826,7 @@
 [    32.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us
 [    32.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    32.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    32.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    32.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    32.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us CROSS-DOMAIN
 [    32.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -2717,6 +2848,7 @@
 [    32.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us
 [    32.819] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    32.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    32.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    32.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    32.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [    32.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -2738,6 +2870,7 @@
 [    33.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us CROSS-DOMAIN
 [    33.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    33.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    33.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    33.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    33.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [    33.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -2759,6 +2892,7 @@
 [    33.322] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    33.324] SCHED CPU_IDLE       cpu=1   pid=0      
 [    33.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    33.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    33.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    33.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us CROSS-DOMAIN
 [    33.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -2779,6 +2913,7 @@
 [    33.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us
 [    33.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    33.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    33.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    33.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    33.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [    33.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -2800,6 +2935,7 @@
 [    33.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us CROSS-DOMAIN
 [    33.825] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    33.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    33.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    33.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    33.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [    33.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -2821,6 +2957,7 @@
 [    34.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us
 [    34.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    34.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    34.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    34.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    34.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us CROSS-DOMAIN
 [    34.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -2841,6 +2978,7 @@
 [    34.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us
 [    34.328] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    34.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    34.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    34.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    34.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [    34.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -2862,6 +3000,7 @@
 [    34.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us CROSS-DOMAIN
 [    34.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    34.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    34.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    34.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    34.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [    34.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -2883,6 +3022,7 @@
 [    34.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us
 [    34.831] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    34.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    34.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    34.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    34.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us CROSS-DOMAIN
 [    34.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -2904,6 +3044,7 @@
 [    35.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    35.054] SCHED CPU_IDLE       cpu=0   pid=0      
 [    35.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    35.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    35.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    35.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [    35.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -2924,6 +3065,7 @@
 [    35.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us CROSS-DOMAIN
 [    35.304] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    35.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    35.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    35.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    35.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [    35.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -2945,6 +3087,7 @@
 [    35.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us
 [    35.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    35.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    35.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    35.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    35.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us CROSS-DOMAIN
 [    35.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -2966,6 +3109,7 @@
 [    35.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us
 [    35.807] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    35.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    35.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    35.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    35.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [    35.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -2986,6 +3130,7 @@
 [    36.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us CROSS-DOMAIN
 [    36.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    36.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    36.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    36.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    36.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [    36.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -3007,6 +3152,7 @@
 [    36.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us
 [    36.310] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    36.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    36.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    36.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    36.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us CROSS-DOMAIN
 [    36.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -3028,6 +3174,7 @@
 [    36.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us
 [    36.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    36.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    36.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    36.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    36.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [    36.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -3049,6 +3196,7 @@
 [    36.813] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    36.815] SCHED CPU_IDLE       cpu=3   pid=0      
 [    36.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    36.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    36.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    36.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [    36.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -3069,6 +3217,7 @@
 [    37.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us
 [    37.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    37.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=9000000 budget=1000000
+[    37.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    37.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    37.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us CROSS-DOMAIN
 [    37.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -3090,6 +3239,7 @@
 [    37.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us
 [    37.316] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    37.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    37.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    37.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    37.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [    37.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -3111,6 +3261,7 @@
 [    37.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us CROSS-DOMAIN
 [    37.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    37.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    37.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    37.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    37.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [    37.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -3131,6 +3282,7 @@
 [    37.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us
 [    37.819] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    37.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    37.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    37.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    37.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us CROSS-DOMAIN
 [    37.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -3152,6 +3304,7 @@
 [    38.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us
 [    38.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    38.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    38.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    38.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    38.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [    38.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -3173,6 +3326,7 @@
 [    38.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us CROSS-DOMAIN
 [    38.322] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    38.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    38.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    38.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    38.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [    38.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -3194,6 +3348,7 @@
 [    38.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    38.575] SCHED CPU_IDLE       cpu=2   pid=0      
 [    38.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    38.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    38.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    38.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us CROSS-DOMAIN
 [    38.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -3214,6 +3369,7 @@
 [    38.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us
 [    38.825] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    38.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    38.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    38.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    38.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [    38.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -3235,6 +3391,7 @@
 [    39.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us CROSS-DOMAIN
 [    39.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    39.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    39.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    39.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    39.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [    39.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -3256,6 +3413,7 @@
 [    39.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us
 [    39.328] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    39.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    39.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    39.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    39.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us CROSS-DOMAIN
 [    39.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -3276,6 +3434,7 @@
 [    39.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us
 [    39.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    39.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    39.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    39.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    39.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [    39.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -3297,6 +3456,7 @@
 [    39.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us CROSS-DOMAIN
 [    39.831] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    39.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    39.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    39.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    39.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [    39.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -3318,6 +3478,7 @@
 [    40.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us
 [    40.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    40.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    40.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    40.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    40.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us CROSS-DOMAIN
 [    40.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -3339,6 +3500,7 @@
 [    40.304] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    40.306] SCHED CPU_IDLE       cpu=1   pid=0      
 [    40.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    40.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    40.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    40.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [    40.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -3359,6 +3521,7 @@
 [    40.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us CROSS-DOMAIN
 [    40.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    40.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    40.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    40.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    40.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [    40.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -3380,6 +3543,7 @@
 [    40.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us
 [    40.807] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    40.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    40.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    40.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    40.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us CROSS-DOMAIN
 [    40.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -3401,6 +3565,7 @@
 [    41.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us
 [    41.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    41.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    41.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    41.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    41.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [    41.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -3421,6 +3586,7 @@
 [    41.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us CROSS-DOMAIN
 [    41.310] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    41.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    41.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    41.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    41.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [    41.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -3442,6 +3608,7 @@
 [    41.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us
 [    41.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    41.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    41.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    41.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    41.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us CROSS-DOMAIN
 [    41.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -3463,6 +3630,7 @@
 [    41.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us
 [    41.813] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    41.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    41.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    41.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    41.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [    41.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -3484,6 +3652,7 @@
 [    42.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    42.066] SCHED CPU_IDLE       cpu=0   pid=0      
 [    42.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    42.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    42.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    42.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [    42.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -3504,6 +3673,7 @@
 [    42.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us
 [    42.316] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    42.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    42.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    42.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    42.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us CROSS-DOMAIN
 [    42.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -3525,6 +3695,7 @@
 [    42.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us
 [    42.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    42.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    42.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    42.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    42.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [    42.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -3546,6 +3717,7 @@
 [    42.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us CROSS-DOMAIN
 [    42.819] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    42.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    42.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    42.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    42.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [    42.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -3566,6 +3738,7 @@
 [    43.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us
 [    43.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    43.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    43.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    43.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    43.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us CROSS-DOMAIN
 [    43.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -3587,6 +3760,7 @@
 [    43.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us
 [    43.322] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    43.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    43.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    43.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    43.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [    43.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -3608,6 +3782,7 @@
 [    43.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us CROSS-DOMAIN
 [    43.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    43.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    43.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    43.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    43.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [    43.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -3629,6 +3804,7 @@
 [    43.825] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    43.827] SCHED CPU_IDLE       cpu=3   pid=0      
 [    43.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    43.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    43.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    43.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us CROSS-DOMAIN
 [    43.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -3649,6 +3825,7 @@
 [    44.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us
 [    44.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    44.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    44.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    44.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    44.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [    44.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -3670,6 +3847,7 @@
 [    44.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us CROSS-DOMAIN
 [    44.328] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    44.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    44.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    44.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    44.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [    44.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -3691,6 +3869,7 @@
 [    44.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us
 [    44.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    44.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    44.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    44.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    44.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us CROSS-DOMAIN
 [    44.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -3711,6 +3890,7 @@
 [    44.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us
 [    44.831] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    44.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    44.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    44.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    44.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [    44.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -3732,6 +3912,7 @@
 [    45.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us CROSS-DOMAIN
 [    45.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    45.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    45.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    45.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    45.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [    45.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -3753,6 +3934,7 @@
 [    45.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us
 [    45.304] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    45.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    45.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    45.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    45.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us CROSS-DOMAIN
 [    45.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -3774,6 +3956,7 @@
 [    45.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    45.557] SCHED CPU_IDLE       cpu=2   pid=0      
 [    45.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    45.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    45.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    45.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [    45.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -3794,6 +3977,7 @@
 [    45.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us CROSS-DOMAIN
 [    45.807] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    45.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    45.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    45.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    45.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [    45.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -3815,6 +3999,7 @@
 [    46.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us
 [    46.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    46.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    46.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    46.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    46.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us CROSS-DOMAIN
 [    46.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -3836,6 +4021,7 @@
 [    46.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us
 [    46.310] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    46.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=9000000 budget=1000000
+[    46.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    46.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    46.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [    46.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -3856,6 +4042,7 @@
 [    46.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us CROSS-DOMAIN
 [    46.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    46.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    46.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    46.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    46.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [    46.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -3877,6 +4064,7 @@
 [    46.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us
 [    46.813] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    46.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    46.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    46.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    46.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us CROSS-DOMAIN
 [    46.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -3898,6 +4086,7 @@
 [    47.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us
 [    47.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    47.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    47.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    47.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    47.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [    47.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -3919,6 +4108,7 @@
 [    47.316] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    47.318] SCHED CPU_IDLE       cpu=1   pid=0      
 [    47.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    47.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    47.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    47.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [    47.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -3939,6 +4129,7 @@
 [    47.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us
 [    47.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    47.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    47.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    47.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    47.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us CROSS-DOMAIN
 [    47.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -3960,6 +4151,7 @@
 [    47.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us
 [    47.819] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    47.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    47.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    47.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    47.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [    47.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -3981,6 +4173,7 @@
 [    48.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us CROSS-DOMAIN
 [    48.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    48.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    48.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    48.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    48.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [    48.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4001,6 +4194,7 @@
 [    48.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us
 [    48.322] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    48.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    48.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    48.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    48.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us CROSS-DOMAIN
 [    48.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -4022,6 +4216,7 @@
 [    48.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us
 [    48.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    48.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    48.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    48.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    48.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [    48.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -4043,6 +4238,7 @@
 [    48.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us CROSS-DOMAIN
 [    48.825] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    48.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    48.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    48.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    48.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [    48.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -4064,6 +4260,7 @@
 [    49.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    49.078] SCHED CPU_IDLE       cpu=0   pid=0      
 [    49.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    49.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    49.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    49.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us CROSS-DOMAIN
 [    49.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4084,6 +4281,7 @@
 [    49.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us
 [    49.328] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    49.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    49.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    49.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    49.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [    49.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -4105,6 +4303,7 @@
 [    49.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us CROSS-DOMAIN
 [    49.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    49.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    49.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    49.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    49.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [    49.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -4126,6 +4325,7 @@
 [    49.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us
 [    49.831] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    49.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    49.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    49.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    49.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us CROSS-DOMAIN
 [    49.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -4146,6 +4346,7 @@
 [    50.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us
 [    50.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    50.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    50.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    50.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    50.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [    50.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4167,6 +4368,7 @@
 [    50.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us CROSS-DOMAIN
 [    50.304] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    50.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    50.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    50.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    50.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [    50.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -4188,6 +4390,7 @@
 [    50.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us
 [    50.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    50.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    50.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    50.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    50.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us CROSS-DOMAIN
 [    50.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -4209,6 +4412,7 @@
 [    50.807] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    50.809] SCHED CPU_IDLE       cpu=3   pid=0      
 [    50.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    50.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    50.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    50.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [    50.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -4229,6 +4433,7 @@
 [    51.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us CROSS-DOMAIN
 [    51.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    51.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    51.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    51.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    51.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [    51.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4250,6 +4455,7 @@
 [    51.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us
 [    51.310] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    51.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    51.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    51.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    51.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us CROSS-DOMAIN
 [    51.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -4271,6 +4477,7 @@
 [    51.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us
 [    51.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    51.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    51.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    51.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    51.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [    51.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -4291,6 +4498,7 @@
 [    51.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us CROSS-DOMAIN
 [    51.813] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    51.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    51.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    51.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    51.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [    51.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -4312,6 +4520,7 @@
 [    52.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us
 [    52.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    52.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    52.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    52.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    52.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us CROSS-DOMAIN
 [    52.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4333,6 +4542,7 @@
 [    52.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us
 [    52.316] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    52.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    52.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    52.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    52.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [    52.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -4354,6 +4564,7 @@
 [    52.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    52.569] SCHED CPU_IDLE       cpu=2   pid=0      
 [    52.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    52.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    52.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    52.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [    52.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -4374,6 +4585,7 @@
 [    52.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us
 [    52.819] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    52.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    52.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    52.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    52.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us CROSS-DOMAIN
 [    52.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -4395,6 +4607,7 @@
 [    53.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us
 [    53.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    53.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    53.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    53.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    53.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [    53.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4416,6 +4629,7 @@
 [    53.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us CROSS-DOMAIN
 [    53.322] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    53.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    53.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    53.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    53.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [    53.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -4436,6 +4650,7 @@
 [    53.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us
 [    53.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    53.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    53.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    53.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    53.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us CROSS-DOMAIN
 [    53.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -4457,6 +4672,7 @@
 [    53.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us
 [    53.825] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    53.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    53.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    53.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    53.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [    53.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -4478,6 +4694,7 @@
 [    54.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us CROSS-DOMAIN
 [    54.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    54.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    54.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    54.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    54.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [    54.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4499,6 +4716,7 @@
 [    54.328] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    54.330] SCHED CPU_IDLE       cpu=1   pid=0      
 [    54.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    54.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    54.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    54.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us CROSS-DOMAIN
 [    54.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -4519,6 +4737,7 @@
 [    54.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us
 [    54.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    54.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    54.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    54.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    54.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [    54.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -4540,6 +4759,7 @@
 [    54.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us CROSS-DOMAIN
 [    54.831] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    54.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    54.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    54.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    54.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [    54.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -4561,6 +4781,7 @@
 [    55.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us
 [    55.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    55.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    55.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    55.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    55.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us CROSS-DOMAIN
 [    55.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4581,6 +4802,7 @@
 [    55.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us
 [    55.304] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    55.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    55.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    55.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    55.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [    55.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -4602,6 +4824,7 @@
 [    55.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us CROSS-DOMAIN
 [    55.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    55.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=9000000 budget=1000000
+[    55.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    55.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    55.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [    55.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -4623,6 +4846,7 @@
 [    55.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us
 [    55.807] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    55.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    55.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    55.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    55.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us CROSS-DOMAIN
 [    55.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -4644,6 +4868,7 @@
 [    56.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    56.060] SCHED CPU_IDLE       cpu=0   pid=0      
 [    56.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    56.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    56.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    56.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [    56.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4664,6 +4889,7 @@
 [    56.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us CROSS-DOMAIN
 [    56.310] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    56.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    56.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    56.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    56.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [    56.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -4685,6 +4911,7 @@
 [    56.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us
 [    56.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    56.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    56.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    56.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    56.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us CROSS-DOMAIN
 [    56.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -4706,6 +4933,7 @@
 [    56.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us
 [    56.813] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    56.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    56.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    56.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    56.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [    56.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -4726,6 +4954,7 @@
 [    57.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us CROSS-DOMAIN
 [    57.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    57.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    57.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    57.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    57.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [    57.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4747,6 +4976,7 @@
 [    57.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us
 [    57.316] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    57.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    57.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    57.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    57.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us CROSS-DOMAIN
 [    57.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -4768,6 +4998,7 @@
 [    57.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us
 [    57.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    57.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    57.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    57.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    57.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [    57.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -4789,6 +5020,7 @@
 [    57.819] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    57.821] SCHED CPU_IDLE       cpu=3   pid=0      
 [    57.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    57.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    57.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    57.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [    57.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -4809,6 +5041,7 @@
 [    58.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us
 [    58.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    58.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    58.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    58.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    58.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us CROSS-DOMAIN
 [    58.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4830,6 +5063,7 @@
 [    58.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us
 [    58.322] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    58.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    58.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    58.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    58.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [    58.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -4851,6 +5085,7 @@
 [    58.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us CROSS-DOMAIN
 [    58.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    58.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    58.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    58.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    58.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [    58.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -4871,6 +5106,7 @@
 [    58.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us
 [    58.825] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    58.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    58.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    58.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    58.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us CROSS-DOMAIN
 [    58.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -4892,6 +5128,7 @@
 [    59.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us
 [    59.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    59.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    59.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    59.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    59.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [    59.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4913,6 +5150,7 @@
 [    59.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us CROSS-DOMAIN
 [    59.328] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    59.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    59.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    59.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    59.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [    59.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -4934,6 +5172,7 @@
 [    59.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    59.581] SCHED CPU_IDLE       cpu=2   pid=0      
 [    59.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    59.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    59.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    59.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us CROSS-DOMAIN
 [    59.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -4954,6 +5193,7 @@
 [    59.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us
 [    59.831] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    59.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    59.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    59.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    59.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [    59.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -4975,6 +5215,7 @@
 [    60.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us CROSS-DOMAIN
 [    60.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    60.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    60.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    60.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    60.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [    60.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -4996,6 +5237,7 @@
 [    60.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us
 [    60.304] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    60.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    60.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    60.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    60.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us CROSS-DOMAIN
 [    60.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -5016,6 +5258,7 @@
 [    60.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us
 [    60.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    60.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    60.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    60.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    60.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [    60.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -5037,6 +5280,7 @@
 [    60.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us CROSS-DOMAIN
 [    60.807] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    60.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    60.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    60.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    60.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [    60.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -5058,6 +5302,7 @@
 [    61.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us
 [    61.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    61.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    61.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    61.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    61.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us CROSS-DOMAIN
 [    61.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -5079,6 +5324,7 @@
 [    61.310] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    61.312] SCHED CPU_IDLE       cpu=1   pid=0      
 [    61.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    61.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    61.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    61.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [    61.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -5099,6 +5345,7 @@
 [    61.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us CROSS-DOMAIN
 [    61.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    61.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    61.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    61.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    61.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [    61.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -5120,6 +5367,7 @@
 [    61.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us
 [    61.813] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    61.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    61.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    61.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    61.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us CROSS-DOMAIN
 [    61.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -5141,6 +5389,7 @@
 [    62.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us
 [    62.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    62.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    62.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    62.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    62.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [    62.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -5161,6 +5410,7 @@
 [    62.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us CROSS-DOMAIN
 [    62.316] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    62.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    62.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    62.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    62.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [    62.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -5182,6 +5432,7 @@
 [    62.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us
 [    62.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    62.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    62.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    62.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    62.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us CROSS-DOMAIN
 [    62.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -5203,6 +5454,7 @@
 [    62.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us
 [    62.819] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    62.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    62.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    62.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    62.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [    62.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -5224,6 +5476,7 @@
 [    63.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    63.072] SCHED CPU_IDLE       cpu=0   pid=0      
 [    63.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    63.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    63.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    63.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [    63.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -5244,6 +5497,7 @@
 [    63.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us
 [    63.322] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    63.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    63.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    63.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    63.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us CROSS-DOMAIN
 [    63.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -5265,6 +5519,7 @@
 [    63.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us
 [    63.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    63.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    63.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    63.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    63.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [    63.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -5286,6 +5541,7 @@
 [    63.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us CROSS-DOMAIN
 [    63.825] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    63.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    63.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    63.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    63.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [    63.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -5306,6 +5562,7 @@
 [    64.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us
 [    64.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    64.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    64.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    64.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    64.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us CROSS-DOMAIN
 [    64.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -5327,6 +5584,7 @@
 [    64.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us
 [    64.329] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    64.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    64.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    64.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    64.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [    64.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -5348,6 +5606,7 @@
 [    64.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us CROSS-DOMAIN
 [    64.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    64.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    64.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    64.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    64.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [    64.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -5369,6 +5628,7 @@
 [    64.832] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    64.832] SCHED CPU_IDLE       cpu=3   pid=0      
 [    64.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=9000000 budget=1000000
+[    64.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    64.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    64.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us CROSS-DOMAIN
 [    64.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -5389,6 +5649,7 @@
 [    65.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us
 [    65.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    65.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    65.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    65.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    65.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [    65.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -5410,6 +5671,7 @@
 [    65.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us CROSS-DOMAIN
 [    65.305] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    65.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    65.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    65.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    65.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [    65.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -5431,6 +5693,7 @@
 [    65.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us
 [    65.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    65.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    65.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    65.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    65.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us CROSS-DOMAIN
 [    65.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -5451,6 +5714,7 @@
 [    65.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us
 [    65.808] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    65.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    65.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    65.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    65.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [    65.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -5472,6 +5736,7 @@
 [    66.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us CROSS-DOMAIN
 [    66.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    66.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    66.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    66.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    66.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [    66.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -5493,6 +5758,7 @@
 [    66.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us
 [    66.311] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    66.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    66.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    66.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    66.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us CROSS-DOMAIN
 [    66.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -5514,6 +5780,7 @@
 [    66.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    66.563] SCHED CPU_IDLE       cpu=2   pid=0      
 [    66.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    66.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    66.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    66.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [    66.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -5534,6 +5801,7 @@
 [    66.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us CROSS-DOMAIN
 [    66.814] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    66.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    66.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    66.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    66.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [    66.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -5555,6 +5823,7 @@
 [    67.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us
 [    67.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    67.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    67.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    67.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    67.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us CROSS-DOMAIN
 [    67.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -5576,6 +5845,7 @@
 [    67.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us
 [    67.317] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    67.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    67.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    67.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    67.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [    67.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -5596,6 +5866,7 @@
 [    67.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us CROSS-DOMAIN
 [    67.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    67.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    67.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    67.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    67.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [    67.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -5617,6 +5888,7 @@
 [    67.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us
 [    67.820] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    67.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    67.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    67.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    67.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us CROSS-DOMAIN
 [    67.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -5638,6 +5910,7 @@
 [    68.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us
 [    68.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    68.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    68.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    68.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    68.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [    68.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -5659,6 +5932,7 @@
 [    68.323] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    68.323] SCHED CPU_IDLE       cpu=1   pid=0      
 [    68.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    68.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    68.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    68.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [    68.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -5679,6 +5953,7 @@
 [    68.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us
 [    68.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    68.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    68.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    68.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    68.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us CROSS-DOMAIN
 [    68.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -5700,6 +5975,7 @@
 [    68.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us
 [    68.826] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    68.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    68.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    68.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    68.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [    68.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -5721,6 +5997,7 @@
 [    69.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us CROSS-DOMAIN
 [    69.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    69.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    69.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    69.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    69.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [    69.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -5741,6 +6018,7 @@
 [    69.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us
 [    69.329] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    69.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    69.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    69.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    69.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us CROSS-DOMAIN
 [    69.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -5762,6 +6040,7 @@
 [    69.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us
 [    69.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    69.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    69.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    69.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    69.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [    69.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -5783,6 +6062,7 @@
 [    69.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us CROSS-DOMAIN
 [    69.832] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    69.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    69.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    69.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    69.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [    69.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -5804,6 +6084,7 @@
 [    70.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    70.054] SCHED CPU_IDLE       cpu=0   pid=0      
 [    70.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    70.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    70.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    70.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us CROSS-DOMAIN
 [    70.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -5824,6 +6105,7 @@
 [    70.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us
 [    70.305] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    70.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    70.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    70.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    70.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [    70.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -5845,6 +6127,7 @@
 [    70.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us CROSS-DOMAIN
 [    70.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    70.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    70.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    70.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    70.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [    70.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -5866,6 +6149,7 @@
 [    70.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us
 [    70.808] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    70.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    70.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    70.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    70.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us CROSS-DOMAIN
 [    70.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -5886,6 +6170,7 @@
 [    71.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us
 [    71.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    71.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    71.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    71.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    71.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [    71.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -5907,6 +6192,7 @@
 [    71.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us CROSS-DOMAIN
 [    71.311] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    71.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    71.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    71.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    71.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [    71.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -5928,6 +6214,7 @@
 [    71.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us
 [    71.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    71.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    71.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    71.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    71.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us CROSS-DOMAIN
 [    71.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -5949,6 +6236,7 @@
 [    71.814] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    71.814] SCHED CPU_IDLE       cpu=3   pid=0      
 [    71.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    71.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    71.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    71.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [    71.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -5969,6 +6257,7 @@
 [    72.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us CROSS-DOMAIN
 [    72.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    72.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    72.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    72.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    72.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [    72.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -5990,6 +6279,7 @@
 [    72.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us
 [    72.317] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    72.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    72.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    72.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    72.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us CROSS-DOMAIN
 [    72.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -6011,6 +6301,7 @@
 [    72.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us
 [    72.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    72.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    72.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    72.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    72.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [    72.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -6031,6 +6322,7 @@
 [    72.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us CROSS-DOMAIN
 [    72.820] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    72.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    72.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    72.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    72.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [    72.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -6052,6 +6344,7 @@
 [    73.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us
 [    73.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    73.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    73.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    73.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    73.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us CROSS-DOMAIN
 [    73.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -6073,6 +6366,7 @@
 [    73.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us
 [    73.323] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    73.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    73.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    73.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    73.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [    73.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -6094,6 +6388,7 @@
 [    73.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    73.575] SCHED CPU_IDLE       cpu=2   pid=0      
 [    73.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    73.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    73.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    73.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [    73.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -6114,6 +6409,7 @@
 [    73.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us
 [    73.826] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    73.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    73.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    73.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    73.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us CROSS-DOMAIN
 [    73.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -6135,6 +6431,7 @@
 [    74.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us
 [    74.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    74.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=9000000 budget=1000000
+[    74.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    74.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    74.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [    74.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -6156,6 +6453,7 @@
 [    74.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us CROSS-DOMAIN
 [    74.329] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    74.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    74.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    74.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    74.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [    74.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -6176,6 +6474,7 @@
 [    74.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us
 [    74.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    74.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    74.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    74.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    74.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us CROSS-DOMAIN
 [    74.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -6197,6 +6496,7 @@
 [    74.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us
 [    74.832] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    74.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    74.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    74.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    74.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [    74.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -6218,6 +6518,7 @@
 [    75.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us CROSS-DOMAIN
 [    75.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    75.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    75.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    75.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    75.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [    75.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -6239,6 +6540,7 @@
 [    75.305] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    75.305] SCHED CPU_IDLE       cpu=1   pid=0      
 [    75.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    75.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    75.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    75.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us CROSS-DOMAIN
 [    75.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -6259,6 +6561,7 @@
 [    75.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us
 [    75.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    75.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    75.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    75.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    75.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [    75.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -6280,6 +6583,7 @@
 [    75.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us CROSS-DOMAIN
 [    75.808] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    75.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    75.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    75.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    75.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [    75.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -6301,6 +6605,7 @@
 [    76.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us
 [    76.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    76.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    76.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    76.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    76.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us CROSS-DOMAIN
 [    76.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -6321,6 +6626,7 @@
 [    76.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us
 [    76.311] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    76.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    76.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    76.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    76.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [    76.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -6342,6 +6648,7 @@
 [    76.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us CROSS-DOMAIN
 [    76.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    76.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    76.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    76.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    76.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [    76.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -6363,6 +6670,7 @@
 [    76.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us
 [    76.814] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    76.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    76.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    76.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    76.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us CROSS-DOMAIN
 [    76.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -6384,6 +6692,7 @@
 [    77.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    77.066] SCHED CPU_IDLE       cpu=0   pid=0      
 [    77.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    77.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    77.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    77.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [    77.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -6404,6 +6713,7 @@
 [    77.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us CROSS-DOMAIN
 [    77.317] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    77.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    77.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    77.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    77.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [    77.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -6425,6 +6735,7 @@
 [    77.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us
 [    77.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    77.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    77.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    77.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    77.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us CROSS-DOMAIN
 [    77.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -6446,6 +6757,7 @@
 [    77.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us
 [    77.820] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    77.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    77.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    77.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    77.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [    77.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -6466,6 +6778,7 @@
 [    78.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us CROSS-DOMAIN
 [    78.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    78.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    78.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    78.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    78.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [    78.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -6487,6 +6800,7 @@
 [    78.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us
 [    78.323] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    78.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    78.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    78.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    78.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us CROSS-DOMAIN
 [    78.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -6508,6 +6822,7 @@
 [    78.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us
 [    78.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    78.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    78.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    78.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    78.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [    78.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -6529,6 +6844,7 @@
 [    78.826] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    78.826] SCHED CPU_IDLE       cpu=3   pid=0      
 [    78.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    78.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    78.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    78.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [    78.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -6549,6 +6865,7 @@
 [    79.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us
 [    79.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    79.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    79.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    79.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    79.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us CROSS-DOMAIN
 [    79.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -6570,6 +6887,7 @@
 [    79.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us
 [    79.329] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    79.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    79.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    79.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    79.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [    79.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -6591,6 +6909,7 @@
 [    79.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us CROSS-DOMAIN
 [    79.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    79.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    79.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    79.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    79.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [    79.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -6611,6 +6930,7 @@
 [    79.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us
 [    79.832] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    79.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    79.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    79.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    79.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us CROSS-DOMAIN
 [    79.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -6632,6 +6952,7 @@
 [    80.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us
 [    80.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    80.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    80.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    80.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    80.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [    80.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -6653,6 +6974,7 @@
 [    80.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us CROSS-DOMAIN
 [    80.305] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    80.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    80.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    80.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    80.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [    80.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -6674,6 +6996,7 @@
 [    80.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    80.557] SCHED CPU_IDLE       cpu=2   pid=0      
 [    80.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    80.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    80.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    80.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us CROSS-DOMAIN
 [    80.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -6694,6 +7017,7 @@
 [    80.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us
 [    80.808] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    80.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    80.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    80.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    80.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [    80.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -6715,6 +7039,7 @@
 [    81.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us CROSS-DOMAIN
 [    81.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    81.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    81.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    81.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    81.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [    81.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -6736,6 +7061,7 @@
 [    81.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us
 [    81.311] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    81.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    81.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    81.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    81.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us CROSS-DOMAIN
 [    81.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -6756,6 +7082,7 @@
 [    81.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us
 [    81.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    81.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    81.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    81.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    81.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [    81.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -6777,6 +7104,7 @@
 [    81.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us CROSS-DOMAIN
 [    81.814] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    81.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    81.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    81.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    81.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [    81.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -6798,6 +7126,7 @@
 [    82.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us
 [    82.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    82.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    82.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    82.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    82.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us CROSS-DOMAIN
 [    82.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -6819,6 +7148,7 @@
 [    82.317] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    82.317] SCHED CPU_IDLE       cpu=1   pid=0      
 [    82.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    82.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    82.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    82.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [    82.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -6839,6 +7169,7 @@
 [    82.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us CROSS-DOMAIN
 [    82.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    82.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    82.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    82.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    82.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [    82.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -6860,6 +7191,7 @@
 [    82.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us
 [    82.820] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    82.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    82.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    82.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    82.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us CROSS-DOMAIN
 [    82.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -6881,6 +7213,7 @@
 [    83.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us
 [    83.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    83.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    83.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    83.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    83.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [    83.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -6901,6 +7234,7 @@
 [    83.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us CROSS-DOMAIN
 [    83.323] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    83.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=9000000 budget=1000000
+[    83.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    83.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    83.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [    83.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -6922,6 +7256,7 @@
 [    83.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us
 [    83.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    83.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    83.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    83.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    83.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us CROSS-DOMAIN
 [    83.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -6943,6 +7278,7 @@
 [    83.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us
 [    83.826] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    83.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    83.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    83.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    83.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [    83.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -6964,6 +7300,7 @@
 [    84.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    84.078] SCHED CPU_IDLE       cpu=0   pid=0      
 [    84.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    84.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    84.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    84.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [    84.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -6984,6 +7321,7 @@
 [    84.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us
 [    84.329] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    84.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    84.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    84.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    84.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us CROSS-DOMAIN
 [    84.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7005,6 +7343,7 @@
 [    84.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us
 [    84.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    84.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    84.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    84.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    84.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [    84.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -7026,6 +7365,7 @@
 [    84.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us CROSS-DOMAIN
 [    84.832] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    84.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    84.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    84.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    84.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [    84.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -7046,6 +7386,7 @@
 [    85.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us
 [    85.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    85.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    85.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    85.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    85.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us CROSS-DOMAIN
 [    85.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -7067,6 +7408,7 @@
 [    85.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us
 [    85.305] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    85.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    85.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    85.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    85.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [    85.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7088,6 +7430,7 @@
 [    85.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us CROSS-DOMAIN
 [    85.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    85.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    85.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    85.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    85.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [    85.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -7109,6 +7452,7 @@
 [    85.808] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    85.808] SCHED CPU_IDLE       cpu=3   pid=0      
 [    85.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    85.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    85.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    85.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us CROSS-DOMAIN
 [    85.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -7129,6 +7473,7 @@
 [    86.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us
 [    86.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    86.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    86.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    86.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    86.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [    86.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -7150,6 +7495,7 @@
 [    86.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us CROSS-DOMAIN
 [    86.311] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    86.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    86.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    86.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    86.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [    86.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7171,6 +7517,7 @@
 [    86.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us
 [    86.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    86.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    86.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    86.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    86.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us CROSS-DOMAIN
 [    86.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -7191,6 +7538,7 @@
 [    86.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us
 [    86.814] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    86.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    86.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    86.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    86.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [    86.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -7212,6 +7560,7 @@
 [    87.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us CROSS-DOMAIN
 [    87.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    87.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    87.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    87.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    87.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [    87.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -7233,6 +7582,7 @@
 [    87.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us
 [    87.317] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    87.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    87.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    87.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    87.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us CROSS-DOMAIN
 [    87.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7254,6 +7604,7 @@
 [    87.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    87.569] SCHED CPU_IDLE       cpu=2   pid=0      
 [    87.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    87.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    87.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    87.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [    87.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -7274,6 +7625,7 @@
 [    87.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us CROSS-DOMAIN
 [    87.820] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    87.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    87.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    87.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    87.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [    87.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -7295,6 +7647,7 @@
 [    88.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us
 [    88.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    88.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    88.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    88.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    88.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us CROSS-DOMAIN
 [    88.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -7316,6 +7669,7 @@
 [    88.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us
 [    88.323] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    88.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    88.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    88.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    88.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [    88.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7336,6 +7690,7 @@
 [    88.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us CROSS-DOMAIN
 [    88.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    88.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    88.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    88.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    88.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [    88.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -7357,6 +7712,7 @@
 [    88.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us
 [    88.826] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    88.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    88.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    88.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    88.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us CROSS-DOMAIN
 [    88.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -7378,6 +7734,7 @@
 [    89.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us
 [    89.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    89.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    89.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    89.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    89.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [    89.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -7399,6 +7756,7 @@
 [    89.329] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    89.329] SCHED CPU_IDLE       cpu=1   pid=0      
 [    89.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    89.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    89.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    89.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [    89.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7419,6 +7777,7 @@
 [    89.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us
 [    89.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    89.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    89.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    89.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    89.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us CROSS-DOMAIN
 [    89.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -7440,6 +7799,7 @@
 [    89.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us
 [    89.832] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    89.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    89.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    89.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    89.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [    89.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -7461,6 +7821,7 @@
 [    90.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us CROSS-DOMAIN
 [    90.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    90.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    90.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    90.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    90.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [    90.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -7481,6 +7842,7 @@
 [    90.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us
 [    90.305] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    90.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    90.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    90.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    90.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us CROSS-DOMAIN
 [    90.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7502,6 +7864,7 @@
 [    90.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us
 [    90.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    90.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    90.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    90.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    90.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us
 [    90.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -7523,6 +7886,7 @@
 [    90.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us CROSS-DOMAIN
 [    90.808] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    90.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    90.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    90.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    90.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [    90.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -7544,6 +7908,7 @@
 [    91.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    91.060] SCHED CPU_IDLE       cpu=0   pid=0      
 [    91.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    91.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    91.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    91.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us CROSS-DOMAIN
 [    91.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -7564,6 +7929,7 @@
 [    91.309] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=9us
 [    91.311] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    91.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    91.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    91.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    91.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us
 [    91.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7585,6 +7951,7 @@
 [    91.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us CROSS-DOMAIN
 [    91.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    91.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    91.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    91.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    91.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [    91.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -7606,6 +7973,7 @@
 [    91.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us
 [    91.814] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    91.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    91.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    91.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    91.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us CROSS-DOMAIN
 [    91.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -7626,6 +7994,7 @@
 [    92.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us
 [    92.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    92.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    92.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    92.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    92.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us
 [    92.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -7647,6 +8016,7 @@
 [    92.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us CROSS-DOMAIN
 [    92.317] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    92.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    92.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    92.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    92.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [    92.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7668,6 +8038,7 @@
 [    92.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us
 [    92.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    92.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=9000000 budget=1000000
+[    92.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    92.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    92.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us CROSS-DOMAIN
 [    92.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -7689,6 +8060,7 @@
 [    92.820] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    92.820] SCHED CPU_IDLE       cpu=3   pid=0      
 [    92.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    92.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    92.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    92.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us
 [    92.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -7709,6 +8081,7 @@
 [    93.070] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=20us CROSS-DOMAIN
 [    93.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    93.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    93.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    93.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    93.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [    93.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -7730,6 +8103,7 @@
 [    93.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us
 [    93.323] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    93.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    93.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    93.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    93.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us CROSS-DOMAIN
 [    93.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7751,6 +8125,7 @@
 [    93.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us
 [    93.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    93.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    93.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    93.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    93.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us
 [    93.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -7771,6 +8146,7 @@
 [    93.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us CROSS-DOMAIN
 [    93.826] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    93.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    93.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    93.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    93.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [    93.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -7792,6 +8168,7 @@
 [    94.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us
 [    94.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    94.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    94.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    94.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    94.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us CROSS-DOMAIN
 [    94.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -7813,6 +8190,7 @@
 [    94.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us
 [    94.329] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    94.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    94.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    94.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    94.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us
 [    94.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7834,6 +8212,7 @@
 [    94.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    94.581] SCHED CPU_IDLE       cpu=2   pid=0      
 [    94.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    94.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    94.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    94.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [    94.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -7854,6 +8233,7 @@
 [    94.831] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=30us
 [    94.832] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    94.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    94.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    94.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    94.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us CROSS-DOMAIN
 [    94.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -7875,6 +8255,7 @@
 [    95.052] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=2us
 [    95.053] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    95.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=800000 budget=1000000
+[    95.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    95.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    95.102] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=2us
 [    95.103] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -7896,6 +8277,7 @@
 [    95.303] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=3us CROSS-DOMAIN
 [    95.305] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    95.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1100000 budget=1000000
+[    95.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    95.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    95.354] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=3us
 [    95.355] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7916,6 +8298,7 @@
 [    95.555] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=5us
 [    95.556] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    95.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=1400000 budget=1000000
+[    95.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    95.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    95.605] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=5us CROSS-DOMAIN
 [    95.606] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -7937,6 +8320,7 @@
 [    95.806] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=6us
 [    95.808] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    95.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1700000 budget=1000000
+[    95.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    95.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    95.857] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=6us
 [    95.858] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -7958,6 +8342,7 @@
 [    96.058] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=8us CROSS-DOMAIN
 [    96.059] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    96.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2000000 budget=1000000
+[    96.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    96.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    96.108] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=8us
 [    96.109] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -7979,6 +8364,7 @@
 [    96.311] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    96.311] SCHED CPU_IDLE       cpu=1   pid=0      
 [    96.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2300000 budget=1000000
+[    96.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    96.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    96.360] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=9us CROSS-DOMAIN
 [    96.361] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -7999,6 +8385,7 @@
 [    96.561] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=11us
 [    96.562] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    96.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2600000 budget=1000000
+[    96.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    96.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    96.611] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=11us
 [    96.612] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -8020,6 +8407,7 @@
 [    96.812] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=12us CROSS-DOMAIN
 [    96.814] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    96.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2900000 budget=1000000
+[    96.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    96.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    96.863] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=12us
 [    96.864] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -8041,6 +8429,7 @@
 [    97.064] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=14us
 [    97.065] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    97.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=3200000 budget=1000000
+[    97.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    97.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    97.114] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=14us CROSS-DOMAIN
 [    97.115] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -8061,6 +8450,7 @@
 [    97.316] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=15us
 [    97.317] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    97.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=3500000 budget=1000000
+[    97.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    97.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    97.366] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=15us
 [    97.367] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -8082,6 +8472,7 @@
 [    97.567] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=17us CROSS-DOMAIN
 [    97.568] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    97.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=800000 budget=1000000
+[    97.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    97.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    97.617] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=17us
 [    97.618] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -8103,6 +8494,7 @@
 [    97.819] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=18us
 [    97.820] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    97.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=1100000 budget=1000000
+[    97.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    97.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    97.869] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=18us CROSS-DOMAIN
 [    97.870] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -8124,6 +8516,7 @@
 [    98.071] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    98.072] SCHED CPU_IDLE       cpu=0   pid=0      
 [    98.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=1400000 budget=1000000
+[    98.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    98.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    98.120] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=20us
 [    98.121] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -8144,6 +8537,7 @@
 [    98.322] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=21us CROSS-DOMAIN
 [    98.323] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    98.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=1700000 budget=1000000
+[    98.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    98.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    98.372] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=21us
 [    98.373] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -8165,6 +8559,7 @@
 [    98.573] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=23us
 [    98.574] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    98.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=2000000 budget=1000000
+[    98.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    98.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    98.623] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=23us CROSS-DOMAIN
 [    98.624] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -8186,6 +8581,7 @@
 [    98.825] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=24us
 [    98.826] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    98.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=2300000 budget=1000000
+[    98.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    98.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    98.875] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=24us
 [    98.876] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -8206,6 +8602,7 @@
 [    99.076] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=26us CROSS-DOMAIN
 [    99.077] SCHED SWITCH_IN      cpu=0   pid=1002   
 [    99.053] SCHED PREEMPT_TICK   cpu=0   pid=1002    runtime=2600000 budget=1000000
+[    99.053] SCHED PREEMPT_WAKEUP cpu=0   pid=1002    waker=-1
 [    99.100] SCHED WAKEUP         cpu=1   pid=1001    target_cpu=1
 [    99.126] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=26us
 [    99.127] SCHED SWITCH_IN      cpu=1   pid=1001   
@@ -8227,6 +8624,7 @@
 [    99.328] SCHED WAKE2RUN       cpu=1   pid=1001    wake2run=27us
 [    99.329] SCHED SWITCH_IN      cpu=1   pid=1001   
 [    99.303] SCHED PREEMPT_TICK   cpu=1   pid=1001    runtime=2900000 budget=1000000
+[    99.303] SCHED PREEMPT_WAKEUP cpu=1   pid=1001    waker=-1
 [    99.350] SCHED WAKEUP         cpu=2   pid=1002    target_cpu=2
 [    99.378] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=27us CROSS-DOMAIN
 [    99.379] SCHED SWITCH_IN      cpu=2   pid=1002   
@@ -8248,6 +8646,7 @@
 [    99.579] SCHED WAKE2RUN       cpu=2   pid=1002    wake2run=29us
 [    99.580] SCHED SWITCH_IN      cpu=2   pid=1002   
 [    99.553] SCHED PREEMPT_TICK   cpu=2   pid=1002    runtime=3200000 budget=1000000
+[    99.553] SCHED PREEMPT_WAKEUP cpu=2   pid=1002    waker=-1
 [    99.600] SCHED WAKEUP         cpu=3   pid=1001    target_cpu=3
 [    99.629] SCHED WAKE2RUN       cpu=3   pid=1001    wake2run=29us
 [    99.630] SCHED SWITCH_IN      cpu=3   pid=1001   
@@ -8269,6 +8668,7 @@
 [    99.832] SCHED SWITCH_IN      cpu=3   pid=1001   
 [    99.832] SCHED CPU_IDLE       cpu=3   pid=0      
 [    99.803] SCHED PREEMPT_TICK   cpu=3   pid=1001    runtime=3500000 budget=1000000
+[    99.803] SCHED PREEMPT_WAKEUP cpu=3   pid=1001    waker=-1
 [    99.850] SCHED WAKEUP         cpu=0   pid=1002    target_cpu=0
 [    99.881] SCHED WAKE2RUN       cpu=0   pid=1002    wake2run=30us
 [    99.882] SCHED SWITCH_IN      cpu=0   pid=1002   
@@ -9909,4 +10309,4 @@
 [   104.052] HEAP   malloc    pid=1000    tid=1001    addr=0x0000000000bbbb00 size=256 comm='worker'
 [   104.053] HEAP   free      pid=1000    tid=1001    addr=0x0000000000bbbb00 size=0 comm='worker'
 [   104.054] HEAP   free      pid=1000    tid=1001    addr=0x0000000000bbbb00 size=0 comm='worker'
-# 9914 events
+# 10314 events

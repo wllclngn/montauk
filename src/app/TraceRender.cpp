@@ -8,8 +8,15 @@ namespace {
 
 using montauk::model::TraceSnapshot;
 
-const char* const kSchedOpName[7] = {
-    "", "enqueue", "pick", "pick_empty", "preempt_tick", "preempt_wakeup", "wakeup"};
+// Indexed by sched_trace_op (montauk_trace.h). The table stopped at 7 while the
+// enum grew to 15, so every op from wake2run up -- including kick_issue and
+// resched, the pair that answers whether a kick was swallowed -- was counted in
+// BPF and then never rendered. Kept in lockstep with the enum, not with whatever
+// the renderer happened to need at the time.
+const char* const kSchedOpName[] = {
+    "", "enqueue", "pick", "pick_empty", "preempt_tick", "preempt_wakeup",
+    "wakeup", "wake2run", "cpu_idle", "switch_in", "field_gate", "kick_issue",
+    "resched", "tick_stop", "dsq_insert", "dsq_drain"};
 
 const char* const kNtsyncOps[] = {
     "create_sem", "sem_release", "wait_any", "wait_all",
@@ -55,13 +62,15 @@ void render_procs(MetricsSink& sink, const TraceSnapshot& t) {
 
 void render_sched_ops(MetricsSink& sink, const TraceSnapshot& t) {
   bool any = false;
-  for (int o = 1; o < 7; ++o) if (t.sched_op_total[o]) { any = true; break; }
+  for (size_t o = 1; o < t.sched_op_total.size(); ++o)
+    if (t.sched_op_total[o]) { any = true; break; }
   if (!any) return;
   sink.collection_begin("sched_op_total", Shape::Objects);
   MetricDesc desc{nullptr, "montauk_sched_op_total",
                   "Scheduler-decision tracepoint counts (per op, summed across CPUs)",
                   MetricKind::Counter};
-  for (int o = 1; o < 7; ++o) {
+  for (size_t o = 1; o < t.sched_op_total.size(); ++o) {
+    if (!t.sched_op_total[o]) continue;   // an unbound op is absent, not zero
     sink.entry_begin();
     sink.str({"op", nullptr, nullptr}, kSchedOpName[o]);
     sink.u64({"count", nullptr, nullptr}, t.sched_op_total[o]);
