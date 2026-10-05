@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Which reports does the fixture actually EXERCISE, and which only ever run empty?
 
-A passing golden does not distinguish "correct" from "never ran". kstrand proved
+A passing gate does not distinguish "correct" from "never ran". kstrand proved
 that: the fixture emitted a SCHED event with a comment calling it a strand, but
 the report reads TRACE_EVT_KSTRAND and returns immediately on SCHED -- so its
 aggregation, ranking, quantiles, HELD/DARK split and holder attribution were all
@@ -42,6 +42,11 @@ EXERCISED = {
     # And by signal + abort records: signals had no events at all, and
     # abortpm reads TRACE_EVT_ABORT, which a SIGABRT delivery is not.
     "abortpm", "signals",
+    # Lit by MIGRATE events carrying the executing CPU (v8.13.0): the fixture
+    # contains all three deciders, so the classifier's branches run. The DSQ
+    # INSERT/DRAIN lane of the same report stays dark -- those probes are
+    # opt-in and 7.1-unsafe, like storm.
+    "dsq-placement",
 }
 
 # Reports with NO INPUT in the fixture: the event class they read is absent, so
@@ -63,8 +68,21 @@ EMPTY_PATH = {
 EMPTY_RE = re.compile(r"^(no |too few|empty trace|zero-duration)", re.I)
 
 
+# A trace with no records is its header alone (TraceFileHeader, 64 bytes).
+TRACE_HEADER_BYTES = 64
+
+
 def note(m):
     print(f"[coverage] {m}", flush=True)
+
+
+def check_concluded(label, reports):
+    """1 if any report publishes no verdict or no class token, else 0."""
+    bad = sorted(r["name"] for r in reports if not r.get("verdict") or not r.get("class"))
+    if bad:
+        note(f"FAIL: on the {label}, {len(bad)} report(s) publish no verdict or class: {bad}")
+        return 1
+    return 0
 
 
 def main() -> int:
@@ -85,11 +103,21 @@ def main() -> int:
     seen = {r["name"]: r for r in reports}
     fails = 0
 
-    # Every report must conclude SOMETHING -- that is the envelope contract.
-    silent = sorted(n for n, r in seen.items() if not r.get("verdict"))
-    if silent:
-        note(f"FAIL: {len(silent)} report(s) publish no verdict: {silent}")
-        fails += 1
+    # Every report must conclude SOMETHING -- a sentence AND a class token --
+    # on real input and on none at all. The empty capture is where conclusions
+    # used to go missing: a report that returned early composed nothing, and a
+    # structured consumer read a bare name. "NONE" is a finding; blank is not.
+    fails += check_concluded("fixture", reports)
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        empty = Path(td) / "empty.mtk"
+        empty.write_bytes(cc.FIXTURE.read_bytes()[:TRACE_HEADER_BYTES])
+        out_empty = harness.run_text([*harness.ANALYZE, str(empty), "--json"],
+                                     env={**os.environ, "TZ": "UTC"}).stdout
+    try:
+        fails += check_concluded("empty trace", json.loads(out_empty)["reports"])
+    except (ValueError, KeyError):
+        note("FAIL: could not parse the JSON envelope of an empty trace"); fails += 1
 
     declared = EXERCISED | set(EMPTY_PATH)
     missing = declared - set(seen)

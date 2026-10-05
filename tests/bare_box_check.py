@@ -181,8 +181,8 @@ def main() -> int:
     ok = check_static() and ok
 
     # A real capture to decode. corpus_check owns the generator; reuse it rather
-    # than growing a second fixture that could drift from the one the goldens
-    # are frozen against.
+    # than growing a second fixture that could drift from the one every other
+    # gate reads.
     sys.path.insert(0, str(ROOT / "tests"))
     import corpus_check
     if not corpus_check.FIXTURE.exists():

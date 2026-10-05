@@ -169,19 +169,6 @@ void heap_evt(uint32_t op, uint64_t addr, uint64_t size, uint32_t tid, uint64_t 
 
 int main(int argc, char** argv) {
   const char* out = (argc >= 2) ? argv[1] : "synthetic.mtk";
-  // --no-idle omits the CPU_IDLE stream, which makes placement-race report
-  // NO-IDLE-STREAM -- a CAPTURE LIMITATION rather than a finding. That is the
-  // one thing the golden's freeze path refuses to freeze (it records a
-  // `skipped` line instead), and it had no fixture: every capture on hand has
-  // the idle stream, so the writer's refusal branch was untested.
-  //
-  // A real no-sched-detail capture was taken under root on 2026-08-04 to
-  // confirm this is the actual mechanism (placement-race = NO-IDLE-STREAM,
-  // 10MB) before reproducing it synthetically here. Synthetic is what SHIPS:
-  // 600KB, no privileges, and it cannot rot the way a recorded capture does.
-  bool no_idle = false;
-  for (int i = 2; i < argc; ++i)
-    if (std::string(argv[i]) == "--no-idle") no_idle = true;
 
   // Thread identities first so the holder ledger / wakers can name them.
   thread_name(1000, "messenger");
@@ -208,7 +195,7 @@ int main(int argc, char** argv) {
 
     // Slice: switch-in pick + idle boundary, inter-switch interval spreads.
     sched_evt(SCHED_OP_SWITCH_IN, cpu, wakee, -1, 0, 0, 0, ts + lat + 1000);
-    if (i % 7 == 0 && !no_idle)
+    if (i % 7 == 0)
       sched_evt(SCHED_OP_CPU_IDLE, cpu, 0, -1, /*entering*/1, 0, 0, ts + lat + 2000);
 
     // Preempt tick with occasional long-slice overrun (>2ms/5ms/8ms).
@@ -270,7 +257,7 @@ int main(int argc, char** argv) {
 
   // A cache_topology provider snapshot. Without it LocalityReport early-outs
   // with "cannot map migration distance" and its whole interval/quantile path
-  // never executes -- so edits to it used to pass the golden gate by never
+  // never executes -- so edits to it used to pass every gate by never
   // running. 4 CPUs: two L2 pairs sharing one L3 on one socket, which gives
   // same-L2, same-L3 and cross-socket tiers something to land in.
   ts += 100'000;
@@ -317,6 +304,43 @@ int main(int argc, char** argv) {
       ev.timestamp_ns = ts;
       emit(&ev, sizeof(ev));
       prev = cur;
+    }
+  }
+
+  // MIGRATE events so REPORT dsq-placement attributes rather than running empty.
+  // sub_idx is the CPU that EXECUTED the move, and comparing it against the
+  // src/dst pair is the whole attribution, so the fixture has to contain all
+  // three outcomes or the classifier's branches never run. Emitted directly:
+  // the helper hardcodes last_cpu = -1, which reads as "not a migration".
+  //   PLACE  a third party moved it (decider is neither end) -- 3 -> 0 done by 1
+  //   PULL   the destination moved it (decider == dst)       -- 0 -> 2 done by 2
+  //   PUSH   the source moved it (decider == src)            -- 2 -> 1 done by 2
+  // Tiers vary with the pairs so PLACE/PULL/PUSH each land in more than one
+  // bucket: on this 4-CPU map 0<->1 is same-L2, 1<->2 same-L3, 2<->3 cross-socket.
+  ts += 100'000;
+  {
+    struct MigCase { uint32_t src, dst, decider; };
+    const MigCase cases[] = {
+        {3, 0, 1},  // PLACE, cross-socket
+        {0, 2, 2},  // PULL,  same-L3
+        {2, 1, 2},  // PUSH,  same-L3
+        {1, 0, 3},  // PLACE, same-L2
+        {1, 3, 3},  // PULL,  cross-socket
+        {0, 1, 0},  // PUSH,  same-L2
+    };
+    for (int i = 0; i < 24; ++i) {
+      const MigCase& c = cases[static_cast<size_t>(i) % 6];
+      ts += 30'000 + static_cast<uint64_t>(i % 7) * 4'000;
+      montauk_sched_event ev{};
+      ev.type = TRACE_EVT_SCHED;
+      ev.op = SCHED_OP_MIGRATE;
+      ev.cpu = c.dst;
+      ev.pid = 1002;
+      ev.secondary_pid = -1;
+      ev.last_cpu = static_cast<int32_t>(c.src);
+      ev.sub_idx = c.decider;
+      ev.timestamp_ns = ts;
+      emit(&ev, sizeof(ev));
     }
   }
 

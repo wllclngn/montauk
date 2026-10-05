@@ -1,4 +1,4 @@
-abi 4
+abi 7
 sublimation_api_version
 sublimation_classify_f32
 sublimation_classify_f64
@@ -8,6 +8,7 @@ sublimation_classify_u32
 sublimation_classify_u64
 sublimation_default_workers
 sublimation_describe_f64
+sublimation_diff_lines
 sublimation_disorder_name
 sublimation_dispersion_field
 sublimation_effective_resistance
@@ -80,9 +81,10 @@ sublimation_randomness_u64
 sublimation_refine_order_f64
 sublimation_scan
 sublimation_scan_min_bytes
-sublimation_search_captures
+sublimation_search_captures_at
 sublimation_search_compile
 sublimation_search_count
+sublimation_search_error
 sublimation_search_find
 sublimation_search_find_from
 sublimation_search_fold_gaps
@@ -113,7 +115,6 @@ sublimation_strings_indices
 sublimation_strings_indices_len
 sublimation_strings_len
 sublimation_sum_f64
-sublimation_tally
 sublimation_tukey_fences_f64
 sublimation_u32
 sublimation_u32_stats

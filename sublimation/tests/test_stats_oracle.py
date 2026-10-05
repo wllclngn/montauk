@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""numpy oracle for the shipped sublimation_stats and tally APIs.
+"""numpy oracle for the shipped sublimation_stats API.
 
 These are the newest code under the byte-parity mandate, and byte-parity only
 proves they do not CHANGE -- it says nothing about whether they were right when
@@ -158,32 +158,12 @@ def main():
         fails += not ok
         note(f"  histogram {'ok' if ok else f'DIVERGED counts={counts!r} sum={sum(counts)}'}")
 
-    # tally: distinct records by count desc, then first-seen.
-    note("tally: distinct records, count desc then first-seen")
-    words = ["alpha", "beta", "gamma", "delta", "beta", "alpha", "beta", "eps"]
-    seq = [words[i % len(words)] for i in range(500)] + ["zzz"]
-    out = run("tally", "\n".join(seq) + "\n")
-    total = int(out[0])
-    pairs = [(int(ln.split("\t")[0]), ln.split("\t")[1]) for ln in out[1:]]
-    first_seen = {}
-    for i, wd in enumerate(seq):
-        first_seen.setdefault(wd, i)
-    counts = {}
-    for wd in seq:
-        counts[wd] = counts.get(wd, 0) + 1
-    ref = sorted(counts.items(), key=lambda kv: (-kv[1], first_seen[kv[0]]))
-    ref_pairs = [(c, wd) for wd, c in ref]
-    ok = total == len(seq) and pairs == ref_pairs
-    fails += not ok
-    note(f"  tally     {'ok' if ok else f'DIVERGED got {pairs[:6]!r} ref {ref_pairs[:6]!r}'}")
-
     note("")
     if fails:
         note(f"GATE FAILED: {fails} check(s) diverged from the oracle")
         return 1
     note("GATE PASSED: the shipped sublimation_stats API matches numpy (reductions, "
-         "both quantile estimators, describe, Tukey fences, histogram) and tally "
-         "orders by count then first-seen")
+         "both quantile estimators, describe, Tukey fences, histogram)")
     return 0
 
 

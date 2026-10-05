@@ -27,7 +27,7 @@ add_library(sublimation STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/spectral_kernel.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/spectral_typed.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/stats.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/tally.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/text/diff.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/text/match.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parallel/wsdeque.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parallel/dfspool.c

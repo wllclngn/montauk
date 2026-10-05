@@ -1,13 +1,11 @@
 """Shared test-harness module for montauk's Python gate/test scripts
 (corpus_check.py, parity_check.py, trace_loadtest.py) -- one place for the
-logging, subprocess-capture, missing-binary, and diff-printing idioms all
-three independently reimplemented, modeled on PANDEMONIUM's
+logging, subprocess-capture and missing-binary idioms all three
+independently reimplemented, modeled on PANDEMONIUM's
 pandemonium_common.py. run.py is deliberately NOT retrofit onto this: it's
 already the suite's one orchestrator and doesn't need restructuring.
 """
-import difflib
 import subprocess
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,14 +47,3 @@ def run_text(argv, **kwargs):
     kwargs.setdefault("capture_output", True)
     kwargs.setdefault("text", True)
     return subprocess.run(argv, **kwargs)
-
-
-def print_diff(label, want, got, limit=40):
-    """Unified diff of two text blobs, capped at `limit` lines -- the same
-    divergence-report shape corpus_check.py wrote out twice (once for named
-    surfaces, once for the CLI blob)."""
-    diff = difflib.unified_diff(
-        want.splitlines(keepends=True), got.splitlines(keepends=True),
-        fromfile=f"{label}.golden", tofile=f"{label}.actual",
-    )
-    sys.stdout.writelines(list(diff)[:limit])

@@ -8,10 +8,11 @@ Four layers, one command, a clear split:
             and the work-stealing DFS engine tests: test_wsdeque / test_dfspool
             / test_psort (correctness) plus the _tsan variants (race-freedom
             under ThreadSanitizer)
-  gate   -- the Python byte-identical output gate (corpus_check.py): analyzer /
-            decoder / sublimation CLI stdout vs frozen goldens, plus the
+  gate   -- the Python output gates. corpus_check.py checks the surfaces that
+            can be WRONG rather than merely DIFFERENT (JSON parses, analyzer and
+            decoder exit clean, every CLI case exits clean, tally/distinct
+            survive the StrMap grow boundaries). Plus the
             search/learn/spectral/signal numpy-parity gates, and the
-            behavioral-golden checker's own contract (golden_gate.py)
   perf   -- the performance envelopes (perf_gate.py): CPU-time ceilings, a
             growth bound and the sort-vs-sort oracle
   trace  -- the live BPF trace harness (trace_loadtest.py); needs root, so it is
@@ -98,7 +99,7 @@ def assert_build_dir_can_produce_tests():
     report success while producing no test binaries at all -- and
     `cmake --build --target montauk_tests` then exits 0 having done nothing.
     That pair once hid a six-day-stale test binary reporting a pass it had not
-    earned, and behind it two goldens failing since v8.9.0.
+    earned, and behind it two tests failing since v8.9.0.
 
     Reporting "missing <exe>" per binary is the wrong diagnosis for that: it
     reads as an incomplete build when the real answer is that this build tree
@@ -174,30 +175,44 @@ def layer_gate():
     abi = run([sys.executable, str(ROOT / "tests" / "abi_check.py")]) == 0
     pop = run([sys.executable, str(ROOT / "tests" / "pop_gate.py")]) == 0
     semantic = run([sys.executable, str(ROOT / "tests" / "semantic_check.py")]) == 0
-    golden = run([sys.executable, str(ROOT / "tests" / "golden_gate.py")]) == 0
     # install/uninstall symmetry: the removal list is derived from what install
     # recorded, not maintained by hand beside it. Needs no build and no root.
     inst = run([sys.executable, str(ROOT / "tests" / "install_manifest_check.py")]) == 0
+    # --static against an independent second implementation of the same scan.
+    # A lexer fails by being confidently wrong, which no frozen expectation
+    # catches; two implementations disagreeing does.
+    static = run([sys.executable, str(ROOT / "tests" / "static_check.py")]) == 0
     # One binary, and it must exec on a box without libbpf/liburing/NVML.
     bare = run([sys.executable, str(ROOT / "tests" / "bare_box_check.py")]) == 0
     # Which reports the fixture actually EXERCISES. Not a correctness check -- a
     # check that the correctness checks run at all.
     cover = run([sys.executable, str(ROOT / "tests" / "report_coverage_check.py")]) == 0
+    # The query face against the fixture's known kicks: counts, pairing and
+    # which end of a pair each clause binds.
+    query = run([sys.executable, str(ROOT / "tests" / "query_check.py")]) == 0
+    # sublimation is the only sort in shipped code; std/libc/kernel sorts live
+    # only in tests, as the oracle.
+    sortban = run([sys.executable, str(ROOT / "tests" / "sort_ban_check.py")]) == 0
     # Shipped sublimation-API byte-parity gates (self-build libsublimation and a
     # harness that touches only the public API, then diff against numpy oracles).
     subt = ROOT / "sublimation" / "tests"
     match = run([sys.executable, str(subt / "test_search_match.py")]) == 0
+    # Every public search entry point against an oracle, over generated
+    # patterns: the counter gate above proves counts and nothing else.
+    fuzz = run([sys.executable, str(subt / "test_search_fuzz.py")]) == 0
     learn = run([sys.executable, str(subt / "test_learn.py")]) == 0
     spectral = run([sys.executable, str(subt / "test_spectral.py")]) == 0
     signal = run([sys.executable, str(subt / "test_signal.py")]) == 0
-    # stats.c/tally.c had byte-stability from the corpus gate but no proof of
+    # stats.c had byte-stability from the corpus gate but no proof of
     # CORRECTNESS -- byte-parity freezes a wrong answer just as faithfully.
     stats = run([sys.executable, str(subt / "test_stats_oracle.py")]) == 0
+    # tee against coreutils tee, on the zero-copy path and the copy loop.
+    tee = run([sys.executable, str(subt / "test_tee.py")]) == 0
     # C++ consumer gate. Nothing else here compiles the public headers as C++,
     # which is how a bare unreachable() macro reached an outside consumer.
     cxx = run([sys.executable, str(subt / "test_cxx_headers.py")]) == 0
-    return (corpus and parity and pop and semantic and golden and inst and bare and cover and match
-            and learn and spectral and signal and stats and cxx and abi)
+    return (corpus and parity and pop and semantic and static and inst and bare and cover and query and sortban and match and fuzz
+            and learn and spectral and signal and stats and tee and cxx and abi)
 
 
 def layer_perf():

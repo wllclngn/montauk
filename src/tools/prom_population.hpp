@@ -89,26 +89,6 @@ HotCpu l2_hot_cpu(const std::string& dir);
 // All `*.prom` in `dir` except the analyzer's own `analysis-*` outputs.
 std::vector<std::string> glob_proms(const std::string& dir);
 
-// EVERY gauge in a recording's scrapes, reduced to one value per
-// (name, labels). A recording holds many scrapes over time, so a "gauge" from
-// that source is a SERIES -- freezing one means CHOOSING a reduction, and the
-// choice is recorded in the golden rather than assumed by whoever reads it.
-//
-// `last` is right for a cumulative counter (the run total); `mean` is the
-// stable summary for an instantaneous gauge, where `max` would freeze the
-// noisiest single scrape. Both are offered because which one a baseline wants
-// is a property of the metric, not of the tool.
-struct ScrapeSeries {
-  std::string key;        // name{labels} -- the pair, never the name alone
-  bool        is_counter{false};  // declared `# TYPE ... counter`
-  double      last{0.0};
-  double      mean{0.0};
-  double      max{0.0};
-  double      min{0.0};
-  int         samples{0};
-};
-std::vector<ScrapeSeries> scrape_series(const std::string& dir);
-
 // Structured system specs parsed from a recording dir's montauk_system_info{}
 // scrape -- the data behind system_info_block(), so a JSON digest can emit
 // these fields directly instead of re-parsing the text block.

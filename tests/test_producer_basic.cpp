@@ -29,6 +29,16 @@ static fs::path make_root_prod() {
   return root;
 }
 
+// Wait for the published sequence to pass `above`, bounded by a deadline. A
+// fixed sleep asserts how fast a loaded box schedules the producer, not whether
+// it publishes.
+static uint64_t wait_seq_above(montauk::app::SnapshotBuffers& b, uint64_t above) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (b.seq() <= above && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  return b.seq();
+}
+
 TEST(producer_publishes_snapshots) {
   auto root = make_root_prod();
   TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
@@ -37,8 +47,7 @@ TEST(producer_publishes_snapshots) {
   TempRootGuard gpu_disable("MONTAUK_GPU_DISABLE_NATIVE", "1");
   montauk::app::SnapshotBuffers buffers; montauk::app::Producer producer(buffers);
   producer.start();
-  std::this_thread::sleep_for(std::chrono::milliseconds(600));
-  auto seq1 = buffers.seq();
+  auto seq1 = wait_seq_above(buffers, 0);
   ASSERT_TRUE(seq1 > 0);
   // mutate fixtures to let deltas occur
   std::ofstream(root / "proc/stat") << "cpu  150 0 150 1100 0 0 0 0\n"
@@ -48,8 +57,7 @@ TEST(producer_publishes_snapshots) {
     " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n"
     "eth0: 11000 0 0 0 0 0 0 0  22000 0 0 0 0 0 0 0\n";
   std::ofstream(root / "proc/diskstats") << "   8       0 sda 150 0 2000 0  260 0 2600 0  0  160 0\n";
-  std::this_thread::sleep_for(std::chrono::milliseconds(800));
-  auto seq2 = buffers.seq();
+  auto seq2 = wait_seq_above(buffers, seq1);
   ASSERT_TRUE(seq2 > seq1);
   producer.stop();
 }

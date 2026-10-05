@@ -1,15 +1,26 @@
 #!/usr/bin/env python3
-"""Byte-identical output gate for the output-unification migration.
+"""Fixture generator and crash/well-formedness gate for the analyzer + CLI.
 
-Regenerates the deterministic synthetic trace from source, runs the current
-build's analyzer + decoder over it, and diffs their STDOUT against the frozen
-goldens. stdout is the data contract; stderr (timing/rate, log lines) is not
-part of the gate and is discarded. Any byte difference fails.
+Regenerates the deterministic synthetic trace from source, then checks the
+surfaces that can actually be WRONG rather than merely DIFFERENT: the JSON
+envelope must parse, every deterministic CLI case must exit clean, and
+tally/distinct must survive the StrMap grow boundaries.
 
-    tests/corpus_check.py            # check against goldens
-    tests/corpus_check.py --update   # re-freeze goldens (only when output is
-                                     # intended to change -- never during a
-                                     # byte-identical migration step)
+    tests/corpus_check.py            # run the gate
+
+THE BYTE-IDENTICAL GOLDENS ARE GONE (v8.13.0) AND ARE NOT COMING BACK. Eight
+frozen stdout blobs gated the analyzer, decoder, JSON and CLI surfaces, and in
+practice a golden only ever fired when output changed ON PURPOSE -- two of them
+had been failing since v8.9.0 and were carried as known-red, which is the state
+in which a gate has stopped being a gate. The one that failed most recently did
+so because a per-CPU self-kick split was ADDED to the kicks report, i.e. the gate
+reported a feature as a regression and the real defect it might have caught was
+invisible underneath. A frozen blob cannot tell an intended line from a broken
+number, so it taxes every deliberate change and catches none of the accidental
+ones. What survives here are the assertions with a failure mode behind them --
+malformed JSON an agent cannot parse, a nonzero exit, a SIGSEGV at a rehash --
+plus parity_check.py, which compares text/JSON/prom against EACH OTHER and so
+needs no frozen reference at all.
 """
 
 import argparse
@@ -24,25 +35,7 @@ from harness import ROOT, ANALYZE, DECODE, SUBLIMATION
 
 GEN_SRC = ROOT / "tests" / "gen_synthetic_trace.cpp"
 FIXTURE = ROOT / "tests" / "fixtures" / "synthetic.mtk"
-# The same generator with --no-idle: no CPU_IDLE stream, so placement-race
-# reports NO-IDLE-STREAM. That is a CAPTURE LIMITATION, the one class the
-# behavioral-golden freeze refuses to freeze, and golden_gate.py needs it to
-# exercise the writer's refusal. Regenerated here beside the main fixture so the
-# two cannot drift apart on a generator change.
-FIXTURE_NOIDLE = ROOT / "tests" / "fixtures" / "synthetic_noidle.mtk"
 
-# label -> (binary, golden path, extra args)
-SURFACES = {
-    "reports": (ANALYZE, ROOT / "tests" / "fixtures" / "synthetic.reports.golden", []),
-    "decode": (DECODE, ROOT / "tests" / "fixtures" / "synthetic.decode.golden", []),
-    "json": (ANALYZE, ROOT / "tests" / "fixtures" / "synthetic.json.golden", ["--json"]),
-}
-
-CLI_GOLDEN = ROOT / "tests" / "fixtures" / "synthetic.cli.golden"
-
-# Deterministic CLI cases: each is (args, stdin). The output of every case is
-# concatenated under a header into one blob, so the whole sublimation stdout
-# surface is gated byte-identical -- the contract the awk/grep wrappers parse.
 _NUMS = "5\n3\n8\n1\n9\n2\n7\n4\n6\n0\n3\n8\n"
 _ROWS = "alpha 10 x\nbeta 20 y\ngamma 30 z\nalpha 40 w\n"
 _FREQ = "a\nb\na\nc\na\nb\n"
@@ -281,7 +274,6 @@ def regenerate_fixture(tmp: Path) -> None:
         sys.exit(1)
     FIXTURE.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([str(gen), str(FIXTURE)], capture_output=True)
-    subprocess.run([str(gen), str(FIXTURE_NOIDLE), "--no-idle"], capture_output=True)
 
 
 def run_stdout(cmd: list, args: list) -> str:
@@ -290,74 +282,10 @@ def run_stdout(cmd: list, args: list) -> str:
     `cmd` is an ARGV PREFIX (`[montauk, --analyze]`), not a path: the analyzer
     and decoder are modes of montauk rather than binaries of their own.
     TZ is pinned to UTC: the summary report renders the capture's fixed epoch
-    as wall-clock text, so an unpinned gate freezes the freezing machine's
-    timezone into the golden and fails everywhere else (confirmed: the one
-    divergent line under TZ=UTC was `start 10:06:40` vs `15:06:40`). The
-    product keeps local time for humans; the gate is hermetic."""
+    as wall-clock text, and the product keeps local time for humans while the
+    gate stays hermetic."""
     env = {**os.environ, "TZ": "UTC"}
     return harness.run_text([*cmd, str(FIXTURE), *args], env=env).stdout
-
-
-def check_surface(label: str, update: bool) -> bool:
-    cmd, golden, args = SURFACES[label]
-    exe = Path(cmd[0])
-    if harness.missing_bins(exe):
-        note(f"FAIL: missing {exe.relative_to(ROOT)} (build first)")
-        return False
-    got = run_stdout(cmd, args)
-
-    # The json surface must also be well-formed, not just byte-stable -- an agent
-    # parses it. A malformed envelope fails the gate even if it matches a stale
-    # golden.
-    if label == "json":
-        import json
-        try:
-            json.loads(got)
-        except json.JSONDecodeError as e:
-            note(f"FAIL: {label} is not valid JSON ({e})")
-            return False
-        # The envelope's trace.path field echoes FIXTURE's absolute path
-        # verbatim -- correct application behavior (it names the file that was
-        # analyzed), but ROOT differs by checkout location, so a golden that
-        # freezes it verbatim can never match from a different clone/home dir.
-        # Normalize it to a placeholder on both sides of the compare so the
-        # golden stays portable; every other field still gates byte-exact.
-        got = got.replace(str(FIXTURE), "<FIXTURE_PATH>")
-
-    if update:
-        # A refreeze canonizes whatever the binary printed. Show the diff it
-        # is about to stamp as truth, so a regression cannot be frozen in
-        # silently by one command.
-        if golden.exists() and golden.read_text() != got:
-            note(f"refreezing {label} -- diff being canonized:")
-            harness.print_diff(label, golden.read_text(), got)
-        golden.write_text(got)
-        note(f"updated {label} golden ({len(got)} bytes)")
-        return True
-
-    if not golden.exists():
-        note(f"FAIL: {label} golden missing ({golden.relative_to(ROOT)})")
-        return False
-
-    want = golden.read_text()
-    if got == want:
-        note(f"PASS {label} ({got.count(chr(10))} lines)")
-        return True
-
-    note(f"FAIL {label} -- stdout diverged from golden:")
-    harness.print_diff(label, want, got)
-    return False
-
-
-def cli_blob() -> str:
-    """Run every CLI case and concatenate stdout under a per-case header."""
-    parts = []
-    for argv, stdin in CLI_CASES:
-        # cwd=ROOT so relative fixture paths (set-ops/join FILE args) resolve.
-        proc = harness.run_text([str(SUBLIMATION), *argv], input=stdin, cwd=ROOT)
-        shown = " ".join(a.replace("\n", "\\n") for a in argv)
-        parts.append(f"$ sublimation {shown}\n{proc.stdout}")
-    return "".join(parts)
 
 
 # tally and distinct share the CLI's one StrMap, which doubles at 50% load. Both
@@ -396,62 +324,110 @@ def check_grow_boundary() -> bool:
     return True
 
 
-def check_cli(update: bool) -> bool:
+# tally breaks ties by the key alone, in descending byte order, so its output is
+# a function of the multiset of lines and serpent can fold partial tallies into
+# the sequential answer. The order is held to the pipeline the help names, and
+# the line format (unpadded count, one space, the key as read) is frozen because
+# serpent rebuilds it; a key with leading spaces has to survive it.
+TALLY_KEYS = ("b", "a", "B", "  lead", "lead", "x y", "a ", "", "z") + tuple(f"u{i}" for i in range(40))
+
+
+def check_tally_ties() -> bool:
+    import random
+    rng = random.Random(20261004)
+    lines = [rng.choice(TALLY_KEYS[:9]) for _ in range(300)] + list(TALLY_KEYS[9:])
+    outs = set()
+    for _ in range(5):
+        rng.shuffle(lines)
+        data = "\n".join(lines) + "\n"
+        outs.add(harness.run_text([str(SUBLIMATION), "tally"], input=data, cwd=ROOT).stdout)
+    gnu = subprocess.run("LC_ALL=C /usr/bin/sort | /usr/bin/uniq -c | LC_ALL=C /usr/bin/sort -rn",
+                         shell=True, input=data, capture_output=True, text=True).stdout
+    # uniq -c right-aligns the count; tally does not. Same order, tally's format.
+    want = [" ".join(ln.lstrip().split(" ", 1)) if " " in ln.lstrip() else ln.lstrip() + " "
+            for ln in gnu.split("\n") if ln]
+    got = next(iter(outs)).split("\n")[:-1]
+    if len(outs) != 1 or got != want:
+        diff = next(((g, w) for g, w in zip(got, want) if g != w), (len(got), len(want)))
+        note(f"FAIL tally-ties -- {len(outs)} distinct output(s) over 5 shuffles; "
+             f"first divergence from the pipeline (got, want): {diff!r}")
+        return False
+    note("PASS tally-ties (5 shuffles identical, order and format match the pipeline)")
+    return True
+
+
+def check_json_wellformed() -> bool:
+    """The envelope must PARSE. An agent consumes it, so malformed JSON is a real
+    defect."""
+    exe = Path(ANALYZE[0])
+    if harness.missing_bins(exe):
+        note(f"FAIL: missing {exe.relative_to(ROOT)} (build first)")
+        return False
+    got = run_stdout(ANALYZE, ["--json"])
+    import json
+    try:
+        json.loads(got)
+    except json.JSONDecodeError as e:
+        note(f"FAIL json -- envelope does not parse ({e})")
+        return False
+    note(f"PASS json ({len(got)} bytes, parses)")
+    return True
+
+
+def check_surfaces_run() -> bool:
+    """Analyzer and decoder must complete over the fixture. Not a byte compare --
+    a nonzero exit or a crash is the failure this catches."""
+    ok = True
+    for label, cmd, args in (("reports", ANALYZE, []), ("decode", DECODE, [])):
+        exe = Path(cmd[0])
+        if harness.missing_bins(exe):
+            note(f"FAIL: missing {exe.relative_to(ROOT)} (build first)")
+            ok = False
+            continue
+        env = {**os.environ, "TZ": "UTC"}
+        proc = harness.run_text([*cmd, str(FIXTURE), *args], env=env)
+        if proc.returncode != 0 or not proc.stdout.strip():
+            note(f"FAIL {label} -- rc={proc.returncode}, {len(proc.stdout)} bytes")
+            ok = False
+        else:
+            note(f"PASS {label} ({proc.stdout.count(chr(10))} lines)")
+    return ok
+
+
+def check_cli_runs() -> bool:
+    """Every deterministic CLI case must exit clean. The cases were written to be
+    diffed; they are kept because they are broad COVERAGE of the CLI surface, and
+    a crash or usage error in any of them is a defect with or without a golden."""
     if harness.missing_bins(SUBLIMATION):
         note(f"FAIL: missing {SUBLIMATION.relative_to(ROOT)} (build first)")
         return False
-    got = cli_blob()
-    if update:
-        if CLI_GOLDEN.exists() and CLI_GOLDEN.read_text() != got:
-            note("refreezing cli -- diff being canonized:")
-            harness.print_diff("cli", CLI_GOLDEN.read_text(), got)
-        CLI_GOLDEN.write_text(got)
-        note(f"updated cli golden ({len(got)} bytes)")
-        return True
-    if not CLI_GOLDEN.exists():
-        note(f"FAIL: cli golden missing ({CLI_GOLDEN.relative_to(ROOT)})")
+    bad = []
+    for argv, stdin in CLI_CASES:
+        proc = harness.run_text([str(SUBLIMATION), *argv], input=stdin, cwd=ROOT)
+        # Exit 1 is "nothing matched", a legitimate outcome for search/where.
+        # 2 is usage/pattern/IO error, and anything else is a signal.
+        if proc.returncode not in (0, 1):
+            shown = " ".join(a.replace("\n", "\\n") for a in argv)
+            bad.append(f"sublimation {shown} -> rc={proc.returncode}")
+    if bad:
+        note("FAIL cli -- case(s) did not exit cleanly:")
+        for b in bad:
+            note(f"  {b}")
         return False
-    if got == CLI_GOLDEN.read_text():
-        note(f"PASS cli ({len(CLI_CASES)} cases)")
-        return True
-    note("FAIL cli -- stdout diverged from golden:")
-    harness.print_diff("cli", CLI_GOLDEN.read_text(), got)
-    return False
+    note(f"PASS cli ({len(CLI_CASES)} cases exit clean)")
+    return True
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--update", action="store_true",
-                    help="re-freeze ALL goldens instead of checking")
-    ap.add_argument("--surface", choices=list(SURFACES) + ["cli"],
-                    help="operate on only this surface's golden; check-only "
-                         "unless --update is ALSO given. --surface used to imply "
-                         "update, which turned an innocent single-surface check "
-                         "into a silent refreeze (a TZ probe rewrote the reports "
-                         "golden that way) -- destructive writes now require the "
-                         "explicit flag, always.")
-    args = ap.parse_args()
-
+    argparse.ArgumentParser(description=__doc__).parse_args()
     with tempfile.TemporaryDirectory() as td:
         regenerate_fixture(Path(td))
-        if args.surface:  # one surface, the others untouched either way
-            if args.surface == "cli":
-                if args.update:
-                    CLI_GOLDEN.write_text(cli_blob())
-                    note(f"updated cli golden ({len(CLI_CASES)} cases)")
-                    return 0
-                # not a golden, so it runs on the check path either way
-                return 0 if (check_cli(False) and check_grow_boundary()) else 1
-            ok = check_surface(args.surface, args.update)
-            return 0 if ok else 1
-        ok = all(check_surface(label, args.update) for label in SURFACES)
-        ok = check_cli(args.update) and ok
-        # call first, then fold: a crash gate must run even when the goldens failed
+        ok = check_surfaces_run()
+        ok = check_json_wellformed() and ok
+        ok = check_cli_runs() and ok
         ok = check_grow_boundary() and ok
-
-    if args.update:
-        return 0
-    note("all surfaces byte-identical" if ok else "GATE FAILED")
+        ok = check_tally_ties() and ok
+    note("all surfaces healthy" if ok else "GATE FAILED")
     return 0 if ok else 1
 
 

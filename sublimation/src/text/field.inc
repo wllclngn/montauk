@@ -39,11 +39,45 @@ static inline int FW(ps_eq)(const uint64_t *a, const uint64_t *b) {
 // Nothing here is guarded by an include guard ON PURPOSE: it is meant to be
 // included more than once.
 
+static gattr_t FW(g_empty)(int nul) {
+    gattr_t a;
+    a.nul = nul;
+    FW(ps_zero)(a.first); FW(ps_zero)(a.first_bol);
+    FW(ps_zero)(a.last);  FW(ps_zero)(a.last_eol);
+    return a;
+}
+
+// Concatenation, with the assertions resolved at the seam. An edge out of a
+// position needing the end, or into one needing offset 0, would have to sit
+// between two consumed bytes, where neither can hold -- so it is never built.
+// What survives through a nullable side inherits that side's requirement.
+static gattr_t FW(g_cat)(gnfa_t *g, const gattr_t *a, const gattr_t *b) {
+    PS_FOREACH(a->last, i, { FW(ps_or)(g->follow[i], b->first); });
+    gattr_t r = FW(g_empty)(nul_cat(a->nul, b->nul));
+    FW(ps_copy)(r.first, a->first);
+    FW(ps_copy)(r.first_bol, a->first_bol);
+    if (a->nul & NUL_ANY) FW(ps_or)(r.first, b->first);
+    if (a->nul & NUL_BOL) FW(ps_or)(r.first_bol, b->first);
+    if (a->nul & (NUL_ANY | NUL_BOL)) FW(ps_or)(r.first_bol, b->first_bol);
+    FW(ps_copy)(r.last, b->last);
+    FW(ps_copy)(r.last_eol, b->last_eol);
+    if (b->nul & NUL_ANY) FW(ps_or)(r.last, a->last);
+    if (b->nul & NUL_EOL) FW(ps_or)(r.last_eol, a->last);
+    if (b->nul & (NUL_ANY | NUL_EOL)) FW(ps_or)(r.last_eol, a->last_eol);
+    return r;
+}
+
+// The back edge of * and +. Only unconditional ends loop to unconditional
+// starts; an iteration cannot re-enter at offset 0 or continue past the end.
+static void FW(g_loop)(gnfa_t *g, const gattr_t *a) {
+    PS_FOREACH(a->last, i, { FW(ps_or)(g->follow[i], a->first); });
+}
+
 // A literal byte SEQUENCE as a chain of positions, returned as one atom. Used
 // for the case-fold alternation below, where each branch is a whole UTF-8
 // encoding rather than a single byte.
 static gattr_t FW(g_bytes)(gpar_t *x, const unsigned char *bytes, int n) {
-    gattr_t a; a.nullable = 0; FW(ps_zero)(a.first); FW(ps_zero)(a.last);
+    gattr_t a = FW(g_empty)(0);
     int first_pos = -1, prev = -1;
     for (int i = 0; i < n; i++) {
         if (x->g->npos >= x->g->nwords * 64) { x->g->ok = 0; return a; }
@@ -54,20 +88,25 @@ static gattr_t FW(g_bytes)(gpar_t *x, const unsigned char *bytes, int n) {
         else FW(ps_set)(x->g->follow[prev], p);
         prev = p;
     }
-    if (first_pos < 0) { a.nullable = 1; return a; }
+    if (first_pos < 0) { a.nul = NUL_ANY; return a; }
     FW(ps_set)(a.first, first_pos);
     FW(ps_set)(a.last, prev);
     return a;
 }
 
 static gattr_t FW(g_atom)(gpar_t *x) {
-    gattr_t a; a.nullable = 0; FW(ps_zero)(a.first); FW(ps_zero)(a.last);
+    gattr_t a = FW(g_empty)(0);
     char c = *x->p;
     int icase = x->g->icase;
     if (c == '(') {
         x->p++; a = FW(g_alt)(x);
         if (*x->p == ')') x->p++; else x->g->ok = 0;
         return a;
+    }
+    if (c == '^' || c == '$') {
+        x->p++;
+        x->g->assertions = 1;
+        return FW(g_empty)(c == '^' ? NUL_BOL : NUL_EOL);
     }
     // CASE FOLD THAT NEEDS AN ALTERNATION, decided BEFORE a position is
     // allocated. These are the folds whose two UTF-8 encodings differ before the
@@ -95,7 +134,7 @@ static gattr_t FW(g_atom)(gpar_t *x) {
                 FW(ps_or)(a.last,  b2.last);
             }
             if (!x->g->ok) return a;
-            a.nullable = 0;
+            a.nul = 0;
             x->p += n;
             return a;
         }
@@ -106,8 +145,8 @@ static gattr_t FW(g_atom)(gpar_t *x) {
     if (c == '.') { memset(S, 0xff, 32); x->p++; }
     else if (c == '[') {
         // strlen of the REMAINING pattern, not the whole one: x->p is the
-        // parser's cursor. Patterns are capped at 64 positions, so this is a
-        // few tens of bytes at compile time, never in a scan.
+        // parser's cursor, and the pattern is bounded, so this is compile-time
+        // cost only.
         size_t rem = strlen(x->p);
         size_t e = class_span(x->p, rem, 0, S, icase);
         // On an unterminated class the cursor still advances to the end: the
@@ -138,79 +177,78 @@ static gattr_t FW(g_atom)(gpar_t *x) {
         x->p++;
     }
 atom_done:
-    a.nullable = 0;
-    FW(ps_zero)(a.first); FW(ps_set)(a.first, pos);
-    FW(ps_zero)(a.last);  FW(ps_set)(a.last,  pos);
+    FW(ps_set)(a.first, pos);
+    FW(ps_set)(a.last,  pos);
     return a;
 }
 
 static gattr_t FW(g_repeat)(gpar_t *x) {
+    const char *atom_at = x->p;
     int pos_before = x->g->npos;
     gattr_t a = FW(g_atom)(x);
+    if (!x->g->ok) return a;
     char c = *x->p;
     if (c == '*' || c == '+') {
         x->p++;
-        PS_FOREACH(a.last, i, { FW(ps_or)(x->g->follow[i], a.first); });
-        if (c == '*') a.nullable = 1;
-    } else if (c == '?') { x->p++; a.nullable = 1; }
+        FW(g_loop)(x->g, &a);
+        if (c == '*') a.nul |= NUL_ANY;
+    } else if (c == '?') { x->p++; a.nul |= NUL_ANY; }
     else if (c == '{') {
-        // Bounded repeat on a single-position atom: lo required plus (hi-lo)
-        // optional copies. {m,} unbounded is not supported here.
-        if (x->g->npos != pos_before + 1) { x->g->ok = 0; return a; }
         x->p++;
-        int lo = 0, hi = -2, haslo = 0;
-        while (*x->p >= '0' && *x->p <= '9') { lo = lo*10 + (*x->p - '0'); x->p++; haslo = 1; }
+        // {n} {n,} {n,m} and GNU's {,m}, which is {0,m}.
+        int lo = 0, hi = -2, haslo = 0, hashi = 0;
+        while (*x->p >= '0' && *x->p <= '9' && lo <= FIELD_DUP_MAX) { lo = lo*10 + (*x->p - '0'); x->p++; haslo = 1; }
         if (*x->p == ',') {
             x->p++; hi = -1;
-            if (*x->p >= '0' && *x->p <= '9') { hi = 0; while (*x->p >= '0' && *x->p <= '9') { hi = hi*10 + (*x->p - '0'); x->p++; } }
+            if (*x->p >= '0' && *x->p <= '9') { hi = 0; hashi = 1; while (*x->p >= '0' && *x->p <= '9' && hi <= FIELD_DUP_MAX) { hi = hi*10 + (*x->p - '0'); x->p++; } }
         } else hi = lo;
-        if (!haslo || *x->p != '}' || hi == -1 || hi > 60) { x->g->ok = 0; return a; }
+        if ((!haslo && !hashi) || *x->p != '}' || lo > FIELD_DUP_MAX || hi > FIELD_DUP_MAX ||
+            (hi >= 0 && hi < lo)) { x->g->ok = 0; return a; }
         x->p++;
+        const char *after = x->p;
         if (hi == 0) {
-            // {0} / {0,0}: zero copies. Reclaim the atom's single position so it
-            // contributes nothing -- leaving it nullable-but-present let it still
-            // match one copy.
+            // {0} / {0,0}: zero copies. Reclaim every position the atom took, so
+            // it contributes nothing and its budget is returned.
+            for (int p = pos_before; p < x->g->npos; p++) {
+                memset(x->g->setb[p], 0, 32);
+                FW(ps_zero)(x->g->follow[p]);
+            }
             x->g->npos = pos_before;
-            FW(ps_zero)(a.first); FW(ps_zero)(a.last); a.nullable = 1;
-            return a;
+            return FW(g_empty)(NUL_ANY);
         }
-        uint8_t setcopy[32]; memcpy(setcopy, x->g->setb[pos_before], 32);
-        if (lo == 0) a.nullable = 1;
-        for (int ci = 1; ci < hi; ci++) {
-            if (x->g->npos >= x->g->nwords * 64) { x->g->ok = 0; return a; }
-            int p = x->g->npos++;
-            memcpy(x->g->setb[p], setcopy, 32);
-            gattr_t b; b.nullable = (ci >= lo) ? 1 : 0;
-            FW(ps_zero)(b.first); FW(ps_set)(b.first, p);
-            FW(ps_zero)(b.last);  FW(ps_set)(b.last,  p);
-            PS_FOREACH(a.last, i, { FW(ps_or)(x->g->follow[i], b.first); });
-            uint64_t nf[SUBLIMATION_SEARCH_POS_WORDS], nl[SUBLIMATION_SEARCH_POS_WORDS];
-            FW(ps_copy)(nf, a.first); if (a.nullable) FW(ps_or)(nf, b.first);
-            FW(ps_copy)(nl, b.last);  if (b.nullable) FW(ps_or)(nl, a.last);
-            FW(ps_copy)(a.first, nf); FW(ps_copy)(a.last, nl);
-            a.nullable = a.nullable && b.nullable;
+        // COPIES ARE RE-PARSES. Each copy of the atom is parsed again from its
+        // own source, so it gets fresh positions and its own internal edges --
+        // which is what lets a group, an alternation or a class repeat, where
+        // copying one position's byte set could only ever repeat a single byte.
+        // X{lo,hi} is lo required copies then hi-lo optional ones; X{lo,} puts
+        // the loop on the last required copy (or makes the single copy X*).
+        int copies = hi < 0 ? (lo > 1 ? lo : 1) : hi;
+        gattr_t acc = a;
+        for (int ci = 1; ci <= copies && x->g->ok; ci++) {
+            gattr_t b = a;
+            if (ci > 1) { x->p = atom_at; b = FW(g_atom)(x); }
+            if (hi < 0 && ci == copies) {
+                FW(g_loop)(x->g, &b);
+                if (lo == 0) b.nul |= NUL_ANY;
+            } else if (ci > lo) {
+                b.nul |= NUL_ANY;
+            }
+            acc = ci == 1 ? b : FW(g_cat)(x->g, &acc, &b);
         }
+        x->p = after;
+        a = acc;
     }
     return a;
 }
 
 static gattr_t FW(g_concat)(gpar_t *x) {
-    gattr_t a; a.nullable = 1; FW(ps_zero)(a.first); FW(ps_zero)(a.last);
-    int any = 0;
+    gattr_t a = FW(g_empty)(NUL_ANY);
     // `&& x->g->ok`: once a position-cap or syntax error trips ok, g_atom stops
     // consuming input, so without this guard the loop spins forever on an
-    // over-64-position pattern instead of returning invalid.
+    // over-budget pattern instead of returning invalid.
     while (*x->p && *x->p != '|' && *x->p != ')' && x->g->ok) {
         gattr_t b = FW(g_repeat)(x);
-        if (!any) { a = b; any = 1; }
-        else {
-            PS_FOREACH(a.last, i, { FW(ps_or)(x->g->follow[i], b.first); });
-            uint64_t nf[SUBLIMATION_SEARCH_POS_WORDS], nl[SUBLIMATION_SEARCH_POS_WORDS];
-            FW(ps_copy)(nf, a.first); if (a.nullable) FW(ps_or)(nf, b.first);
-            FW(ps_copy)(nl, b.last);  if (b.nullable) FW(ps_or)(nl, a.last);
-            FW(ps_copy)(a.first, nf); FW(ps_copy)(a.last, nl);
-            a.nullable = a.nullable && b.nullable;
-        }
+        a = FW(g_cat)(x->g, &a, &b);
     }
     return a;
 }
@@ -219,37 +257,25 @@ static gattr_t FW(g_alt)(gpar_t *x) {
     gattr_t a = FW(g_concat)(x);
     while (*x->p == '|' && x->g->ok) {
         x->p++; gattr_t b = FW(g_concat)(x);
-        FW(ps_or)(a.first, b.first); FW(ps_or)(a.last, b.last);
-        a.nullable = a.nullable || b.nullable;
+        FW(ps_or)(a.first, b.first); FW(ps_or)(a.first_bol, b.first_bol);
+        FW(ps_or)(a.last, b.last);   FW(ps_or)(a.last_eol, b.last_eol);
+        a.nul |= b.nul;
     }
     return a;
 }
 
 static int FW(build_gnfa)(const char *pat, gnfa_t *g, int icase) {
     memset(g, 0, sizeof(*g)); g->ok = 1; g->icase = icase;
-    // Width of the position field for this pattern. One word is the common
-    // path and the only one built today; the wide path is selected here once
-    // the two-word specialization exists.
     g->nwords = PW;
-    char buf[1024];
-    size_t len = strlen(pat), s = 0, e = len;
-    if (e > 0 && pat[0] == '^') { g->anchored_start = 1; s = 1; }
-    if (e > s && pat[e - 1] == '$') { g->anchored_end = 1; e--; }
-    if (e - s >= sizeof(buf)) return 0;
-    // Anchor-only / empty body ("^", "$", "^$", ""): a legal zero-width,
-    // nullable pattern with no positions. sed's own insertion idioms
-    // (s/^/P /, s/$/ S/) depend on it; the Thompson engine this replaced
-    // accepted it, so rejecting it was a v8.0.0 parity regression.
-    if (e == s) {
-        g->npos = 0; FW(ps_zero)(g->first); FW(ps_zero)(g->last); g->nullable_all = 1;
-        return 1;
-    }
-    memcpy(buf, pat + s, e - s); buf[e - s] = '\0';
-    gpar_t x = { buf, g, 0, 0 };
+    // A pattern with no positions at all ("", "^", "$", "^$", "a{0}", "()") is
+    // legal: it matches the empty string wherever its assertions allow. sed's
+    // own insertion idioms (s/^/P /, s/$/ S/) depend on it.
+    gpar_t x = { pat, g, 0, 0 };
     gattr_t a = FW(g_alt)(&x);
-    if (!g->ok || *x.p != '\0' || g->npos == 0) return 0;
-    FW(ps_copy)(g->first, a.first); FW(ps_copy)(g->last, a.last);
-    g->nullable_all = a.nullable;
+    if (!g->ok || *x.p != '\0') return 0;
+    FW(ps_copy)(g->first, a.first);  FW(ps_copy)(g->first_bol, a.first_bol);
+    FW(ps_copy)(g->last, a.last);    FW(ps_copy)(g->last_eol, a.last_eol);
+    g->null_mask = a.nul;
     return 1;
 }
 
@@ -273,6 +299,7 @@ static inline void FW(reach_compute)(const uint64_t *D, const gnfa_t *g, uint64_
 static inline void FW(reach_of)(const uint64_t *D, const gnfa_t *g, reach_ent *cache,
                             uint64_t *out) {
     if (!FW(ps_any)(D)) { FW(ps_copy)(out, g->first); return; }
+    if (!cache) { FW(reach_compute)(D, g, out); return; }
     uint64_t mix = 0;
     for (int w = 0; w < PW; w++) mix = (mix ^ D[w]) * 0x9E3779B97F4A7C15ull;
     size_t h = (size_t)(mix >> (64 - REACH_BITS));
@@ -289,49 +316,42 @@ static inline void FW(reach_of)(const uint64_t *D, const gnfa_t *g, reach_ent *c
     FW(ps_copy)(cache[h].key, D); FW(ps_copy)(cache[h].reach, out); cache[h].used = 1;
 }
 
-// Full-field match-end count over hay[0..n). Byte-parity reference for the regex
-// face; the prefilter and class fast path must reproduce this exactly. `I` is
-// the compile-time per-byte position map (sublimation_search.imap).
+// Does the field, after consuming hay[j], accept there?
+static inline int FW(accepts)(const gnfa_t *g, const uint64_t *D, size_t j, size_t n) {
+    uint64_t acc[SUBLIMATION_SEARCH_POS_WORDS];
+    FW(ps_copy)(acc, D); FW(ps_and)(acc, g->last);
+    if (FW(ps_any)(acc)) return 1;
+    if (j + 1 != n) return 0;
+    FW(ps_copy)(acc, D); FW(ps_and)(acc, g->last_eol);
+    return FW(ps_any)(acc);
+}
+
+// Full-field match-end count over hay[0..n): the number of offsets in [0, n]
+// at which some match ends. Byte-parity reference for the regex face; the
+// prefilter and class fast path must reproduce this exactly. `I` is the
+// compile-time per-byte position map (sublimation_search.imap).
 static size_t FW(scan_gnfa)(const uint8_t *hay, size_t n, const gnfa_t *g,
                         const uint64_t I[256][SUBLIMATION_SEARCH_POS_WORDS]) {
-    if (g->nullable_all && !g->anchored_start && !g->anchored_end) return n + 1;
-    // Anchor-only pattern (npos == 0): exactly one zero-width match, at the
-    // start for ^ or the end for $; ^$ only matches the empty field.
-    if (g->npos == 0) {
-        if (g->anchored_start && g->anchored_end) return n == 0 ? 1 : 0;
-        return 1;
-    }
+    const int nm = g->null_mask;
+    if (nm & NUL_ANY) return n + 1;
+    size_t count = nul_at(nm, 0, n) ? 1 : 0;
+    const int roots = FW(ps_any)(g->first);
     uint64_t D[SUBLIMATION_SEARCH_POS_WORDS]; FW(ps_zero)(D);
-    uint64_t reach[SUBLIMATION_SEARCH_POS_WORDS], acc[SUBLIMATION_SEARCH_POS_WORDS];
-    size_t count = 0;
-    if (g->anchored_start || g->anchored_end) {
-        for (size_t j = 0; j < n; j++) {
-            if (!g->anchored_start || j == 0) FW(ps_copy)(reach, g->first);
-            else FW(ps_zero)(reach);
-            PS_FOREACH(D, i, { FW(ps_or)(reach, g->follow[i]); });
-            FW(ps_copy)(D, reach); FW(ps_and)(D, I[(unsigned char)hay[j]]);
-            FW(ps_copy)(acc, D); FW(ps_and)(acc, g->last);
-            if (FW(ps_any)(acc) && (!g->anchored_end || j + 1 == n)) count++;
-        }
-        return count;
-    }
-    reach_ent *cache = reach_cache_get();
-    if (!cache) {
-        // Allocation failure: no-cache scan (same fallback convention as the
-        // fuzzy face). Recomputes reach per step; byte-identical count.
-        for (size_t j = 0; j < n; j++) {
-            FW(reach_compute)(D, g, reach);
-            FW(ps_copy)(D, reach); FW(ps_and)(D, I[(unsigned char)hay[j]]);
-            FW(ps_copy)(acc, D); FW(ps_and)(acc, g->last);
-            if (FW(ps_any)(acc)) count++;
-        }
-        return count;
-    }
+    uint64_t reach[SUBLIMATION_SEARCH_POS_WORDS];
+    // A NULL memo (allocation failure) recomputes the reach per step;
+    // byte-identical count either way.
+    reach_ent *cache = n ? reach_cache_get() : NULL;
     for (size_t j = 0; j < n; j++) {
-        FW(reach_of)(D, g, cache, reach);
+        if (j == 0) { FW(ps_copy)(reach, g->first); FW(ps_or)(reach, g->first_bol); }
+        else FW(reach_of)(D, g, cache, reach);
         FW(ps_copy)(D, reach); FW(ps_and)(D, I[(unsigned char)hay[j]]);
-        FW(ps_copy)(acc, D); FW(ps_and)(acc, g->last);
-        if (FW(ps_any)(acc)) count++;
+        if (FW(accepts)(g, D, j, n) || nul_at(nm, j + 1, n)) count++;
+        // Nothing live and nothing that can start past offset 0: the rest of
+        // the input can hold only an empty match at the very end.
+        if (!roots && !FW(ps_any)(D)) {
+            if (j + 1 < n && nul_at(nm, n, n)) count++;
+            break;
+        }
     }
     return count;
 }
@@ -360,7 +380,7 @@ static size_t FW(regex_prefiltered)(const uint8_t *hay, size_t n, const char *pa
                                 const uint64_t I[256][SUBLIMATION_SEARCH_POS_WORDS],
                                 int *used) {
     *used = 0;
-    if (g->anchored_start || g->anchored_end || g->nullable_all) return 0;
+    if (g->assertions || g->null_mask) return 0;
     int ml = regex_maxlen(pat);
     if (ml < 1 || ml > 60) return 0;
     uint8_t lit[64];
@@ -403,10 +423,11 @@ static size_t FW(regex_prefiltered)(const uint8_t *hay, size_t n, const char *pa
 // Regex count dispatch. Prefilter where applicable, else the class fast path, else
 // the full field -- all byte-identical to the full field.
 static size_t FW(regex_count)(const sublimation_search *s, const uint8_t *hay, size_t n) {
-    // Anchor-only patterns have no positions for the prefilter or class field
-    // to anchor on; the full field handles their zero-width semantics directly.
-    if (s->g.npos == 0) return FW(scan_gnfa)(hay, n, &s->g, s->imap);
-    if (s->icase) return FW(scan_gnfa)(hay, n, &s->g, s->imap);
+    // No positions, case folding and assertions all go to the full field: the
+    // prefilter and class path have nothing to anchor on, fold nothing, and read
+    // the raw pattern text, where a ^ or $ would be taken for a literal.
+    if (s->g.npos == 0 || s->icase || s->g.assertions)
+        return FW(scan_gnfa)(hay, n, &s->g, s->imap);
     int used = 0;
     size_t r = FW(regex_prefiltered)(hay, n, s->pattern, &s->g, s->imap, &used);
     if (used) return r;
@@ -416,35 +437,112 @@ static size_t FW(regex_count)(const sublimation_search *s, const uint8_t *hay, s
     return FW(scan_gnfa)(hay, n, &s->g, s->imap);
 }
 
-// Fixed-start Glushkov walk: longest match-end for a match starting exactly at
-// `start`, or -1. No restart when the field goes empty (fixed start, not a scan).
+// Fixed-start walk: the longest end of a match starting exactly at `start` that
+// `ok` accepts (NULL accepts every end), or -1. -w needs this rather than the
+// leftmost-longest span: grep admits a shorter match at the same start when the
+// longest one is not word-bounded.
 static long FW(gnfa_start_longest)(const gnfa_t *g,
                                const uint64_t I[256][SUBLIMATION_SEARCH_POS_WORDS],
-                               const uint8_t *hay, size_t n, size_t start) {
+                               const uint8_t *hay, size_t n, size_t start,
+                               span_ok_fn ok) {
     long best = -1;
-    if (g->nullable_all && (!g->anchored_end || start == n)) best = (long)start;
-    uint64_t D[SUBLIMATION_SEARCH_POS_WORDS]; FW(ps_zero)(D);
-    uint64_t cand[SUBLIMATION_SEARCH_POS_WORDS], acc[SUBLIMATION_SEARCH_POS_WORDS];
-    int consumed = 0;
+    if (nul_at(g->null_mask, start, n) && (!ok || ok(hay, n, (long)start, (long)start)))
+        best = (long)start;
+    uint64_t D[SUBLIMATION_SEARCH_POS_WORDS], cand[SUBLIMATION_SEARCH_POS_WORDS];
+    FW(ps_zero)(D);
     for (size_t j = start; j < n; j++) {
-        if (!consumed) FW(ps_copy)(cand, g->first);
-        else { FW(ps_zero)(cand); PS_FOREACH(D, i, { FW(ps_or)(cand, g->follow[i]); }); }
+        if (j == start) {
+            FW(ps_copy)(cand, g->first);
+            if (j == 0) FW(ps_or)(cand, g->first_bol);
+        } else {
+            FW(ps_zero)(cand);
+            PS_FOREACH(D, i, { FW(ps_or)(cand, g->follow[i]); });
+        }
         FW(ps_copy)(D, cand); FW(ps_and)(D, I[hay[j]]);
-        consumed = 1;
         if (!FW(ps_any)(D)) break;
-        FW(ps_copy)(acc, D); FW(ps_and)(acc, g->last);
-        if (FW(ps_any)(acc)) { if (!g->anchored_end || j + 1 == n) best = (long)(j + 1); }
+        if (FW(accepts)(g, D, j, n) && (!ok || ok(hay, n, (long)start, (long)(j + 1))))
+            best = (long)(j + 1);
     }
     return best;
 }
 
-// Whole-input match: does the regex match hay[0..n) end to end?
+// LEFTMOST-LONGEST IN ONE PASS. Each live position carries the earliest start of
+// any path that reached it, and the live list is kept in start order: extending
+// it in that order and letting each position keep its FIRST owner gives every
+// position its earliest start without a comparison. A later start reaching the
+// same position has the same future, so it can never beat the earlier one --
+// dropping it loses nothing. Once a match is found, starts after it stop being
+// seeded and stop being carried; starts before it stay live, since one of them
+// may still accept further on and is then the leftmost.
+//
+// This replaced a fixed-start walk retried from every offset, which re-read the
+// input once per start: quadratic on any input where the field stays live and
+// no match arrives, which is exactly the long-line, rare-match case.
+static long FW(gnfa_find)(const gnfa_t *g,
+                      const uint64_t I[256][SUBLIMATION_SEARCH_POS_WORDS],
+                      const uint8_t *hay, size_t n, size_t from, long *end_out) {
+    const int nm = g->null_mask;
+    const int roots = FW(ps_any)(g->first);
+    int lp[2][SUBLIMATION_SEARCH_MAX_POS];
+    size_t ls[2][SUBLIMATION_SEARCH_MAX_POS];
+    int nl = 0, cur = 0;
+    long bs = -1, be = -1;
+    for (size_t j = from; ; j++) {
+        if (bs < 0 && nul_at(nm, j, n)) { bs = (long)j; be = (long)j; }
+        if (j == n) break;
+        const unsigned char c = hay[j];
+        const int nxt = cur ^ 1;
+        int nn = 0;
+        uint64_t taken[SUBLIMATION_SEARCH_POS_WORDS], q[SUBLIMATION_SEARCH_POS_WORDS];
+        FW(ps_zero)(taken);
+        for (int k = 0; k < nl; k++) {
+            const size_t st = ls[cur][k];
+            if (bs >= 0 && st > (size_t)bs) break;
+            FW(ps_copy)(q, g->follow[lp[cur][k]]); FW(ps_and)(q, I[c]);
+            for (int w = 0; w < PW; w++) q[w] &= ~taken[w];
+            FW(ps_or)(taken, q);
+            PS_FOREACH(q, p, { lp[nxt][nn] = p; ls[nxt][nn] = st; nn++; });
+        }
+        if (bs < 0 || (size_t)bs == j) {
+            FW(ps_copy)(q, g->first);
+            if (j == 0) FW(ps_or)(q, g->first_bol);
+            FW(ps_and)(q, I[c]);
+            for (int w = 0; w < PW; w++) q[w] &= ~taken[w];
+            PS_FOREACH(q, p, { lp[nxt][nn] = p; ls[nxt][nn] = j; nn++; });
+        }
+        // The first accepting entry in start order is the earliest start that
+        // ends here; a later step with the same start only lengthens it.
+        for (int k = 0; k < nn; k++) {
+            const int p = lp[nxt][k];
+            if (FW(ps_test)(g->last, p) || (j + 1 == n && FW(ps_test)(g->last_eol, p))) {
+                const long st = (long)ls[nxt][k];
+                if (bs < 0 || st < bs || (st == bs && (long)(j + 1) > be)) { bs = st; be = (long)(j + 1); }
+                break;
+            }
+        }
+        cur = nxt; nl = nn;
+        if (nl == 0) {
+            if (bs >= 0) break;
+            // Nothing live, nothing found, and no start can be entered past
+            // offset 0: only an empty match at the end remains possible.
+            if (!roots) {
+                if (nul_at(nm, n, n)) { bs = (long)n; be = (long)n; }
+                break;
+            }
+        }
+    }
+    if (bs >= 0 && end_out) *end_out = be;
+    return bs;
+}
+
+// Whole-input match: does the regex match hay[0..n) end to end? Both edges are
+// the input's own, so every assertion is satisfiable at its edge.
 static int FW(gnfa_full)(const gnfa_t *g,
                      const uint64_t I[256][SUBLIMATION_SEARCH_POS_WORDS],
                      const uint8_t *hay, size_t n) {
-    if (n == 0) return g->nullable_all;
+    if (n == 0) return g->null_mask != 0;
     uint64_t D[SUBLIMATION_SEARCH_POS_WORDS], reach[SUBLIMATION_SEARCH_POS_WORDS];
-    FW(ps_copy)(D, g->first); FW(ps_and)(D, I[hay[0]]);
+    FW(ps_copy)(D, g->first); FW(ps_or)(D, g->first_bol); FW(ps_and)(D, I[hay[0]]);
     if (!FW(ps_any)(D)) return 0;
     for (size_t j = 1; j < n; j++) {
         FW(ps_zero)(reach);
@@ -452,8 +550,7 @@ static int FW(gnfa_full)(const gnfa_t *g,
         FW(ps_copy)(D, reach); FW(ps_and)(D, I[hay[j]]);
         if (!FW(ps_any)(D)) return 0;
     }
-    FW(ps_and)(D, g->last);
-    return FW(ps_any)(D);
+    return FW(accepts)(g, D, n - 1, n);
 }
 
 #undef PS_FOREACH

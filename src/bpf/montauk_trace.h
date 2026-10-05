@@ -376,6 +376,18 @@ enum sched_trace_op {
                                 //   recover which task it was: if that task last ran elsewhere,
                                 //   the migration was decided at DRAIN time by the race, not at
                                 //   placement time by a policy.
+  SCHED_OP_MIGRATE        = 16, // a task changed CPU (tp/sched/sched_migrate_task).
+                                //   pid=task, cpu=DESTINATION, last_cpu=SOURCE,
+                                //   sub_idx=the CPU that EXECUTED the move.
+                                //   set_task_cpu runs in the decider's context, so
+                                //   comparing sub_idx against the src/dst pair names
+                                //   WHO decided: sub_idx==dst is a destination PULL,
+                                //   sub_idx==src a source PUSH, anything else a
+                                //   third-party PLACE (on a wake, the waker). A plain
+                                //   tracepoint with no trampoline and no struct_ops
+                                //   association, and class-agnostic, so it attributes
+                                //   a non-sched_ext scheduler on the same axis -- which
+                                //   a dsq kfunc probe structurally cannot.
 };
 
 // Per-CPU aggregation of scheduler-decision counts, indexed by sched_trace_op.
@@ -383,7 +395,7 @@ enum sched_trace_op {
 // (one bump, no shared ringbuf reserve) keeps tracing near-zero-overhead there.
 // Userspace sums across CPUs at snapshot time. Per-event streaming is opt-in
 // (binary --trace-out only); the contract struct above is the streamed form.
-#define MONTAUK_SCHED_OP_MAX 16  /* index by sched_trace_op (1..15); 0 unused */
+#define MONTAUK_SCHED_OP_MAX 17  /* index by sched_trace_op (1..16); 0 unused */
 struct sched_op_counters {
   __u64 op[MONTAUK_SCHED_OP_MAX];
 };

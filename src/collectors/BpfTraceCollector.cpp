@@ -1353,19 +1353,24 @@ void BpfTraceCollector::run(std::stop_token st) {
     }
   }
 
-  // scx storm probes are fentry/fexit trampolines on sched_ext's OWN kfuncs
-  // (scx_bpf_kick_cpu / scx_bpf_reenqueue_local). fentry resolves its BTF
-  // target at LOAD time, so on a kernel without sched_ext the missing kfunc
-  // fails the ENTIRE skeleton load -- every universal handler dies with it
-  // (observed on a kernel without sched_ext: libbpf "failed to find kernel BTF
-  // type ID of 'scx_bpf_kick_cpu': -ESRCH" killed the whole capture). Autoload them
-  // only when the running kernel's BTF actually carries the kfunc; the
-  // attach side already gates them behind MONTAUK_SCX_STORM.
+  // The scx probes are fentry/fexit trampolines on sched_ext's OWN kfuncs
+  // (scx_bpf_kick_cpu / scx_bpf_reenqueue_local / scx_bpf_dsq_insert{,_vtime} /
+  // scx_bpf_dsq_move_to_local). fentry resolves its BTF target at LOAD time, so
+  // on a kernel without sched_ext a missing kfunc fails the ENTIRE skeleton load
+  // -- every universal handler dies with it (observed on a kernel without
+  // sched_ext: libbpf "failed to find kernel BTF type ID of 'scx_bpf_kick_cpu':
+  // -ESRCH" killed the whole capture). Gate each name SEPARATELY, so a kernel
+  // carrying some of them loses only the probes it cannot resolve.
   {
     struct btf* vmlinux_btf = btf__load_vmlinux_btf();
-    bool have_scx = vmlinux_btf &&
-        btf__find_by_name_kind(vmlinux_btf, "scx_bpf_kick_cpu",
-                               BTF_KIND_FUNC) > 0;
+    auto have_fn = [&](const char* fn) {
+      return vmlinux_btf &&
+             btf__find_by_name_kind(vmlinux_btf, fn, BTF_KIND_FUNC) > 0;
+    };
+    const bool have_scx    = have_fn("scx_bpf_kick_cpu");
+    const bool have_ins    = have_fn("scx_bpf_dsq_insert");
+    const bool have_ins_vt = have_fn("scx_bpf_dsq_insert_vtime");
+    const bool have_drain  = have_fn("scx_bpf_dsq_move_to_local");
     btf__free(vmlinux_btf);
     if (!have_scx) {
       bpf_program__set_autoload(skel_->progs.handle_scx_kick,  false);
@@ -1373,6 +1378,12 @@ void BpfTraceCollector::run(std::stop_token st) {
       montauk::util::log_info("kernel BTF lacks sched_ext kfuncs; "
                               "scx storm probes disabled for this boot");
     }
+    if (!have_ins)
+      bpf_program__set_autoload(skel_->progs.handle_scx_dsq_insert, false);
+    if (!have_ins_vt)
+      bpf_program__set_autoload(skel_->progs.handle_scx_dsq_insert_vtime, false);
+    if (!have_drain)
+      bpf_program__set_autoload(skel_->progs.handle_scx_dsq_drain, false);
   }
 
   int err = montauk_trace_bpf__load(skel_);
@@ -1426,20 +1437,31 @@ void BpfTraceCollector::run(std::stop_token st) {
   bpf_program__set_autoattach(skel_->progs.uprobe_libc_message, false);
   bpf_program__set_autoattach(skel_->progs.uprobe_abort,        false);
 
-  // scx storm probes OFF by default. handle_scx_kick / handle_scx_reenq /
-  // handle_resched_curr are the only montauk programs that trampoline a
-  // kernel hot path an scx scheduler hammers at storm rates (~100k/s):
-  // fentry/scx_bpf_kick_cpu, fexit/scx_bpf_reenqueue_local, and
-  // fentry/resched_curr (called from every kick, plus preemption and wakeup
-  // paths generally -- hotter than the kick kfunc itself). Attaching a BPF
-  // trampoline patches live kernel text, and on 7.1+ that patch cannot
-  // synchronize across CPUs while scx saturates them -- a silent box-wide
-  // freeze. The pervasive --trace path must never carry any of them; opt in
-  // below with MONTAUK_SCX_STORM for a deliberate storm capture. Skip
-  // auto-attach here.
-  bpf_program__set_autoattach(skel_->progs.handle_scx_kick,    false);
-  bpf_program__set_autoattach(skel_->progs.handle_scx_reenq,   false);
-  bpf_program__set_autoattach(skel_->progs.handle_resched_curr, false);
+  // THE KICK PROBES ARE OFF BY DEFAULT ON COST, NOT ON SAFETY. The 7.1.x freeze
+  // that used to gate them is fixed upstream and the storm set has since run
+  // 14.6M kicks across eight cells on 7.2.3 without a lock, so nothing here is
+  // protecting the box any more.
+  //
+  // What it protects is the capture. resched_curr fires on every kick, every
+  // preemption and every wakeup, so arming this set on a saturated scx load took
+  // one fork-thread capture from 159k events/s to 451k -- 3.6M events to 10.5M
+  // -- and the analysis time with it. A trace that costs 3x to take and 3x to
+  // read is not a trace anyone runs by accident, so it is opted into per capture
+  // and never left ambient.
+  //
+  // THE DSQ PROBES ARE OFF FOR THE SAME REASON, HARDER.
+  // scx_bpf_dsq_insert{,_vtime} fires on EVERY enqueue. On a saturated box that
+  // offers the ring far more than it drains, and the loss is not evenly spread:
+  // the arm that finishes fastest offers the highest rate, overruns hardest and
+  // ends up the least sampled, so a dropped capture reads as though the winning
+  // arm had the worst locality. Opt in with MONTAUK_SCX_DSQ for a capture whose
+  // ring and duration were chosen to carry it.
+  bpf_program__set_autoattach(skel_->progs.handle_scx_kick,             false);
+  bpf_program__set_autoattach(skel_->progs.handle_scx_reenq,            false);
+  bpf_program__set_autoattach(skel_->progs.handle_resched_curr,         false);
+  bpf_program__set_autoattach(skel_->progs.handle_scx_dsq_insert,       false);
+  bpf_program__set_autoattach(skel_->progs.handle_scx_dsq_insert_vtime, false);
+  bpf_program__set_autoattach(skel_->progs.handle_scx_dsq_drain,        false);
 
   // Atomic skeleton attach now covers only the universal handlers -- always
   // present, so this cannot fail on a missing scheduler tracepoint.
@@ -1452,23 +1474,62 @@ void BpfTraceCollector::run(std::stop_token st) {
     return;
   }
 
-  // Opt-in scx storm probes (see the OFF-by-default note above). A storm capture
-  // sets MONTAUK_SCX_STORM=1; montauk comes up BEFORE the load ramps, so the
-  // trampoline patch lands while scx is still quiescent, and detaches after the
-  // load drains -- never patched/unpatched mid-storm. Off => the StormReport is
-  // simply empty, never a freeze.
+  // KICK CADENCE. MONTAUK_SCX_STORM arms the full set -- the two kick kfuncs
+  // plus resched_curr. MONTAUK_SCX_RESCHED arms resched_curr ALONE, which is
+  // the cheap half and still answers the question the kfunc probes are usually
+  // wanted for: a scheduler that kicks on every insert already knows it issued
+  // a kick, what it cannot see is whether a resched followed. Neither on means
+  // StormReport and KickLatencyReport are simply empty, and the capture stays
+  // at its base rate.
   if (const char* sv = std::getenv("MONTAUK_SCX_STORM");
       sv && sv[0] && sv[0] != '0') {
-    skel_->links.handle_scx_kick    = bpf_program__attach(skel_->progs.handle_scx_kick);
-    skel_->links.handle_scx_reenq   = bpf_program__attach(skel_->progs.handle_scx_reenq);
+    skel_->links.handle_scx_kick     = bpf_program__attach(skel_->progs.handle_scx_kick);
+    skel_->links.handle_scx_reenq    = bpf_program__attach(skel_->progs.handle_scx_reenq);
     skel_->links.handle_resched_curr = bpf_program__attach(skel_->progs.handle_resched_curr);
-    if (skel_->links.handle_scx_kick && skel_->links.handle_scx_reenq &&
-        skel_->links.handle_resched_curr) {
-      scx_storm_active_ = true;
-      montauk::util::log_info("scx storm probes attached (MONTAUK_SCX_STORM)");
-    } else
-      montauk::util::log_warn("scx storm probes requested but attach failed -- "
+    scx_storm_active_   = skel_->links.handle_scx_kick && skel_->links.handle_scx_reenq;
+    scx_resched_active_ = skel_->links.handle_resched_curr != nullptr;
+    if (scx_storm_active_ && scx_resched_active_)
+      montauk::util::log_info("scx kick probes attached (MONTAUK_SCX_STORM)");
+    else
+      montauk::util::log_warn("scx kick probes requested but attach failed -- "
                               "StormReport will be empty");
+  } else if (const char* rv = std::getenv("MONTAUK_SCX_RESCHED");
+             rv && rv[0] && rv[0] != '0') {
+    skel_->links.handle_resched_curr = bpf_program__attach(skel_->progs.handle_resched_curr);
+    if (skel_->links.handle_resched_curr) {
+      scx_resched_active_ = true;
+      montauk::util::log_info("scx resched probe attached (MONTAUK_SCX_RESCHED); "
+                              "kick kfunc probes stay off");
+    } else
+      montauk::util::log_warn("scx resched probe requested but attach failed");
+  }
+
+  // SCHED_EXT DISPATCH-QUEUE ATTRIBUTION, opt-in on volume (see the note above).
+  // The question it answers: when a task ends up on a CPU it did not last run
+  // on, was that decided by a PLACEMENT naming the wrong seat, or by a shared
+  // pool handing the task to whichever CPU reached the drain first? Those look
+  // identical in a sched_switch trace and have opposite fixes.
+  //
+  // The dsq_id carries it with no cooperation from the scheduler: every scx
+  // scheduler using per-CPU queues numbers them by CPU, so an id below the
+  // online CPU count NAMES a destination and anything above it is a pool.
+  if (const char* dv = std::getenv("MONTAUK_SCX_DSQ");
+      dv && dv[0] && dv[0] != '0') {
+    int dsq_n = 0;
+    struct { struct bpf_program* prog; struct bpf_link** link; } dsq_progs[] = {
+      {skel_->progs.handle_scx_dsq_insert_vtime, &skel_->links.handle_scx_dsq_insert_vtime},
+      {skel_->progs.handle_scx_dsq_insert,       &skel_->links.handle_scx_dsq_insert},
+      {skel_->progs.handle_scx_dsq_drain,        &skel_->links.handle_scx_dsq_drain},
+    };
+    for (auto& d : dsq_progs) {
+      struct bpf_link* l = bpf_program__attach(d.prog);
+      if (l && libbpf_get_error(l) == 0) { *d.link = l; ++dsq_n; }
+    }
+    if (dsq_n > 0)
+      montauk::util::log_info("scx dsq attribution probes attached (%d/3)", dsq_n);
+    else
+      montauk::util::log_warn("scx dsq probes requested but none attached -- "
+                              "the dsq-placement report will be empty");
   }
 
   // Bind the decision programs to the configured scheduler tracepoints, if any.

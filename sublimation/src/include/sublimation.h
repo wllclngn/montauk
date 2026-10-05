@@ -26,9 +26,9 @@ extern "C" {
 
 // Release version (source-of-truth for the library tag, pkgbuild, tests).
 #define SUBLIMATION_VERSION_MAJOR  3
-#define SUBLIMATION_VERSION_MINOR  2
+#define SUBLIMATION_VERSION_MINOR  3
 #define SUBLIMATION_VERSION_PATCH  0
-#define SUBLIMATION_VERSION_STRING "3.2.0"
+#define SUBLIMATION_VERSION_STRING "3.3.0"
 
 // ABI version. Bumped only when the library ABI breaks; independent from
 // the release version above. Readers should compare this value at runtime
@@ -44,7 +44,14 @@ extern "C" {
 // changed -- but a caller compiled against this header and linked against a
 // pre-4 shared object resolves none of those symbols, which is exactly the
 // mismatch this constant exists to name.
-#define SUBLIMATION_API_VERSION 4
+// Advanced to 6: sublimation_search_captures became sublimation_search_captures_at,
+// which takes the line around the span so ^ and $ keep their meaning, and the
+// public sublimation_search_gnfa traded its leading/trailing anchor flags for
+// per-position assertion sets (a layout change).
+// Advanced to 7: sublimation_tally and sub_tally_t were removed. The CLI's tally
+// verb is the one tally; the library copy existed for an in-process caller that
+// now runs the CLI, and nothing else called it.
+#define SUBLIMATION_API_VERSION 7
 
 // Disorder classification (the classifier's verdict)
 typedef enum {

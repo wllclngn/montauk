@@ -54,35 +54,75 @@ typedef struct {
     // only the first `nwords` of each, which is what makes the narrow path
     // scalar rather than a loop.
     uint64_t follow[SUBLIMATION_SEARCH_MAX_POS][SUBLIMATION_SEARCH_POS_WORDS];
-    uint64_t first[SUBLIMATION_SEARCH_POS_WORDS];   // start position set
-    uint64_t last[SUBLIMATION_SEARCH_POS_WORDS];    // accept position set
-    int npos, nwords, nullable_all, ok;
-    int anchored_start, anchored_end;               // leading ^ / trailing $
+    // ^ and $ are zero-width assertions wherever they appear, as in ERE: a start
+    // position behind a ^ may be entered only at offset 0, an accept position
+    // before a $ accepts only at the end, and an edge crossing either is never
+    // built. `null_mask` says when the empty string matches (internal bits).
+    uint64_t first[SUBLIMATION_SEARCH_POS_WORDS];      // enter at any offset
+    uint64_t first_bol[SUBLIMATION_SEARCH_POS_WORDS];  // enter only at offset 0
+    uint64_t last[SUBLIMATION_SEARCH_POS_WORDS];       // accept at any offset
+    uint64_t last_eol[SUBLIMATION_SEARCH_POS_WORDS];   // accept only at the end
+    int npos, nwords, null_mask, ok;
+    int assertions;                                 // any ^ or $ in the pattern
     int icase;                                      // fold ASCII case into setb[]
 } sublimation_search_gnfa;
+
+// Why a compile produced an invalid search. Both an over-long pattern and a
+// malformed one used to be `valid == 0` and nothing else, which left a front
+// end unable to tell a user which of the two happened.
+enum {
+    SUBLIMATION_SEARCH_OK = 0,
+    SUBLIMATION_SEARCH_ERR_EMPTY,     // zero-length pattern
+    SUBLIMATION_SEARCH_ERR_TOO_LONG,  // past the regex face's position budget
+    SUBLIMATION_SEARCH_ERR_SYNTAX,    // the expression does not parse
+};
 
 typedef struct {
     sublimation_search_gnfa g;                          // regex program (REGEX mode)
     uint64_t imap[256][SUBLIMATION_SEARCH_POS_WORDS];  // per-byte position map,
                          // built once at compile time
                          // (REGEX mode; depends only on pattern + icase)
+    // THE LITERAL AND FUZZY FACES BORROW; ONLY REGEX COPIES.
+    //
+    // The Glushkov builder needs a NUL-terminated string it can re-read, so a
+    // regex is copied into `pattern` and bounded by the position budget. The
+    // exact face is Boyer-Moore-Horspool over the caller's bytes and the fuzzy
+    // face is a pigeonhole scan over the same, and neither reads the copy --
+    // so neither needs one, and neither needs a length ceiling. `grep -F`
+    // takes a needle of any length; this is what makes the literal face agree.
+    //
+    // When `borrowed` is non-NULL it IS the needle and the caller owns it: it
+    // must outlive every call made with this search. `pattern` holds the copy
+    // otherwise.
+    const char *borrowed;
     char    pattern[SUBLIMATION_SEARCH_MAX_PATTERN + 1];// NUL-terminated source
     size_t  pattern_len;
     int     k;      // fuzzy Hamming threshold (0 = exact/regex)
     int     mode;   // 0 = exact, 1 = regex, 2 = fuzzy (internal)
     int     icase;
     int     valid;
+    int     error;  // one of the SUBLIMATION_SEARCH_ERR_* codes above
 } sublimation_search;
 
 // Compile `pattern` (len bytes) into `out`. `flags` selects the face
 // (SUBLIMATION_SEARCH_FIXED / _ICASE); default (0) is regex. k > 0 selects the
-// fuzzy face (k == 0 is exact/regex). No allocation; `out` is caller-owned. Check
-// sublimation_search_valid() afterward.
+// fuzzy face (k == 0 is exact/regex). No allocation; `out` is caller-owned.
+// Check sublimation_search_valid() afterward, and sublimation_search_error()
+// for why when it is not.
+//
+// LIFETIME: the literal and fuzzy faces BORROW `pattern`, which must therefore
+// outlive every call made with `out`. The regex face copies, and only it is
+// bounded by SUBLIMATION_SEARCH_MAX_PATTERN.
 SUB_API void sublimation_search_compile(sublimation_search *out, const char *pattern,
                                         size_t len, unsigned flags, int k);
 
 // Did the pattern compile?
 SUB_API int sublimation_search_valid(const sublimation_search *s);
+
+// Why it did not, as a sentence a front end can print. Returns NULL when the
+// search is valid. A refusal that names which of "too long" and "malformed"
+// occurred is the difference between a user fixing their pattern and guessing.
+SUB_API const char *sublimation_search_error(const sublimation_search *s);
 
 // Split PATTERN on its top-level '|' only -- never one inside a bracket
 // expression, behind a backslash, or nested in a group. Returns the branch
@@ -116,6 +156,49 @@ SUB_API long sublimation_search_find_from(const sublimation_search *s, const cha
 // end positions. Fuzzy: windows within k mismatches. Optimizations (regex literal
 // prefilter, fuzzy pigeonhole prefilter) are internal and never change the count.
 SUB_API size_t sublimation_search_count(const sublimation_search *s, const char *input, size_t n);
+
+// DIFF -- the edit between two line sequences.
+//
+// The last general text operation the library was missing, and the one every
+// consumer was going to hand-roll: a shell showing what a config reload
+// changed, an analyzer comparing two captures, an editor rendering an undo, a
+// harness confirming an edit before writing it. Four hand-rolled diffs is four
+// implementations of the same subtlety.
+//
+// Line-level, because that is the unit every one of those callers reports in.
+// The algorithm is Myers' greedy edit path over hashed lines, with the common
+// prefix and suffix trimmed first -- which is what makes the usual case, a
+// small change in a large file, cost the trim rather than the search.
+
+typedef enum {
+    SUBLIMATION_DIFF_EQUAL = 0,   // a_count lines matched b_count lines
+    SUBLIMATION_DIFF_DELETE,      // a_count lines are only in A
+    SUBLIMATION_DIFF_INSERT,      // b_count lines are only in B
+} sublimation_diff_op;
+
+typedef struct {
+    sublimation_diff_op op;
+    size_t a_start, a_count;
+    size_t b_start, b_count;
+} sublimation_diff_hunk;
+
+// Diff `na` lines against `nb` lines. `alen`/`blen` may be NULL, in which case
+// the lines are NUL-terminated; when given they are byte lengths, so embedded
+// NULs and unterminated slices both work.
+//
+// Writes at most `max_out` hunks and returns how many the edit NEEDS, which
+// may exceed `max_out`: a caller can size a buffer by calling once with
+// max_out 0. EQUAL runs are emitted too, so a caller rendering context does
+// not have to recompute what matched.
+//
+// Returns -1 when the edit distance exceeds `max_cost`, which bounds the work
+// on two files with nothing in common. Pass 0 for a default proportional to
+// the input. A refusal is not a failure to diff; it means the answer would
+// have been "replace everything" at a price worth declining.
+SUB_API int sublimation_diff_lines(const char *const *a, const size_t *alen, size_t na,
+                                   const char *const *b, const size_t *blen, size_t nb,
+                                   sublimation_diff_hunk *out, int max_out,
+                                   long max_cost);
 
 // LINE SELECTION over a pattern SET -- grep's semantics, as the library's own
 // answer rather than a front-end's. `set`/`nset` is the -e/-f pattern set, which
@@ -179,17 +262,25 @@ SUB_API size_t sublimation_search_spans(const sublimation_search *set, int nset,
                                         int wword, int xline,
                                         sublimation_match_span *out, size_t cap);
 
-// CAPTURE GROUPS for ONE match span. `text[0..n)` must be exactly a match of
-// `pat` -- the fast engine isolates it first, and this only ever runs over those
-// bytes, only when a substitution asks for a backreference. Fills `groups` with
-// up to `max_groups` spans, 1-based left to right, and writes how many to
-// `ngroups`. A group that did not participate has pat == -1.
+// CAPTURE GROUPS for ONE match span. `line[start..end)` must be a match of
+// `pat` -- the fast engine isolates it first, and this runs only over those
+// bytes, only when a substitution asks for a backreference. The whole line is
+// passed because ^ and $ mean ITS edges, not the span's. Fills `groups` with up
+// to `max_groups` spans, 1-based left to right, as offsets into `line`, and
+// writes how many to `ngroups`. A group that did not participate has pat == -1.
 //
-// Returns 1 on a parse-and-match, 0 otherwise. Fails CLOSED: a pattern this
-// subset cannot express yields no captures rather than a guess.
-SUB_API int sublimation_search_captures(const char *pat, const char *text, size_t n,
-                                        int icase, sublimation_match_span *groups,
-                                        size_t max_groups, size_t *ngroups);
+// SUBGROUPS FOLLOW PERL'S RULES (Python's re, PCRE): the highest-priority parse
+// of the span wins, and a repeated group reports its last iteration. POSIX
+// regexec differs on nested and repeated groups. The whole-match span itself
+// is POSIX's leftmost-longest, from the field.
+//
+// Linear in span x pattern, with no recursion on the input. Returns 1 on a
+// parse-and-match, 0 when the pattern has no groups, does not parse, or the
+// span is not a match of it.
+SUB_API int sublimation_search_captures_at(const char *pat, const char *line, size_t n,
+                                           size_t start, size_t end, int icase,
+                                           sublimation_match_span *groups,
+                                           size_t max_groups, size_t *ngroups);
 
 // THE DISPERSION FIELD -- what the occurrence field is FOR.
 //
@@ -290,20 +381,6 @@ SUB_API void sublimation_occ_buf_init(sublimation_occ_buf *b);
 SUB_API void sublimation_occ_buf_push(sublimation_occ_buf *b, uint32_t line_no,
                                       const char *line, size_t len, size_t raw_len);
 SUB_API void sublimation_occ_buf_free(sublimation_occ_buf *b);
-
-// One distinct newline-separated record and its occurrence count, as an offset
-// and length into the caller's buffer (no copy). Backs the tally/distinct/count
-// verbs for a bounded FFI caller; the CLI keeps its own streaming interner for
-// unbounded stdin.
-typedef struct { size_t offset; size_t length; uint64_t count; } sub_tally_t;
-
-// Tally distinct newline-separated records in data[0..n): fill out[] with up to
-// out_cap distinct records (offset, length, count) sorted by count descending
-// then first-seen. Returns the number of DISTINCT records (may exceed out_cap;
-// out is filled only up to it). *total, if non-NULL, gets the total record
-// count. A trailing record without a newline still counts.
-SUB_API size_t sublimation_tally(const char *data, size_t n, sub_tally_t *out,
-                                 size_t out_cap, uint64_t *total);
 
 #ifdef __cplusplus
 }

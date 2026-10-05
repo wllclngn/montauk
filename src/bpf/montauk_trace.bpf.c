@@ -1198,6 +1198,14 @@ int handle_cpu_frequency(struct trace_event_raw_cpu_frequency_compat *ctx) {
 SEC("tp/sched/sched_switch")
 int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
   u64 now = bpf_ktime_get_ns();
+  // MIGRATION SRC CORE FOR THE SWITCH_IN LANE, HOISTED TO FUNCTION SCOPE.
+  // WAKE2RUN has carried this since it existed, but it is emitted only for a
+  // task that SLEPT, so the migration lane that folds it sees only the wake
+  // population -- single-digit percent of a preempt-heavy scheduler's moves.
+  // SWITCH_IN is emitted for every task on every CPU, so carrying the same
+  // field there gives the lane the whole population at no capture cost.
+  // -1 = no prior run, or the thread is not tracked.
+  int sw_src_cpu = -1;
 
   // Handle prev task going off-CPU
   u32 prev_tid = ctx->prev_pid; // confusingly named: this is actually the tid
@@ -1210,9 +1218,39 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
     }
     prev->enter_ns = 0;
 
-    // Map prev_state to our state encoding
+    // Map prev_state to our state encoding.
+    //
+    // A PREEMPTED TASK DOES NOT REPORT 0, AND EVERY CAPTURE TAKEN BEFORE THIS
+    // FIX RECORDED ONE AS HAVING SLEPT. __trace_sched_switch_state() returns
+    // TASK_REPORT_MAX (0x100) for a task that lost the CPU while runnable --
+    // since 4.14, when preempted was split out of the TASK_REPORT bits so it
+    // could be distinguished from TASK_RUNNING. 0x100 matches none of the bit
+    // tests below and fell through to the default S, so a preempt was booked as
+    // a sleep. Two consequences, both load-bearing and both observed: the
+    // migration classifier keys `woke` off this state, so every preempt
+    // re-dispatch counted as a WAKE migration and the wake/steal split was
+    // inverted on any preempt-heavy workload; and the wake_ns stamp below never
+    // fired for a preempt, so no WAKE2RUN was emitted, so LocalityReport -- which
+    // folds only WAKE2RUN -- saw a single-digit percentage of a scheduler's
+    // migrations and reported the tier mix of the minority it could see.
+    //
+    // AND THE FIX DELIBERATELY DOES NOT STAMP wake_ns ON THE PREEMPT BRANCH.
+    // The legacy prev_state == 0 arm below does, on the reasoning that a
+    // re-enqueue wait is a runqueue wait worth measuring -- but that arm has
+    // never fired on any kernel this tool supports, so wake2run has only ever
+    // contained genuine wakes. Stamping preempts now would fold re-queue latency
+    // into the same distribution and silently redefine every wake2run p99 in the
+    // archive. The correct instrument for the preempt population is the
+    // SWITCH_IN lane below, which carries the migration src core and is emitted
+    // for every task on every CPU.
+    //
+    // ORDER MATTERS: test the preempt sentinel BEFORE the sleep bits, because
+    // TASK_REPORT_MAX is a value and not a flag and would otherwise be masked by
+    // a later comparison that happens to share a bit.
     long prev_state = ctx->prev_state;
-    if (prev_state == 0) {
+    if (prev_state >= 0x100) {
+      prev->state = 0; // R (preempted, still runnable) -- no wake_ns stamp
+    } else if (prev_state == 0) {
       prev->state = 0; // R (preempted, still runnable)
       // Involuntary preempt: runnable but lost the CPU. Stamp so the next
       // sched-in measures the runqueue wait (bcc runqlat re-enqueue case).
@@ -1245,6 +1283,7 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
     // and classify it intra- vs cross-domain by the L3 domain of src/dst core.
     int cpu = (int)bpf_get_smp_processor_id();
     int prev_run_cpu = next->cur_cpu;  // src core of this sched-in; stamped on WAKE2RUN
+    sw_src_cpu = prev_run_cpu;         // and on SWITCH_IN, which covers every task
     int cross_domain = 0;  // did this sched-in land on a different cache domain than last run
     if (next->cur_cpu >= 0 && next->cur_cpu != cpu) {
       next->migrations += 1;
@@ -1406,7 +1445,7 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
       pe->cpu           = (u32)bpf_get_smp_processor_id();
       pe->pid           = (int)next_tid;
       pe->secondary_pid = -1;
-      pe->last_cpu      = -1;
+      pe->last_cpu      = sw_src_cpu;  // migration src core (-1 = no prior run)
       pe->sub_idx       = 0;
       pe->freq_mhz      = 0;
       pe->score         = 0;
@@ -1518,6 +1557,82 @@ int BPF_PROG(handle_scx_kick, s32 cpu, u64 flags)
   // resulted in a resched, or was swallowed.
   sched_emit(SCHED_OP_KICK_ISSUE, (u32)cpu, -1, -1,
              (s32)bpf_get_smp_processor_id(), 0, 0, flags, 0, 0);
+  return 0;
+}
+
+// SCHED_EXT DISPATCH-QUEUE ATTRIBUTION
+// The migration question no scheduler-external instrument could answer before:
+// when a task ends up on a CPU it did not last run on, was that decided by a
+// PLACEMENT policy naming the wrong seat, or by a shared pool handing the task
+// to whichever CPU reached the drain first? The two look identical in a
+// sched_switch trace and have opposite fixes, so they have to be separated at
+// the decision, not reconstructed from the outcome.
+//
+// The dsq_id carries it. Every scx scheduler using per-CPU queues numbers them
+// by CPU, so an id below the online CPU count NAMES a destination and anything
+// above it is a pool. Emitting the raw id keeps this generic -- the analyzer
+// classifies against the CPU count it already knows, and no scheduler has to
+// cooperate or be named here.
+
+SEC("fentry/scx_bpf_dsq_insert_vtime")
+int BPF_PROG(handle_scx_dsq_insert_vtime, struct task_struct *p, u64 dsq_id,
+             u64 slice, u64 vtime, u64 enq_flags)
+{
+  sched_op_bump(SCHED_OP_DSQ_INSERT);
+  if (!sched_stream)
+    return 0;
+  sched_emit(SCHED_OP_DSQ_INSERT, (u32)bpf_get_smp_processor_id(),
+             (s32)BPF_CORE_READ(p, pid), -1, -1, 0, 0, dsq_id, slice, 0);
+  return 0;
+}
+
+// The non-vtime insert. Same contract; a scheduler may use either or both.
+SEC("fentry/scx_bpf_dsq_insert")
+int BPF_PROG(handle_scx_dsq_insert, struct task_struct *p, u64 dsq_id,
+             u64 slice, u64 enq_flags)
+{
+  sched_op_bump(SCHED_OP_DSQ_INSERT);
+  if (!sched_stream)
+    return 0;
+  sched_emit(SCHED_OP_DSQ_INSERT, (u32)bpf_get_smp_processor_id(),
+             (s32)BPF_CORE_READ(p, pid), -1, -1, 0, 0, dsq_id, slice, 0);
+  return 0;
+}
+
+// The drain side. move_to_local does not name the task, so pid is -1 and the
+// pairing is positional: the next SWITCH_IN on this CPU is what came off this
+// queue. That is enough, because SWITCH_IN already carries the task and the
+// analyzer already knows where it last ran.
+SEC("fentry/scx_bpf_dsq_move_to_local")
+int BPF_PROG(handle_scx_dsq_drain, u64 dsq_id)
+{
+  sched_op_bump(SCHED_OP_DSQ_DRAIN);
+  if (!sched_stream)
+    return 0;
+  sched_emit(SCHED_OP_DSQ_DRAIN, (u32)bpf_get_smp_processor_id(),
+             -1, -1, -1, 0, 0, dsq_id, 0, 0);
+  return 0;
+}
+
+// WHO DECIDED EACH MIGRATION, FOR EVERY SCHEDULER CLASS.
+// set_task_cpu runs in the context of whoever moved the task, so the executing
+// CPU compared against the src/dst pair separates the three cases that produce
+// identical sched_switch traces and admit opposite fixes: a destination PULL,
+// a source PUSH, and a third-party PLACE. The tracepoint carries orig_cpu and
+// dest_cpu itself, so nothing has to be reconstructed from a later switch.
+//
+// This is the route that needs no kfunc. No trampoline, no struct_ops
+// association, and being class-agnostic it attributes a non-sched_ext scheduler
+// on the same axis, which a dsq probe cannot do at all -- so the two arms of a
+// comparison are finally measured the same way.
+SEC("tp/sched/sched_migrate_task")
+int handle_sched_migrate(struct trace_event_raw_sched_migrate_task *ctx)
+{
+  sched_op_bump(SCHED_OP_MIGRATE);
+  if (!sched_stream)
+    return 0;
+  sched_emit(SCHED_OP_MIGRATE, (u32)ctx->dest_cpu, ctx->pid, -1,
+             ctx->orig_cpu, (u32)bpf_get_smp_processor_id(), 0, 0, 0, 0);
   return 0;
 }
 

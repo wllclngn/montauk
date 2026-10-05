@@ -8,6 +8,7 @@
 #include <algorithm>
 #include "sublimation_signal.h"
 #include "sublimation_spectral.h"
+#include "sublimation_order.hpp"
 #include "app/MetricsServer.hpp"
 #include "app/LogWriter.hpp"
 #include "app/TraceBuffers.hpp"
@@ -75,8 +76,7 @@ static int parse_int_arg(const char* s, int fallback) {
 //
 // Dispatch happens before ANY montauk setup: no locale, no signal handlers, no
 // output sink. The tools own their whole process when they run, exactly as they
-// did as separate binaries, so their behaviour cannot drift from what the corpus
-// goldens froze.
+// did as separate binaries.
 static int dispatch_tool(int argc, char** argv) {
   if (argc <= 1) return -1;
   // The tool is handed argv as if it had been called directly: argv[0] set to
@@ -91,6 +91,7 @@ static int dispatch_tool(int argc, char** argv) {
   };
   if (std::strcmp(argv[1], "--analyze") == 0) return forward("montauk --analyze", montauk_analyze_main);
   if (std::strcmp(argv[1], "--decode") == 0) return forward("montauk --decode", montauk_decode_main);
+  if (std::strcmp(argv[1], "--static") == 0) return forward("montauk --static", montauk_static_main);
   return -1;  // not a tool invocation; fall through to montauk proper
 }
 
@@ -304,6 +305,21 @@ int main(int argc, char** argv) {
       montauk_sink_appendf(&g_out, "               [--trace PATTERN] [--trace-out FILE] [--stream-out DEVICE] [--sched-detail] [--init-theme]\n");
       montauk_sink_appendf(&g_out, "               [--pmu-comm SUBSTR] [--pmu-pid N]\n"
                "               [--json] [--anomalies N] [--similar PID] [--regime N] [--cpu-window N]\n");
+      // THE MODES ARE DISPATCHED BEFORE THIS TEXT IS EVER REACHED, which is
+      // exactly why they belong in it. dispatch_tool() consumes --analyze,
+      // --decode and --static at argv[1] and forwards to their own entry
+      // points, so none of them ever touched the flag loop below and none of
+      // them were ever printed here -- three faces of the binary reachable
+      // only by already knowing they exist.
+      montauk_sink_appendf(&g_out, "Modes: montauk takes a mode word at argv[1]; each has its own --help.\n");
+      montauk_sink_appendf(&g_out, "       --analyze TARGET      Read a capture, a recording dir or a .guards\n");
+      montauk_sink_appendf(&g_out, "                             artifact and report on it (--json for the envelope)\n");
+      montauk_sink_appendf(&g_out, "       --decode FILE         Decode a raw --trace-out binary event log\n");
+      montauk_sink_appendf(&g_out, "       --static FILE|DIR...  Read SOURCE and record every branch it declares with\n");
+      montauk_sink_appendf(&g_out, "                             the conditions guarding it, and each function's\n");
+      montauk_sink_appendf(&g_out, "                             control flow graph; -o writes a .guards artifact\n");
+      montauk_sink_appendf(&g_out, "                             for --analyze. C, C++ and Rust\n");
+      montauk_sink_appendf(&g_out, "\n");
       montauk_sink_appendf(&g_out, "Notes: Text UI runs until Ctrl+C by default.\n");
       montauk_sink_appendf(&g_out, "       --metrics PORT        Enable Prometheus endpoint on PORT\n");
       montauk_sink_appendf(&g_out, "       --log DIR             Write timestamped snapshots to DIR\n");
@@ -514,8 +530,7 @@ int main(int argc, char** argv) {
         std::vector<const montauk::app::AnomalyFeatureRow*> rows;
         rows.reserve(ms.anomaly_features.size());
         for (const auto& r : ms.anomaly_features) rows.push_back(&r);
-        std::sort(rows.begin(), rows.end(),
-                  [](auto* a, auto* b) { return a->anomaly_score > b->anomaly_score; });
+        sublimation_order_f64(rows, true, [](const auto* r) { return r->anomaly_score; });
         const size_t k = std::min<size_t>((size_t)anomalies_n, rows.size());
         montauk_sink_appendf(&g_out, "{\"anomalies\":[");
         for (size_t idx = 0; idx < k; ++idx) {
@@ -600,17 +615,23 @@ int main(int argc, char** argv) {
           return 1;
         }
         if (distinct > CAP) {
-          std::sort(sel.begin(), sel.end(), [&](size_t a, size_t b) {
-            double da = 0, db = 0;
+          // sel and members are parallel; they move as one row or the member
+          // counts land on the wrong behaviour.
+          std::vector<std::pair<size_t, size_t>> rows;
+          rows.reserve(sel.size());
+          for (size_t i = 0; i < sel.size(); ++i) rows.emplace_back(sel[i], members[i]);
+          sublimation_order_f64(rows, false, [&](const std::pair<size_t, size_t>& r) {
+            double d = 0;
             for (size_t j = 0; j < D; ++j) {
-              double ea = (featv(ms.anomaly_features[a], j) - featv(ms.anomaly_features[qi_all], j)) / sd[j];
-              double eb = (featv(ms.anomaly_features[b], j) - featv(ms.anomaly_features[qi_all], j)) / sd[j];
-              da += ea * ea; db += eb * eb;
+              double e = (featv(ms.anomaly_features[r.first], j) - featv(ms.anomaly_features[qi_all], j)) / sd[j];
+              d += e * e;
             }
-            return da < db;
+            return d;
           });
+          rows.resize(CAP);
           sel.resize(CAP);
           members.resize(CAP);
+          for (size_t i = 0; i < CAP; ++i) { sel[i] = rows[i].first; members[i] = rows[i].second; }
         }
         const size_t n = sel.size();
         size_t qi = n;
@@ -627,8 +648,7 @@ int main(int argc, char** argv) {
         }
         std::vector<size_t> ord;
         for (size_t idx = 0; idx < n; ++idx) if (idx != qi) ord.push_back(idx);
-        std::sort(ord.begin(), ord.end(),
-                  [&](size_t a, size_t b) { return reff[qi * n + a] < reff[qi * n + b]; });
+        sublimation_order_f64(ord, false, [&](size_t a) { return reff[qi * n + a]; });
         const size_t k = std::min<size_t>((size_t)similar_n, ord.size());
         const auto& q = ms.anomaly_features[qi_all];
         montauk_sink_appendf(&g_out, "{\"query\":{\"pid\":%lld,\"comm\":\"%s\"},\"similar\":[",
@@ -791,6 +811,4 @@ int main(int argc, char** argv) {
     montauk::util::log_error("likely a transient filesystem issue (proc/sys files disappearing); please report if it persists");
     return 1;
   }
-
-  return 0;
 }

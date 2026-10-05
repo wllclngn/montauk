@@ -29,6 +29,9 @@
 // side, one engine: literal, regex or fuzzy), field prints a column. One tool for
 // sort, awk and grep.
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE   // tee(2), splice(2), F_GETPIPE_SZ
+#endif
 #include "sublimation.h"
 #include "sublimation_pack.h"
 #include "sublimation_locate.h"
@@ -44,6 +47,8 @@
 #include <ctype.h>
 #include <math.h>
 #include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <stdatomic.h>
 
@@ -98,8 +103,12 @@ static void usage(FILE *out) {
         "  count [--words|--bytes] number of input lines/words/bytes (wc -l/-w/-c)\n"
         "  head N [FILE]         first N lines (head -N)\n"
         "  tail N [FILE]         last N lines (tail -N)\n"
-        "  distinct              count of distinct tokens (sort | uniq | wc -l)\n"
-        "  tally                 per-token frequency, high to low (sort | uniq -c | sort -rn)\n"
+        "  distinct              count of distinct lines (sort | uniq | wc -l)\n"
+        "  tally                 per-line frequency, high to low; ties by line in\n"
+        "                        descending byte order (LC_ALL=C sort | uniq -c | sort -rn)\n"
+        "  tee [-a] [FILE..]     copy stdin to stdout and every FILE (coreutils tee);\n"
+        "                        zero-copy through tee(2)/splice(2) when stdin and\n"
+        "                        stdout are pipes. -a appends; no other flag\n"
         "  classify              disorder class + profile of the stream\n"
         "  locate CLASS [--values]  windows whose disorder class == CLASS (--values: select-by-structure, emit the data in them)\n"
         "  rand                  max-entropy randomness confidence\n"
@@ -142,6 +151,9 @@ static void usage(FILE *out) {
         "  tr SET1 SET2          translate SET1's characters to SET2's, positionally\n"
         "                        (SET2 shorter: its last char repeats); X-Y ranges, \\n\\t\\r\\\\ escapes\n"
         "  tr -d SET1            delete SET1's characters instead of translating\n"
+        "  diff FILE             line edit from FILE to stdin: '-' lines are only in\n"
+        "                        FILE, '+' only in stdin. Exit 0 when they differ,\n"
+        "                        1 when they do not, the way grep reports a match\n"
         "  comm FILE             sorted 3-column compare vs stdin (both pre-sorted): col 1\n"
         "                        stdin-only, col 2 (1 tab) FILE-only, col 3 (2 tabs) common\n"
         "  intersect FILE        lines in both stdin and FILE (set intersection)\n"
@@ -348,34 +360,35 @@ static int smap_load_file(StrMap *m, const char *path, int store_line) {
     return 0;
 }
 
-// TALLY EMIT, one implementation for both callers. `search --tally` and the
-// `tally` verb each built this pack-and-sort inline: pack (count << 32 | dense
-// index) into one u64 per key, order it through the in-tree u64 sort, then walk
-// it backwards so the highest count prints first. Two copies of a packing
-// convention is two chances to disagree about the shift.
+// TALLY EMIT, one implementation for both callers (`search --tally` and the
+// `tally` verb). Count descending, and TIES BY KEY IN DESCENDING BYTE ORDER, the
+// order `LC_ALL=C sort | uniq -c | sort -rn` gives. Hash-slot order would depend
+// on the order of the input, which no fold of partial tallies can reproduce;
+// a rule on the key alone makes the output a function of the multiset of lines.
 //
-// Prints nothing and frees nothing it did not allocate; the map stays the
-// caller's.
+// The keys are ranked by the string sort, then (count << 32 | rank) goes through
+// the u64 sort and is walked backwards. The line format, count, one space, key,
+// is frozen: serpent's fold rebuilds it.
 static void emit_tally_desc(const StrMap *m) {
     if (m->used == 0) return;
-    char    **dk     = (char **)malloc(m->used * sizeof(char *));
-    uint64_t *packed = (uint64_t *)malloc(m->used * sizeof(uint64_t));
-    if (dk && packed) {
+    const char **dk     = (const char **)malloc(m->used * sizeof(char *));
+    size_t     *slot    = (size_t *)malloc(m->used * sizeof(size_t));
+    uint32_t   *by_key  = (uint32_t *)malloc(m->used * sizeof(uint32_t));
+    uint64_t   *packed  = (uint64_t *)malloc(m->used * sizeof(uint64_t));
+    if (dk && slot && by_key && packed) {
         size_t d = 0;
         for (size_t i = 0; i < m->cap; i++)
-            if (m->keys[i]) {
-                dk[d] = m->keys[i];
-                packed[d] = ((uint64_t)m->nums[i] << 32) | (uint64_t)d;
-                d++;
-            }
-        sublimation_u64(packed, m->used);            // ascending
-        for (size_t i = m->used; i-- > 0;) {         // descending: highest first
+            if (m->keys[i]) { dk[d] = m->keys[i]; slot[d] = i; d++; }
+        sublimation_strings_indices(dk, by_key, m->used);   // by_key[rank] = dense index
+        for (size_t r = 0; r < m->used; r++)
+            packed[r] = ((uint64_t)m->nums[slot[by_key[r]]] << 32) | (uint64_t)r;
+        sublimation_u64(packed, m->used);
+        for (size_t i = m->used; i-- > 0;) {
             unsigned long long count = (unsigned long long)(packed[i] >> 32);
-            size_t idx = (size_t)(packed[i] & 0xFFFFFFFFULL);
-            montauk_sink_appendf(&g_out, "%llu %s\n", count, dk[idx]);
+            montauk_sink_appendf(&g_out, "%llu %s\n", count, dk[by_key[packed[i] & 0xFFFFFFFFULL]]);
         }
     }
-    free(dk); free(packed);
+    free(dk); free(slot); free(by_key); free(packed);
 }
 
 // ASCII case-fold byte comparison for uniq -i -- ASCII only, same scope as
@@ -1028,6 +1041,163 @@ static int parse_class(const char *s, sub_disorder_t *out) {
     return 0;
 }
 
+// TEE. Byte for byte what coreutils `tee` writes, and zero-copy when stdin and
+// stdout are both pipes: tee(2) duplicates the input pipe's pages into stdout
+// without consuming them, splice(2) then moves the same bytes into the first
+// file, and each further file takes its own duplicate through a private pipe.
+// Nothing enters userspace. Anything else -- a file redirected in, a terminal
+// out, a FILE that is not a regular file -- takes the read/write loop, quietly,
+// since the bytes are the same. splice(2) refuses an O_APPEND target, so under
+// -a the stdout leg stays on tee(2) and the files are written from a buffer.
+//
+// A FILE that will not open, or fails mid-stream, is reported and dropped while
+// the rest are still written, exit 1. SIGPIPE keeps its default, so a pipeline
+// ending in `head` ends tee the way it ends coreutils tee.
+#define TEE_MAX 256
+
+typedef struct { int fd, dup_r, dup_w; const char *name; } TeeOut;
+
+static void tee_drop(TeeOut *o, int err) {
+    fprintf(stderr, "sublimation: tee: %s: %s\n", o->name, strerror(err));
+    close(o->fd);
+    if (o->dup_r >= 0) { close(o->dup_r); close(o->dup_w); }
+    o->fd = o->dup_r = o->dup_w = -1;
+}
+
+static int tee_write_all(int fd, const char *p, size_t n) {
+    while (n) {
+        ssize_t w = write(fd, p, n);
+        if (w < 0) { if (errno == EINTR) continue; return -1; }
+        p += w; n -= (size_t)w;
+    }
+    return 0;
+}
+
+// Move exactly n bytes out of pipe `in`; returns how many did not move.
+static size_t tee_splice_n(int in, int out, size_t n) {
+    while (n) {
+        ssize_t s = splice(in, NULL, out, NULL, n, SPLICE_F_MOVE);
+        if (s < 0 && errno == EINTR) continue;
+        if (s <= 0) break;
+        n -= (size_t)s;
+    }
+    return n;
+}
+
+// The zero-copy rounds. Returns 0 at EOF, 1 when stdout failed with nothing of
+// the round consumed, so the caller finishes the files on the copy loop.
+static int tee_zero_copy(TeeOut *out, int nout, int append, char *buf, int *rc) {
+    long cap = fcntl(0, F_GETPIPE_SZ);
+    size_t chunk = cap > 0 ? (size_t)cap : 65536;
+    if (!append)
+        for (int i = 1; i < nout; i++) {
+            int p[2];
+            if (pipe2(p, O_CLOEXEC) < 0) { tee_drop(&out[i], errno); *rc = 1; continue; }
+            out[i].dup_r = p[0]; out[i].dup_w = p[1];
+            // A resize past pipe-max-size is refused; the round then fits the
+            // duplicate pipe as it is.
+            long got = fcntl(p[1], F_SETPIPE_SZ, (int)chunk);
+            if (got < 0) got = fcntl(p[1], F_GETPIPE_SZ);
+            if (got > 0 && (size_t)got < chunk) chunk = (size_t)got;
+        }
+    if (append && chunk > 65536) chunk = 65536;   // the files' leg goes through buf
+    for (;;) {
+        ssize_t n = nout == 0 ? splice(0, NULL, 1, NULL, chunk, SPLICE_F_MOVE)
+                              : tee(0, 1, chunk, 0);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) {
+            fprintf(stderr, "sublimation: tee: standard output: %s\n", strerror(errno));
+            *rc = 1;
+            return 1;
+        }
+        if (n == 0) return 0;
+        if (append) {
+            size_t got = 0;
+            while (got < (size_t)n) {
+                ssize_t r = read(0, buf + got, (size_t)n - got);
+                if (r < 0 && errno == EINTR) continue;
+                if (r <= 0) { fprintf(stderr, "sublimation: tee: standard input: %s\n", strerror(errno)); *rc = 1; return 0; }
+                got += (size_t)r;
+            }
+            for (int i = 0; i < nout; i++)
+                if (out[i].fd >= 0 && tee_write_all(out[i].fd, buf, got)) { tee_drop(&out[i], errno); *rc = 1; }
+            continue;
+        }
+        errno = 0;
+        for (int i = 1; i < nout; i++)
+            if (out[i].dup_w >= 0 && tee(0, out[i].dup_w, (size_t)n, 0) != n) { tee_drop(&out[i], errno ? errno : EIO); *rc = 1; }
+        if (nout > 0) {
+            // The first file consumes the round. If it fails, the rest of the
+            // round still has to leave the input pipe, so it goes to /dev/null.
+            size_t left = tee_splice_n(0, out[0].fd, (size_t)n);
+            if (left) {
+                tee_drop(&out[0], errno ? errno : EIO); *rc = 1;
+                out[0].fd = open("/dev/null", O_WRONLY | O_CLOEXEC);
+                out[0].name = NULL;
+                tee_splice_n(0, out[0].fd, left);
+            }
+        }
+        for (int i = 1; i < nout; i++)
+            if (out[i].dup_r >= 0 && tee_splice_n(out[i].dup_r, out[i].fd, (size_t)n)) { tee_drop(&out[i], errno ? errno : EIO); *rc = 1; }
+    }
+}
+
+static int run_tee(int argc, char **argv) {
+    TeeOut out[TEE_MAX];
+    const char *names[TEE_MAX];
+    int nname = 0, append = 0, endopts = 0, rc = 0;
+    for (int i = 0; i < argc; i++) {
+        const char *a = argv[i];
+        if (!endopts && !strcmp(a, "--")) { endopts = 1; continue; }
+        if (!endopts && (!strcmp(a, "-a") || !strcmp(a, "--append"))) { append = 1; continue; }
+        if (!endopts && a[0] == '-' && a[1]) {
+            fprintf(stderr, "sublimation: tee: '%s' is not supported; -a is the only option\n", a);
+            return 2;
+        }
+        if (nname == TEE_MAX) { fprintf(stderr, "sublimation: tee: at most %d FILEs\n", TEE_MAX); return 2; }
+        names[nname++] = a;
+    }
+    int nout = 0, all_regular = 1;
+    for (int i = 0; i < nname; i++) {
+        int fd = open(names[i], O_WRONLY | O_CREAT | O_CLOEXEC | (append ? O_APPEND : O_TRUNC), 0666);
+        if (fd < 0) { fprintf(stderr, "sublimation: tee: %s: %s\n", names[i], strerror(errno)); rc = 1; continue; }
+        struct stat st;
+        if (fstat(fd, &st) || !S_ISREG(st.st_mode)) all_regular = 0;
+        out[nout++] = (TeeOut){fd, -1, -1, names[i]};
+    }
+
+    char *buf = (char *)malloc(1 << 16);
+    if (!buf) { fputs("sublimation: out of memory\n", stderr); return 2; }
+    struct stat si, so;
+    int pipes = !fstat(0, &si) && !fstat(1, &so) && S_ISFIFO(si.st_mode) && S_ISFIFO(so.st_mode);
+    int out_ok = 1;
+    if (pipes && (append || all_regular)) {
+        if (tee_zero_copy(out, nout, append, buf, &rc) == 0) goto done;
+        out_ok = 0;                 // stdout failed; the files finish on the copy loop
+    }
+    for (;;) {
+        ssize_t n = read(0, buf, 1 << 16);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) { fprintf(stderr, "sublimation: tee: standard input: %s\n", strerror(errno)); rc = 1; break; }
+        if (n == 0) break;
+        if (out_ok && tee_write_all(1, buf, (size_t)n)) {
+            fprintf(stderr, "sublimation: tee: standard output: %s\n", strerror(errno));
+            out_ok = 0; rc = 1;
+        }
+        for (int i = 0; i < nout; i++)
+            if (out[i].fd >= 0 && tee_write_all(out[i].fd, buf, (size_t)n)) { tee_drop(&out[i], errno); rc = 1; }
+    }
+done:
+    for (int i = 0; i < nout; i++) {
+        if (out[i].fd >= 0 && close(out[i].fd) && out[i].name) {
+            fprintf(stderr, "sublimation: tee: %s: %s\n", out[i].name, strerror(errno)); rc = 1;
+        }
+        if (out[i].dup_r >= 0) { close(out[i].dup_r); close(out[i].dup_w); }
+    }
+    free(buf);
+    return rc;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2 || !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help") ||
         !strcmp(argv[1], "help")) {
@@ -1068,7 +1238,7 @@ int main(int argc, char **argv) {
         "head", "tail", "distinct", "tally", "classify", "locate", "rand",
         "characterize", "search", "replace", "field", "where", "group", "uniq",
         "cut", "column", "tac", "paste", "intersect", "subtract", "union",
-        "join", "tr", "comm",
+        "join", "tr", "comm", "diff", "tee",
     };
     int known_cmd = 0;
     for (size_t vi = 0; vi < sizeof verbs / sizeof verbs[0]; vi++)
@@ -1078,6 +1248,8 @@ int main(int argc, char **argv) {
         usage(stderr);
         return 2;
     }
+    // tee takes -a and FILEs and nothing the shared option parser knows.
+    if (!strcmp(cmd, "tee")) return run_tee(argc - 2, argv + 2);
 
     int field = 0;
     const char *field_arg = NULL;  // --field's raw text; sort --keyed splits a comma-list from
@@ -2874,6 +3046,7 @@ int main(int argc, char **argv) {
         sublimation_search srch;
         sublimation_search_compile(&srch, pos, strlen(pos), icase ? SUBLIMATION_SEARCH_ICASE : 0u, 0);
         if (!sublimation_search_valid(&srch)) { fprintf(stderr, "sublimation: bad regex '%s'\n", pos); return 2; }
+        int warned_caps = 0;
         char *line = NULL; size_t lcap = 0; ssize_t len;
         while ((len = getline(&line, &lcap, stdin)) != -1) {
             size_t l = (len > 0 && line[len - 1] == '\n') ? (size_t)len - 1 : (size_t)len;
@@ -2887,26 +3060,31 @@ int main(int argc, char **argv) {
                 size_t ms = (size_t)s, me = (size_t)end;
                 montauk_sink_append(&g_out, line + off, ms - off);  // text before the match
                 if (has_escape) {
-                    // Captures are extracted from the MATCH SPAN alone, and only
-                    // because this replacement asked. A pattern with no groups,
-                    // or one the submatch subset cannot parse, substitutes the
-                    // backreference as EMPTY rather than guessing -- the same
-                    // thing sed does for a group that did not participate.
+                    // Captures are extracted from the MATCH SPAN, and only because
+                    // this replacement asked. A group that did not participate
+                    // substitutes as empty, which is what sed does. A capture pass
+                    // that FAILS is not that, and says so once rather than
+                    // substituting empty in silence.
                     sublimation_match_span gr[9];
                     size_t ng = 0;
                     // The submatch pass costs a second parse, so it runs only
                     // when a \1..\9 actually asked for it.
                     int have = (has_backref && me > ms)
-                             ? sublimation_search_captures(pos, line + ms, me - ms,
-                                                           icase, gr, 9, &ng)
+                             ? sublimation_search_captures_at(pos, line, l, ms, me,
+                                                              icase, gr, 9, &ng)
                              : 0;
+                    if (has_backref && me > ms && !have && !warned_caps) {
+                        fprintf(stderr, "sublimation: replace: no capture groups for '%s'; "
+                                        "backreferences substitute empty\n", pos);
+                        warned_caps = 1;
+                    }
                     for (size_t ri = 0; ri < rlen; ri++) {
                         if (repl[ri] == '\\' && ri + 1 < rlen) {
                             char d = repl[ri + 1];
                             if (d >= '1' && d <= '9') {
                                 size_t gi = (size_t)(d - '1');
                                 if (have && gi < ng && gr[gi].pat >= 0)
-                                    montauk_sink_append(&g_out, line + ms + gr[gi].start,
+                                    montauk_sink_append(&g_out, line + gr[gi].start,
                                                         gr[gi].end - gr[gi].start);
                                 ri++; continue;
                             }
@@ -2969,6 +3147,68 @@ int main(int argc, char **argv) {
     // sorted -- unsorted input gives comm's usual undefined-ish output, same
     // as real comm). Column 1 = stdin-only, column 2 (1 tab) = FILE-only,
     // column 3 (2 tabs) = common to both. No -1/-2/-3 column suppression yet.
+    if (!strcmp(cmd, "diff")) {
+        if (!pos) { fputs("sublimation: diff needs FILE -- e.g. 'diff old.txt' (stdin is the new version)\n", stderr); return 2; }
+        if (nfiles > 0) { fprintf(stderr, "sublimation: diff takes one FILE; '%s' is an unexpected argument\n", files[0]); return 2; }
+        FILE *fa = strcmp(pos, "-") ? fopen(pos, "r") : stdin;
+        if (!fa) { fprintf(stderr, "sublimation: cannot open '%s'\n", pos); return 2; }
+
+        /* Both sides are read whole: a diff is not a streaming operation, and
+         * pretending otherwise would mean reporting an edit before knowing
+         * whether a later line changes it. */
+        char **A = NULL, **B = NULL; size_t na = 0, nb = 0, ca = 0, cb = 0;
+        char *line = NULL; size_t cap = 0; ssize_t got;
+        while ((got = getline(&line, &cap, fa)) > 0) {
+            if (line[got - 1] == '\n') line[--got] = '\0';
+            if (na == ca) { ca = ca ? ca * 2 : 256; A = realloc(A, ca * sizeof *A); }
+            A[na++] = strdup(line);
+        }
+        while ((got = getline(&line, &cap, stdin)) > 0) {
+            if (line[got - 1] == '\n') line[--got] = '\0';
+            if (nb == cb) { cb = cb ? cb * 2 : 256; B = realloc(B, cb * sizeof *B); }
+            B[nb++] = strdup(line);
+        }
+        free(line);
+        if (fa != stdin) fclose(fa);
+
+        const int want = sublimation_diff_lines((const char *const *)A, NULL, na,
+                                                (const char *const *)B, NULL, nb,
+                                                NULL, 0, 0);
+        int rc = 0;
+        if (want < 0) {
+            fputs("sublimation: the two inputs have too little in common to diff\n", stderr);
+            rc = 2;
+        } else {
+            sublimation_diff_hunk *H = calloc((size_t)want, sizeof *H);
+            sublimation_diff_lines((const char *const *)A, NULL, na,
+                                   (const char *const *)B, NULL, nb, H, want, 0);
+            int changed = 0;
+            for (int i = 0; i < want; i++) {
+                const sublimation_diff_hunk *h = &H[i];
+                if (h->op == SUBLIMATION_DIFF_EQUAL) continue;
+                changed = 1;
+                const char prefix = (h->op == SUBLIMATION_DIFF_DELETE) ? '-' : '+';
+                const size_t n = (h->op == SUBLIMATION_DIFF_DELETE) ? h->a_count : h->b_count;
+                char *const *src = (h->op == SUBLIMATION_DIFF_DELETE) ? A : B;
+                const size_t at = (h->op == SUBLIMATION_DIFF_DELETE) ? h->a_start : h->b_start;
+                for (size_t k = 0; k < n; k++) {
+                    montauk_sink_appendc(&g_out, prefix);
+                    montauk_sink_append(&g_out, src[at + k], strlen(src[at + k]));
+                    montauk_sink_appendc(&g_out, '\n');
+                }
+                if (g_out.len >= (1u << 16)) montauk_sink_drain(&g_out);
+            }
+            free(H);
+            /* grep's convention, which every caller here already knows: 0 when
+             * there is something to report, 1 when there is not. */
+            rc = changed ? 0 : 1;
+        }
+        for (size_t i = 0; i < na; i++) free(A[i]);
+        for (size_t i = 0; i < nb; i++) free(B[i]);
+        free(A); free(B);
+        return rc;
+    }
+
     if (!strcmp(cmd, "comm")) {
         if (!pos) { fputs("sublimation: comm needs FILE -- e.g. 'comm sorted.txt' (stdin is the other stream, both pre-sorted)\n", stderr); return 2; }
         if (nfiles > 0) { fprintf(stderr, "sublimation: comm takes one FILE; '%s' is an unexpected argument\n", files[0]); return 2; }

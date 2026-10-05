@@ -442,11 +442,43 @@ static size_t scan_classfield(const uint8_t *hay, size_t n, uint8_t sets[][32], 
 }
 
 typedef sublimation_search_gnfa gnfa_t;
+
+// WHEN AN EXPRESSION MATCHES EMPTY. Bit i is a requirement set: bit 0 needs
+// nothing, bit 1 needs offset 0 (a ^ on the path), bit 2 needs the end (a $),
+// bit 3 needs both, which only an empty input satisfies. Alternatives OR; a
+// concatenation's requirements union, which is nul_cat.
+enum { NUL_ANY = 1, NUL_BOL = 2, NUL_EOL = 4, NUL_BOTH = 8 };
+
+static int nul_cat(int a, int b) {
+    int out = 0;
+    for (int i = 0; i < 4; i++)
+        if ((a >> i) & 1)
+            for (int j = 0; j < 4; j++)
+                if ((b >> j) & 1) out |= 1 << (i | j);
+    return out;
+}
+
+// Can an empty match end (and start) at offset e of an input of length n?
+static inline int nul_at(int mask, size_t e, size_t n) {
+    return (mask & NUL_ANY) || ((mask & NUL_BOL) && e == 0) ||
+           ((mask & NUL_EOL) && e == n) || ((mask & NUL_BOTH) && n == 0);
+}
+
 typedef struct {
-    int nullable;
+    int nul;                                        // NUL_* alternatives, 0 = never empty
     uint64_t first[SUBLIMATION_SEARCH_POS_WORDS];
+    uint64_t first_bol[SUBLIMATION_SEARCH_POS_WORDS];
     uint64_t last[SUBLIMATION_SEARCH_POS_WORDS];
+    uint64_t last_eol[SUBLIMATION_SEARCH_POS_WORDS];
 } gattr_t;
+// RE_DUP_MAX as GNU sets it. A repeat bound past this is refused rather than
+// parsed, by both parsers, so a typo'd count cannot spin either copy loop.
+#define FIELD_DUP_MAX 32767
+
+// A predicate over a candidate span [s, e) of hay[0..n); -w's word boundary is
+// the one caller.
+typedef int (*span_ok_fn)(const uint8_t *hay, size_t n, long s, long e);
+
 // fold_left counts bytes until the one that differs under icase; fold_byte is
 // the counterpart to admit there. Only the LAST byte of a folded character
 // ever differs (see case_fold_table.h), so one pending byte is enough.
@@ -512,8 +544,9 @@ static gattr_t FW(g_alt)(gpar_t *x);
 static int build_gnfa(const char *pat, gnfa_t *g, int icase) {
     if (build_gnfa_w1(pat, g, icase)) return 1;
     // Only a position-cap overrun is worth a second pass; a syntax error fails
-    // identically at either width. npos stops exactly AT the narrow cap when the
-    // pattern outgrew it, which is what distinguishes the two.
+    // identically at either width. npos stops exactly AT the cap when the
+    // pattern outgrew it, which is what distinguishes the two -- here and in
+    // the error the compile reports.
     if (g->npos < SUBLIMATION_SEARCH_NARROW_POS) return 0;
     return build_gnfa_w2(pat, g, icase);
 }
@@ -530,9 +563,14 @@ static int gnfa_full(const gnfa_t *g, const uint64_t I[256][SUBLIMATION_SEARCH_P
 }
 static long gnfa_start_longest(const gnfa_t *g,
                                const uint64_t I[256][SUBLIMATION_SEARCH_POS_WORDS],
-                               const uint8_t *hay, size_t n, size_t start) {
-    return g->nwords == 2 ? gnfa_start_longest_w2(g, I, hay, n, start)
-                          : gnfa_start_longest_w1(g, I, hay, n, start);
+                               const uint8_t *hay, size_t n, size_t start, span_ok_fn ok) {
+    return g->nwords == 2 ? gnfa_start_longest_w2(g, I, hay, n, start, ok)
+                          : gnfa_start_longest_w1(g, I, hay, n, start, ok);
+}
+static long gnfa_find(const gnfa_t *g, const uint64_t I[256][SUBLIMATION_SEARCH_POS_WORDS],
+                      const uint8_t *hay, size_t n, size_t from, long *end_out) {
+    return g->nwords == 2 ? gnfa_find_w2(g, I, hay, n, from, end_out)
+                          : gnfa_find_w1(g, I, hay, n, from, end_out);
 }
 
 
@@ -623,29 +661,57 @@ static int extract_literal(const char *p, uint8_t *out, int maxout) {
 
 // Public API
 
+// The needle, wherever it lives. A borrowed pattern is the caller's bytes; a
+// copied one is the regex source.
+static inline const uint8_t *sub_needle(const sublimation_search *s) {
+    return (const uint8_t *)(s->borrowed ? s->borrowed : s->pattern);
+}
+
 void sublimation_search_compile(sublimation_search *out, const char *pattern,
                                 size_t len, unsigned flags, int k) {
     memset(out, 0, sizeof(*out));
     out->icase = (flags & SUBLIMATION_SEARCH_ICASE) ? 1 : 0;
     out->k = k > 0 ? k : 0;
-    if (len > SUBLIMATION_SEARCH_MAX_PATTERN) { out->valid = 0; return; }
-    memcpy(out->pattern, pattern, len);
-    out->pattern[len] = '\0';
     out->pattern_len = len;
 
+    // An empty REGEX is legal and matches every line, which is grep's answer
+    // and what `search --lines A,B` relies on to select a range with no
+    // pattern. Only the literal and fuzzy faces have nothing to match on.
+    if (len == 0 && (k > 0 || (flags & SUBLIMATION_SEARCH_FIXED))) {
+        out->valid = 0;
+        out->error = SUBLIMATION_SEARCH_ERR_EMPTY;
+        return;
+    }
+
     if (k > 0) {
+        // Pigeonhole scan over the caller's bytes; no copy, no ceiling.
         out->mode = MODE_FUZZY;
-        out->valid = (len > 0);
+        out->borrowed = pattern;
+        out->valid = 1;
     } else if (flags & SUBLIMATION_SEARCH_FIXED) {
+        // Boyer-Moore-Horspool over the caller's bytes; no copy, no ceiling.
         out->mode = MODE_EXACT;
-        out->valid = (len > 0);
+        out->borrowed = pattern;
+        out->valid = 1;
     } else {
+        // Only the regex face copies, because build_gnfa re-reads a
+        // NUL-terminated string, and only it is bounded by the position budget.
+        if (len > SUBLIMATION_SEARCH_MAX_PATTERN) {
+            out->valid = 0;
+            out->error = SUBLIMATION_SEARCH_ERR_TOO_LONG;
+            return;
+        }
+        memcpy(out->pattern, pattern, len);
+        out->pattern[len] = '\0';
         out->mode = MODE_REGEX;
         // Regex compiles from the NUL-terminated pattern copy, so an embedded NUL
         // truncates the expression there -- unlike the literal/fuzzy paths above,
         // which honor `len` byte-for-byte. Threading `len` through the whole regex
         // parser is deferred; regex patterns are C strings in every current caller.
         out->valid = build_gnfa(out->pattern, &out->g, out->icase);
+        if (!out->valid)
+            out->error = out->g.npos >= SUBLIMATION_SEARCH_MAX_POS
+                       ? SUBLIMATION_SEARCH_ERR_TOO_LONG : SUBLIMATION_SEARCH_ERR_SYNTAX;
         // The per-byte position map depends only on (pattern, icase): build it
         // once here so match/count calls never rebuild it.
         if (out->valid) build_imap(&out->g, out->imap);
@@ -653,6 +719,24 @@ void sublimation_search_compile(sublimation_search *out, const char *pattern,
 }
 
 int sublimation_search_valid(const sublimation_search *s) { return s->valid; }
+
+const char *sublimation_search_error(const sublimation_search *s) {
+    if (!s || s->valid) return NULL;
+    switch (s->error) {
+        case SUBLIMATION_SEARCH_ERR_EMPTY:
+            return "empty pattern";
+        case SUBLIMATION_SEARCH_ERR_TOO_LONG:
+            return "regex is too long: the bit-parallel field holds "
+                   "SUBLIMATION_SEARCH_MAX_POS positions, counting literals, "
+                   "classes and metacharacters across all branches. Split it "
+                   "across several patterns, or use the literal face, which "
+                   "has no such limit";
+        case SUBLIMATION_SEARCH_ERR_SYNTAX:
+            return "the expression does not parse";
+        default:
+            return "invalid pattern";
+    }
+}
 
 // Split a pattern on its TOP-LEVEL '|' only -- not one inside a bracket
 // expression, behind a backslash, or nested in a group. Lives here, beside the
@@ -706,7 +790,16 @@ int sublimation_search_split_alternation(const char *pattern, char ***out, int *
 // The last foreign mirror of this struct went with the MCP server; the assert
 // stays because the property it guards -- growth is a deliberate act, never a
 // silent one -- outlives any particular consumer.
-static_assert(sizeof(sublimation_search) == 11352,
+// 11352 -> 11368: a borrowed-needle pointer and an error code. The literal and
+// fuzzy faces stopped copying the pattern, which is what removed their length
+// ceiling; the error code is what lets a front end say WHICH refusal happened
+// rather than only that one did. Sixteen bytes against a 1023-byte ceiling on
+// the two faces that never needed one.
+// 11368 -> 11392: ^ and $ became assertions wherever they appear, which needs
+// the start positions enterable only at offset 0 and the accepts valid only at
+// the end as two more position sets. The two leading/trailing anchor flags they
+// replace went with them.
+static_assert(sizeof(sublimation_search) == 11392,
               "sublimation_search changed size: that is a deliberate decision, "
               "not an accident -- update this assert with the reason");
 
@@ -716,7 +809,7 @@ int sublimation_search_full_match(const sublimation_search *s, const char *input
     if (!s->valid) return 0;
     const uint8_t *hay = (const uint8_t *)input;
     size_t m = s->pattern_len;
-    const uint8_t *pat = (const uint8_t *)s->pattern;
+    const uint8_t *pat = sub_needle(s);
     if (s->mode == MODE_REGEX) {
         return gnfa_full(&s->g, s->imap, hay, n);
     }
@@ -738,18 +831,9 @@ long sublimation_search_find_from(const sublimation_search *s, const char *input
     if (!s->valid || from > n) return -1;
     const uint8_t *hay = (const uint8_t *)input;
     size_t m = s->pattern_len;
-    const uint8_t *pat = (const uint8_t *)s->pattern;
+    const uint8_t *pat = sub_needle(s);
 
-    if (s->mode == MODE_REGEX) {
-        // size_t, not int: a multi-GB haystack (montauk analyzes them) overflows
-        // an int start/limit and breaks the scan.
-        size_t start_limit = s->g.anchored_start ? 1 : n + 1;
-        for (size_t start = from; start < start_limit; ++start) {
-            long e = gnfa_start_longest(&s->g, s->imap, hay, n, start);
-            if (e >= 0) { if (end_out) *end_out = e; return (long)start; }
-        }
-        return -1;
-    }
+    if (s->mode == MODE_REGEX) return gnfa_find(&s->g, s->imap, hay, n, from, end_out);
 
     if (m == 0) { if (end_out) *end_out = (long)from; return (long)from; }
     if (m > n) return -1;
@@ -831,9 +915,9 @@ static int word_byte(unsigned char c) {
 
 // -w boundary test: span [s,e) of line[0..n) counts only when neither
 // neighbor is a word byte (a line edge counts as non-word).
-static int word_bounded(const char *line, size_t n, long s, long e) {
-    if (s > 0 && word_byte((unsigned char)line[s - 1])) return 0;
-    if ((size_t)e < n && word_byte((unsigned char)line[e])) return 0;
+static int word_bounded(const uint8_t *line, size_t n, long s, long e) {
+    if (s > 0 && word_byte(line[s - 1])) return 0;
+    if ((size_t)e < n && word_byte(line[e])) return 0;
     return 1;
 }
 
@@ -842,27 +926,23 @@ static int word_bounded(const char *line, size_t n, long s, long e) {
 // (grep's rule -- skipping the rest of the line would drop later words).
 // regex_face: find_from reports only the LONGEST end per start, but grep -w
 // admits any match length ('a-|a' on "a-b" must still hit the word "a",
-// verified against /usr/bin/grep), so on rejection the shorter ends at the
-// same start are probed through full_match. ^ is already satisfied (the
-// start came from find_from); $-anchored patterns skip the probe since their
-// matches may only end at n.
+// verified against /usr/bin/grep), so on rejection the field is walked again
+// from the same start for the longest end that IS word-bounded. The walk runs
+// over the whole line, so ^ and $ keep their meaning; probing a sub-slice
+// would have let both fire at the slice's own edges.
 static long search_next_match(const sublimation_search *s, int regex_face,
                               const char *line, size_t n, size_t from,
                               int wword, long *end_out) {
+    const uint8_t *hay = (const uint8_t *)line;
     size_t off = from;
     while (off <= n) {
         long e = -1;
         long st = sublimation_search_find_from(s, line, n, off, &e);
         if (st < 0) return -1;
-        if (!wword || word_bounded(line, n, st, e)) { *end_out = e; return st; }
-        if (regex_face && !s->g.anchored_end) {
-            for (long e2 = e - 1; e2 >= st; e2--) {
-                if (!word_bounded(line, n, st, e2)) continue;
-                if (sublimation_search_full_match(s, line + st, (size_t)(e2 - st))) {
-                    *end_out = e2;
-                    return st;
-                }
-            }
+        if (!wword || word_bounded(hay, n, st, e)) { *end_out = e; return st; }
+        if (regex_face) {
+            long e2 = gnfa_start_longest(&s->g, s->imap, hay, n, (size_t)st, word_bounded);
+            if (e2 >= 0) { *end_out = e2; return st; }
         }
         off = (size_t)st + 1;
     }
@@ -974,7 +1054,7 @@ size_t sublimation_search_count(const sublimation_search *s, const char *input, 
     if (!s->valid) return 0;
     const uint8_t *hay = (const uint8_t *)input;
     size_t m = s->pattern_len;
-    const uint8_t *pat = (const uint8_t *)s->pattern;
+    const uint8_t *pat = sub_needle(s);
 
     if (s->mode == MODE_REGEX) return regex_count(s, hay, n);
 
@@ -1097,28 +1177,38 @@ size_t sublimation_search_fold_gaps(const char *pat, size_t len) {
     return 0;
 }
 
-// CAPTURE GROUPS, as a bounded post-pass over ONE match span.
+// CAPTURE GROUPS, as a post-pass over ONE match span.
 //
 // The Glushkov field tracks a position SET with no submatch notion, and the
 // compiler builds those positions in a single pass keeping no AST -- so group
-// boundaries cannot be recovered from it at all. On its own that makes captures
-// a second engine over the haystack, which is why they were deferred for so
-// long.
+// boundaries cannot be recovered from it at all. The occurrence field inverts
+// that: the fast engine has already isolated the span, so this runs only over
+// those bytes, and only when a substitution actually asks for a backreference.
 //
-// The occurrence field inverts it. The match SPAN is already isolated by the
-// fast engine, so this only ever runs over those few bytes, only when a
-// substitution actually asks for a backreference. It is a backtracking matcher
-// -- normally the wrong choice for a scanner -- and that is acceptable precisely
-// because it never sees a scan: worst-case backtracking over a span the fast
-// path already bounded is a different risk from backtracking over a file.
+// A PIKE VM, NOT A BACKTRACKER. The backtracker this replaced argued that a
+// bounded span made its worst case harmless, and the bound was the line:
+// `(a?){n}a{n}` doubled its cost per n, and `(a*)` over a 100k-byte line
+// recursed once per repetition and took the stack. Here every thread advances
+// in lockstep, one per program counter per byte, so the cost is span x program
+// with no recursion on the input -- the same reason the field is linear.
 //
-// It accepts the same ERE subset the Glushkov face does. Anything it cannot
-// parse fails closed (no captures), and the caller substitutes empty rather than
-// guessing.
+// SUBGROUPS FOLLOW PERL'S RULES, not POSIX's. Threads run in priority order
+// (greedy before lazy, left alternative before right) and the first thread to
+// reach the span's end wins, so a group reports the parse a backtracker would
+// find first, and a repeated group reports its last iteration. Python's re and
+// PCRE agree; glibc's regexec does not on nested and repeated groups, where
+// POSIX asks for the leftmost-longest SUBexpression instead. The WHOLE-match
+// span is still POSIX's leftmost-longest -- that comes from the field, and this
+// only divides it up.
+//
+// It accepts the same ERE subset the Glushkov face does, ^ and $ included:
+// both are judged against the whole line, not the span, which is why the line
+// is passed in.
 
 typedef struct cap_node cap_node;
 struct cap_node {
-    enum { CN_CHAR, CN_ANY, CN_CLASS, CN_CONCAT, CN_ALT, CN_REP, CN_GROUP } k;
+    enum { CN_CHAR, CN_ANY, CN_CLASS, CN_CONCAT, CN_ALT, CN_REP, CN_GROUP,
+           CN_BOL, CN_EOL } k;
     unsigned char ch;
     uint8_t set[32];
     cap_node *a, *b;      // CONCAT/ALT children; REP/GROUP child in `a`
@@ -1156,7 +1246,8 @@ static cap_node *cap_atom(cap_parser *cp) {
         if (*cp->p == ')') cp->p++; else cp->ok = 0;
         return g;
     }
-    if (c == '.') { cp->p++; cap_node *n = cn_new(cp, CN_ANY); return n; }
+    if (c == '^' || c == '$') { cp->p++; return cn_new(cp, c == '^' ? CN_BOL : CN_EOL); }
+    if (c == '.') { cp->p++; return cn_new(cp, CN_ANY); }
     if (c == '[') {
         cap_node *n = cn_new(cp, CN_CLASS);
         if (!n) return NULL;
@@ -1183,47 +1274,45 @@ static cap_node *cap_atom(cap_parser *cp) {
     return n;
 }
 
+// One quantifier per atom, with the field parser's grammar and refusals:
+// {n} {n,} {n,m} {,m}, nothing past FIELD_DUP_MAX, no m below n.
 static cap_node *cap_repeat(cap_parser *cp) {
     cap_node *a = cap_atom(cp);
     if (!cp->ok || !a) return a;
-    for (;;) {
-        char c = *cp->p;
-        int lo, hi;
-        if (c == '*') { lo = 0; hi = -1; cp->p++; }
-        else if (c == '+') { lo = 1; hi = -1; cp->p++; }
-        else if (c == '?') { lo = 0; hi = 1; cp->p++; }
-        else if (c == '{') {
-            const char *save = cp->p;
-            cp->p++;
-            int l = 0, h = -2, hasl = 0;
-            while (*cp->p >= '0' && *cp->p <= '9') { l = l * 10 + (*cp->p - '0'); cp->p++; hasl = 1; }
-            if (*cp->p == ',') {
-                cp->p++; h = -1;
-                if (*cp->p >= '0' && *cp->p <= '9') { h = 0; while (*cp->p >= '0' && *cp->p <= '9') { h = h * 10 + (*cp->p - '0'); cp->p++; } }
-            } else h = l;
-            if (!hasl || *cp->p != '}') { cp->p = save; break; }
-            cp->p++; lo = l; hi = h;
-        }
-        else break;
-        cap_node *r = cn_new(cp, CN_REP);
-        if (!r) return NULL;
-        r->a = a; r->lo = lo; r->hi = hi;
-        a = r;
+    char c = *cp->p;
+    int lo, hi;
+    if (c == '*') { lo = 0; hi = -1; cp->p++; }
+    else if (c == '+') { lo = 1; hi = -1; cp->p++; }
+    else if (c == '?') { lo = 0; hi = 1; cp->p++; }
+    else if (c == '{') {
+        cp->p++;
+        int l = 0, h = -2, hasl = 0, hash = 0;
+        while (*cp->p >= '0' && *cp->p <= '9' && l <= FIELD_DUP_MAX) { l = l * 10 + (*cp->p - '0'); cp->p++; hasl = 1; }
+        if (*cp->p == ',') {
+            cp->p++; h = -1;
+            if (*cp->p >= '0' && *cp->p <= '9') { h = 0; hash = 1; while (*cp->p >= '0' && *cp->p <= '9' && h <= FIELD_DUP_MAX) { h = h * 10 + (*cp->p - '0'); cp->p++; } }
+        } else h = l;
+        if ((!hasl && !hash) || *cp->p != '}' || l > FIELD_DUP_MAX || h > FIELD_DUP_MAX ||
+            (h >= 0 && h < l)) { cp->ok = 0; return a; }
+        cp->p++; lo = l; hi = h;
     }
-    return a;
+    else return a;
+    cap_node *r = cn_new(cp, CN_REP);
+    if (!r) return NULL;
+    r->a = a; r->lo = lo; r->hi = hi;
+    return r;
 }
 
 static cap_node *cap_concat(cap_parser *cp) {
-    cap_node *head = NULL, *tail = NULL;
+    cap_node *head = NULL;
     while (cp->ok && *cp->p && *cp->p != '|' && *cp->p != ')') {
         cap_node *r = cap_repeat(cp);
         if (!cp->ok || !r) break;
-        if (!head) { head = r; tail = r; continue; }
+        if (!head) { head = r; continue; }
         cap_node *c = cn_new(cp, CN_CONCAT);
         if (!c) return NULL;
-        c->a = head; c->b = r; head = c; tail = r;
+        c->a = head; c->b = r; head = c;
     }
-    (void)tail;
     return head;
 }
 
@@ -1239,120 +1328,234 @@ static cap_node *cap_alt(cap_parser *cp) {
     return l;
 }
 
-// Continuation-passing backtracker: match `n` at text[i..len), then `k`.
-typedef struct { const char *t; size_t len; uint32_t *gs; uint32_t *ge; int icase; } cap_run;
-typedef struct cap_cont cap_cont;
-struct cap_cont { cap_node *n; cap_cont *next; };
+// The program. SPLIT tries x before y, which is the whole of the priority rule.
+// LOOP is the back edge of an unbounded repeat: x is the loop head, y its exit.
+enum { PK_CHAR, PK_ANY, PK_CLASS, PK_SPLIT, PK_JMP, PK_LOOP, PK_SAVE, PK_BOL, PK_EOL, PK_MATCH };
+typedef struct { int op, x, y; unsigned char ch; const uint8_t *set; } pk_ins;
+typedef struct { pk_ins *ins; int n, cap; int ok; int depth, max_depth; } pk_prog;
 
-static int cap_m(cap_run *r, cap_node *n, size_t i, cap_cont *k);
+// The program grows with every unrolled copy of a bounded repeat; past this it
+// is refused rather than built. A pattern that compiled for the field is far
+// inside it (the field holds 128 positions).
+#define PK_MAX_PROG (1 << 16)
 
-static int cap_k(cap_run *r, cap_cont *k, size_t i) {
-    if (!k) return i == r->len;          // EXACT consumption: the span is known
-    return cap_m(r, k->n, i, k->next);
+static int pk_emit(pk_prog *pg, int op) {
+    if (!pg->ok) return 0;
+    if (pg->n == pg->cap) {
+        int nc = pg->cap ? pg->cap * 2 : 64;
+        pk_ins *ni = nc <= PK_MAX_PROG ? (pk_ins *)realloc(pg->ins, (size_t)nc * sizeof *ni) : NULL;
+        if (!ni) { pg->ok = 0; return 0; }
+        pg->ins = ni; pg->cap = nc;
+    }
+    pg->ins[pg->n] = (pk_ins){ .op = op };
+    return pg->n++;
 }
 
-static int cap_m(cap_run *r, cap_node *n, size_t i, cap_cont *k) {
-    if (!n) return cap_k(r, k, i);
+static void pk_compile(pk_prog *pg, const cap_node *n) {
+    if (!n || !pg->ok) return;
+    int at, j;
     switch (n->k) {
-    case CN_CHAR: {
-        if (i >= r->len) return 0;
-        unsigned char a = (unsigned char)r->t[i], b = n->ch;
-        if (r->icase) { a = fold(a, 1); b = fold(b, 1); }
-        return a == b ? cap_k(r, k, i + 1) : 0;
-    }
-    case CN_ANY:
-        return i < r->len ? cap_k(r, k, i + 1) : 0;
-    case CN_CLASS: {
-        if (i >= r->len) return 0;
-        unsigned char c = (unsigned char)r->t[i];
-        return (n->set[c >> 3] & (uint8_t)(1u << (c & 7))) ? cap_k(r, k, i + 1) : 0;
-    }
-    case CN_CONCAT: {
-        cap_cont c = { n->b, k };
-        return cap_m(r, n->a, i, &c);
-    }
+    case CN_CHAR:  at = pk_emit(pg, PK_CHAR); if (pg->ok) pg->ins[at].ch = n->ch; break;
+    case CN_ANY:   pk_emit(pg, PK_ANY); break;
+    case CN_CLASS: at = pk_emit(pg, PK_CLASS); if (pg->ok) pg->ins[at].set = n->set; break;
+    case CN_BOL:   pk_emit(pg, PK_BOL); break;
+    case CN_EOL:   pk_emit(pg, PK_EOL); break;
+    case CN_CONCAT: pk_compile(pg, n->a); pk_compile(pg, n->b); break;
     case CN_ALT:
-        return cap_m(r, n->a, i, k) || cap_m(r, n->b, i, k);
-    case CN_GROUP: {
-        // Record on the way in; a failed branch overwrites on the retry, and the
-        // final accepted parse is the one whose writes survive.
-        uint32_t save_s = r->gs[n->gidx], save_e = r->ge[n->gidx];
-        r->gs[n->gidx] = (uint32_t)i;
-        // The group's end is stamped by a marker continuation so it reflects
-        // where the group ACTUALLY stopped, not where the parser guessed.
-        cap_node marker;
-        memset(&marker, 0, sizeof marker);
-        marker.k = CN_REP; marker.lo = 0; marker.hi = 0; marker.gidx = n->gidx;
-        cap_cont c = { &marker, k };
-        if (cap_m(r, n->a, i, &c)) return 1;
-        r->gs[n->gidx] = save_s; r->ge[n->gidx] = save_e;
-        return 0;
-    }
+        at = pk_emit(pg, PK_SPLIT);
+        if (pg->ok) pg->ins[at].x = pg->n;
+        pk_compile(pg, n->a);
+        j = pk_emit(pg, PK_JMP);
+        if (pg->ok) pg->ins[at].y = pg->n;
+        pk_compile(pg, n->b);
+        if (pg->ok) pg->ins[j].x = pg->n;
+        break;
+    case CN_GROUP:
+        at = pk_emit(pg, PK_SAVE); if (pg->ok) pg->ins[at].x = 2 * n->gidx;
+        pk_compile(pg, n->a);
+        at = pk_emit(pg, PK_SAVE); if (pg->ok) pg->ins[at].x = 2 * n->gidx + 1;
+        break;
     case CN_REP: {
-        if (n->hi == 0) {           // the group-end marker (lo 0, hi 0, gidx set)
-            if (n->gidx) r->ge[n->gidx] = (uint32_t)i;
-            return cap_k(r, k, i);
-        }
-        // GREEDY: try the longest first, which is POSIX's rule and the one the
-        // fast engine's leftmost-longest span already committed to.
-        int maxrep = n->hi < 0 ? (int)(r->len - i) + 1 : n->hi;
-        for (int cnt = maxrep; cnt >= n->lo; --cnt) {
-            // Build a chain of `cnt` copies ahead of k, then match it.
-            int okrun = 1;
-            size_t j = i;
-            // Fast path: match cnt copies greedily left to right, then the tail.
-            // A copy that itself backtracks is handled by recursion below.
-            if (cnt == 0) { if (cap_k(r, k, j)) return 1; continue; }
-            // Recursive form: one copy, then (cnt-1) more, then k.
-            cap_node rest;
-            memset(&rest, 0, sizeof rest);
-            rest.k = CN_REP; rest.a = n->a; rest.lo = cnt - 1;
-            rest.hi = cnt - 1 ? cnt - 1 : 0;
-            if (cnt - 1 == 0) {
-                cap_cont c = { NULL, k };
-                if (cap_m(r, n->a, j, &c)) return 1;
-            } else {
-                cap_cont c = { &rest, k };
-                if (cap_m(r, n->a, j, &c)) return 1;
+        // Required copies, then either a greedy loop on one more or the
+        // optional copies, each skipping to the common end when declined.
+        for (int i = 0; i < n->lo && pg->ok; i++) pk_compile(pg, n->a);
+        if (n->hi < 0) {
+            int loop = pk_emit(pg, PK_SPLIT);
+            if (pg->ok) pg->ins[loop].x = pg->n;
+            if (++pg->depth > pg->max_depth) pg->max_depth = pg->depth;
+            pk_compile(pg, n->a);
+            pg->depth--;
+            j = pk_emit(pg, PK_LOOP);
+            if (pg->ok) { pg->ins[j].x = loop; pg->ins[loop].y = pg->ins[j].y = pg->n; }
+        } else {
+            int opt = n->hi - n->lo, *splits = opt > 0 ? (int *)malloc((size_t)opt * sizeof *splits) : NULL;
+            if (opt > 0 && !splits) { pg->ok = 0; break; }
+            for (int i = 0; i < opt && pg->ok; i++) {
+                splits[i] = pk_emit(pg, PK_SPLIT);
+                if (pg->ok) pg->ins[splits[i]].x = pg->n;
+                pk_compile(pg, n->a);
             }
-            (void)okrun;
+            for (int i = 0; i < opt && pg->ok; i++) pg->ins[splits[i]].y = pg->n;
+            free(splits);
         }
-        return 0;
+        break;
     }
-    default: return 0;
     }
 }
 
-int sublimation_search_captures(const char *pat, const char *text, size_t n,
-                                int icase, sublimation_match_span *groups,
-                                size_t max_groups, size_t *ngroups) {
+typedef struct { int pc; uint32_t *caps; } pk_thread;
+typedef struct { pk_thread *t; uint32_t *store; int n; } pk_list;
+typedef struct {
+    const pk_prog *pg;
+    const uint8_t *line; size_t n;
+    int icase, nslots, passes;
+    int *mark, *enq, gen;   // mark: per (pass, pc); enq: per consuming pc
+    int *stk, *stk_pass;    // explicit stack: pc, or ~slot with the value to restore
+    uint32_t *stk_val;
+} pk_vm;
+
+// Follow every epsilon edge from pc at offset i in priority order and enqueue
+// the byte-consuming (or matching) instructions reached. Iterative: a restore
+// entry undoes a SAVE once everything behind it has been explored, so the
+// depth is the program's, never the input's.
+//
+// PASSES. An iteration that consumed bytes ends by walking the rest of its body
+// (a group's closing SAVE, say) and then taking the back edge, and the empty
+// iteration Perl takes next walks those SAME instructions again at the same
+// offset. One mark per instruction per step would kill it. So a back edge into
+// a loop head not yet seen at this pass starts the new iteration one pass up;
+// a back edge into a head already seen at its pass is the zero-width iteration,
+// and leaves. Passes are bounded by loop nesting, and enqueueing still dedups
+// by instruction alone, so the list stays one thread per instruction.
+static void pk_add(pk_vm *vm, pk_list *l, int pc0, uint32_t *caps, size_t i) {
+    const int np = vm->pg->n;
+    int sp = 0;
+    vm->stk[sp] = pc0; vm->stk_pass[sp++] = 0;
+    while (sp > 0) {
+        --sp;
+        int e = vm->stk[sp], pass = vm->stk_pass[sp];
+        if (e < 0) { caps[~e] = vm->stk_val[sp]; continue; }
+        int *mk = &vm->mark[(size_t)pass * (size_t)np + (size_t)e];
+        if (*mk == vm->gen) continue;
+        *mk = vm->gen;
+        const pk_ins *in = &vm->pg->ins[e];
+#define PK_PUSH(pc, ps) do { vm->stk[sp] = (pc); vm->stk_pass[sp++] = (ps); } while (0)
+        switch (in->op) {
+        case PK_JMP:  PK_PUSH(in->x, pass); break;
+        // Back at a loop head already seen at this pass means the iteration
+        // consumed nothing. Perl takes that iteration and then leaves the
+        // loop, so the thread continues at the exit carrying its captures --
+        // ahead of the path that declined the iteration, which is the
+        // priority Perl gives it.
+        case PK_LOOP:
+            if (vm->mark[(size_t)pass * (size_t)np + (size_t)in->x] == vm->gen) PK_PUSH(in->y, pass);
+            else if (pass + 1 < vm->passes) PK_PUSH(in->x, pass + 1);
+            break;
+        case PK_SPLIT: PK_PUSH(in->y, pass); PK_PUSH(in->x, pass); break;
+        case PK_SAVE:
+            vm->stk_val[sp] = caps[in->x]; PK_PUSH(~in->x, pass);
+            caps[in->x] = (uint32_t)i;
+            PK_PUSH(e + 1, pass);
+            break;
+        case PK_BOL: if (i == 0) PK_PUSH(e + 1, pass); break;
+        case PK_EOL: if (i == vm->n) PK_PUSH(e + 1, pass); break;
+        default: {
+            if (vm->enq[e] == vm->gen) break;
+            vm->enq[e] = vm->gen;
+            pk_thread *t = &l->t[l->n];
+            t->pc = e;
+            t->caps = l->store + (size_t)l->n * (size_t)vm->nslots;
+            memcpy(t->caps, caps, (size_t)vm->nslots * sizeof *caps);
+            l->n++;
+        }
+        }
+#undef PK_PUSH
+    }
+}
+
+static int pk_byte_ok(const pk_vm *vm, const pk_ins *in, unsigned char c) {
+    switch (in->op) {
+    case PK_ANY:   return 1;
+    case PK_CLASS: return (in->set[c >> 3] >> (c & 7)) & 1;
+    case PK_CHAR:  return vm->icase ? fold(c, 1) == fold(in->ch, 1) : c == in->ch;
+    default:       return 0;
+    }
+}
+
+int sublimation_search_captures_at(const char *pat, const char *line, size_t n,
+                                   size_t start, size_t end, int icase,
+                                   sublimation_match_span *groups,
+                                   size_t max_groups, size_t *ngroups) {
     if (ngroups) *ngroups = 0;
-    if (!pat || !text || !groups || max_groups == 0) return 0;
+    if (!pat || !line || !groups || max_groups == 0 || start > end || end > n) return 0;
     cap_parser cp = { pat, NULL, 0, 1, icase };
     cap_node *root = cap_alt(&cp);
-    int ok = cp.ok && root && *cp.p == '\0' && cp.ngroups > 0;
     int rc = 0;
-    if (ok) {
-        int ng = cp.ngroups;
-        uint32_t *gs = (uint32_t *)calloc((size_t)ng + 1, sizeof *gs);
-        uint32_t *ge = (uint32_t *)calloc((size_t)ng + 1, sizeof *ge);
-        if (gs && ge) {
-            for (int g = 0; g <= ng; g++) { gs[g] = UINT32_MAX; ge[g] = UINT32_MAX; }
-            cap_run r = { text, n, gs, ge, icase };
-            if (cap_m(&r, root, 0, NULL)) {
-                size_t out = 0;
-                for (int g = 1; g <= ng && out < max_groups; g++, out++) {
-                    int set = gs[g] != UINT32_MAX && ge[g] != UINT32_MAX;
-                    groups[out].start = set ? gs[g] : 0;
-                    groups[out].end   = set ? ge[g] : 0;
-                    groups[out].pat   = set ? g : -1;   // -1: group did not participate
-                }
-                if (ngroups) *ngroups = out;
-                rc = 1;
-            }
-        }
-        free(gs); free(ge);
+    pk_prog pg = { NULL, 0, 0, 1, 0, 0 };
+    if (cp.ok && *cp.p == '\0' && cp.ngroups > 0) {
+        pk_compile(&pg, root);
+        pk_emit(&pg, PK_MATCH);
+    } else pg.ok = 0;
+
+    const int nslots = 2 * (cp.ngroups + 1);
+    const int passes = pg.max_depth + 2;
+    const size_t np = (size_t)pg.n, ns = (size_t)nslots, npp = np * (size_t)passes;
+    pk_vm vm = { &pg, (const uint8_t *)line, n, icase, nslots, passes,
+                 NULL, NULL, 0, NULL, NULL, NULL };
+    pk_list a = { NULL, NULL, 0 }, b = { NULL, NULL, 0 };
+    uint32_t *caps = NULL;
+    if (pg.ok) {
+        // Every pc enters a list at most once per step, and each visited
+        // (pass, pc) pushes at most two stack entries, plus the seed.
+        vm.mark = (int *)calloc(npp, sizeof *vm.mark);
+        vm.enq = (int *)calloc(np, sizeof *vm.enq);
+        vm.stk = (int *)malloc((2 * npp + 1) * sizeof *vm.stk);
+        vm.stk_pass = (int *)malloc((2 * npp + 1) * sizeof *vm.stk_pass);
+        vm.stk_val = (uint32_t *)malloc((2 * npp + 1) * sizeof *vm.stk_val);
+        a.t = (pk_thread *)malloc(np * sizeof *a.t);
+        b.t = (pk_thread *)malloc(np * sizeof *b.t);
+        a.store = (uint32_t *)malloc(np * ns * sizeof *a.store);
+        b.store = (uint32_t *)malloc(np * ns * sizeof *b.store);
+        caps = (uint32_t *)malloc(ns * sizeof *caps);
     }
+    if (pg.ok && vm.mark && vm.enq && vm.stk && vm.stk_pass && vm.stk_val &&
+        a.t && b.t && a.store && b.store && caps) {
+        for (size_t s = 0; s < ns; s++) caps[s] = UINT32_MAX;
+        pk_list *cur = &a, *nxt = &b;
+        vm.gen = 1;
+        pk_add(&vm, cur, 0, caps, start);
+        for (size_t i = start; cur->n > 0; i++) {
+            if (i == end) {
+                // The first thread at MATCH, in priority order, is the parse.
+                for (int k = 0; k < cur->n; k++) {
+                    if (pg.ins[cur->t[k].pc].op != PK_MATCH) continue;
+                    const uint32_t *c = cur->t[k].caps;
+                    size_t out = 0;
+                    for (int g = 1; g <= cp.ngroups && out < max_groups; g++, out++) {
+                        int set = c[2 * g] != UINT32_MAX && c[2 * g + 1] != UINT32_MAX;
+                        groups[out].start = set ? c[2 * g] : 0;
+                        groups[out].end   = set ? c[2 * g + 1] : 0;
+                        groups[out].pat   = set ? g : -1;   // -1: group did not participate
+                    }
+                    if (ngroups) *ngroups = out;
+                    rc = 1;
+                    break;
+                }
+                break;
+            }
+            nxt->n = 0;
+            vm.gen++;
+            const unsigned char ch = (unsigned char)line[i];
+            for (int k = 0; k < cur->n; k++) {
+                const pk_ins *in = &pg.ins[cur->t[k].pc];
+                if (pk_byte_ok(&vm, in, ch)) pk_add(&vm, nxt, cur->t[k].pc + 1, cur->t[k].caps, i + 1);
+            }
+            pk_list *t = cur; cur = nxt; nxt = t;
+        }
+    }
+    free(vm.mark); free(vm.enq); free(vm.stk); free(vm.stk_pass); free(vm.stk_val);
+    free(a.t); free(b.t); free(a.store); free(b.store); free(caps);
+    free(pg.ins);
     for (cap_node *q = cp.arena; q; ) { cap_node *nx = q->next; free(q); q = nx; }
     return rc;
 }

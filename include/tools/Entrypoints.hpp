@@ -12,3 +12,7 @@
 // historical `montauk_analyze` / `montauk_trace_decode` names.
 int montauk_analyze_main(int argc, char** argv);
 int montauk_decode_main(int argc, char** argv);
+
+// The static face reads SOURCE and records the branches a program declares.
+// Same argc/argv shape, reached as `montauk --static FILE`.
+int montauk_static_main(int argc, char** argv);

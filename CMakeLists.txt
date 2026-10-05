@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 8.12.0 LANGUAGES C CXX)
+project(montauk VERSION 8.13.0 LANGUAGES C CXX)
 # (7.17.0: kick-capture honesty -- the storm report no longer manufactures a
 #  false kick/s=0 when the scx storm probes are unattached, and kick-latency
 #  surfaces the KICK_ISSUE->RESCHED pairing (availability, unanswered share,
@@ -283,6 +283,8 @@ install(TARGETS montauk RUNTIME DESTINATION bin)
 # the two prom_* helpers are added here.
 target_sources(montauk PRIVATE
     src/tools/trace_analyze.cpp
+    src/tools/trace_query.cpp
+    src/tools/static_scan.cpp
     src/tools/prom_stats.cpp
     src/tools/prom_population.cpp
     src/tools/trace_decode.cpp)
@@ -405,7 +407,8 @@ if(MONTAUK_BUILD_TESTS)
       test_basic test_tier1 test_tier2 test_tier4 test_tier5
       test_adversarial test_adversarial_types test_bentley_mcilroy test_antiqsort
       test_types test_sorted_perturbed test_zipfian test_saw_mixed
-      test_strings test_randomness test_profile_contract test_search test_affinity)
+      test_strings test_randomness test_profile_contract test_search test_affinity
+      test_diff)
     add_executable(${t} sublimation/tests/${t}.c)
     set_target_properties(${t} PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
     target_include_directories(${t} PRIVATE ${SUB_INC})
@@ -419,7 +422,10 @@ if(MONTAUK_BUILD_TESTS)
   # so they carry the sanitized pass; they COMPILE the lib sources directly so the
   # sanitizer instruments sublimation, not just the test.
   file(GLOB_RECURSE SUB_LIB_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src/*.c)
-  foreach(t test_types test_tier5)
+  # test_diff joins them because diff.c is the one place in the library doing
+  # manual allocation and index arithmetic over a computed path, which is the
+  # shape a sanitizer catches and review does not.
+  foreach(t test_types test_tier5 test_diff)
     add_executable(${t}_asan sublimation/tests/${t}.c ${SUB_LIB_SRCS})
     set_target_properties(${t}_asan PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
     target_include_directories(${t}_asan PRIVATE ${SUB_INC} ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src)

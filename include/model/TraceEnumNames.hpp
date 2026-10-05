@@ -28,6 +28,9 @@ inline const char* sched_op_name(uint32_t op) {
     case SCHED_OP_KICK_ISSUE:     return "KICK_ISSUE";
     case SCHED_OP_RESCHED:        return "RESCHED";
     case SCHED_OP_TICK_STOP:      return "TICK_STOP";
+    case SCHED_OP_DSQ_INSERT:     return "DSQ_INSERT";
+    case SCHED_OP_DSQ_DRAIN:      return "DSQ_DRAIN";
+    case SCHED_OP_MIGRATE:        return "MIGRATE";
     default:                      return "?";
   }
 }

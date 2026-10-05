@@ -1,8 +1,7 @@
-// Harness for test_stats_oracle.py. Touches only the public sublimation_stats /
-// sublimation_text API, reads doubles (or lines, for tally) on stdin, and prints
-// results at full precision for the Python side to diff against numpy.
+// Harness for test_stats_oracle.py. Touches only the public sublimation_stats
+// API, reads doubles on stdin, and prints results at full precision for the
+// Python side to diff against numpy.
 #include "sublimation_stats.h"
-#include "sublimation_text.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,28 +22,6 @@ static size_t read_doubles(double **out) {
 int main(int argc, char **argv) {
     if (argc < 2) return 2;
     const char *mode = argv[1];
-
-    if (strcmp(mode, "tally") == 0) {
-        // Whole stdin as one buffer; tally counts distinct lines.
-        size_t cap = 1 << 16, n = 0;
-        char *buf = malloc(cap);
-        size_t got;
-        while ((got = fread(buf + n, 1, cap - n, stdin)) > 0) {
-            n += got;
-            if (n == cap) {
-                cap *= 2;
-                buf = realloc(buf, cap);
-            }
-        }
-        sub_tally_t *t = malloc(sizeof(*t) * (n + 1));
-        size_t total = 0;
-        size_t k = sublimation_tally(buf, n, t, n + 1, &total);
-        printf("%zu\n", total);
-        for (size_t i = 0; i < k; i++)
-            printf("%llu\t%.*s\n", (unsigned long long)t[i].count,
-                   (int)t[i].length, buf + t[i].offset);
-        return 0;
-    }
 
     double *v = NULL;
     size_t n = read_doubles(&v);

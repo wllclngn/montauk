@@ -89,6 +89,12 @@ private:
   // no measurement at all. Gate the emit on this so the trace never carries a
   // fictional zero-count interval the analyzer would render as kick/s=0.
   bool scx_storm_active_ = false;
+  // resched_curr attached, either as part of the storm set or alone under
+  // MONTAUK_SCX_RESCHED. Separate from scx_storm_active_ because the resched
+  // probe is not a kfunc and does not carry sched-ext/scx#3687 Bug 1, so it can
+  // be armed on its own; a consumer asking "is RESCHED measured" must not read
+  // the storm bit for that answer.
+  bool scx_resched_active_ = false;
 
   // Ring-drop accounting: sample the BPF drop_counts map (per-CPU per-type
   // reserve failures) and stamp a cumulative TRACE_EVT_DROPS snapshot into

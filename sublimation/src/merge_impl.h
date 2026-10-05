@@ -366,9 +366,71 @@ static void SUB_TYPED(merge_reff)(SUB_TYPE *arr, SUB_TYPED(sub_run_t) *runs, siz
 // spectral graph theory, so the name is literal; the path R_eff has a closed
 // form (measured equivalent to the full eigensolver, which costs O(n^3) for no
 // gain).
+// BATCH LEVELS. Each level holds one sorted span covering ~511x the level below,
+// so 511^6 is past any addressable input and this is a ceiling, never a limit.
+#define SUB_SPECTRAL_LEVELS 6
+
+// Close one batch of detected runs and fold it into the level stack.
+//
+// The gap coalesce and the R_eff merge both run HERE, so effective resistance
+// still chooses the merge order inside a batch -- the spectral merge is intact
+// at the granularity it was measured at. Folding between levels is a pairwise
+// merge of two adjacent spans, and there are only log_511(n) of those.
+static void SUB_TYPED(spectral_fold)(SUB_TYPE *arr, SUB_TYPED(sub_run_t) *detected,
+                                     size_t *num_runs, SUB_TYPED(sub_run_t) *level,
+                                     int *level_used, SUB_TYPE *tmp,
+                                     size_t *min_gallop, uint64_t *cmp) {
+    if (*num_runs == 0) return;
+
+    // Gap heuristic: coalesce neighbours that are already in order.
+    {
+        size_t out = 0;
+        for (size_t i = 1; i < *num_runs; i++) {
+            size_t prev_end = detected[out].base + detected[out].length - 1;
+            if (SUB_KEY(arr[prev_end]) <= SUB_KEY(arr[detected[i].base])) {
+                detected[out].length += detected[i].length;
+            } else {
+                out++;
+                detected[out] = detected[i];
+            }
+        }
+        *num_runs = out + 1;
+    }
+
+    SUB_TYPED(merge_reff)(arr, detected, *num_runs, tmp, min_gallop, cmp);
+
+    SUB_TYPED(sub_run_t) r;
+    r.base = detected[0].base;
+    r.length = detected[*num_runs - 1].base + detected[*num_runs - 1].length - r.base;
+    *num_runs = 0;
+
+    // Carry upward like a base-511 counter. level[0] holds the most recent span,
+    // higher levels progressively earlier ones, so every merge here is between
+    // two spans that are already adjacent in address order.
+    for (size_t l = 0; l < SUB_SPECTRAL_LEVELS; l++) {
+        if (!level_used[l]) { level[l] = r; level_used[l] = 1; return; }
+        SUB_TYPED(merge_pair)(arr, level[l].base, level[l].length, r.length,
+                              tmp, min_gallop, cmp);
+        r.base = level[l].base;
+        r.length += level[l].length;
+        level_used[l] = 0;
+    }
+    level[SUB_SPECTRAL_LEVELS - 1] = r;
+    level_used[SUB_SPECTRAL_LEVELS - 1] = 1;
+}
+
 void SUB_TYPED(sub_spectral_merge)(SUB_TYPE *arr, size_t n, uint64_t *comparisons) {
     if (n < 2) return;
     if (n < SUB_MIN_MERGE) {
+        SUB_TYPED(binary_insertion_sort)(arr, n, comparisons);
+        return;
+    }
+
+    // ONE tmp FOR THE WHOLE SORT, allocated up front because the batch close
+    // needs it during detection and not only at the end.
+    size_t min_gallop = SUB_MIN_GALLOP;
+    SUB_TYPE *tmp = malloc((n / 2 + 1) * sizeof(SUB_TYPE));
+    if (!tmp) {
         SUB_TYPED(binary_insertion_sort)(arr, n, comparisons);
         return;
     }
@@ -378,55 +440,58 @@ void SUB_TYPED(sub_spectral_merge)(SUB_TYPE *arr, size_t n, uint64_t *comparison
     size_t remaining = n;
     SUB_TYPE *cur = arr;
 
-    while (remaining > 0 && num_runs < 511) {
+    SUB_TYPED(sub_run_t) level[SUB_SPECTRAL_LEVELS];
+    int level_used[SUB_SPECTRAL_LEVELS];
+    for (size_t l = 0; l < SUB_SPECTRAL_LEVELS; l++) level_used[l] = 0;
+
+    // DETECTION CLOSES ITS OWN BATCHES RATHER THAN RECURSING ON THE TAIL.
+    //
+    // This used to stop at 511 runs and call itself on everything left over.
+    // merge_reff's bounds[511]/parent[512] are why the cap exists, so the cap
+    // itself is correct -- what was wrong is what happened at it. On
+    // high-entropy input the mean ascending run is ~2 elements, so a frame
+    // consumed only ~1.3k elements and then recursed on the remaining n-1.3k.
+    // Two consequences, and the second is the worse one:
+    //
+    //   STACK. ~n/1300 frames, each carrying this 512-entry detected[] array.
+    //   A 1.5M-element sort went ~1200 frames deep and segfaulted; montauk
+    //   crashed analysing any sufficiently large capture.
+    //
+    //   TIME. Every level merged 511 tiny runs against one huge sorted tail,
+    //   which is O(n) per level over n/1300 levels -- quadratic, and it was
+    //   quadratic on exactly the random input the radix pole is supposed to
+    //   hand over here.
+    //
+    // Batching fixes both. Runs accumulate to the cap, the batch closes into a
+    // single span via merge_reff, and spans fold upward through the level
+    // stack. Stack use is O(1) and total work is O(n log_511 n).
+    while (remaining > 0) {
         size_t run_len = SUB_TYPED(count_run_asc)(cur, remaining, comparisons);
         detected[num_runs].base = (size_t)(cur - arr);
         detected[num_runs].length = run_len;
         num_runs++;
         cur += run_len;
         remaining -= run_len;
+
+        if (num_runs == 511)
+            SUB_TYPED(spectral_fold)(arr, detected, &num_runs, level,
+                                     level_used, tmp, &min_gallop, comparisons);
     }
 
-    if (remaining > 0) {
-        if (remaining <= 64) {
-            SUB_TYPED(binary_insertion_sort)(cur, remaining, comparisons);
-        } else {
-            SUB_TYPED(sub_spectral_merge)(cur, remaining, comparisons);
-        }
-        detected[num_runs].base = (size_t)(cur - arr);
-        detected[num_runs].length = remaining;
-        num_runs++;
+    SUB_TYPED(spectral_fold)(arr, detected, &num_runs, level, level_used, tmp,
+                             &min_gallop, comparisons);
+
+    // Collapse the level stack. Highest occupied level is earliest in address
+    // order, so walk downward and merge each later span onto the accumulator.
+    SUB_TYPED(sub_run_t) acc;
+    int have = 0;
+    for (size_t l = SUB_SPECTRAL_LEVELS; l-- > 0; ) {
+        if (!level_used[l]) continue;
+        if (!have) { acc = level[l]; have = 1; continue; }
+        SUB_TYPED(merge_pair)(arr, acc.base, acc.length, level[l].length,
+                              tmp, &min_gallop, comparisons);
+        acc.length += level[l].length;
     }
-
-    if (num_runs <= 1) return;
-
-    // Phase 2: gap heuristic
-    {
-        size_t out = 0;
-        detected[out] = detected[0];
-        for (size_t i = 1; i < num_runs; i++) {
-            size_t prev_end = detected[out].base + detected[out].length - 1;
-            if (SUB_KEY(arr[prev_end]) <= SUB_KEY(arr[detected[i].base])) {
-                detected[out].length += detected[i].length;
-            } else {
-                out++;
-                detected[out] = detected[i];
-            }
-        }
-        num_runs = out + 1;
-    }
-
-    if (num_runs <= 1) return;
-
-    // Phase 3: R_eff-ordered merge
-    size_t min_gallop = SUB_MIN_GALLOP;
-    SUB_TYPE *tmp = malloc((n / 2 + 1) * sizeof(SUB_TYPE));
-    if (!tmp) {
-        SUB_TYPED(binary_insertion_sort)(arr, n, comparisons);
-        return;
-    }
-
-    SUB_TYPED(merge_reff)(arr, detected, num_runs, tmp, &min_gallop, comparisons);
 
     free(tmp);
 }
