@@ -30,7 +30,7 @@ if [[ $BUILDDIR -ef "$startdir" && "$startdir" == *" "* ]]; then
     BUILDDIR=/tmp/makepkg-$pkgname
 fi
 
-pkgver=7.8.0.r79.g4fd29ea0
+pkgver=8.13.1.r2037.gf28a75ec
 pkgrel=1
 pkgdesc='Linux observability platform: event-driven monitor, eBPF tracer and analyzer on an in-tree flow-model sort/search engine, with kernel-module telemetry and GPU attribution'
 arch=('x86_64')
@@ -111,10 +111,9 @@ build() {
 package() {
     cd "$srcdir/$_pkgname"
 
-    # Binaries.
+    # Binaries. The analyzer and decoder are modes of montauk (`montauk
+    # --analyze`, `montauk --decode`), not binaries of their own.
     install -Dm755 build/montauk              "$pkgdir/usr/bin/montauk"
-    install -Dm755 build/montauk_analyze      "$pkgdir/usr/bin/montauk_analyze"
-    install -Dm755 build/montauk_trace_decode "$pkgdir/usr/bin/montauk_trace_decode"
     install -Dm755 build/sublimation          "$pkgdir/usr/bin/sublimation"
 
     # Manpage — the in-app help overlay loads it at runtime via `man montauk`.
