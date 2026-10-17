@@ -26,24 +26,13 @@ static long perf_event_open(struct perf_event_attr* attr, pid_t pid, int cpu,
 
 // SYSFS HELPERS
 
-static bool read_sysfs_str(const std::string& path, std::string& out) {
-  auto s = montauk::util::read_file_string(path);
-  if (!s) return false;
-  out = *s;
-  // sysfs attrs are one line; drop anything past it, then trailing
-  // whitespace/newline.
-  auto nl = out.find('\n');
-  if (nl != std::string::npos) out.erase(nl);
-  while (!out.empty() && (out.back() == '\n' || out.back() == '\r' ||
-                          out.back() == ' ' || out.back() == '\t'))
-    out.pop_back();
-  return true;
-}
+using montauk::util::read_line;
 
+// A PMU's dynamic type number. sysfs writes it in decimal; base 0 also takes hex.
 static bool read_sysfs_u32(const std::string& path, uint32_t& out) {
-  std::string s;
-  if (!read_sysfs_str(path, s) || s.empty()) return false;
-  out = static_cast<uint32_t>(std::strtoul(s.c_str(), nullptr, 0));
+  unsigned long long v = 0;
+  if (!montauk::util::read_number(path, v, 0)) return false;
+  out = static_cast<uint32_t>(v);
   return true;
 }
 
@@ -88,8 +77,9 @@ static std::vector<L3Format> read_l3_formats(const std::string& l3_dir) {
   std::vector<L3Format> fmts;
   std::string fmt_dir = l3_dir + "/format";
   for (const auto& name : montauk::util::list_dir(fmt_dir)) {
-    std::string spec;
-    if (!read_sysfs_str(fmt_dir + "/" + name, spec)) continue;
+    const auto line = read_line(fmt_dir + "/" + name);
+    if (!line) continue;
+    const std::string& spec = *line;
     // spec looks like "config:0-7" or "config:8" (single bit).
     auto colon = spec.find(':');
     if (colon == std::string::npos) continue;
@@ -151,8 +141,9 @@ static L3Events resolve_l3_events(const std::string& l3_dir,
     // but exact names vary by kernel, so match by substring.
     std::string lname = name;
     for (auto& ch : lname) ch = static_cast<char>(::tolower(ch));
-    std::string spec;
-    if (!read_sysfs_str(ev_dir + "/" + name, spec)) continue;
+    const auto line = read_line(ev_dir + "/" + name);
+    if (!line) continue;
+    const std::string& spec = *line;
     uint64_t cfg = encode_l3_event(spec, fmts);
     if (lname.find("miss") != std::string::npos) {
       if (!ev.have_miss) { ev.miss_config = cfg; ev.have_miss = true; }
@@ -309,9 +300,7 @@ void PmuCollector::init() {
   }
 
   // Online logical CPUs.
-  std::string online;
-  read_sysfs_str("/sys/devices/system/cpu/online", online);
-  std::vector<int> cpus = parse_cpu_list(online);
+  std::vector<int> cpus = parse_cpu_list(read_line("/sys/devices/system/cpu/online").value_or(""));
   if (cpus.empty()) {
     available_ = false;
     return;
@@ -332,12 +321,11 @@ void PmuCollector::init() {
   std::vector<L3Format> cpu_fmts = read_l3_formats(cpu_dir);
   uint64_t kL2MissConfig = 0x0964;  // event=0x64,umask=0x09
   uint64_t kL2RefConfig  = 0xff60;  // event=0x60,umask=0xff
-  std::string miss_spec, ref_spec;
   if (!cpu_fmts.empty()) {
-    if (read_sysfs_str(cpu_dir + "/events/cache-misses", miss_spec))
-      kL2MissConfig = encode_l3_event(miss_spec, cpu_fmts);
-    if (read_sysfs_str(cpu_dir + "/events/cache-references", ref_spec))
-      kL2RefConfig = encode_l3_event(ref_spec, cpu_fmts);
+    if (const auto miss_spec = read_line(cpu_dir + "/events/cache-misses"))
+      kL2MissConfig = encode_l3_event(*miss_spec, cpu_fmts);
+    if (const auto ref_spec = read_line(cpu_dir + "/events/cache-references"))
+      kL2RefConfig = encode_l3_event(*ref_spec, cpu_fmts);
   }
 
   for (int cpu : cpus) {
@@ -357,9 +345,12 @@ void PmuCollector::init() {
       // System-wide per-CPU opens (pid=-1, cpu=N) require paranoid < 1 —
       // i.e. 0 or -1 — or CAP_PERFMON. paranoid=1 only permits own-process
       // measurement and would still fail here.
+      // Per-process counters open on their own at the ordinary paranoid, so
+      // the warning names only the half that is off.
       montauk::util::log_warn(
-                   "perf_event_open denied (errno=%d %s); PMU disabled. "
-                   "Need perf_event_paranoid<=0 or CAP_PERFMON.",
+                   "system-wide PMU off: perf_event_open denied (errno=%d %s); "
+                   "per-CPU counters need perf_event_paranoid<=0 or CAP_PERFMON. "
+                   "Per-process counters (--pmu-comm, --pmu-pid) are unaffected.",
                    first_open_errno_, std::strerror(first_open_errno_));
       return;
     }
@@ -394,9 +385,7 @@ void PmuCollector::init() {
   if (read_sysfs_u32(l3_dir + "/type", l3_type)) {
     std::vector<L3Format> fmts = read_l3_formats(l3_dir);
     L3Events ev = resolve_l3_events(l3_dir, fmts);
-    std::string cpumask;
-    read_sysfs_str(l3_dir + "/cpumask", cpumask);
-    std::vector<int> l3_cpus = parse_cpu_list(cpumask);
+    std::vector<int> l3_cpus = parse_cpu_list(read_line(l3_dir + "/cpumask").value_or(""));
     if (ev.have_access && !l3_cpus.empty()) {
       for (int cpu : l3_cpus) {
         L3Domain dom{};

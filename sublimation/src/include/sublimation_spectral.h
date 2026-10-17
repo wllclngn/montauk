@@ -5,7 +5,7 @@
 // Fiedler value with a spectral-gap partition count, and Ng-Jordan-Weiss
 // spectral clustering. Pure algorithm, zero weights. Matrices are row-major,
 // n by n; output buffers are caller-allocated. Inputs are never modified.
-// These back montauk_similar (effective-resistance nearest) and the ANALYZER
+// These back montauk --similar (effective-resistance nearest) and the ANALYZER
 // cross-run novelty score.
 #ifndef SUBLIMATION_SPECTRAL_H
 #define SUBLIMATION_SPECTRAL_H
@@ -37,7 +37,7 @@ SUB_API void sublimation_laplacian(const double *W, size_t n, double *L);
 // with a zero diagonal. Unlike one global bandwidth -- which collapses every
 // edge of an extreme outlier to ~0 and makes commute-time distance from that
 // outlier degenerate -- the local scale keeps an outlier's own nearest neighbors
-// meaningfully connected. This builds the graph montauk_similar feeds to
+// meaningfully connected. This builds the graph montauk --similar feeds to
 // effective resistance. W is n*n, caller-allocated. knn is clamped to [1, n-1].
 // Returns 0 on success, nonzero on OOM.
 SUB_API int sublimation_self_tuning_affinity(const double *x, size_t n, size_t d,

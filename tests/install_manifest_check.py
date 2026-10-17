@@ -3,8 +3,8 @@
 
 cmd_uninstall used to carry its own hardcoded copy of what cmd_install placed,
 and the two drifted. That is not hypothetical: when this gate was written, a
-live /usr/local carried an orphaned bin/montauk-mcp from before the rename to
-the retired MCP server, a share/montauk/ the installer never creates, and the
+live /usr/local carried an orphaned binary from a retired tool, a
+share/montauk/ the installer never creates, and the
 manpage at BOTH
 share/man/man1/ and man/man1/ -- all of it surviving an uninstall that reported
 success. The same root cause shipped in PANDEMONIUM (Issue #17) and PRISM.
@@ -74,8 +74,8 @@ def main() -> int:
 
         # Orphans an older installer left behind. Uninstall must take these too,
         # or an upgrade-in-place never cleans up after its ancestors.
-        # Directory-vs-file cannot be inferred from the suffix: bin/montauk-mcp
-        # and bin/montauk_analyze are extensionless FILES. Anything under bin/ is
+        # Directory-vs-file cannot be inferred from the suffix: bin/montauk_analyze
+        # and bin/montauk_trace_decode are extensionless FILES. Anything under bin/ is
         # a binary; the rest is a directory unless it names a file.
         for rel in mod.LEGACY_TARGETS:
             dst = prefix / rel

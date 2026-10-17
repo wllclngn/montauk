@@ -49,8 +49,6 @@ inline std::string_view read_text(const Field& f, const uint8_t* data) {
   const char* p = reinterpret_cast<const char*>(data + f.off);
   return std::string_view(p, strnlen(p, f.size));
 }
-// Every class, for the help listing.
-const EventClass* const* all_classes(size_t* n);
 
 // SELECTION: one class, an optional set of its ops, and field comparisons.
 enum class Cmp : uint8_t { Eq, Ne, Lt, Le, Gt, Ge };
@@ -81,19 +79,37 @@ bool parse_select(std::string_view spec, Select& out, std::string& err);
 // "runtime_ns>=900000", "comm=wine", "cpu!=3", against the select's class.
 bool parse_clause(std::string_view spec, Select& sel, std::string& err);
 
+// TEXT INTERNED ONCE: an id per distinct string and the strings by id, probed
+// by view so a lookup builds no string. The analyzer's row buffer and every
+// table share it.
+struct Interner {
+  struct Hash {
+    using is_transparent = void;
+    size_t operator()(std::string_view s) const noexcept { return std::hash<std::string_view>{}(s); }
+  };
+  std::vector<std::string> strings;
+  std::unordered_map<std::string, int64_t, Hash, std::equal_to<>> interned;
+
+  int64_t intern(std::string_view s) {
+    auto it = interned.find(s);
+    if (it != interned.end()) return it->second;
+    const auto id = static_cast<int64_t>(strings.size());
+    strings.emplace_back(s);
+    interned.emplace(strings.back(), id);
+    return id;
+  }
+};
+
 // A TABLE: named columns of int64 cells, text columns interned. The one
 // result shape every operator produces and every renderer reads.
-struct Table {
+struct Table : Interner {
   std::vector<std::string> cols;
   std::vector<bool> text;                   // per column: cell is an index into `strings`
   std::vector<int64_t> cells;               // row-major
-  std::vector<std::string> strings;
-  std::unordered_map<std::string, int64_t> interned;
 
   size_t width() const { return cols.size(); }
   size_t rows() const { return cols.empty() ? 0 : cells.size() / cols.size(); }
   int64_t at(size_t r, size_t c) const { return cells[r * cols.size() + c]; }
-  int64_t intern(std::string_view s);
   std::string cell_text(size_t r, size_t c) const;
 };
 

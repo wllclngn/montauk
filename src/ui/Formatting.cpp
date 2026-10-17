@@ -87,10 +87,7 @@ std::string read_hostname() {
   static bool have = false;
   std::string root = identity_root_key();
   if (have && root == cached_root) return cached;
-  auto txt = montauk::util::read_file_string("/proc/sys/kernel/hostname");
-  std::string host = txt ? *txt : std::string();
-  while (!host.empty() && (host.back() == '\n' || host.back() == '\r' || host.back() == ' '))
-    host.pop_back();
+  std::string host = montauk::util::read_line("/proc/sys/kernel/hostname").value_or("");
   if (host.empty()) host = "unknown";
   cached = std::move(host);
   cached_root = std::move(root);
@@ -105,10 +102,7 @@ std::string read_kernel_version() {
   static bool have = false;
   std::string root = identity_root_key();
   if (have && root == cached_root) return cached;
-  auto txt = montauk::util::read_file_string("/proc/sys/kernel/osrelease");
-  std::string ver = txt ? *txt : std::string();
-  while (!ver.empty() && (ver.back() == '\n' || ver.back() == '\r' || ver.back() == ' '))
-    ver.pop_back();
+  std::string ver = montauk::util::read_line("/proc/sys/kernel/osrelease").value_or("");
   if (ver.empty()) ver = "unknown";
   cached = std::move(ver);
   cached_root = std::move(root);
@@ -130,13 +124,10 @@ std::string read_scheduler() {
     if (dt < 1000) return cache;
   }
   std::string out = "CFS";
-  auto txt = montauk::util::read_file_string("/sys/kernel/sched_ext/root/ops");
   bool resolved = false;
-  if (txt) {
-    std::string name = *txt;
-    while (!name.empty() && (name.back() == '\n' || name.back() == '\r' || name.back() == ' '))
-      name.pop_back();
-    if (!name.empty()) { out = std::move(name); resolved = true; }
+  if (auto name = montauk::util::read_line("/sys/kernel/sched_ext/root/ops"); name && !name->empty()) {
+    out = std::move(*name);
+    resolved = true;
   }
   if (!resolved) {
     auto ver = montauk::util::read_file_string("/proc/sys/kernel/osrelease");

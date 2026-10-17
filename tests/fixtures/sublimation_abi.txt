@@ -1,4 +1,4 @@
-abi 7
+abi 8
 sublimation_api_version
 sublimation_classify_f32
 sublimation_classify_f64
@@ -18,6 +18,7 @@ sublimation_f32_stats
 sublimation_f64
 sublimation_f64_stats
 sublimation_fiedler
+sublimation_fmt_double
 sublimation_histogram_f64
 sublimation_i32
 sublimation_i32_stats
@@ -83,6 +84,8 @@ sublimation_scan
 sublimation_scan_min_bytes
 sublimation_search_captures_at
 sublimation_search_compile
+sublimation_search_confuse
+sublimation_search_costliest
 sublimation_search_count
 sublimation_search_error
 sublimation_search_find

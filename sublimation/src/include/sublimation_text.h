@@ -39,6 +39,13 @@ extern "C" {
 #define SUBLIMATION_SEARCH_POS_WORDS   2
 #define SUBLIMATION_SEARCH_MAX_POS     (64 * SUBLIMATION_SEARCH_POS_WORDS)
 #define SUBLIMATION_SEARCH_NARROW_POS  64    // one word: the common path
+// Bounded repeats a pattern may carry as counters rather than unrolled copies
+// (see `counted` below).
+#define SUBLIMATION_SEARCH_MAX_COUNTERS 8
+// Confusion classes the fuzzy face may carry (see sublimation_search_confuse):
+// members across all classes, and their bytes packed end to end.
+#define SUBLIMATION_SEARCH_CONFUSE_MEMBERS 64
+#define SUBLIMATION_SEARCH_CONFUSE_BYTES   256
 
 enum {
     SUBLIMATION_SEARCH_FIXED = 1u,   // literal/anchor face (default is regex)
@@ -65,6 +72,19 @@ typedef struct {
     int npos, nwords, null_mask, ok;
     int assertions;                                 // any ^ or $ in the pattern
     int icase;                                      // fold ASCII case into setb[]
+    // COUNTED REPEATS. A pattern that does not fit the field unrolled is
+    // rebuilt with each single-position X{lo,hi} as ONE position and a counter
+    // (ctr_pos, ctr_lo, ctr_hi), so `[^]]{0,200}` costs one position, not 200.
+    // A counted position's follow[] holds only its exit edges; the counter
+    // gates them. A pattern that fits unrolled never has a counter.
+    uint64_t counted[SUBLIMATION_SEARCH_POS_WORDS];
+    int ncounted;
+    int ctr_pos[SUBLIMATION_SEARCH_MAX_COUNTERS];
+    int ctr_lo[SUBLIMATION_SEARCH_MAX_COUNTERS];
+    int ctr_hi[SUBLIMATION_SEARCH_MAX_COUNTERS];
+    // The unrolled construct that cost the most positions, as a span of the
+    // pattern, so a refusal can name it (see sublimation_search_costliest).
+    int cost, cost_at, cost_len;
 } sublimation_search_gnfa;
 
 // Why a compile produced an invalid search. Both an over-long pattern and a
@@ -102,6 +122,18 @@ typedef struct {
     int     icase;
     int     valid;
     int     error;  // one of the SUBLIMATION_SEARCH_ERR_* codes above
+    // CONFUSION CLASSES (fuzzy face; see sublimation_search_confuse). Each
+    // member is rewritten to its class's shortest member in the pattern and
+    // the text alike, so a substitution inside a class costs nothing: The
+    // members' packed bytes, each one's start, length and representative
+    // member, the first bytes any member begins with, and the member count
+    // (0 = no classes, and the face runs exactly as it did).
+    unsigned char cf_bytes[SUBLIMATION_SEARCH_CONFUSE_BYTES];
+    uint16_t cf_at[SUBLIMATION_SEARCH_CONFUSE_MEMBERS];
+    uint8_t  cf_len[SUBLIMATION_SEARCH_CONFUSE_MEMBERS];
+    uint8_t  cf_rep[SUBLIMATION_SEARCH_CONFUSE_MEMBERS];
+    uint8_t  cf_first[32];
+    int      cf_n;
 } sublimation_search;
 
 // Compile `pattern` (len bytes) into `out`. `flags` selects the face
@@ -115,6 +147,24 @@ typedef struct {
 // bounded by SUBLIMATION_SEARCH_MAX_PATTERN.
 SUB_API void sublimation_search_compile(sublimation_search *out, const char *pattern,
                                         size_t len, unsigned flags, int k);
+
+// CONFUSION CLASSES for a fuzzy search (k > 0) or a literal one, which then
+// matches as the fuzzy face at k = 0: Substitutions that cost nothing, for text whose errors come in known pairs -- OCR reading
+// early print's long s as f, c as e, rn as m. SPEC is classes separated by
+// ',', members by '=', backslash escaping either and itself: "f=ſ,c=e,rn=m".
+// A member may be any non-empty byte string, so a class may pair characters
+// of different lengths, and no member may appear twice.
+//
+// Every member is rewritten to its class's shortest member (the first, on a
+// tie), longest member first and left to right, in the pattern now and in
+// the text at match time; mismatches are then counted on the two rewritten
+// forms, and a window starts only where a rewritten unit does. Spans are
+// reported in the original text. The pattern is copied into `s`, so it need
+// not outlive the call.
+//
+// Returns 1, or 0 with `s` unchanged when SPEC is malformed, the search is a
+// regex, or the classes or rewritten pattern exceed their bounds above.
+SUB_API int sublimation_search_confuse(sublimation_search *s, const char *spec);
 
 // Did the pattern compile?
 SUB_API int sublimation_search_valid(const sublimation_search *s);
@@ -133,8 +183,15 @@ SUB_API const char *sublimation_search_error(const sublimation_search *s);
 SUB_API int sublimation_search_split_alternation(const char *pattern,
                                                  char ***out, int *nout);
 
+// The construct that cost the regex field the most positions: its span in the
+// pattern through *at and *len, and the return value its cost. 0 when no
+// repeated construct was unrolled. Meant for a refusal, so a front end can say
+// what blew the budget ("'(ab){0,100}' needs 200 positions") rather than only
+// that something did.
+SUB_API int sublimation_search_costliest(const sublimation_search *s, size_t *at, size_t *len);
+
 // sizeof(sublimation_search), exported so a foreign binding that mirrors the
-// struct as an opaque buffer (vector's ffi.rs) can assert its mirror
+// struct as an opaque buffer can assert its mirror
 // matches this library at runtime, not just at the mirror's writing.
 SUB_API size_t sublimation_search_sizeof(void);
 

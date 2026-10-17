@@ -42,8 +42,8 @@ using montauk::ui::restore_terminal_minimal;
 using montauk::ui::on_sigint;
 
 // CLI/usage stdout drains through one buffered sink, drained at exit.
-static montauk_sink g_out;
-static void drain_out() { montauk_sink_drain(&g_out); }
+static sublimation_sink g_out;
+static void drain_out() { sublimation_sink_drain(&g_out); }
 using montauk::ui::on_atexit_restore;
 using montauk::ui::tty_stdout;
 using montauk::ui::config;
@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
   std::signal(SIGABRT, on_fatal_signal);
   std::signal(SIGBUS,  on_fatal_signal);
   std::signal(SIGQUIT, on_fatal_signal);
-  montauk_sink_init(&g_out, 1);
+  sublimation_sink_init(&g_out, 1);
   std::atexit(drain_out);
   // Text-only UI is the default and only mode. Ctrl+C to exit.
   // Default: run indefinitely with 250ms refresh (no flags needed).
@@ -294,16 +294,16 @@ int main(int argc, char** argv) {
       if (last_slash != std::string::npos)
         std::filesystem::create_directories(cfg_path.substr(0, last_slash));
       if (toml.save(cfg_path))
-        montauk_sink_appendf(&g_out, "Wrote %s\n", cfg_path.c_str());
+        sublimation_sink_appendf(&g_out, "Wrote %s\n", cfg_path.c_str());
       else
         montauk::util::log_error("failed to write %s", cfg_path.c_str());
       return 0;
     }
     else if (a == "-h" || a == "--help") {
-      montauk_sink_appendf(&g_out, "Usage: montauk [--self-test-seconds S] [--iterations N]\n");
-      montauk_sink_appendf(&g_out, "               [--metrics PORT] [--log DIR] [--log-interval-ms MS] [--headless]\n");
-      montauk_sink_appendf(&g_out, "               [--trace PATTERN] [--trace-out FILE] [--stream-out DEVICE] [--sched-detail] [--init-theme]\n");
-      montauk_sink_appendf(&g_out, "               [--pmu-comm SUBSTR] [--pmu-pid N]\n"
+      sublimation_sink_appendf(&g_out, "Usage: montauk [--self-test-seconds S] [--iterations N]\n");
+      sublimation_sink_appendf(&g_out, "               [--metrics PORT] [--log DIR] [--log-interval-ms MS] [--headless]\n");
+      sublimation_sink_appendf(&g_out, "               [--trace PATTERN] [--trace-out FILE] [--stream-out DEVICE] [--sched-detail] [--init-theme]\n");
+      sublimation_sink_appendf(&g_out, "               [--pmu-comm SUBSTR] [--pmu-pid N]\n"
                "               [--json] [--anomalies N] [--similar PID] [--regime N] [--cpu-window N]\n");
       // THE MODES ARE DISPATCHED BEFORE THIS TEXT IS EVER REACHED, which is
       // exactly why they belong in it. dispatch_tool() consumes --analyze,
@@ -311,35 +311,36 @@ int main(int argc, char** argv) {
       // points, so none of them ever touched the flag loop below and none of
       // them were ever printed here -- three faces of the binary reachable
       // only by already knowing they exist.
-      montauk_sink_appendf(&g_out, "Modes: montauk takes a mode word at argv[1]; each has its own --help.\n");
-      montauk_sink_appendf(&g_out, "       --analyze TARGET      Read a capture, a recording dir or a .guards\n");
-      montauk_sink_appendf(&g_out, "                             artifact and report on it (--json for the envelope)\n");
-      montauk_sink_appendf(&g_out, "       --decode FILE         Decode a raw --trace-out binary event log\n");
-      montauk_sink_appendf(&g_out, "       --static FILE|DIR...  Read SOURCE and record every branch it declares with\n");
-      montauk_sink_appendf(&g_out, "                             the conditions guarding it, and each function's\n");
-      montauk_sink_appendf(&g_out, "                             control flow graph; -o writes a .guards artifact\n");
-      montauk_sink_appendf(&g_out, "                             for --analyze. C, C++ and Rust\n");
-      montauk_sink_appendf(&g_out, "\n");
-      montauk_sink_appendf(&g_out, "Notes: Text UI runs until Ctrl+C by default.\n");
-      montauk_sink_appendf(&g_out, "       --metrics PORT        Enable Prometheus endpoint on PORT\n");
-      montauk_sink_appendf(&g_out, "       --log DIR             Write timestamped snapshots to DIR\n");
-      montauk_sink_appendf(&g_out, "       --log-interval-ms MS  Write interval in ms (default: 1000)\n");
-      montauk_sink_appendf(&g_out, "       --headless            Daemon mode (no TUI, requires --metrics or --log)\n");
-      montauk_sink_appendf(&g_out, "       --trace PATTERN       Trace process group matching PATTERN (headless)\n");
-      montauk_sink_appendf(&g_out, "       --trace-out FILE      Write raw binary event log; decode with --decode\n");
-      montauk_sink_appendf(&g_out, "       --stream-out DEVICE   Second, independent binary stream (same format as --trace-out), meant for a character device (e.g. a qemu-backed serial port) so capture survives a hang that takes --trace-out's filesystem down with it\n");
-      montauk_sink_appendf(&g_out, "       --trace-ring-bytes N  BPF ring size (default 1M; accepts K/M/G). The default was never sized against a real offered rate: one sched-messaging capture offered ~2.8M events/s against ~254k/s drained and kept 5.7%% of its stream. Rounded up to a power of two\n");
-      montauk_sink_appendf(&g_out, "       --trace-classes LIST  Capture only these event classes (comma-separated: fork,exec,exit,comm,io,ntsync,sched,heap,signal,mmap,provider,abort,heapstack,keyedevt). Stops one loud class drowning the one the capture is FOR -- excluded classes are never reserved, and are NOT counted as drops\n");
-      montauk_sink_appendf(&g_out, "       --sched-detail        Stream the heavy per-switch scheduler-decision detail -- per-CPU idle boundaries and the EEVDF pick fallback (off by default; the placement/slice/stall reports need it, ~6x cost on CPU-cycling workloads)\n");
-      montauk_sink_appendf(&g_out, "       --init-theme          Detect terminal palette and write config.toml\n");
-      montauk_sink_appendf(&g_out, "       --pmu-comm SUBSTR     Attach hardware counters to processes whose command matches SUBSTR (instructions, cycles, dTLB load misses, cache misses, per process). Needs no root and no sysctl, unlike --trace's system-wide PMU; re-resolved every tick, so a workload started later is picked up\n");
-      montauk_sink_appendf(&g_out, "       --pmu-pid N           Same, for one explicit pid (repeatable; composes with --pmu-comm)\n");
-      montauk_sink_appendf(&g_out, "       --json                One-shot structured system snapshot to stdout, then exit\n");
-      montauk_sink_appendf(&g_out, "       --anomalies [N]       Rank what is anomalous right now (default 5) with each process's dominant axis, as JSON. The conclusion, not the matrix: ~600 bytes against --json's ~67,000\n");
-      montauk_sink_appendf(&g_out, "       --similar PID         Processes behaving like PID, by effective resistance over a self-tuning affinity graph. Identical feature vectors collapse to one node first, since a process table is mostly idle duplicates and an uncollapsed graph ties every one of them\n");
-      montauk_sink_appendf(&g_out, "       --similar-top N       How many neighbours --similar returns (default 5)\n");
-      montauk_sink_appendf(&g_out, "       --regime [N]          Did the load regime shift recently, and when: spectral residual over N sampled CPU points (default 64, clamped 16-256, 100ms apart)\n");
-      montauk_sink_appendf(&g_out, "       --cpu-window N        Sample aggregate CPU N times at 100ms and emit the raw series, for a caller that wants the window rather than a verdict\n");
+      sublimation_sink_appendf(&g_out, "Modes: montauk takes a mode word at argv[1]; each has its own --help.\n");
+      sublimation_sink_appendf(&g_out, "       --analyze TARGET      Read a capture, a recording dir or a .guards\n");
+      sublimation_sink_appendf(&g_out, "                             artifact and report on it (--json for the envelope)\n");
+      sublimation_sink_appendf(&g_out, "       --decode FILE         Decode a raw --trace-out binary event log\n");
+      sublimation_sink_appendf(&g_out, "       --static FILE|DIR...  Read SOURCE and record every branch it declares with\n");
+      sublimation_sink_appendf(&g_out, "                             the conditions guarding it, and each function's\n");
+      sublimation_sink_appendf(&g_out, "                             control flow graph; -o writes a .guards artifact\n");
+      sublimation_sink_appendf(&g_out, "                             for --analyze. C, C++, Rust and Python source;\n");
+      sublimation_sink_appendf(&g_out, "                             compiled BPF, aarch64 and x86-64 objects\n");
+      sublimation_sink_appendf(&g_out, "\n");
+      sublimation_sink_appendf(&g_out, "Notes: Text UI runs until Ctrl+C by default.\n");
+      sublimation_sink_appendf(&g_out, "       --metrics PORT        Enable Prometheus endpoint on PORT\n");
+      sublimation_sink_appendf(&g_out, "       --log DIR             Write timestamped snapshots to DIR\n");
+      sublimation_sink_appendf(&g_out, "       --log-interval-ms MS  Write interval in ms (default: 1000)\n");
+      sublimation_sink_appendf(&g_out, "       --headless            Daemon mode (no TUI, requires --metrics or --log)\n");
+      sublimation_sink_appendf(&g_out, "       --trace PATTERN       Trace process group matching PATTERN (headless)\n");
+      sublimation_sink_appendf(&g_out, "       --trace-out FILE      Write raw binary event log; decode with --decode\n");
+      sublimation_sink_appendf(&g_out, "       --stream-out DEVICE   Second, independent binary stream (same format as --trace-out), meant for a character device (e.g. a qemu-backed serial port) so capture survives a hang that takes --trace-out's filesystem down with it\n");
+      sublimation_sink_appendf(&g_out, "       --trace-ring-bytes N  BPF ring size (default 1M; accepts K/M/G). The default was never sized against a real offered rate: one sched-messaging capture offered ~2.8M events/s against ~254k/s drained and kept 5.7%% of its stream. Rounded up to a power of two\n");
+      sublimation_sink_appendf(&g_out, "       --trace-classes LIST  Capture only these event classes (comma-separated: fork,exec,exit,comm,io,ntsync,sched,heap,signal,mmap,provider,abort,heapstack,keyedevt). Stops one loud class drowning the one the capture is FOR -- excluded classes are never reserved, and are NOT counted as drops\n");
+      sublimation_sink_appendf(&g_out, "       --sched-detail        Stream the heavy per-switch scheduler-decision detail -- per-CPU idle boundaries and the EEVDF pick fallback (off by default; the placement/slice/stall reports need it, ~6x cost on CPU-cycling workloads)\n");
+      sublimation_sink_appendf(&g_out, "       --init-theme          Detect terminal palette and write config.toml\n");
+      sublimation_sink_appendf(&g_out, "       --pmu-comm SUBSTR     Attach hardware counters to processes whose command matches SUBSTR (instructions, cycles, dTLB load misses, cache misses, per process). Needs no root and no sysctl, unlike --trace's system-wide PMU; re-resolved every tick, so a workload started later is picked up\n");
+      sublimation_sink_appendf(&g_out, "       --pmu-pid N           Same, for one explicit pid (repeatable; composes with --pmu-comm)\n");
+      sublimation_sink_appendf(&g_out, "       --json                One-shot structured system snapshot to stdout, then exit\n");
+      sublimation_sink_appendf(&g_out, "       --anomalies [N]       Rank what is anomalous right now (default 5) with each process's dominant axis, as JSON. The conclusion, not the matrix: ~600 bytes against --json's ~67,000\n");
+      sublimation_sink_appendf(&g_out, "       --similar PID         Processes behaving like PID, by effective resistance over a self-tuning affinity graph. Identical feature vectors collapse to one node first, since a process table is mostly idle duplicates and an uncollapsed graph ties every one of them\n");
+      sublimation_sink_appendf(&g_out, "       --similar-top N       How many neighbours --similar returns (default 5)\n");
+      sublimation_sink_appendf(&g_out, "       --regime [N]          Did the load regime shift recently, and when: spectral residual over N sampled CPU points (default 64, clamped 16-256, 100ms apart)\n");
+      sublimation_sink_appendf(&g_out, "       --cpu-window N        Sample aggregate CPU N times at 100ms and emit the raw series, for a caller that wants the window rather than a verdict\n");
       return 0;
     }
     // AN UNRECOGNIZED ARGUMENT IS FATAL. It used to be silently ignored, and
@@ -395,6 +396,7 @@ int main(int argc, char** argv) {
     // Per-process attribution is the unprivileged half and stands on its own.
     if (!pmu_comm.empty() || !pmu_pids.empty())
       producer.set_pmu_process_filter(pmu_comm, pmu_pids);
+    if (self_test_secs > 0) producer.enable_stage_timing();
     producer.start();
 
     // Trace subsystem (optional, parallel to main pipeline). Constructed
@@ -430,9 +432,8 @@ int main(int argc, char** argv) {
     // the trace snapshot (JSON-lines style: one structured record per line).
     // --cpu-window N: a TEMPORAL window montauk's one-shot cannot otherwise
     // serve. --json is instantaneous, so any consumer wanting "did the load
-    // regime shift" had to sample repeatedly itself -- which is exactly what
-    // vector's montauk_regime was doing, reading /proc/stat directly and making
-    // vector a second collector. Collection belongs in the instrument: this
+    // regime shift" had to sample repeatedly itself, reading /proc/stat directly and
+    // becoming a second collector. Collection belongs in the instrument: this
     // samples montauk's own CpuCollector N times and emits the series, so the
     // consumer makes one call and reads a result.
     if (cpu_window > 0) {
@@ -442,20 +443,20 @@ int main(int argc, char** argv) {
       montauk::collectors::CpuCollector cpu;
       montauk::model::CpuSnapshot cs{};
       (void)cpu.sample(cs);   // prime: the first delta has no predecessor
-      montauk_sink_appendf(&g_out, "{\"interval_ms\":100,\"samples\":[");
+      sublimation_sink_appendf(&g_out, "{\"interval_ms\":100,\"samples\":[");
       for (int k = 0; k < n && !g_stop.load(); ++k) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         (void)cpu.sample(cs);
-        montauk_sink_appendf(&g_out, "%s%.6f", k ? "," : "", cs.usage_pct);
+        sublimation_sink_appendf(&g_out, "%s%.6f", k ? "," : "", cs.usage_pct);
       }
-      montauk_sink_appendf(&g_out, "],\"source\":\"montauk CpuCollector\"}\n");
+      sublimation_sink_appendf(&g_out, "],\"source\":\"montauk CpuCollector\"}\n");
       drain_out();
       return 0;
     }
 
     // --regime N: the temporal conclusion. Samples its own window through
     // CpuCollector (same path as --cpu-window) and runs sublimation's Spectral
-    // Residual over it. Lives here rather than only behind an MCP tool because
+    // Residual over it. Lives in montauk because
     // a conclusion is small: a handful of flagged points, not a payload.
     if (regime_n > 0) {
       size_t n = 1; while (n < (size_t)regime_n) n <<= 1;
@@ -481,15 +482,15 @@ int main(int argc, char** argv) {
       double mean = 0.0;
       for (double v : sig) mean += v;
       mean /= (double)n;
-      montauk_sink_appendf(&g_out, "{\"samples\":%zu,\"interval_ms\":100,\"mean_cpu_pct\":%.2f,\"shifts\":[", n, mean);
+      sublimation_sink_appendf(&g_out, "{\"samples\":%zu,\"interval_ms\":100,\"mean_cpu_pct\":%.2f,\"shifts\":[", n, mean);
       int emitted = 0;
       for (size_t k = 0; k < n; ++k) {
         if (!flags[k]) continue;
-        montauk_sink_appendf(&g_out,
+        sublimation_sink_appendf(&g_out,
             "%s{\"seconds_ago\":%.1f,\"cpu_pct\":%.1f,\"saliency\":%.3f}",
             emitted++ ? "," : "", (double)(n - 1 - k) * 0.1, sig[k], sal[k]);
       }
-      montauk_sink_appendf(&g_out, "],\"shifted\":%s,\"basis\":\"spectral residual over montauk CpuCollector\"}\n",
+      sublimation_sink_appendf(&g_out, "],\"shifted\":%s,\"basis\":\"spectral residual over montauk CpuCollector\"}\n",
                            emitted ? "true" : "false");
       drain_out();
       return 0;
@@ -532,18 +533,18 @@ int main(int argc, char** argv) {
         for (const auto& r : ms.anomaly_features) rows.push_back(&r);
         sublimation_order_f64(rows, true, [](const auto* r) { return r->anomaly_score; });
         const size_t k = std::min<size_t>((size_t)anomalies_n, rows.size());
-        montauk_sink_appendf(&g_out, "{\"anomalies\":[");
+        sublimation_sink_appendf(&g_out, "{\"anomalies\":[");
         for (size_t idx = 0; idx < k; ++idx) {
           const auto* r = rows[idx];
           const char* ax = (r->anomaly_axis >= 0 && r->anomaly_axis < 6)
                                ? kAx[r->anomaly_axis] : "none";
-          montauk_sink_appendf(&g_out,
+          sublimation_sink_appendf(&g_out,
               "%s{\"pid\":%lld,\"comm\":\"%s\",\"anomaly_score\":%.4f,\"axis\":\"%s\","
               "\"cpu_pct\":%.2f,\"rss_mb\":%.0f}",
               idx ? "," : "", (long long)r->pid, r->comm.data(), r->anomaly_score, ax,
               r->cpu_pct, r->rss_kb / 1024.0);
         }
-        montauk_sink_appendf(&g_out, "],\"population\":%zu,\"basis\":\"fused MAD, "
+        sublimation_sink_appendf(&g_out, "],\"population\":%zu,\"basis\":\"fused MAD, "
             "Mahalanobis and Half-Space Trees (rank-averaged); higher is more anomalous\"}\n",
             ms.anomaly_features.size());
         drain_out();
@@ -651,15 +652,15 @@ int main(int argc, char** argv) {
         sublimation_order_f64(ord, false, [&](size_t a) { return reff[qi * n + a]; });
         const size_t k = std::min<size_t>((size_t)similar_n, ord.size());
         const auto& q = ms.anomaly_features[qi_all];
-        montauk_sink_appendf(&g_out, "{\"query\":{\"pid\":%lld,\"comm\":\"%s\"},\"similar\":[",
+        sublimation_sink_appendf(&g_out, "{\"query\":{\"pid\":%lld,\"comm\":\"%s\"},\"similar\":[",
                              (long long)q.pid, q.comm.data());
         for (size_t idx = 0; idx < k; ++idx) {
           const auto& r = ms.anomaly_features[sel[ord[idx]]];
-          montauk_sink_appendf(&g_out, "%s{\"pid\":%lld,\"comm\":\"%s\",\"resistance\":%.3f,\"identical_peers\":%zu}",
+          sublimation_sink_appendf(&g_out, "%s{\"pid\":%lld,\"comm\":\"%s\",\"resistance\":%.3f,\"identical_peers\":%zu}",
                                idx ? "," : "", (long long)r.pid, r.comm.data(), reff[qi * n + ord[idx]],
                                members[ord[idx]]);
         }
-        montauk_sink_appendf(&g_out, "],\"graph_nodes\":%zu,\"population\":%zu,\"basis\":"
+        sublimation_sink_appendf(&g_out, "],\"graph_nodes\":%zu,\"population\":%zu,\"basis\":"
             "\"effective-resistance (commute-time) nearest over a self-tuning affinity graph "
             "(cpu, rss, gpu, faults, threads, ctxsw); lower resistance is more similar\"}\n",
             n, total);
@@ -668,14 +669,14 @@ int main(int argc, char** argv) {
       }
 
       std::string js = montauk::app::snapshot_to_json(ms);
-      montauk_sink_append(&g_out, js.data(), js.size());
+      sublimation_sink_append(&g_out, js.data(), js.size());
 
       if (trace_buffers) {
         for (int spins = 0; trace_buffers->seq() < 2 && !g_stop.load() && spins < 4000; ++spins)
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         montauk::model::TraceSnapshot ts = montauk::app::read_trace_snapshot(*trace_buffers);
         std::string tjs = montauk::app::trace_to_json(ts);
-        montauk_sink_append(&g_out, tjs.data(), tjs.size());
+        sublimation_sink_append(&g_out, tjs.data(), tjs.size());
       }
 
 #ifdef MONTAUK_HAVE_BPF
@@ -740,9 +741,23 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     double secs = std::chrono::duration<double>(clock::now() - start).count();
-    montauk_sink_appendf(&g_out, "Self-test: updates=%llu in %gs (~%g/s)\n",
-                         (unsigned long long)updates, secs, updates / secs);
     producer.stop();
+    sublimation_sink_appendf(&g_out, "Self-test: updates=%llu in %gs (~%g/s)\n",
+                         (unsigned long long)updates, secs, updates / secs);
+    // Where the collection thread's CPU went, highest first: The answer to
+    // "what does montauk cost to run", stage by stage, from montauk itself.
+    auto costs = producer.stage_costs();
+    sublimation_order_u64(costs, true, [](const auto& c) { return c.cpu_ns; });
+    uint64_t total = 0;
+    for (const auto& c : costs) total += c.cpu_ns;
+    sublimation_sink_appendf(&g_out, "Producer stages (thread CPU, steady loop): %.1f ms/s\n",
+                             total / 1e6 / secs);
+    for (const auto& c : costs) {
+      if (c.calls == 0) continue;
+      sublimation_sink_appendf(&g_out, "  %-16s %6llu calls  %9.1f ms  %7.2f ms/s  %5.1f%%\n", c.name,
+                               (unsigned long long)c.calls, c.cpu_ns / 1e6, c.cpu_ns / 1e6 / secs,
+                               total ? 100.0 * (double)c.cpu_ns / (double)total : 0.0);
+    }
     return 0;
   }
 
@@ -789,13 +804,18 @@ int main(int argc, char** argv) {
     s_copy = buffers.read([](const montauk::model::Snapshot& s) { return s; });
     renderer.render(s_copy);
   }
+  // The writer is joined before the terminal is restored, so no frame can
+  // land after the restore, and both happen before the slow teardown below
+  // (BPF detach across a large tree can take seconds) so the terminal is the
+  // user's again while it runs. See g_writer_muted in Terminal.cpp.
+  montauk::ui::stop_async_writer();
+  restore_terminal_minimal();
 #ifdef MONTAUK_HAVE_BPF
   if (trace_collector) trace_collector->stop();
 #endif
   if (log_writer) log_writer->stop();
   if (metrics) metrics->stop();
   producer.stop();
-  montauk::ui::stop_async_writer();
   return 0;
 
   } catch (const std::exception& e) {

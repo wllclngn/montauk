@@ -58,6 +58,20 @@ public:
     back_ = old_front; // now becomes new back
   }
 
+  // CARRY THE PUBLISHED STATE INTO THE NEXT FILL. publish() swaps without
+  // copying, so the buffer it hands back holds the state from two publishes
+  // ago. A writer that refills only part of T each cycle -- the Producer, whose
+  // collectors each run on their own cadence -- would then publish that older
+  // state for every part it did not refill, and consecutive publishes would
+  // alternate between two generations: A cumulative counter went backwards on
+  // 14 of 35 publishes. Call after publish() to start the next fill from what
+  // was just published. Writer-only: The front is only ever mutated by this
+  // writer, so reading it here races with nothing but other readers.
+  void carry_forward() {
+    T& b = begin_write();
+    b = *front_.load(std::memory_order_relaxed);
+  }
+
   // Copy the front buffer under a shared lock so the writer cannot begin reusing
   // it mid-copy. fn receives const T& and returns the caller's snapshot type.
   template <typename Fn>

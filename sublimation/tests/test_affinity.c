@@ -1,4 +1,4 @@
-// test_affinity.c -- self-tuning (local-scaling) affinity for montauk_similar.
+// test_affinity.c -- self-tuning (local-scaling) affinity for montauk --similar.
 // The degeneracy fix: an extreme-outlier query keeps a defined neighborhood, so
 // commute-time (effective-resistance) distances from it stay ORDERED by feature
 // proximity instead of saturating to one value, the way a single global RBF

@@ -19,7 +19,7 @@ struct CpuSnapshot {
   double usage_pct{};              // aggregate percent 0..100
   // Machine load-regime changepoint: divergence of a fast vs a slow EWMA of the
   // aggregate-CPU history (0 = steady, rises and holds while the regime shifts).
-  // An always-on, near-free complement to montauk_regime's on-demand probe;
+  // An always-on, near-free complement to --regime's on-demand probe;
   // 0 until enough history has accrued.
   double changepoint_score{0.0};
   std::vector<double> per_core_pct; // optional

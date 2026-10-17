@@ -4,17 +4,17 @@
 #include <algorithm>
 #include <charconv>
 
-#include "util/fmt_double.h"
+#include "sublimation_fmt.h"
 
 namespace montauk::app {
 
 namespace {
 
 void append_double(std::string& out, double v) {
-  // The SAME formatter the JSON face calls -- see util/fmt_double.h. Two
+  // The SAME formatter the JSON face calls -- see sublimation_fmt.h. Two
   // surfaces rendering one computed double must not produce two strings.
   char buf[32];
-  int n = montauk_fmt_double(buf, sizeof(buf), v);
+  int n = sublimation_fmt_double(buf, sizeof(buf), v);
   if (n >= 0) out.append(buf, static_cast<size_t>(n));
   else out += '0';
 }

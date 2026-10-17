@@ -62,3 +62,42 @@ TEST(producer_publishes_snapshots) {
   producer.stop();
 }
 
+
+// THE PUBLISHED STATE NEVER STEPS BACKWARDS. Collectors run on their own
+// cadences and the producer publishes between them, so a publish that does not
+// carry the last one forward republishes the other buffer's older samples: The
+// cumulative CPU counter went backwards on 14 of 35 publishes. Here /proc/stat
+// only ever rises, and every publish must show it no lower than the last.
+TEST(producer_published_state_never_steps_backwards) {
+  auto root = make_root_prod();
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
+  TempRootGuard gpu_disable("MONTAUK_GPU_DISABLE_NATIVE", "1");
+  montauk::app::SnapshotBuffers buffers; montauk::app::Producer producer(buffers);
+  producer.start();
+  uint64_t last_seq = 0, last_total = 0, publishes = 0, backwards = 0;
+  const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(2500);
+  uint64_t tick = 0;
+  while (std::chrono::steady_clock::now() < end) {
+    tick++;
+    // Written aside and renamed in, as procfs serves a whole file: Truncating
+    // in place lets the producer read half a cpu line, a smaller total that is
+    // the fixture's tear and not a step backwards.
+    std::ofstream(root / "proc/stat.next") << "cpu  " << 100 + tick * 10 << " 0 100 " << 1000 + tick * 10
+                                           << " 0 0 0 0\ncpu0 " << 100 + tick * 10 << " 0 100 "
+                                           << 1000 + tick * 10 << " 0 0 0 0\n";
+    fs::rename(root / "proc/stat.next", root / "proc/stat");
+    const uint64_t seq = buffers.seq();
+    if (seq != last_seq) {
+      const uint64_t total = buffers.read([](const montauk::model::Snapshot& s) {
+        return s.cpu.total_times.total();
+      });
+      if (publishes > 0 && total < last_total) backwards++;
+      last_total = total; publishes++;
+      last_seq = seq;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+  }
+  producer.stop();
+  ASSERT_TRUE(publishes >= 6);
+  ASSERT_EQ(backwards, 0u);
+}

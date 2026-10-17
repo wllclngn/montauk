@@ -22,9 +22,8 @@ _*_build/
 /install_manifest.txt
 /compile_commands.json
 
-# Cargo build output (components/vector/, any future Rust crate). Cargo.lock stays
-# tracked -- the MCP server is a binary crate, and binaries commit their lock
-# file by convention; only the build output itself is ignored.
+# Cargo build output for any Rust crate in the tree; only the build output
+# itself is ignored.
 target/
 
 # Binary outputs (if ever created at repo root)

@@ -38,10 +38,6 @@ public:
   Panel(std::string title, std::vector<Row> rows)
       : title_(std::move(title)), rows_(std::move(rows)) {}
 
-  // Total panel height (rows) for `content_rows` interior lines including
-  // both border edges.
-  [[nodiscard]] static int height_for(int content_rows) { return content_rows + 2; }
-
   void render(Canvas& canvas,
               const LayoutRect& rect,
               const montauk::model::Snapshot& snap) override;

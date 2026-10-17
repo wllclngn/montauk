@@ -3,7 +3,7 @@
 // One home for the graph-spectral math every caller needs: the cyclic-Jacobi
 // eigensolver, the graph Laplacian, effective resistance, the Fiedler vector
 // and spectral clustering, over double matrices. Callers -- the learn lane
-// (montauk_similar, clustering), the randomness battery (comparison-Laplacian
+// (montauk --similar, clustering), the randomness battery (comparison-Laplacian
 // spectral-flatness lens) -- all link this one implementation; the int64
 // front-end that builds a comparison Laplacian from an array lives in
 // spectral_typed.c and feeds this core. (The sort's spectral merge uses the
@@ -83,7 +83,7 @@ static void jacobi_ld(double *A, size_t n, size_t ld, double *eval, double *V) {
 // consecutive accesses stride by the row length; when that stride is a multiple
 // of the L1 way size every row of a column lands in ONE cache set and only
 // `associativity` of them stay resident. Measured on this box through
-// montauk_similar's path, random 6-feature input, cost of the whole
+// montauk --similar's path, random 6-feature input, cost of the whole
 // effective-resistance call: n=511 2.18s, n=512 41.6s, n=513 2.93s -- a 19x
 // spike on the power of two alone. At n=1024 it reaches 332s while n=1025, a
 // LARGER problem, takes 50s. An odd row stride cannot alias, so pad even n by

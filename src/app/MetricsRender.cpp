@@ -515,7 +515,7 @@ void render_processes(MetricsSink& sink, const MetricsSnapshot& s) {
 
   // The full population the anomaly fusion ran over, features only, JSON-only
   // (null prom_name -> Prometheus emits nothing; it keeps the per-process
-  // anomaly_score gauge above). This is what lets vector's montauk_anomalies
+  // anomaly_score gauge above). This is what lets a consumer
   // reproduce montauk's population-relative score by feeding the same matrix to
   // sublimation_anomaly_fuse -- the score is judged against exactly this set.
   // THE LIVE BASIS, published rather than assumed. A consumer that fuses or
@@ -546,7 +546,7 @@ void render_processes(MetricsSink& sink, const MetricsSnapshot& s) {
       sink.f64({"ctxsw_delta", nullptr, nullptr}, r.ctxsw_delta);
       sink.f64({"thread_count", nullptr, nullptr}, r.thread_count);
       // montauk's own score, for every ranked process. A consumer reads this
-      // instead of re-fusing the matrix; re-fusing is what let vector drift.
+      // instead of re-fusing the matrix, which is how a second copy drifts.
       sink.f64({"anomaly_score", nullptr, nullptr}, r.anomaly_score);
       sink.i64({"anomaly_axis", nullptr, nullptr}, r.anomaly_axis);
       sink.entry_end();

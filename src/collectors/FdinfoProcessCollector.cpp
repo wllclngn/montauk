@@ -1,5 +1,6 @@
 #include "collectors/FdinfoProcessCollector.hpp"
 #include "util/Procfs.hpp"
+#include "util/Text.hpp"
 
 #include <charconv>
 #include <string>
@@ -26,12 +27,7 @@ static bool is_number(const std::string& s) {
 // into the caller's buffer and from_chars do the same job with neither.
 static void parse_fdinfo_text(const std::string& txt, FdinfoProcessCollector::IntelCycles& intel,
                               FdinfoProcessCollector::AmdEngines& amd, uint64_t& vram_kb) {
-  auto trim = [](std::string_view v) {
-    while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.remove_prefix(1);
-    while (!v.empty() && (v.back() == ' ' || v.back() == '\t' || v.back() == '\r'))
-      v.remove_suffix(1);
-    return v;
-  };
+  using montauk::util::trim;
   // Leading-integer parse. Returns false on no digits, so a malformed value
   // leaves its counter untouched exactly as the catch-and-continue did.
   auto to_u64 = [](std::string_view v, uint64_t& out) {
@@ -97,12 +93,20 @@ bool FdinfoProcessCollector::sample(std::unordered_map<int,int>& pid_to_gpu,
     int pid = std::strtol(pd.c_str(), nullptr, 10);
     // Enumerate fdinfo files
     std::string fdinfo_dir = std::string("/proc/") + pd + "/fdinfo";
+    const std::string fd_dir = std::string("/proc/") + pd + "/fd/";
     auto fds = montauk::util::list_dir(fdinfo_dir);
     if (fds.empty()) continue;
     IntelCycles intel_acc{}; AmdEngines amd_acc{}; uint64_t vram_kb = 0;
     bool saw_drm = false;
     for (const auto& fn : fds) {
       if (!is_number(fn)) continue;
+      // ONLY A DRM NODE CARRIES ENGINE COUNTERS, and the kernel names an fd's
+      // link by the node's path, so one readlink decides what opening and
+      // reading every fdinfo of every process used to: 38 ms a second on a
+      // box with no DRM client at all, which montauk's own stage accounting
+      // (--self-test-seconds) put at most of the producer's GPU attribution.
+      auto target = montauk::util::read_symlink(fd_dir + fn);
+      if (!target || !target->starts_with("/dev/dri/")) continue;
       auto content_opt = montauk::util::read_file_string(fdinfo_dir + "/" + fn);
       if (!content_opt) continue;
       const auto& txt = *content_opt;

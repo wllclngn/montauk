@@ -92,15 +92,36 @@ bool NvmlDyn::dlsym_all() {
 
 bool NvmlDyn::available() const { return handle_ != nullptr && !suppressed_; }
 
+NvmlDyn::~NvmlDyn() {
+  if (inited_) p_nvmlShutdown();
+}
+
 bool NvmlDyn::read_devices(montauk::model::GpuVram& out) {
   out = {};
   if (!load_once() || !available()) return false;
   
-  NvmlGuard guard;
-  if (!guard.ok()) return false;
-  
+  if (!inited_) inited_ = p_nvmlInit_v2() == NVML_SUCCESS;
+  if (!inited_) return false;
+
   unsigned int n = 0;
   if (p_nvmlDeviceGetCount_v2(&n) != NVML_SUCCESS) return false;
+  if (fixed_.size() != n) {
+    fixed_.assign(n, Fixed{"", false, 0.0});
+    for (unsigned int i = 0; i < n; ++i) {
+      nvmlDevice_t dev{};
+      if (p_nvmlDeviceGetHandleByIndex_v2(i, &dev) != NVML_SUCCESS) continue;
+      if (p_nvmlDeviceGetName) {
+        char name[96]; name[0] = '\0';
+        if (p_nvmlDeviceGetName(dev, name, sizeof(name)) == NVML_SUCCESS && name[0]) fixed_[i].name = name;
+      }
+      unsigned int lim_mw = 0;
+      if (p_nvmlDeviceGetPowerManagementLimit &&
+          p_nvmlDeviceGetPowerManagementLimit(dev, &lim_mw) == NVML_SUCCESS && lim_mw > 0) {
+        fixed_[i].has_limit = true;
+        fixed_[i].limit_w = (double)lim_mw / 1000.0;
+      }
+    }
+  }
 
   bool any = false; uint64_t total_mb_sum = 0, used_mb_sum = 0;
   double total_power_w = 0.0; bool have_power = false;
@@ -123,13 +144,8 @@ bool NvmlDyn::read_devices(montauk::model::GpuVram& out) {
     any = true; total_mb_sum += t_mb; used_mb_sum += u_mb;
 
     montauk::model::GpuVramDevice rec{};
-    if (p_nvmlDeviceGetName) {
-      char name[96]; name[0] = '\0';
-      if (p_nvmlDeviceGetName(dev, name, sizeof(name)) == NVML_SUCCESS && name[0]) {
-        rec.name = name; model_names.emplace_back(name);
-      }
-    }
-    if (rec.name.empty()) rec.name = "GPU";
+    if (!fixed_[i].name.empty()) { rec.name = fixed_[i].name; model_names.push_back(rec.name); }
+    else rec.name = "GPU";
     rec.total_mb = t_mb; rec.used_mb = u_mb;
 
     // Temperature (edge)
@@ -152,9 +168,7 @@ bool NvmlDyn::read_devices(montauk::model::GpuVram& out) {
     if (p_nvmlDeviceGetPowerUsage) {
       unsigned int mw = 0; if (p_nvmlDeviceGetPowerUsage(dev, &mw) == NVML_SUCCESS && mw > 0) { total_power_w += (double)mw / 1000.0; have_power = true; }
     }
-    if (p_nvmlDeviceGetPowerManagementLimit) {
-      unsigned int lim_mw = 0; if (p_nvmlDeviceGetPowerManagementLimit(dev, &lim_mw) == NVML_SUCCESS && lim_mw > 0) { total_plimit_w += (double)lim_mw / 1000.0; have_plimit = true; }
-    }
+    if (fixed_[i].has_limit) { total_plimit_w += fixed_[i].limit_w; have_plimit = true; }
 
     // Pstate (first device)
     if (!have_pstate && p_nvmlDeviceGetPerformanceState) {

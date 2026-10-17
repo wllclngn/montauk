@@ -1,9 +1,12 @@
 #include "app/GpuAttributor.hpp"
 #include "util/Log.hpp"
+#include "collectors/GpuCollector.hpp"
+#include "util/Procfs.hpp"
+#include "util/Text.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
+#include <unistd.h>
 #include <vector>
 #include "ui/Config.hpp"
 extern "C" {
@@ -228,9 +231,7 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
         if (fpv) {
           char lbuf[64] = {0};
           if (std::fgets(lbuf, sizeof(lbuf), fpv)) {
-            std::string cuda_str(lbuf);
-            while (!cuda_str.empty() && (cuda_str.back()=='\n' || cuda_str.back()=='\r' || cuda_str.back()==' ' || cuda_str.back()=='\t')) cuda_str.pop_back();
-            cached_cuda_version_ = cuda_str;
+            cached_cuda_version_ = std::string(montauk::util::trim(lbuf));
           }
           ::pclose(fpv);
         }
@@ -247,32 +248,20 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
   }
 #endif
 
-  // Shared nvidia-smi path resolver using config
-  auto find_smi = [&]() -> std::string {
-    const auto& sp = montauk::ui::config().nvidia.smi_path;
-    if (sp != "auto" && !sp.empty()) return sp;
-    if (const char* path = std::getenv("PATH")) {
-      std::string p(path); size_t start=0; while (start<=p.size()) { size_t end=p.find(':',start); std::string dir=p.substr(start,end==std::string::npos?std::string::npos:end-start); if(!dir.empty()){ std::string cand=dir+"/nvidia-smi"; std::error_code ec; if(std::filesystem::exists(cand,ec)) return cand; } if(end==std::string::npos) break; start=end+1; }
-    }
-    const char* candidates[]={"/usr/bin/nvidia-smi","/usr/local/bin/nvidia-smi","/opt/nvidia/sbin/nvidia-smi","/bin/nvidia-smi"};
-    for (const char* c: candidates) { std::error_code ec; if (std::filesystem::exists(c,ec)) return std::string(c); }
-    return {};
-  };
+  using montauk::collectors::find_nvidia_smi_path;
 
   // Detect MIG mode via nvidia-smi only when NVML is unavailable -- when NVML is
   // up it authoritatively reports mig state, so forking nvidia-smi every enrich
   // (the common non-MIG case) was pure overhead.
   if (!nvml_available() && !s.nvml.mig_enabled) {
-    std::string smi = find_smi();
+    std::string smi = find_nvidia_smi_path();
     if (!smi.empty()) {
       std::string cmd = smi + " --query-gpu=mig.mode.current --format=csv,noheader 2>/dev/null";
       FILE* fp = ::popen(cmd.c_str(), "r");
       if (fp) {
         char lbuf[128]={0};
         if (std::fgets(lbuf, sizeof(lbuf), fp)) {
-          std::string line(lbuf);
-          auto trim = [](std::string str){ while(!str.empty() && (str.back()=='\n'||str.back()=='\r'||str.back()==' '||str.back()=='\t')) str.pop_back(); while(!str.empty() && (str.front()==' '||str.front()=='\t')) str.erase(str.begin()); return str; };
-          line = trim(line);
+          const std::string_view line = montauk::util::trim(lbuf);
           if (!line.empty() && (line[0]=='E' || line[0]=='e')) { // "Enabled"
             s.nvml.mig_enabled = true;
           }
@@ -282,9 +271,13 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
     }
   }
 
-  // Populate version strings via nvidia-smi when NVML did not fill them
-  if (s.nvml.driver_version.empty() || s.nvml.cuda_version.empty()) {
-    std::string smi = find_smi();
+  // Populate version strings via nvidia-smi when NVML did not fill them, from
+  // one query per process. This forked nvidia-smi on every enrich whenever a
+  // field stayed empty, and on a driver that refuses cuda_version as a query
+  // field (exit 2) one always does.
+  if ((s.nvml.driver_version.empty() || s.nvml.cuda_version.empty()) && !smi_versions_tried_) {
+    smi_versions_tried_ = true;
+    std::string smi = find_nvidia_smi_path();
     if (!smi.empty()) {
       std::string cmd = smi + " --query-gpu=driver_version,cuda_version --format=csv,noheader 2>/dev/null";
       FILE* fp = ::popen(cmd.c_str(), "r");
@@ -296,16 +289,16 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
           size_t comma = line.find(',');
           auto trim = [](std::string str){ while(!str.empty() && (str.back()=='\n'||str.back()=='\r'||str.back()==' '||str.back()=='\t')) str.pop_back(); while(!str.empty() && (str.front()==' '||str.front()=='\t')) str.erase(str.begin()); return str; };
           if (comma != std::string::npos) {
-            auto drv = trim(line.substr(0, comma));
-            auto cud = trim(line.substr(comma+1));
-            if (s.nvml.driver_version.empty()) s.nvml.driver_version = drv;
-            if (s.nvml.cuda_version.empty())   s.nvml.cuda_version   = cud;
+            smi_driver_version_ = trim(line.substr(0, comma));
+            smi_cuda_version_ = trim(line.substr(comma+1));
           }
         }
         ::pclose(fp);
       }
     }
   }
+  if (s.nvml.driver_version.empty()) s.nvml.driver_version = smi_driver_version_;
+  if (s.nvml.cuda_version.empty())   s.nvml.cuda_version   = smi_cuda_version_;
 
   // If NVML gave nothing or is unavailable, try fdinfo for AMD/Intel
   if (pid_to_gpu.empty()) {
@@ -315,9 +308,14 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
     }
   }
 
-  // Optional NVIDIA PMON fallback: parse `nvidia-smi pmon` for per-process sm/enc/dec
-  if (pid_to_gpu.empty() && montauk::ui::config().nvidia.pmon && !s.nvml.mig_enabled) {
-    std::string smi = find_smi();
+  // Optional NVIDIA PMON fallback: parse `nvidia-smi pmon` for per-process sm/enc/dec.
+  // Only without NVML: pmon reads the per-process utilization NVML has already
+  // answered above, so with NVML up, an idle GPU (no samples, the common case)
+  // forked nvidia-smi every second to be told the same nothing -- 41 ms of CPU
+  // and 53 ms of the producer's time per fork. The MIG probe above skips its
+  // fork for the same reason.
+  if (pid_to_gpu.empty() && !nvml_available() && montauk::ui::config().nvidia.pmon && !s.nvml.mig_enabled) {
+    std::string smi = find_nvidia_smi_path();
     std::string cmd = (!smi.empty()? smi : std::string("nvidia-smi")) + " pmon -c 1 -s u 2>/dev/null";
     FILE* fp = ::popen(cmd.c_str(), "r");
     if (fp) {
@@ -352,18 +350,15 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
     int dev_util_hint = (int)std::max({ (double)as_int_pct(s.vram.gpu_util_pct), (double)as_int_pct(s.vram.enc_util_pct), (double)as_int_pct(s.vram.dec_util_pct) });
     if (dev_util_hint > 0) {
       for (const auto& p : s.procs.processes) {
-        try {
-          std::filesystem::path fddir(std::string("/proc/") + std::to_string(p.pid) + "/fd");
-          if (!std::filesystem::exists(fddir)) continue;
-          for (auto& de : std::filesystem::directory_iterator(fddir)) {
-            std::error_code ec; auto target = std::filesystem::read_symlink(de.path(), ec);
-            if (ec) continue;
-            auto tstr = target.string();
-            if (tstr.rfind("/dev/nvidia", 0) == 0 || tstr.find("nvidia-uvm") != std::string::npos || tstr.find("/dev/dri/renderD") == 0) {
-              running_pids.insert(p.pid); break;
-            }
+        const std::string fddir = "/proc/" + std::to_string(p.pid) + "/fd";
+        for (const auto& fd : montauk::util::list_dir(fddir)) {
+          auto target = montauk::util::read_symlink(fddir + "/" + fd);
+          if (!target) continue;
+          const std::string& tstr = *target;
+          if (tstr.rfind("/dev/nvidia", 0) == 0 || tstr.find("nvidia-uvm") != std::string::npos || tstr.find("/dev/dri/renderD") == 0) {
+            running_pids.insert(p.pid); break;
           }
-        } catch (...) { /* ignore per-pid errors */ }
+        }
       }
     }
   }
@@ -381,7 +376,7 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
 
   // Optional NVIDIA memory query via nvidia-smi (compute contexts)
   if (pid_to_gpu_mem_kb.empty() && montauk::ui::config().nvidia.mem && !s.nvml.mig_enabled) {
-    std::string smi = find_smi();
+    std::string smi = find_nvidia_smi_path();
     std::string cmd = (!smi.empty()? smi : std::string("nvidia-smi")) + " --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null";
     FILE* fp = ::popen(cmd.c_str(), "r");
     if (fp) {

@@ -16,7 +16,6 @@ namespace montauk::util {
 // tiebreaks on the packed index, which is initialized from the input order.
 void sort_by_key_f32(std::span<const float>    keys, std::span<uint32_t> indices, bool descending);
 void sort_by_key_u32(std::span<const uint32_t> keys, std::span<uint32_t> indices, bool descending);
-void sort_by_key_i32(std::span<const int32_t>  keys, std::span<uint32_t> indices, bool descending);
 
 // String sort: indices permuted so `arr[indices[i]]` is ascending lex
 // order. `arr` is read-only. Dispatches to sublimation_strings_indices

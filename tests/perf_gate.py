@@ -18,6 +18,7 @@ Three defenses, stacked so no box or load level flakes:
 Run:  python3 tests/perf_gate.py   (or via tests/run.py, perf layer)
 """
 import os
+import re
 import resource
 import shutil
 import subprocess
@@ -47,6 +48,32 @@ def cpu_seconds(argv, stdin_file=None, env=None, ok_codes=(0,)) -> float:
         if os.waitstatus_to_exitcode(status) not in ok_codes:
             raise RuntimeError(f"{argv[0]} exited nonzero")
         return ru.ru_utime + ru.ru_stime
+
+
+def producer_ms_per_s(seconds):
+    """The self-test's own account of the collection thread's steady-state CPU,
+    in ms per second, or None when it cannot run. The self-test wants a terminal,
+    so it gets a pty."""
+    binary = str(harness.MONTAUK)
+    r, w = os.openpty()
+    pid = os.posix_spawn(binary, [binary, "--self-test-seconds", str(seconds)], os.environ,
+                         file_actions=[(os.POSIX_SPAWN_DUP2, w, 1)])
+    os.close(w)
+    text = b""
+    while True:
+        try:
+            chunk = os.read(r, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        text += chunk
+    os.close(r)
+    _, status, _ = os.wait4(pid, 0)
+    m = re.search(rb"Producer stages \(thread CPU, steady loop\): ([0-9.]+) ms/s", text)
+    if os.waitstatus_to_exitcode(status) != 0 or not m:
+        return None
+    return float(m.group(1))
 
 
 def main() -> int:
@@ -162,11 +189,36 @@ def main() -> int:
         check("regex-captures-growth", ok and ratio < 4.0,
               f"2x line -> {ratio:.2f}x cpu" if ok else "crashed")
 
+        # Bounded repeats as counters: One position and a ring of entry offsets,
+        # so -o over a line the pattern matches throughout is linear in the line
+        # (a find that rescanned the rest of the line per match was 4x per 2x)
+        # and does not grow with the bound. Unrolled, {0,30000} would be 30,000
+        # positions, and was refused before counters.
+        t1 = cpu_or_crash([str(SUB), "search", "-o", "a[ab]{0,150}a"], one_line("ctr", 2_000_000))
+        t2 = cpu_or_crash([str(SUB), "search", "-o", "a[ab]{0,150}a"], one_line("ctr", 4_000_000))
+        ok = t1 is not None and t2 is not None
+        ratio = t2 / max(t1, 0.05) if ok else 0.0
+        check("regex-counted-growth", ok and ratio < 4.0,
+              f"2x line -> {ratio:.2f}x cpu, {t1:.2f}s at n" if ok else "crashed")
+        t3 = cpu_or_crash([str(SUB), "search", "-o", "a[ab]{0,30000}a"], one_line("ctr", 4_000_000))
+        ok = t2 is not None and t3 is not None
+        ratio = t3 / max(t2, 0.05) if ok else 0.0
+        check("regex-counted-bound", ok and ratio < 4.0,
+              f"200x bound -> {ratio:.2f}x cpu" if ok else "crashed")
+
         # (a?){n}a{n} over a^n doubled per n under backtracking (n=26: 9.8s).
         # n=40 is past any backtracker's reach and trivial for a linear engine.
         t = cpu_or_crash([str(SUB), "replace", "(a?){40}a{40}", r"[\1]"], one_line("capexp", 40))
         check("regex-captures-ceiling", t is not None and t < 1.0,
               f"{t:.2f}s cpu" if t is not None else "crashed")
+
+    # Collection's own cost, from montauk's account of it: The producer thread's
+    # steady-state CPU per second. 50 ms/s on the box it was set on, 100 before
+    # the fdinfo scan, the anomaly re-runs and the per-second nvidia-smi forks
+    # were cut; a ceiling of 150 catches a return of any one of them.
+    ms = producer_ms_per_s(4)
+    check("collection-ceiling", ms is not None and ms < 150.0,
+          f"{ms:.1f} ms/s producer cpu" if ms is not None else "self-test did not report")
 
     note("PASS: all envelopes hold" if not fails
          else f"FAIL: {len(fails)} envelope(s) breached")

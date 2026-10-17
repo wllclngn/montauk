@@ -23,21 +23,8 @@
 // [[nodiscard]]
 #if SUB_HAVE_C23 || (defined(__GNUC__) && __GNUC__ >= 10)
 #define SUB_NODISCARD [[nodiscard]]
-#define SUB_NODISCARD_MSG(msg) [[nodiscard(msg)]]
 #else
 #define SUB_NODISCARD
-#define SUB_NODISCARD_MSG(msg)
-#endif
-
-// [[noreturn]]
-#if SUB_HAVE_C23
-#define SUB_NORETURN [[noreturn]]
-#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-#define SUB_NORETURN _Noreturn
-#elif defined(__GNUC__)
-#define SUB_NORETURN __attribute__((noreturn))
-#else
-#define SUB_NORETURN
 #endif
 
 // [[reproducible]] / [[unsequenced]] -- C23, but newer than most C23 modes
@@ -115,22 +102,11 @@
 #define SUB_INLINE static inline
 #endif
 
-// Likely/unlikely branch hints
+// Unlikely branch hint
 #if defined(__GNUC__)
-#define sub_likely(x)   __builtin_expect(!!(x), 1)
 #define sub_unlikely(x) __builtin_expect(!!(x), 0)
 #else
-#define sub_likely(x)   (x)
 #define sub_unlikely(x) (x)
-#endif
-
-// Prefetch
-#if defined(__GNUC__)
-#define sub_prefetch_r(addr) __builtin_prefetch((addr), 0, 3)
-#define sub_prefetch_w(addr) __builtin_prefetch((addr), 1, 3)
-#else
-#define sub_prefetch_r(addr) ((void)(addr))
-#define sub_prefetch_w(addr) ((void)(addr))
 #endif
 
 // restrict qualifier (C only; C++ uses compiler extension)

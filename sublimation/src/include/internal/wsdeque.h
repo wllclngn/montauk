@@ -78,7 +78,4 @@ bool sub_wsdeque_take(sub_wsdeque_t *q, sub_dfs_frame_t *out);
 // Any thief. Steals the oldest frame (FIFO). SUB_STEAL_ABORT means retry.
 sub_steal_t sub_wsdeque_steal(sub_wsdeque_t *q, sub_dfs_frame_t *out);
 
-// Approximate live count (relaxed; may be stale under concurrency).
-size_t sub_wsdeque_size(sub_wsdeque_t *q);
-
 #endif // SUB_WSDEQUE_H

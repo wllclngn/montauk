@@ -1,4 +1,4 @@
-.TH MONTAUK 1 "October 2026" "montauk 8.13.1" "User Commands"
+.TH MONTAUK 1 "October 2026" "montauk 8.14.0" "User Commands"
 .SH NAME
 montauk \- Linux observability platform: monitor, eBPF tracer and analyzer
 .SH SYNOPSIS
@@ -839,15 +839,30 @@ do. The pair names the declared branches a run never took \(em which no capture
 can show, because a branch that never executes emits nothing and a dead arm is
 ordinary reviewed code on the page.
 .PP
-Beside the branches it records what each file DECLARES and every place a
-declared name is named again. A function with no branches emits no guard at all,
-so the branch records alone cannot tell a symbol nothing reaches from one that
-was never written; the two together can, and
+Beside the branches it records what each file DECLARES \(em functions,
+enumerators and macros \(em and every place a declared name is named again,
+with the function or macro it is named from. A function with no branches emits
+no guard at all, so the branch records alone cannot tell a symbol nothing
+reaches from one that was never written; the two together can, and
 .B montauk \-\-analyze
-reports the declarations the scan found no reference to. Unreferenced is not
-dead \(em a table dispatch, a caller outside the scanned files and a runtime
-entry point all look the same \(em so the report is a short list to read, not a
-verdict.
+walks them from the entry points and reports the declarations no walk reaches,
+each marked named by nothing or named only from code nothing reaches. The entry
+points are
+.B main
+and every reference from file scope: a table or initialiser, a conditional
+directive, a function placed in a section
+.RB ( SEC() ,
+.BR __attribute__((section)) ,
+constructor, destructor or used), a Python dunder method, and an object's
+exports. A prototype is not a reference, a macro's body references from the
+macro, a stem pasted into a name with
+.B ##
+references each declared name it begins, and a function a macro defines
+.RB ( TEST(name) )
+is reached with the macro. Reaching is by spelling, so declarations sharing a
+name are reached together. Reached from none is not dead \(em a caller outside
+the scanned files and a table filled at run time look the same \(em so the
+report is a short list to read, not a verdict.
 .PP
 It also records each function's control flow graph: basic blocks, and the
 edges between them for fall-through, both arms of a branch, each operand of a
@@ -884,17 +899,35 @@ the constant it resolves to.
 .B \-o \fIOUT.guards\fR
 Write the artifact to a file; without it the records go to stdout.
 .TP
-.B \-\-lang \fIc\fR|\fIrust\fR
+.B \-\-lang \fIc\fR|\fIrust\fR|\fIpython\fR
 Force one dialect on every FILE, and limit a DIR to that dialect's extensions.
 By default each file's extension picks it: c covers C and C++, rust covers
-Rust. The scanner is one engine and a dialect is a table of comment forms,
-literal forms, condition style and keywords.
+Rust, python covers .py and .pyi. The scanner is one engine and a dialect is a
+table of comment forms, literal forms, condition style and keywords. Python's
+blocks are indentation, so a Python file is rewritten into the engine's brace
+grammar first, every newline kept in place so its lines are the source's: an
+elif reads as else if, an except as a handler, a case as a match arm, and
+module-level code as <file>.
 .TP
 .I DIR
 Walked for every file a dialect claims, in byte order of path, skipping hidden
 directories and any holding a
 .B CACHEDIR.TAG
-(a Cargo target directory carries one).
+(a Cargo target directory carries one). A
+.B .o
+in it that is a BPF, aarch64 or x86-64 object is read too.
+.TP
+.I OBJECT.o
+A compiled BPF, aarch64 or x86-64 object (ELF64, relocatable or linked) takes
+the object lane: the same records
+from its instructions after optimization, which the source lane cannot see.
+A function is an STT_FUNC symbol, a block's line is an instruction index within
+its section, a guard is each conditional branch spelled as its comparison
+(\fBr1 > 5\fR, \fBx3 == 0\fR) or condition code (\fBne\fR), and a reference is
+each call and tail call, and each map a BPF program loads, so the declarations
+report says what nothing reaches. On x86-64 a block's line is a byte offset,
+since its instructions are variable-length. Any other machine is refused by
+name.
 .PP
 Example:
 .PP
@@ -903,6 +936,7 @@ Example:
 montauk --static src/sched.c -o sched.guards
 montauk --analyze sched.guards --json
 montauk --static . -o tree.guards           # a whole tree, C and Rust
+montauk --static prog.bpf.o -o prog.guards  # what the compiler made of it
 .fi
 .RE
 .SH SEE ALSO
@@ -994,6 +1028,6 @@ Report issues at: https://github.com/wllclngn/montauk/issues
 .SH COPYRIGHT
 GPL-2.0-only. See LICENSE file in repository.
 .SH VERSION
-montauk 8.13.1
+montauk 8.14.0
 .br
 October 2026

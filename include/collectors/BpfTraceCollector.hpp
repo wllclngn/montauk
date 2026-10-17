@@ -122,9 +122,6 @@ private:
   // Ring buffer event callback
   static int handle_event(void* ctx, void* data, size_t len);
 
-  // Syscall decode
-  static const char* syscall_name(int nr);
-
   // True if `s` matches any of the --trace pattern tokens (substring, ci).
   bool matches_any(const std::string& s) const;
 

@@ -6,6 +6,11 @@
 
 namespace montauk::app {
 
+// The directory of the provider mesh, where every producer's socket sits and
+// ProviderCollector scans: $XDG_RUNTIME_DIR/montauk/providers, or
+// /run/montauk/providers without one.
+[[nodiscard]] std::string providers_dir();
+
 // Exposes montauk's own state on a unix-socket provider endpoint
 // ($XDG_RUNTIME_DIR/montauk/providers/<name>.sock), serving one Prometheus-text
 // snapshot per connection — the exact contract montauk's own ProviderCollector

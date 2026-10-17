@@ -482,7 +482,96 @@ typedef int (*span_ok_fn)(const uint8_t *hay, size_t n, long s, long e);
 // fold_left counts bytes until the one that differs under icase; fold_byte is
 // the counterpart to admit there. Only the LAST byte of a folded character
 // ever differs (see case_fold_table.h), so one pending byte is enough.
-typedef struct { const char *p; gnfa_t *g; int fold_left; unsigned char fold_byte; } gpar_t;
+// p0 is the pattern's start, for the cost span; count asks g_repeat for counters.
+typedef struct {
+    const char *p, *p0; gnfa_t *g; int fold_left; unsigned char fold_byte; int count;
+} gpar_t;
+
+// THE COUNTERS' RUN STATE. A counted position is a single-position atom
+// repeated X{lo,hi}, and every live count of it advances on the same byte and
+// dies on the same byte: A byte in X adds one to every count, a byte outside
+// it ends them all. So the counts are fully named by the offsets at which they
+// entered, a ring of at most hi entries, oldest first. The entry that entered
+// at offset t has count j - t + 1 after the byte at j, it dies past hi, and it
+// may exit once its count reaches lo (at least one byte). The oldest entry is
+// the first to be eligible and the first to die, so eligibility is a prefix of
+// the ring [head, el) that grows at el and shrinks at head. This is the offset
+// list of the counting-set automata (Turonova et al., OOPSLA 2020; Holik et
+// al., FoSSaCS 2023), sound here because a repeat of one class or byte is
+// flat, synchronizing counting in their terms.
+//
+// gnfa_find also carries each entry's start. Two paths entering a counter on
+// the same byte share its count and so its future, and the earliest start is
+// kept, as for any position; but entries of different counts do not share a
+// future -- the older exits sooner and dies sooner -- so all of them are
+// kept, and an exit carries the smallest start among those that may exit. A
+// sliding window minimum over the eligible prefix (mono, starts increasing)
+// makes that O(1) amortized per byte, so the find stays one linear pass.
+//
+// Sequence numbers only grow, so a ring slot is seq % cap.
+typedef struct {
+    size_t *t, *st, *mono;
+    size_t head, tail, el, mh, mt;
+    size_t cap, lo_eff;
+    int starts;
+} ctr_run;
+
+typedef struct { ctr_run r[SUBLIMATION_SEARCH_MAX_COUNTERS]; } ctr_set;
+
+// One thread-local block for every counter's ring, grown on demand and reused,
+// for the same reason the reach memo is: A search over many lines or files
+// would otherwise pay an allocation per call.
+static int ctr_begin(const gnfa_t *g, ctr_set *cs, int starts) {
+    static _Thread_local size_t *block = NULL;
+    static _Thread_local size_t block_cap = 0;
+    size_t need = 0, per = starts ? 3 : 1;
+    for (int c = 0; c < g->ncounted; c++) need += (size_t)g->ctr_hi[c] * per;
+    if (need > block_cap) {
+        size_t *nb = (size_t *)realloc(block, need * sizeof *nb);
+        if (!nb) return 0;
+        block = nb; block_cap = need;
+    }
+    size_t *at = block;
+    for (int c = 0; c < g->ncounted; c++) {
+        ctr_run *r = &cs->r[c];
+        r->cap = (size_t)g->ctr_hi[c];
+        r->lo_eff = g->ctr_lo[c] > 0 ? (size_t)g->ctr_lo[c] : 1;
+        r->starts = starts;
+        r->t = at; at += r->cap;
+        r->st = starts ? at : NULL; if (starts) at += r->cap;
+        r->mono = starts ? at : NULL; if (starts) at += r->cap;
+        r->head = r->tail = r->el = r->mh = r->mt = 0;
+    }
+    return 1;
+}
+
+static inline void ctr_reset(ctr_run *r) { r->head = r->tail = r->el = r->mh = r->mt = 0; }
+static inline int ctr_alive(const ctr_run *r) { return r->head < r->tail; }
+static inline int ctr_eligible(const ctr_run *r) { return r->el > r->head; }
+static inline size_t ctr_exit_start(const ctr_run *r) { return r->st[r->mono[r->mh % r->cap] % r->cap]; }
+
+// The byte at j: in_x says whether it is in X, enter whether the counted
+// position was reached from outside (a new entry, count 1, carrying start st).
+static inline void ctr_step(ctr_run *r, int in_x, int enter, size_t j, size_t st) {
+    if (!in_x) { ctr_reset(r); return; }
+    const size_t cap = r->cap;
+    while (r->head < r->tail && j - r->t[r->head % cap] + 1 > cap) r->head++;
+    if (r->el < r->head) r->el = r->head;
+    if (r->starts) while (r->mh < r->mt && r->mono[r->mh % cap] < r->head) r->mh++;
+    if (enter) {
+        r->t[r->tail % cap] = j;
+        if (r->starts) r->st[r->tail % cap] = st;
+        r->tail++;
+    }
+    while (r->el < r->tail && j + 1 - r->t[r->el % cap] >= r->lo_eff) {
+        if (r->starts) {
+            const size_t s = r->st[r->el % cap];
+            while (r->mt > r->mh && r->st[r->mono[(r->mt - 1) % cap] % cap] >= s) r->mt--;
+            r->mono[r->mt++ % cap] = r->el;
+        }
+        r->el++;
+    }
+}
 
 // Reach-closure memo. reach(D) = first | union(follow[i], i in D), memoized --
 // the position-NFA's transition closure cached on the fly, keyed by state set.
@@ -541,14 +630,23 @@ static gattr_t FW(g_alt)(gpar_t *x);
 // count is not estimated -- the parser IS the counter, so retrying is both the
 // simplest correct classifier and the cheapest one for the common case, which
 // never retries.
+//
+// COUNTERS ARE THE THIRD AND FOURTH PASS, not the first. A pattern that fits
+// the field unrolled keeps exactly the program it had, which is pure bit
+// parallelism; only a pattern refused at both widths is rebuilt with its
+// single-position bounded repeats as counters, narrow and then wide.
 static int build_gnfa(const char *pat, gnfa_t *g, int icase) {
-    if (build_gnfa_w1(pat, g, icase)) return 1;
+    if (build_gnfa_w1(pat, g, icase, 0)) return 1;
     // Only a position-cap overrun is worth a second pass; a syntax error fails
     // identically at either width. npos stops exactly AT the cap when the
     // pattern outgrew it, which is what distinguishes the two -- here and in
     // the error the compile reports.
     if (g->npos < SUBLIMATION_SEARCH_NARROW_POS) return 0;
-    return build_gnfa_w2(pat, g, icase);
+    if (build_gnfa_w2(pat, g, icase, 0)) return 1;
+    if (g->npos < SUBLIMATION_SEARCH_MAX_POS) return 0;
+    if (build_gnfa_w1(pat, g, icase, 1)) return 1;
+    if (g->npos < SUBLIMATION_SEARCH_NARROW_POS) return 0;
+    return build_gnfa_w2(pat, g, icase, 1);
 }
 
 static void build_imap(const gnfa_t *g, uint64_t I[256][SUBLIMATION_SEARCH_POS_WORDS]) {
@@ -667,6 +765,173 @@ static inline const uint8_t *sub_needle(const sublimation_search *s) {
     return (const uint8_t *)(s->borrowed ? s->borrowed : s->pattern);
 }
 
+// CONFUSION CLASSES. A class of members that cost nothing to substitute for
+// one another becomes a rewrite: Every member to its class's shortest member,
+// longest member first, left to right, applied to the pattern once and to the
+// text per call. Hamming distance between the two rewritten forms is then the
+// distance with the substitutions free, and a pair of different lengths (ſ, a
+// two-byte character, for f) costs nothing either, which no per-byte compare
+// could give. The rewrite is linear and never longer than its input, since a
+// member only ever shrinks to the class's shortest.
+//
+// map[i] is the original offset of rewritten byte i, map[w] the input's end;
+// unit[i] marks where a rewritten unit starts, so a window never begins inside
+// one, and a span ends where the unit it ends in does.
+typedef struct { uint8_t *b, *unit; size_t *map; size_t cap; } cf_buf;
+
+static size_t cf_member_at(const sublimation_search *s, const uint8_t *p, size_t avail, int *mi) {
+    size_t best = 0;
+    for (int i = 0; i < s->cf_n; i++) {
+        size_t l = s->cf_len[i];
+        if (l <= best || l > avail) continue;
+        const uint8_t *mb = s->cf_bytes + s->cf_at[i];
+        size_t j = 0;
+        while (j < l && fold(p[j], s->icase) == fold(mb[j], s->icase)) j++;
+        if (j == l) { best = l; *mi = i; }
+    }
+    return best;
+}
+
+// Rewrite src[0..n) into o; returns the rewritten length, or (size_t)-1 when
+// the buffer cannot grow.
+static size_t cf_rewrite(const sublimation_search *s, const uint8_t *src, size_t n, cf_buf *o) {
+    if (n + 1 > o->cap) {
+        size_t nc = n + 1;
+        uint8_t *nb = (uint8_t *)realloc(o->b, nc), *nu;
+        if (!nb) return (size_t)-1;
+        o->b = nb;
+        if (!(nu = (uint8_t *)realloc(o->unit, nc))) return (size_t)-1;
+        o->unit = nu;
+        size_t *nm = (size_t *)realloc(o->map, nc * sizeof *nm);
+        if (!nm) return (size_t)-1;
+        o->map = nm; o->cap = nc;
+    }
+    size_t i = 0, w = 0;
+    while (i < n) {
+        int mi = -1;
+        size_t l = 0;
+        unsigned char c0 = (unsigned char)fold(src[i], s->icase);
+        if ((s->cf_first[c0 >> 3] >> (c0 & 7)) & 1) l = cf_member_at(s, src + i, n - i, &mi);
+        if (l) {
+            const int r = s->cf_rep[mi];
+            const uint8_t *rb = s->cf_bytes + s->cf_at[r];
+            for (size_t q = 0; q < s->cf_len[r]; q++) {
+                o->b[w] = rb[q]; o->map[w] = i; o->unit[w] = q == 0; w++;
+            }
+            i += l;
+        } else {
+            o->b[w] = src[i]; o->map[w] = i; o->unit[w] = 1; w++; i++;
+        }
+    }
+    o->map[w] = n;
+    return w;
+}
+
+// One rewrite buffer per thread, reused, as the reach memo is.
+static cf_buf *cf_scratch(void) {
+    static _Thread_local cf_buf buf = { NULL, NULL, NULL, 0 };
+    return &buf;
+}
+
+static int cf_within(const sublimation_search *s, const uint8_t *a, const uint8_t *b, size_t m) {
+    int mism = 0;
+    for (size_t j = 0; j < m; j++)
+        if (fold(a[j], s->icase) != fold(b[j], s->icase) && ++mism > s->k) return 0;
+    return 1;
+}
+
+static size_t cf_count(const sublimation_search *s, const uint8_t *hay, size_t n) {
+    cf_buf *o = cf_scratch();
+    size_t w = cf_rewrite(s, hay, n, o), m = s->pattern_len, count = 0;
+    if (w == (size_t)-1 || m > w) return 0;
+    for (size_t i = 0; i + m <= w; i++)
+        if (o->unit[i] && cf_within(s, o->b + i, (const uint8_t *)s->pattern, m)) count++;
+    return count;
+}
+
+static long cf_find(const sublimation_search *s, const uint8_t *hay, size_t n, size_t from,
+                    long *end_out) {
+    cf_buf *o = cf_scratch();
+    size_t w = cf_rewrite(s, hay + from, n - from, o), m = s->pattern_len;
+    if (w == (size_t)-1 || m > w) return -1;
+    for (size_t i = 0; i + m <= w; i++) {
+        if (!o->unit[i] || !cf_within(s, o->b + i, (const uint8_t *)s->pattern, m)) continue;
+        size_t ce = i + m;
+        while (ce < w && !o->unit[ce]) ce++;
+        if (end_out) *end_out = (long)(from + o->map[ce]);
+        return (long)(from + o->map[i]);
+    }
+    return -1;
+}
+
+static int cf_full(const sublimation_search *s, const uint8_t *hay, size_t n) {
+    cf_buf *o = cf_scratch();
+    size_t w = cf_rewrite(s, hay, n, o);
+    return w != (size_t)-1 && w == s->pattern_len &&
+           cf_within(s, o->b, (const uint8_t *)s->pattern, w);
+}
+
+// A literal search takes classes too, as the fuzzy face at k = 0: Exact but
+// for the substitutions the classes make free.
+int sublimation_search_confuse(sublimation_search *s, const char *spec) {
+    if (!s || !s->valid || (s->mode != MODE_FUZZY && s->mode != MODE_EXACT) || !spec) return 0;
+    unsigned char bytes[SUBLIMATION_SEARCH_CONFUSE_BYTES];
+    uint16_t at[SUBLIMATION_SEARCH_CONFUSE_MEMBERS];
+    uint8_t len[SUBLIMATION_SEARCH_CONFUSE_MEMBERS], rep[SUBLIMATION_SEARCH_CONFUSE_MEMBERS];
+    int cls[SUBLIMATION_SEARCH_CONFUSE_MEMBERS];
+    int nm = 0, nc = 0;
+    size_t nb = 0, cur = 0;
+    for (const char *q = spec; ; q++) {
+        const char c = *q;
+        if (c == '\0' || c == ',' || c == '=') {
+            if (cur == 0 || nm == SUBLIMATION_SEARCH_CONFUSE_MEMBERS || cur > 255) return 0;
+            at[nm] = (uint16_t)(nb - cur); len[nm] = (uint8_t)cur; cls[nm] = nc; nm++;
+            cur = 0;
+            if (c != '=') nc++;
+            if (c == '\0') break;
+            continue;
+        }
+        if (c == '\\' && q[1]) q++;
+        if (nb == sizeof bytes) return 0;
+        bytes[nb++] = (unsigned char)*q; cur++;
+    }
+    // Every class names at least two members, no member twice anywhere, and
+    // each class's representative is its shortest member, the first on a tie.
+    for (int i = 0; i < nm; i++) {
+        int peers = 0, r = i;
+        for (int j = 0; j < nm; j++) {
+            if (cls[j] != cls[i]) continue;
+            peers++;
+            if (len[j] < len[r] || (len[j] == len[r] && j < r)) r = j;
+        }
+        if (peers < 2) return 0;
+        rep[i] = (uint8_t)r;
+        for (int j = i + 1; j < nm; j++)
+            if (len[j] == len[i] && !memcmp(bytes + at[j], bytes + at[i], len[i])) return 0;
+    }
+    sublimation_search t = *s;
+    memcpy(t.cf_bytes, bytes, nb);
+    memcpy(t.cf_at, at, (size_t)nm * sizeof at[0]);
+    memcpy(t.cf_len, len, (size_t)nm);
+    memcpy(t.cf_rep, rep, (size_t)nm);
+    memset(t.cf_first, 0, sizeof t.cf_first);
+    for (int i = 0; i < nm; i++) {
+        unsigned char f = (unsigned char)fold(bytes[at[i]], t.icase);
+        t.cf_first[f >> 3] |= (uint8_t)(1u << (f & 7));
+    }
+    t.cf_n = nm;
+    cf_buf *o = cf_scratch();
+    size_t w = cf_rewrite(&t, sub_needle(s), s->pattern_len, o);
+    if (w == (size_t)-1 || w == 0 || w > SUBLIMATION_SEARCH_MAX_PATTERN) return 0;
+    memcpy(t.pattern, o->b, w);
+    t.pattern[w] = '\0';
+    t.pattern_len = w;
+    t.borrowed = NULL;
+    t.mode = MODE_FUZZY;
+    *s = t;
+    return 1;
+}
+
 void sublimation_search_compile(sublimation_search *out, const char *pattern,
                                 size_t len, unsigned flags, int k) {
     memset(out, 0, sizeof(*out));
@@ -719,6 +984,13 @@ void sublimation_search_compile(sublimation_search *out, const char *pattern,
 }
 
 int sublimation_search_valid(const sublimation_search *s) { return s->valid; }
+
+int sublimation_search_costliest(const sublimation_search *s, size_t *at, size_t *len) {
+    if (!s || s->mode != MODE_REGEX || s->g.cost <= 0) return 0;
+    if (at) *at = (size_t)s->g.cost_at;
+    if (len) *len = (size_t)s->g.cost_len;
+    return s->g.cost;
+}
 
 const char *sublimation_search_error(const sublimation_search *s) {
     if (!s || s->valid) return NULL;
@@ -779,15 +1051,15 @@ int sublimation_search_split_alternation(const char *pattern, char ***out, int *
     return n;
 }
 
-// The opaque-buffer contract with foreign callers (vector mirrors this
-// struct as a byte buffer in Rust). The static assert pins the size the
-// mirror was written against; growth breaks THIS build, never a caller's
+// The opaque-buffer contract with foreign callers that mirror this struct
+// as a byte buffer. The static assert pins the size a mirror is written
+// against; growth breaks THIS build, never a caller's
 // stack. The sizeof export lets a binding assert the contract at runtime.
 // The struct is sized for the WIDE field: the engine is specialized for one- and
 // two-word position sets and the pattern picks, but a single public layout keeps
 // sublimation_search one value type a caller can still stack-allocate.
 //
-// The last foreign mirror of this struct went with the MCP server; the assert
+// No foreign mirror of this struct remains; the assert
 // stays because the property it guards -- growth is a deliberate act, never a
 // silent one -- outlives any particular consumer.
 // 11352 -> 11368: a borrowed-needle pointer and an error code. The literal and
@@ -799,7 +1071,15 @@ int sublimation_search_split_alternation(const char *pattern, char ***out, int *
 // the start positions enterable only at offset 0 and the accepts valid only at
 // the end as two more position sets. The two leading/trailing anchor flags they
 // replace went with them.
-static_assert(sizeof(sublimation_search) == 11392,
+// 11392 -> 11520: bounded repeats as counters. A pattern refused unrolled is
+// rebuilt with each single-position X{lo,hi} as one position and a counter,
+// which needs the counted set and up to eight (position, lo, hi) triples; and
+// the costliest unrolled construct's span, so a refusal can name it.
+// 11520 -> 12064: confusion classes for the fuzzy face, held in the search so
+// matching needs no spec and no allocation of its own: Up to 64 members in
+// 256 packed bytes, with their starts, lengths, representatives and a
+// first-byte set.
+static_assert(sizeof(sublimation_search) == 12064,
               "sublimation_search changed size: that is a deliberate decision, "
               "not an accident -- update this assert with the reason");
 
@@ -814,6 +1094,7 @@ int sublimation_search_full_match(const sublimation_search *s, const char *input
         return gnfa_full(&s->g, s->imap, hay, n);
     }
     if (s->mode == MODE_FUZZY) {
+        if (s->cf_n) return cf_full(s, hay, n);
         if (n != m) return 0;
         int mism = 0;
         for (size_t j = 0; j < m; j++)
@@ -838,6 +1119,7 @@ long sublimation_search_find_from(const sublimation_search *s, const char *input
     if (m == 0) { if (end_out) *end_out = (long)from; return (long)from; }
     if (m > n) return -1;
 
+    if (s->mode == MODE_FUZZY && s->cf_n) return cf_find(s, hay, n, from, end_out);
     if (s->mode == MODE_FUZZY) {
         for (size_t i = from; i + m <= n; i++) {
             int mism = 0; size_t j = 0;
@@ -901,7 +1183,7 @@ long sublimation_search_find(const sublimation_search *s, const char *input, siz
 // LINE SELECTION SEMANTICS. These were the CLI's private helpers until 2026-07-27
 // and moved here unchanged: They decide what counts as a match for a whole line
 // and for a pattern SET, which has to be one answer the library gives, not one
-// the CLI keeps to itself. vector reaching the matcher over FFI has to agree
+// the CLI keeps to itself. A caller reaching the matcher over FFI has to agree
 // with `sublimation search` on -w and -x, and the occurrence field is built on
 // exactly these spans. Every behavioral comment below was verified against
 // /usr/bin/grep and the corpus gate holds them to it.
@@ -1059,6 +1341,7 @@ size_t sublimation_search_count(const sublimation_search *s, const char *input, 
     if (s->mode == MODE_REGEX) return regex_count(s, hay, n);
 
     if (s->mode == MODE_FUZZY) {
+        if (s->cf_n) return cf_count(s, hay, n);
         if (s->icase) return scan_kmismatch(hay, n, pat, m, s->k, 1);
         size_t r = scan_kmismatch_pre(hay, n, pat, m, s->k);
         if (r == (size_t)-1) return scan_kmismatch(hay, n, pat, m, s->k, 0);

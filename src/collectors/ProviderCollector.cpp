@@ -1,5 +1,7 @@
 #include "collectors/ProviderCollector.hpp"
 #include "app/ProviderEmitter.hpp"
+#include "util/Procfs.hpp"
+#include "util/Text.hpp"
 #include "sublimation_order.hpp"
 
 #include <algorithm>
@@ -9,7 +11,6 @@
 #include <string>
 #include <string_view>
 
-#include <dirent.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -23,11 +24,6 @@ namespace {
 // snapshot within this window is skipped for the scrape.
 constexpr int kScrapeTimeoutMs = 50;
 
-std::string providers_dir() {
-  const char* xdg = std::getenv("XDG_RUNTIME_DIR");
-  if (xdg && *xdg) return std::string(xdg) + "/montauk/providers";
-  return "/run/montauk/providers";
-}
 
 // Connect to a unix socket and read until EOF, bounded by kScrapeTimeoutMs
 // total. Returns false on any failure (caller skips the provider silently).
@@ -74,10 +70,8 @@ size_t parse_prometheus(const std::string& text, std::vector<montauk::model::Pro
   while (pos < text.size()) {
     size_t eol = text.find('\n', pos);
     if (eol == std::string::npos) eol = text.size();
-    std::string_view line(text.data() + pos, eol - pos);
+    const std::string_view line = montauk::util::trim(std::string_view(text.data() + pos, eol - pos));
     pos = eol + 1;
-    while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.remove_prefix(1);
-    while (!line.empty() && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r')) line.remove_suffix(1);
     if (line.empty() || line.front() == '#') continue;
 
     std::string_view name, labels;
@@ -115,12 +109,12 @@ size_t parse_prometheus(const std::string& text, std::vector<montauk::model::Pro
 
 bool ProviderCollector::sample(std::vector<montauk::model::Provider>& out) {
   out.clear();
-  std::string dir = providers_dir();
-  DIR* d = ::opendir(dir.c_str());
-  if (!d) return false; // no providers directory: silent no-providers case
+  std::string dir = montauk::app::providers_dir();
+  auto names = montauk::util::read_dir(dir);
+  if (!names) return false; // no providers directory: silent no-providers case
 
-  while (dirent* ent = ::readdir(d)) {
-    std::string_view fname(ent->d_name);
+  for (const auto& name : *names) {
+    std::string_view fname(name);
     constexpr std::string_view suffix = ".sock";
     if (fname.size() <= suffix.size() || !fname.ends_with(suffix)) continue;
 
@@ -133,9 +127,8 @@ bool ProviderCollector::sample(std::vector<montauk::model::Provider>& out) {
     if (parse_prometheus(p.raw_text, p.metrics) == 0) continue; // garbled: skip
     out.push_back(std::move(p));
   }
-  ::closedir(d);
 
-  // readdir order is arbitrary; sort by name (through sublimation) for stable order
+  // Directory order is arbitrary; sort by name (through sublimation) for stable order
   sublimation_order_strings(out, false, [](const auto& p) { return p.name.c_str(); });
   return true;
 }

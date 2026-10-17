@@ -13,10 +13,10 @@
 // enumerators including a public error code no function returns.
 //
 // AND IT STILL CONCLUDES NOTHING, for a reason the first run demonstrated: the
-// join also named `main`, which libc calls and no source in the set does. A
-// name dispatched through a table looks the same way. Whether an unreferenced
-// declaration is dead is a question for the analyzer with a capture beside it,
-// exactly as a never-taken guard is.
+// join also named `main`, which libc calls and no source in the set does. The
+// analyzer walks the references from such entry points; whether what no walk
+// reaches is dead is still its question, with a capture beside it, exactly as
+// a never-taken guard is.
 //
 // WHY THIS PAIRS WITH A CAPTURE AND IS THIN ALONE. The analyzer says what a
 // program DID; this says what it COULD do. Neither is scarce on its own. The
@@ -53,17 +53,24 @@
 // analyzer names it as a limit.
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
 #include <map>
 #include <set>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+
 #include "sublimation.h"
+#include "static_object.hpp"
+#include "static_python.hpp"
 #include "util/Log.hpp"
+#include "util/Procfs.hpp"
 #include "util/sink.h"
 
 using montauk::util::log_error;
@@ -72,8 +79,8 @@ using montauk::util::log_warn;
 
 namespace {
 
-montauk_sink g_out;
-void drain_out() { montauk_sink_drain(&g_out); }
+sublimation_sink g_out;
+void drain_out() { sublimation_sink_drain(&g_out); }
 
 constexpr int kStaticFormat = 2;
 constexpr size_t npos = std::string::npos;
@@ -118,18 +125,23 @@ struct Dialect {
   const char* containers;    // heads that hold bodies rather than being one
   const char* branches;      // keywords whose condition guards a body
   const char* block_words;   // a word that opens a plain block
+  bool handlers;             // `try { } catch (spec) { }` is a construct
+  bool indented;             // blocks are indentation, rewritten to braces (static_python.cpp)
 };
 
 constexpr Dialect kDialects[] = {
     {"c", ".c .h .cc .cpp .cxx .hh .hpp .hxx .inc", false, false, false, true, true, nullptr,
-     "namespace extern struct class union enum", "if while for switch", nullptr},
+     "namespace extern struct class union enum", "if while for switch", nullptr, true, false},
     {"rust", ".rs", true, true, true, false, false, "fn", "impl mod trait extern",
-     "if while for match", "unsafe async"},
+     "if while for match", "unsafe async", false, false},
+    {"python", ".py .pyi", false, false, false, false, false, "def", "class",
+     "if while for match", nullptr, true, true},
 };
 
 const Dialect* dialect_named(std::string_view n) {
   if (n == "c" || n == "c++" || n == "cpp") return &kDialects[0];
   if (n == "rust" || n == "rs") return &kDialects[1];
+  if (n == "python" || n == "py") return &kDialects[2];
   return nullptr;
 }
 
@@ -155,8 +167,15 @@ const Dialect* dialect_for(const std::string& path) {
 // knows which `#` lines are directives and which sit inside a comment.
 using Directives = std::vector<std::pair<size_t, char>>;
 
+// `lines`, when given, receives each directive that NAMES something: a #define
+// ('d'), whose name is a declaration and whose body references, and a
+// conditional (#if, #ifdef, #ifndef, #elif and C23's #elifdef/#elifndef, 'u'),
+// whose words reference. `from` is just past the directive word and `end` the
+// end of the logical line, continuations included.
+struct PpLine { size_t hash, from, end; char kind; };
+
 std::string mask_code(const std::string& src, bool keep_strings, const Dialect& d,
-                      Directives* pp = nullptr) {
+                      Directives* pp = nullptr, std::vector<PpLine>* lines = nullptr) {
   std::string out = src;
   const size_t n = src.size();
   size_t i = 0;
@@ -166,13 +185,19 @@ std::string mask_code(const std::string& src, bool keep_strings, const Dialect& 
     if (c == '\n') { at_line_start = true; ++i; continue; }
     if (at_line_start && (c == ' ' || c == '\t')) { ++i; continue; }
     if (at_line_start && c == '#') {                 // preprocessor line, or an attribute
-      if (pp) {
+      const size_t hash = i;
+      char named = 0;
+      size_t from = 0;
+      if (pp || lines) {
         size_t w = i + 1;
         while (w < n && (src[w] == ' ' || src[w] == '\t')) ++w;
-        const std::string word = src.substr(w, word_end(src, w) - w);
+        from = word_end(src, w);
+        const std::string word = src.substr(w, from - w);
         const char k = word == "if" || word == "ifdef" || word == "ifndef" ? 'i'
                      : word == "elif" ? 'l' : word == "else" ? 'e' : word == "endif" ? 'n' : 0;
-        if (k) pp->push_back({i, k});
+        if (pp && k) pp->push_back({i, k});
+        named = word == "define" ? 'd'
+              : k == 'i' || k == 'l' || word == "elifdef" || word == "elifndef" ? 'u' : 0;
       }
       while (i < n && src[i] != '\n') {
         if (src[i] == '\\' && i + 1 < n && src[i + 1] == '\n') {
@@ -180,6 +205,7 @@ std::string mask_code(const std::string& src, bool keep_strings, const Dialect& 
         }
         out[i] = ' '; ++i;
       }
+      if (lines && named) lines->push_back({hash, from, i, named});
       continue;
     }
     at_line_start = false;
@@ -813,7 +839,7 @@ struct Cfg {
     if (w == "do" && d.paren_conds) return parse_do(i, end);
     if (w == "switch" && d.paren_conds) return parse_switch(i, end);
     if (w == "match" && !d.paren_conds) return parse_match(i, end);
-    if (w == "try" && d.paren_conds) return parse_try(i, end);
+    if (w == "try" && d.handlers) return parse_try(i, end);
     if ((w == "case" || w == "default") && d.paren_conds && switch_ctx())
       return parse_case(i, we, end, w == "default");
     if (w == "return") { const size_t e = plain(i, end); jump(rets, "return"); return e; }
@@ -1170,6 +1196,61 @@ void find_enumerators(const std::string& mask, const Scanner& sc,
   }
 }
 
+// A NAME AT FILE SCOPE IN `T name(...);` IS A PROTOTYPE: a second declaration
+// of the function, not a use of it -- a header declaring read_dir does not
+// reach read_dir. The type before the name ends in a word, `*`, `&` or `>`, and
+// the parameter list is followed by `;` before any `{`.
+bool prototype_at(const std::string& mask, size_t i, size_t k) {
+  size_t p = i;
+  while (p > 0 && is_space(mask[p - 1])) --p;
+  if (p == 0) return false;
+  const char b = mask[p - 1];
+  if (!(ident_char(b) || b == '*' || b == '&' || b == '>')) return false;
+  const size_t q = skip_space(mask, k);
+  if (q >= mask.size() || mask[q] != '(') return false;
+  const size_t close = match_pair(mask, q, '(', ')');
+  if (close == npos) return false;
+  const size_t semi = mask.find(';', close);
+  return semi != npos && semi < mask.find('{', close);
+}
+
+// A STEM PASTED INTO A NAME NAMES EVERY DECLARATION IT BEGINS. Generated
+// families are spelled once as a stem -- `SUB_TYPED(sub_radix_sort)(arr, n)`
+// pastes a suffix on per element type -- so the declared names never appear
+// whole where they are used. An identifier written next to `##` in a macro
+// body, or passed to a macro that pastes (its body holds `##`, directly or
+// through another macro), references each declared name it is a proper prefix
+// of. That over-reaches to a sibling that shares the stem, never short of one.
+bool pasted_at(const std::string& m, size_t i, size_t k, const std::set<std::string>& pasting) {
+  size_t a = k;
+  while (a < m.size() && (m[a] == ' ' || m[a] == '\t')) ++a;
+  if (a + 1 < m.size() && m[a] == '#' && m[a + 1] == '#') return true;
+  size_t b = i;
+  while (b > 0 && (m[b - 1] == ' ' || m[b - 1] == '\t')) --b;
+  if (b >= 2 && m[b - 1] == '#' && m[b - 2] == '#') return true;
+  int depth = 0;
+  for (size_t p = i; p > 0;) {
+    const char c = m[--p];
+    if (c == ';' || c == '{' || c == '}') return false;
+    if (c == ')') { ++depth; continue; }
+    if (c != '(') continue;
+    if (depth > 0) { --depth; continue; }
+    size_t e = p;
+    while (e > 0 && is_space(m[e - 1])) --e;
+    size_t s = e;
+    while (s > 0 && ident_char(m[s - 1])) --s;
+    return s < e && pasting.count(m.substr(s, e - s));
+  }
+  return false;
+}
+
+// Each declared name `stem` is a proper prefix of, in name order.
+template <class F>
+void each_stemmed(const std::string& stem, const std::set<std::string>& known, F&& f) {
+  for (auto it = known.upper_bound(stem); it != known.end() && it->compare(0, stem.size(), stem) == 0; ++it)
+    f(*it);
+}
+
 // Every place a KNOWN name is named again, with the function it was named from.
 // Restricted to names the scan already declared, because recording every
 // identifier would bury the signal in locals and keywords -- and because a
@@ -1179,6 +1260,7 @@ void find_references(const std::string& mask, const Scanner& sc,
                      const std::vector<Func>& funcs,
                      const std::set<std::string>& known,
                      const std::set<size_t>& decl_offsets,
+                     const std::set<std::string>& pasting,
                      std::vector<Ref>& out) {
   size_t fi = 0;
   size_t i = 0;
@@ -1193,24 +1275,122 @@ void find_references(const std::string& mask, const Scanner& sc,
     if (known.count(name) && !decl_offsets.count(i)) {
       while (fi < funcs.size() && funcs[fi].end < i) ++fi;
       const bool inside = fi < funcs.size() && i >= funcs[fi].start && i <= funcs[fi].end;
-      out.push_back({sc.line_of(i), inside ? funcs[fi].name : "<file>", name});
+      if (inside || !prototype_at(mask, i, k))
+        out.push_back({sc.line_of(i), inside ? funcs[fi].name : "<file>", name});
+    } else if (decl_offsets.count(i)) {
+      // `TEST(name) {` defines TEST:name, and TEST expands right here: The
+      // macro is used where it defines.
+      for (const Func& f : funcs)
+        if (f.name_off == i && f.name.size() > name.size() && f.name[name.size()] == ':' &&
+            f.name.compare(0, name.size(), name) == 0 && known.count(name)) {
+          while (fi < funcs.size() && funcs[fi].end < i) ++fi;
+          const bool inside = fi < funcs.size() && i >= funcs[fi].start && i <= funcs[fi].end;
+          out.push_back({sc.line_of(i), inside ? funcs[fi].name : "<file>", name});
+          break;
+        }
+    } else if (!known.count(name) && pasted_at(mask, i, k, pasting)) {
+      while (fi < funcs.size() && funcs[fi].end < i) ++fi;
+      const bool inside = fi < funcs.size() && i >= funcs[fi].start && i <= funcs[fi].end;
+      each_stemmed(name, known, [&](const std::string& n) {
+        out.push_back({sc.line_of(i), inside ? funcs[fi].name : "<file>", n});
+      });
     }
     i = k;
   }
 }
 
+// The head of a body: from the last statement, body or enclosing brace that
+// closed before it, as find_functions reads it.
+size_t head_start_of(const std::string& mask, size_t body) {
+  size_t head_start = 0;
+  for (char stop : {';', '}', '{'}) {
+    size_t p = body ? mask.rfind(stop, body - 1) : npos;
+    if (p != npos && p + 1 > head_start) head_start = p + 1;
+  }
+  return head_start;
+}
+
+// A FUNCTION PLACED IN A SECTION IS REACHED BY WHOEVER LOADS IT. A BPF program
+// under SEC("..."), and anything under __attribute__((section(..))),
+// constructor, destructor or used, is entered by a loader, the runtime or a
+// linker set rather than by a call the scan can see. Each is a reference from
+// file scope, at the word that places it. Python's runtime calls a `__name__`
+// method itself (construction, `with`, an operator), so one is a reference
+// from file scope at its name.
+void find_placements(const std::string& mask, const Scanner& sc,
+                     const std::vector<Func>& funcs, bool dunders, std::vector<Ref>& out) {
+  for (const Func& f : funcs) {
+    if (f.name == "<file>") continue;
+    if (dunders && f.name_off != npos && f.name.size() > 4 && f.name.starts_with("__") &&
+        f.name.ends_with("__")) {
+      out.push_back({sc.line_of(f.name_off), "<file>", f.name});
+      continue;
+    }
+    size_t at = npos;
+    for (size_t p = head_start_of(mask, f.start); p < f.start && at == npos;) {
+      if (!ident_char(mask[p]) || (p && ident_char(mask[p - 1]))) { ++p; continue; }
+      const size_t q = word_end(mask, p);
+      const std::string_view w(mask.data() + p, q - p);
+      const size_t o = skip_space(mask, q);
+      if (w == "SEC" && o < f.start && mask[o] == '(') at = p;
+      if (w == "__attribute__" && o < f.start && mask[o] == '(') {
+        const size_t c = match_pair(mask, o, '(', ')');
+        for (size_t r = o; c != npos && r < c && at == npos;) {
+          if (!ident_char(mask[r])) { ++r; continue; }
+          const size_t e = word_end(mask, r);
+          if (in_words("section __section__ constructor __constructor__ destructor "
+                       "__destructor__ used __used__", std::string_view(mask).substr(r, e - r)))
+            at = p;
+          r = e;
+        }
+      }
+      p = q;
+    }
+    if (at != npos) out.push_back({sc.line_of(at), "<file>", f.name});
+  }
+}
+
+// WHAT A DIRECTIVE NAMES. A #define's body references from the macro it
+// defines, so a function named only inside a macro is reached when the macro
+// is; a conditional's words reference from wherever the line sits.
+struct PpRegion { size_t from, end; std::string macro; std::set<std::string> params; };
+
+void find_pp_references(const std::string& ppm, const Scanner& sc,
+                        const std::vector<Func>& funcs, const std::vector<PpRegion>& regions,
+                        const std::set<std::string>& known, const std::set<std::string>& pasting,
+                        std::vector<Ref>& out) {
+  for (const PpRegion& g : regions) {
+    for (size_t i = g.from; i < g.end;) {
+      if (!ident_char(ppm[i]) || (ppm[i] >= '0' && ppm[i] <= '9') ||
+          (i > g.from && ident_char(ppm[i - 1]))) { ++i; continue; }
+      const size_t k = word_end(ppm, i);
+      const std::string name = ppm.substr(i, k - i);
+      if (g.params.count(name)) { i = k; continue; }   // a parameter names nothing
+      const bool whole = known.count(name) > 0;
+      if (whole || pasted_at(ppm, i, k, pasting)) {
+        std::string func = g.macro;
+        if (func.empty()) {
+          func = "<file>";
+          for (const Func& f : funcs)
+            if (f.name != "<file>" && i >= f.start && i <= f.end) { func = f.name; break; }
+        }
+        if (whole) out.push_back({sc.line_of(i), func, name});
+        else each_stemmed(name, known, [&](const std::string& n) { out.push_back({sc.line_of(i), func, n}); });
+      }
+      i = k;
+    }
+  }
+}
+
 bool read_file(const std::string& path, std::string& out) {
-  FILE* f = std::fopen(path.c_str(), "rb");
-  if (!f) { log_error("cannot open '%s'", path.c_str()); return false; }
-  char buf[65536];
-  size_t n;
-  while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
-  std::fclose(f);
+  auto s = montauk::util::read_file_string(path);
+  if (!s) { log_error("cannot open '%s'", path.c_str()); return false; }
+  out = std::move(*s);
   return true;
 }
 void usage() {
-  montauk_sink_appendf(&g_out,
-      "usage: montauk --static FILE|DIR... [-o OUT.guards] [--lang c|rust]\n"
+  sublimation_sink_appendf(&g_out,
+      "usage: montauk --static FILE|DIR... [-o OUT.guards] [--lang c|rust|python]\n"
       "                       (records every branch each FILE declares and the\n"
       "                        chain of conditions that must hold to reach it,\n"
       "                        each function's basic blocks and the edges between\n"
@@ -1222,7 +1402,14 @@ void usage() {
       "                        claims by extension, skipping hidden directories\n"
       "                        and any holding a CACHEDIR.TAG. --lang forces one\n"
       "                        dialect on every FILE and limits a DIR to its own\n"
-      "                        extensions; c covers C and C++)\n");
+      "                        extensions; c covers C and C++, python covers .py\n"
+      "                        and .pyi, its indentation rewritten into the brace\n"
+      "                        grammar the engine reads. A compiled BPF, aarch64\n"
+      "                        or x86-64 object takes the object lane instead: the\n"
+      "                        same records from its instructions, a block's line\n"
+      "                        being an instruction index, a guard each conditional\n"
+      "                        branch, a reference each call, tail call and BPF\n"
+      "                        map load)\n");
 }
 
 }  // namespace
@@ -1230,7 +1417,7 @@ void usage() {
 #include "tools/Entrypoints.hpp"
 
 int montauk_static_main(int argc, char** argv) {
-  montauk_sink_init(&g_out, 1);
+  sublimation_sink_init(&g_out, 1);
   std::atexit(drain_out);
 
   std::vector<std::string> args;
@@ -1243,7 +1430,7 @@ int montauk_static_main(int argc, char** argv) {
     else if (a == "--lang" && i + 1 < argc) {
       forced = dialect_named(argv[++i]);
       if (!forced) {
-        log_error("--lang %s: the dialects are c (C and C++) and rust", argv[i]);
+        log_error("--lang %s: the dialects are c (C and C++), rust and python", argv[i]);
         return 2;
       }
     } else if (!a.empty() && a[0] == '-') {
@@ -1257,35 +1444,74 @@ int montauk_static_main(int argc, char** argv) {
   // in byte order of path, so two runs over one tree write one artifact.
   std::vector<std::string> files;
   std::vector<const Dialect*> dialects;
+  // A BPF, aarch64 or x86-64 object takes the object lane (static_object.cpp): Its
+  // dialect slot is null, and its records come from its instructions.
+  // What statx says a path is (S_IFDIR, S_IFREG, ... or 0), following a link
+  // unless told not to.
+  auto type_of = [](const std::string& p, int flags = 0) -> unsigned {
+    struct statx sx{};
+    if (::statx(AT_FDCWD, p.c_str(), flags, STATX_TYPE, &sx) != 0) return 0;
+    return sx.stx_mode & S_IFMT;
+  };
   for (const std::string& a : args) {
-    std::error_code ec;
-    if (!std::filesystem::is_directory(a, ec)) {
+    if (type_of(a) != S_IFDIR) {
+      const ObjectKind ok = static_object_kind(a);
+      if (ok == ObjectKind::OtherElf) {
+        log_error("%s: an ELF object, and the object lane reads BPF, aarch64 and x86-64 "
+                  "objects only", a.c_str());
+        return 2;
+      }
       const Dialect* d = forced ? forced : dialect_for(a);
       files.push_back(a);
-      dialects.push_back(d ? d : &kDialects[0]);
+      dialects.push_back(ok != ObjectKind::NotElf ? nullptr : d ? d : &kDialects[0]);
       continue;
     }
+    // The walk: getdents64 types each entry, so only a link or an entry the
+    // filesystem leaves untyped costs a statx. A directory link is not
+    // descended (a cycle cannot form), a hidden directory or one carrying
+    // CACHEDIR.TAG is not either, and a directory that will not open is passed.
     std::vector<std::string> found;
-    namespace fs = std::filesystem;
-    fs::recursive_directory_iterator it(a, fs::directory_options::skip_permission_denied, ec), stop;
-    for (; !ec && it != stop; it.increment(ec)) {
-      std::error_code q;
-      const fs::path& p = it->path();
-      if (it->is_directory(q)) {
-        const std::string name = p.filename().string();
-        if ((!name.empty() && name[0] == '.') || fs::exists(p / "CACHEDIR.TAG", q))
-          it.disable_recursion_pending();
+    std::vector<std::string> pending{a};
+    bool top = true;
+    while (!pending.empty()) {
+      const std::string dir = std::move(pending.back());
+      pending.pop_back();
+      auto ents = montauk::util::read_dir_typed(dir);
+      if (!ents) {
+        if (top || (errno != EACCES && errno != EPERM)) {
+          log_error("cannot walk '%s': %s", dir.c_str(), std::strerror(errno));
+          return 2;
+        }
         continue;
       }
-      if (!it->is_regular_file(q)) continue;
-      const Dialect* d = dialect_for(p.string());
-      if (d && (!forced || d == forced)) found.push_back(p.string());
+      top = false;
+      const std::string base = dir.back() == '/' ? dir : dir + "/";
+      for (const auto& e : *ents) {
+        const std::string p = base + e.name;
+        unsigned type = e.type == DT_DIR ? S_IFDIR : e.type == DT_REG ? S_IFREG
+                      : e.type == DT_LNK ? S_IFLNK : type_of(p, AT_SYMLINK_NOFOLLOW);
+        if (type == S_IFLNK && type_of(p) == S_IFREG) type = S_IFREG;
+        if (type == S_IFDIR) {
+          if (e.name[0] != '.' && type_of(p + "/CACHEDIR.TAG") == 0) pending.push_back(p);
+          continue;
+        }
+        if (type != S_IFREG) continue;
+        const Dialect* d = dialect_for(p);
+        if (d && (!forced || d == forced)) found.push_back(p);
+        else if (!forced && p.ends_with(".o")) {
+          const ObjectKind ok = static_object_kind(p);
+          if (ok != ObjectKind::NotElf && ok != ObjectKind::OtherElf) found.push_back(p);
+        }
+      }
     }
-    if (ec) { log_error("cannot walk '%s': %s", a.c_str(), ec.message().c_str()); return 2; }
     std::vector<const char*> order;
     for (const std::string& f : found) order.push_back(f.c_str());
     sublimation_strings(order.data(), order.size());
-    for (const char* f : order) { files.push_back(f); dialects.push_back(dialect_for(f)); }
+    for (const char* f : order) {
+      files.push_back(f);
+      const ObjectKind ok = static_object_kind(f);
+      dialects.push_back(ok != ObjectKind::NotElf && ok != ObjectKind::OtherElf ? nullptr : dialect_for(f));
+    }
   }
   if (files.empty()) { log_error("no source files a dialect claims"); return 2; }
 
@@ -1300,19 +1526,31 @@ int montauk_static_main(int argc, char** argv) {
     std::vector<Func> funcs;
     std::vector<Decl> decls;
     std::set<size_t> decl_offsets;
+    // The naming directives' words with comments and literals blanked, and
+    // nothing else: every other byte is a space, every newline kept.
+    std::string ppm;
+    std::vector<PpRegion> pp_regions;
   };
   std::vector<Scanned> scanned(files.size());
   std::set<std::string> known;
 
   for (size_t fi = 0; fi < files.size(); ++fi) {
-    std::string src;
-    if (!read_file(files[fi], src)) return 2;
     Scanned& s = scanned[fi];
     s.d = dialects[fi];
-    s.mask = mask_code(src, false, *s.d, &s.pp);
-    s.text = mask_code(src, true, *s.d);
-    for (size_t i = 0; i < src.size(); ++i)
-      if (src[i] == '\n') s.nl.push_back(i);
+    if (!s.d) continue;   // the object lane, read in the second pass
+    std::string src;
+    if (!read_file(files[fi], src)) return 2;
+    std::vector<PpLine> pp_lines;
+    if (s.d->indented) {
+      python_masks(src, s.mask, s.text);
+    } else {
+      s.mask = mask_code(src, false, *s.d, &s.pp, &pp_lines);
+      s.text = mask_code(src, true, *s.d);
+    }
+    // Newlines from the scanned text, not the source: An indented dialect's
+    // rewrite keeps every newline but not every offset.
+    for (size_t i = 0; i < s.text.size(); ++i)
+      if (s.text[i] == '\n') s.nl.push_back(i);
     std::vector<Guard> unused;
     Scanner sc{*s.d, s.text, s.mask, s.nl, unused};
     size_t unbalanced;
@@ -1327,11 +1565,72 @@ int montauk_static_main(int argc, char** argv) {
       if (f.name_off != npos) s.decl_offsets.insert(f.name_off);
       known.insert(f.name);
     }
-    find_enumerators(s.mask, sc, s.decls);
+    // Python has no enum construct: An `enum` there is a name or a module.
+    if (!s.d->indented) find_enumerators(s.mask, sc, s.decls);
     for (const Decl& d : s.decls) {
       if (d.kind != "enumerator") continue;
       s.decl_offsets.insert(d.off);
       known.insert(d.name);
+    }
+    // A #define declares its name; the body after the name (and after a
+    // function-like macro's parameters) is what it references.
+    if (!pp_lines.empty()) {
+      s.ppm.assign(src.size(), ' ');
+      for (size_t q = 0; q < src.size(); ++q) if (src[q] == '\n') s.ppm[q] = '\n';
+      for (const PpLine& l : pp_lines) {
+        size_t from = l.from;
+        std::string macro;
+        std::set<std::string> params;
+        if (l.kind == 'd') {
+          const size_t a = skip_space(src, l.from);
+          const size_t b = word_end(src, a);
+          if (a >= l.end || b == a) continue;
+          macro = src.substr(a, b - a);
+          s.decls.push_back({sc.line_of(l.hash), "macro", macro, a});
+          known.insert(macro);
+          from = b;
+          if (b < l.end && src[b] == '(') {
+            const size_t c = src.find(')', b);
+            from = c != npos && c < l.end ? c + 1 : l.end;
+            for (size_t q = b + 1; q < from;) {
+              if (!ident_char(src[q])) { ++q; continue; }
+              const size_t e = word_end(src, q);
+              params.insert(src.substr(q, e - q));
+              q = e;
+            }
+          }
+        }
+        for (size_t q = from; q < l.end; ++q) s.ppm[q] = src[q];
+        s.pp_regions.push_back({from, l.end, macro, std::move(params)});
+      }
+      s.ppm = mask_code(s.ppm, false, *s.d);
+    }
+  }
+
+  // Which macros paste: a body holding `##`, or naming a macro that does.
+  std::set<std::string> pasting;
+  {
+    std::map<std::string, std::set<std::string>> words;
+    for (const Scanned& s : scanned)
+      for (const PpRegion& g : s.pp_regions) {
+        if (g.macro.empty()) continue;
+        const std::string body = s.ppm.substr(g.from, g.end - g.from);
+        if (body.find("##") != npos) pasting.insert(g.macro);
+        for (size_t i = 0; i < body.size();) {
+          if (!ident_char(body[i]) || (body[i] >= '0' && body[i] <= '9') ||
+              (i && ident_char(body[i - 1]))) { ++i; continue; }
+          const size_t k = word_end(body, i);
+          words[g.macro].insert(body.substr(i, k - i));
+          i = k;
+        }
+      }
+    for (bool grew = true; grew;) {
+      grew = false;
+      for (const auto& [m, ws] : words) {
+        if (pasting.count(m)) continue;
+        for (const std::string& w : ws)
+          if (pasting.count(w)) { pasting.insert(m); grew = true; break; }
+      }
     }
   }
 
@@ -1347,11 +1646,25 @@ int montauk_static_main(int argc, char** argv) {
   for (const Dialect& d : kDialects)
     if (std::find(dialects.begin(), dialects.end(), &d) != dialects.end())
       langs += (langs.empty() ? "" : ",") + std::string(d.name);
+  std::set<std::string> object_langs;
+  for (size_t fi = 0; fi < files.size(); ++fi)
+    if (!dialects[fi]) object_langs.insert(static_object_dialect(static_object_kind(files[fi])));
+  for (const std::string& l : object_langs) langs += (langs.empty() ? "" : ",") + l;
   body += "language " + langs + "\n";
 
   size_t total = 0, ndecl = 0, nref = 0, nblock = 0, nedge = 0;
   for (size_t fi = 0; fi < files.size(); ++fi) {
     Scanned& s = scanned[fi];
+    if (!s.d) {
+      StaticObjectCounts oc;
+      std::string err;
+      if (!static_scan_object(files[fi], fi, body, oc, err)) {
+        log_error("%s: %s", files[fi].c_str(), err.c_str());
+        return 2;
+      }
+      total += oc.guards; ndecl += oc.decls; nref += oc.refs; nblock += oc.blocks; nedge += oc.edges;
+      continue;
+    }
     std::vector<Guard> guards;
     Scanner sc{*s.d, s.text, s.mask, s.nl, guards};
     for (const Func& f : s.funcs) {
@@ -1359,7 +1672,9 @@ int montauk_static_main(int argc, char** argv) {
       sc.walk(f.start + 1, f.end - 1, f.name, stack);
     }
     std::vector<Ref> refs;
-    find_references(s.mask, sc, s.funcs, known, s.decl_offsets, refs);
+    find_references(s.mask, sc, s.funcs, known, s.decl_offsets, pasting, refs);
+    find_placements(s.mask, sc, s.funcs, s.d->indented, refs);
+    find_pp_references(s.ppm, sc, s.funcs, s.pp_regions, known, pasting, refs);
 
     const std::string fs = std::to_string(fi);
     body += "file " + fs + " " + s.d->name + " " + files[fi] + "\n";
@@ -1392,7 +1707,7 @@ int montauk_static_main(int argc, char** argv) {
   }
 
   if (out_path.empty()) {
-    montauk_sink_appendf(&g_out, "%s", body.c_str());
+    sublimation_sink_appendf(&g_out, "%s", body.c_str());
     return 0;
   }
   FILE* out = std::fopen(out_path.c_str(), "wb");

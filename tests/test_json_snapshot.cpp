@@ -12,8 +12,8 @@
 // coverage is montauk --static's job now; what belongs here is the PROPERTY a
 // frozen blob could not express.
 #include "minitest.hpp"
-#include "util/fmt_double.h"
-#include "util/json.h"
+#include "sublimation_fmt.h"
+#include "sublimation_json.h"
 
 #include <cstring>
 #include <string>
@@ -26,7 +26,7 @@
 // byte-identical goldens could not catch it: each face was frozen against
 // itself, so both were "correct" and neither was ever compared to the other.
 //
-// Both now call montauk_fmt_double, so the property to hold down is that the
+// Both now call sublimation_fmt_double, so the property to hold down is that the
 // shared formatter is shortest round-trip and that the JSON face actually uses
 // it. The Prometheus face calls the same function.
 //
@@ -41,7 +41,7 @@ TEST(shared_double_formatter_is_shortest_round_trip) {
   };
   for (double v : vals) {
     char buf[40];
-    int n = montauk_fmt_double(buf, sizeof buf, v);
+    int n = sublimation_fmt_double(buf, sizeof buf, v);
     ASSERT_TRUE(n > 0);
     std::string got(buf, (size_t)n);
     // Shortest ROUND-TRIP: the text must read back as the identical double.
@@ -50,7 +50,7 @@ TEST(shared_double_formatter_is_shortest_round_trip) {
     // And it must be canonical -- reformatting its own output is a fixed point,
     // so no caller can produce two spellings of one value.
     char again[40];
-    int n2 = montauk_fmt_double(again, sizeof again, strtod(got.c_str(), nullptr));
+    int n2 = sublimation_fmt_double(again, sizeof again, strtod(got.c_str(), nullptr));
     ASSERT_EQ(std::string(again, (size_t)n2), got);
   }
 }
@@ -58,15 +58,15 @@ TEST(shared_double_formatter_is_shortest_round_trip) {
 TEST(json_face_uses_the_shared_double_formatter) {
   static const double vals[] = {1.0 / 3.0, 0.1, 123456789.12345679, 1e30, -2.5};
   for (double v : vals) {
-    montauk_sink sink;
-    montauk_sink_init(&sink, -1);
-    montauk_json j;
-    montauk_json_init(&j, &sink);
-    montauk_json_num(&j, v);
+    sublimation_sink sink;
+    sublimation_sink_init(&sink, -1);
+    sublimation_json j;
+    sublimation_json_init(&j, &sink);
+    sublimation_json_num(&j, v);
 
     char buf[40];
-    int n = montauk_fmt_double(buf, sizeof buf, v);
+    int n = sublimation_fmt_double(buf, sizeof buf, v);
     ASSERT_EQ(std::string(sink.data, sink.len), std::string(buf, (size_t)n));
-    montauk_sink_free(&sink);
+    sublimation_sink_free(&sink);
   }
 }

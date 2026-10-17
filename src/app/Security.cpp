@@ -58,14 +58,6 @@ const LiteralSet kAuthProc{"ssh", "sudo", "login", "pam"};
 const LiteralSet kNetOwner{"ssh", "chrome", "firefox", "rsync", "scp", "curl", "wget"};
 }  // namespace
 
-static std::string to_upper_copy(std::string s, size_t max_len = 512) {
-  if (s.size() > max_len) {
-    s.resize(max_len);
-  }
-  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return static_cast<char>(std::toupper(c)); });
-  return s;
-}
-
 static std::string strip_deleted_suffix(const std::string& path) {
   auto pos = path.find(" (deleted)");
   if (pos != std::string::npos) return path.substr(0, pos);
@@ -245,15 +237,6 @@ std::string format_security_line_default(const SecurityFinding& f) {
   else os << "  ";
   os << f.subject;
   if (!f.reason.empty()) os << " [" << f.reason << ']';
-  return os.str();
-}
-
-std::string format_security_line_system(const SecurityFinding& f) {
-  std::ostringstream os;
-  os << "PROC SECURITY ";
-  if (f.severity >= 2) os << "⚠ ";
-  os << f.subject;
-  if (!f.reason.empty()) os << " [" << to_upper_copy(f.reason) << ']';
   return os.str();
 }
 

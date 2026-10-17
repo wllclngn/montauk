@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "util/Text.hpp"
 
 namespace montauk::util {
 
@@ -148,12 +149,6 @@ private:
     for (const auto& [n, s] : sections_)
       if (n == name) return &s;
     return nullptr;
-  }
-
-  static std::string_view trim(std::string_view sv) {
-    while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.front()))) sv.remove_prefix(1);
-    while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.back()))) sv.remove_suffix(1);
-    return sv;
   }
 
   static void trim_inplace(std::string& s) {

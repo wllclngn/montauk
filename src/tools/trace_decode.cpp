@@ -28,8 +28,8 @@
 namespace {
 
 // Decoded output drains through one buffered sink, drained at exit.
-montauk_sink g_out;
-void drain_out() { montauk_sink_drain(&g_out); }
+sublimation_sink g_out;
+void drain_out() { sublimation_sink_drain(&g_out); }
 
 using montauk::model::sched_op_name;
 using montauk::model::ntsync_op_name;
@@ -53,7 +53,7 @@ std::string wall_str(uint64_t wall_ns) {
 #include "tools/Entrypoints.hpp"
 
 int montauk_decode_main(int argc, char** argv) {
-  montauk_sink_init(&g_out, 1);
+  sublimation_sink_init(&g_out, 1);
   std::atexit(drain_out);
   if (argc < 2) {
     montauk::util::log_error("usage: montauk --decode FILE [--csv]");
@@ -88,9 +88,9 @@ int montauk_decode_main(int argc, char** argv) {
   if (!csv) {
     char pat[33];
     std::snprintf(pat, sizeof(pat), "%.*s", static_cast<int>(sizeof(hdr.pattern)), hdr.pattern);
-    montauk_sink_appendf(&g_out, "# montauk trace log  pattern='%s'  start=%s\n", pat, wall_str(hdr.real_anchor_ns).c_str());
+    sublimation_sink_appendf(&g_out, "# montauk trace log  pattern='%s'  start=%s\n", pat, wall_str(hdr.real_anchor_ns).c_str());
   } else {
-    montauk_sink_appendf(&g_out, "type,op,elapsed_ms,wall,pid,tid,cpu,detail\n");
+    sublimation_sink_appendf(&g_out, "type,op,elapsed_ms,wall,pid,tid,cpu,detail\n");
   }
 
   auto status = reader.for_each([&](uint32_t type, const uint8_t* data, uint32_t len) {
@@ -99,34 +99,34 @@ int montauk_decode_main(int argc, char** argv) {
         if (len < sizeof(montauk_sched_event)) break;
         auto* s = reinterpret_cast<const montauk_sched_event*>(data);
         if (csv) {
-          montauk_sink_appendf(&g_out, "SCHED,%s,%.3f,%s,%d,%d,%u,score=%" PRIu64 " last_cpu=%d sub=%u runtime=%" PRIu64 " budget=%" PRIu64 "\n",
+          sublimation_sink_appendf(&g_out, "SCHED,%s,%.3f,%s,%d,%d,%u,score=%" PRIu64 " last_cpu=%d sub=%u runtime=%" PRIu64 " budget=%" PRIu64 "\n",
                       sched_op_name(s->op), elapsed_ms(s->timestamp_ns), wall_str(to_wall(s->timestamp_ns)).c_str(),
                       s->pid, s->secondary_pid, s->cpu, (uint64_t)s->score, s->last_cpu, s->sub_idx,
                       (uint64_t)s->runtime_ns, (uint64_t)s->budget_ns);
         } else {
-          montauk_sink_appendf(&g_out, "[%10.3f] SCHED %-14s cpu=%-3u pid=%-7d", elapsed_ms(s->timestamp_ns),
+          sublimation_sink_appendf(&g_out, "[%10.3f] SCHED %-14s cpu=%-3u pid=%-7d", elapsed_ms(s->timestamp_ns),
                       sched_op_name(s->op), s->cpu, s->pid);
           if (s->op == SCHED_OP_ENQUEUE)
-            montauk_sink_appendf(&g_out, " last_cpu=%d sub=%u score=%" PRIu64, s->last_cpu, s->sub_idx, (uint64_t)s->score);
+            sublimation_sink_appendf(&g_out, " last_cpu=%d sub=%u score=%" PRIu64, s->last_cpu, s->sub_idx, (uint64_t)s->score);
           else if (s->op == SCHED_OP_PICK)
-            montauk_sink_appendf(&g_out, " score=%" PRIu64, (uint64_t)s->score);
+            sublimation_sink_appendf(&g_out, " score=%" PRIu64, (uint64_t)s->score);
           else if (s->op == SCHED_OP_PREEMPT_TICK)
-            montauk_sink_appendf(&g_out, " runtime=%" PRIu64 " budget=%" PRIu64, (uint64_t)s->runtime_ns, (uint64_t)s->budget_ns);
+            sublimation_sink_appendf(&g_out, " runtime=%" PRIu64 " budget=%" PRIu64, (uint64_t)s->runtime_ns, (uint64_t)s->budget_ns);
           else if (s->op == SCHED_OP_PREEMPT_WAKEUP)
-            montauk_sink_appendf(&g_out, " waker=%d", s->secondary_pid);
+            sublimation_sink_appendf(&g_out, " waker=%d", s->secondary_pid);
           else if (s->op == SCHED_OP_WAKEUP)
-            montauk_sink_appendf(&g_out, " target_cpu=%u", s->cpu);
+            sublimation_sink_appendf(&g_out, " target_cpu=%u", s->cpu);
           else if (s->op == SCHED_OP_WAKE2RUN) {
-            montauk_sink_appendf(&g_out, " wake2run=%" PRIu64 "us%s", (uint64_t)s->runtime_ns / 1000,
+            sublimation_sink_appendf(&g_out, " wake2run=%" PRIu64 "us%s", (uint64_t)s->runtime_ns / 1000,
                         s->sub_idx ? " CROSS-DOMAIN" : "");
-            if (s->freq_mhz) montauk_sink_appendf(&g_out, " freq=%uMHz", s->freq_mhz);
+            if (s->freq_mhz) sublimation_sink_appendf(&g_out, " freq=%uMHz", s->freq_mhz);
           } else if (s->op == SCHED_OP_KICK_ISSUE)
-            montauk_sink_appendf(&g_out, " issuing_cpu=%d flags=0x%" PRIx64, s->last_cpu, (uint64_t)s->score);
+            sublimation_sink_appendf(&g_out, " issuing_cpu=%d flags=0x%" PRIx64, s->last_cpu, (uint64_t)s->score);
           else if (s->op == SCHED_OP_RESCHED)
-            montauk_sink_appendf(&g_out, " calling_cpu=%d", s->last_cpu);
+            sublimation_sink_appendf(&g_out, " calling_cpu=%d", s->last_cpu);
           else if (s->op == SCHED_OP_TICK_STOP)
-            montauk_sink_appendf(&g_out, " success=%u dependency=0x%" PRIx64, s->sub_idx, (uint64_t)s->score);
-          montauk_sink_appendf(&g_out, "\n");
+            sublimation_sink_appendf(&g_out, " success=%u dependency=0x%" PRIx64, s->sub_idx, (uint64_t)s->score);
+          sublimation_sink_appendf(&g_out, "\n");
         }
         break;
       }
@@ -134,11 +134,11 @@ int montauk_decode_main(int argc, char** argv) {
         if (len < sizeof(montauk_kstrand_event)) break;
         auto* k = reinterpret_cast<const montauk_kstrand_event*>(data);
         if (csv) {
-          montauk_sink_appendf(&g_out, "KSTRAND,%.3f,%s,%u,%u,%s,lat_us=%" PRIu64 "\n",
+          sublimation_sink_appendf(&g_out, "KSTRAND,%.3f,%s,%u,%u,%s,lat_us=%" PRIu64 "\n",
                       elapsed_ms(k->timestamp_ns), wall_str(to_wall(k->timestamp_ns)).c_str(),
                       k->tid, k->cpu, k->comm, (uint64_t)k->latency_ns / 1000);
         } else {
-          montauk_sink_appendf(&g_out, "[%10.3f] KSTRAND cpu=%-3u tid=%-7u %-16s strand=%" PRIu64 "us\n",
+          sublimation_sink_appendf(&g_out, "[%10.3f] KSTRAND cpu=%-3u tid=%-7u %-16s strand=%" PRIu64 "us\n",
                       elapsed_ms(k->timestamp_ns), k->cpu, k->tid, k->comm,
                       (uint64_t)k->latency_ns / 1000);
         }
@@ -147,25 +147,25 @@ int montauk_decode_main(int argc, char** argv) {
       case TRACE_EVT_NTSYNC: {
         if (len < sizeof(montauk_ntsync_event)) break;
         auto* nts = reinterpret_cast<const montauk_ntsync_event*>(data);
-        montauk_sink_appendf(&g_out, "[%10.3f] NTSYNC %-13s pid=%-7d tid=%-7d fd=%-4d result=%ld",
+        sublimation_sink_appendf(&g_out, "[%10.3f] NTSYNC %-13s pid=%-7d tid=%-7d fd=%-4d result=%ld",
                     elapsed_ms(nts->timestamp_ns), ntsync_op_name(nts->op),
                     nts->pid, nts->tid, nts->fd, (long)nts->result);
         if (nts->op == NTS_WAIT_ANY || nts->op == NTS_WAIT_ALL) {
           uint32_t n = nts->wait_count;
           if (n > NTSYNC_MAX_WAIT_FDS) n = NTSYNC_MAX_WAIT_FDS;
-          montauk_sink_appendf(&g_out, " objs=[");
+          sublimation_sink_appendf(&g_out, " objs=[");
           for (uint32_t i = 0; i < n; ++i)
-            montauk_sink_appendf(&g_out, i ? ",%d" : "%d", static_cast<int32_t>(nts->wait_fds[i]));
-          montauk_sink_appendf(&g_out, "]");
-          montauk_sink_appendf(&g_out, " objptrs=[");
+            sublimation_sink_appendf(&g_out, i ? ",%d" : "%d", static_cast<int32_t>(nts->wait_fds[i]));
+          sublimation_sink_appendf(&g_out, "]");
+          sublimation_sink_appendf(&g_out, " objptrs=[");
           for (uint32_t i = 0; i < n; ++i)
-            montauk_sink_appendf(&g_out, i ? ",0x%llx" : "0x%llx",
+            sublimation_sink_appendf(&g_out, i ? ",0x%llx" : "0x%llx",
                         (unsigned long long)nts->wait_objs[i]);
-          montauk_sink_appendf(&g_out, "]");
+          sublimation_sink_appendf(&g_out, "]");
         } else if (nts->obj_ptr) {
-          montauk_sink_appendf(&g_out, " objptr=0x%llx", (unsigned long long)nts->obj_ptr);
+          sublimation_sink_appendf(&g_out, " objptr=0x%llx", (unsigned long long)nts->obj_ptr);
         }
-        montauk_sink_appendf(&g_out, "\n");
+        sublimation_sink_appendf(&g_out, "\n");
         break;
       }
       case TRACE_EVT_IO: {
@@ -176,12 +176,12 @@ int montauk_decode_main(int argc, char** argv) {
         // other syscalls it's unset. Print accordingly so byte-level
         // analysis can correlate pread → file offset.
         if (io->syscall_nr == 17) {
-          montauk_sink_appendf(&g_out, "[%10.3f] IO     %-13s pid=%-7d tid=%-7d fd=%-4d count=%" PRIu64 " offset=%u result=%ld comm='%.16s'\n",
+          sublimation_sink_appendf(&g_out, "[%10.3f] IO     %-13s pid=%-7d tid=%-7d fd=%-4d count=%" PRIu64 " offset=%u result=%ld comm='%.16s'\n",
                       elapsed_ms(io->timestamp_ns),
                       io_syscall_name(io->syscall_nr), io->pid, io->tid, io->fd,
                       (uint64_t)io->count, io->whence, (long)io->result, io->comm);
         } else {
-          montauk_sink_appendf(&g_out, "[%10.3f] IO     %-13s pid=%-7d tid=%-7d fd=%-4d count=%" PRIu64 " result=%ld comm='%.16s'\n",
+          sublimation_sink_appendf(&g_out, "[%10.3f] IO     %-13s pid=%-7d tid=%-7d fd=%-4d count=%" PRIu64 " result=%ld comm='%.16s'\n",
                       elapsed_ms(io->timestamp_ns),
                       io_syscall_name(io->syscall_nr), io->pid, io->tid, io->fd,
                       (uint64_t)io->count, (long)io->result, io->comm);
@@ -200,7 +200,7 @@ int montauk_decode_main(int argc, char** argv) {
         if (m->prot & 0x4) prot_s[2] = 'x';
         const char* share = (m->flags & 0x1) ? "SHARED" : (m->flags & 0x2) ? "PRIVATE" : "?";
         const char* fixed = (m->flags & 0x10) ? " FIXED" : "";
-        montauk_sink_appendf(&g_out, "[%10.3f] MMAP   pid=%-7d tid=%-7d fd=%-4d addr=0x%016" PRIx64 " length=%" PRIu64 " offset=%" PRIu64 " prot=%s %s%s comm='%.16s'\n",
+        sublimation_sink_appendf(&g_out, "[%10.3f] MMAP   pid=%-7d tid=%-7d fd=%-4d addr=0x%016" PRIx64 " length=%" PRIu64 " offset=%" PRIu64 " prot=%s %s%s comm='%.16s'\n",
                     elapsed_ms(m->timestamp_ns), m->pid, m->tid, m->fd,
                     (uint64_t)m->addr, (uint64_t)m->length, (uint64_t)m->offset,
                     prot_s, share, fixed, m->comm);
@@ -215,14 +215,14 @@ int montauk_decode_main(int argc, char** argv) {
                        : h->op == HEAP_OP_CALLOC  ? "calloc"
                        : "?";
         if (h->op == HEAP_OP_REALLOC) {
-          montauk_sink_appendf(&g_out, "[%10.3f] HEAP   %-9s pid=%-7u tid=%-7u "
+          sublimation_sink_appendf(&g_out, "[%10.3f] HEAP   %-9s pid=%-7u tid=%-7u "
                       "old=0x%016" PRIx64 " new=0x%016" PRIx64 " size=%" PRIu64
                       " comm='%.16s'\n",
                       elapsed_ms(h->timestamp_ns), op, h->pid, h->tid,
                       (uint64_t)h->addr, (uint64_t)h->new_addr,
                       (uint64_t)h->size, h->comm);
         } else {
-          montauk_sink_appendf(&g_out, "[%10.3f] HEAP   %-9s pid=%-7u tid=%-7u "
+          sublimation_sink_appendf(&g_out, "[%10.3f] HEAP   %-9s pid=%-7u tid=%-7u "
                       "addr=0x%016" PRIx64 " size=%" PRIu64 " comm='%.16s'\n",
                       elapsed_ms(h->timestamp_ns), op, h->pid, h->tid,
                       (uint64_t)h->addr, (uint64_t)h->size, h->comm);
@@ -235,7 +235,7 @@ int montauk_decode_main(int argc, char** argv) {
         const char* signame = s->signal_nr == 0 ? "(none)" : signal_name(s->signal_nr);
         if (!signame) signame = "?";
         const char* kind = (s->kind == SIGEVT_DELIVER) ? "DELIVER" : "EXIT_ABNL";
-        montauk_sink_appendf(&g_out, "[%10.3f] SIGNAL %s pid=%u tid=%u sig=%s(%d) sender=%d "
+        sublimation_sink_appendf(&g_out, "[%10.3f] SIGNAL %s pid=%u tid=%u sig=%s(%d) sender=%d "
                     "exit_code=0x%x comm='%.16s' stack_depth=%u\n",
                     elapsed_ms(s->timestamp_ns), kind, s->pid, s->tid,
                     signame, s->signal_nr, s->sender_pid,
@@ -243,7 +243,7 @@ int montauk_decode_main(int argc, char** argv) {
         unsigned n = s->stack_depth;
         if (n > TRACE_STACK_MAX_FRAMES) n = TRACE_STACK_MAX_FRAMES;
         for (unsigned i = 0; i < n; ++i) {
-          montauk_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
+          sublimation_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
                       i, (uint64_t)s->stack_user[i]);
         }
         break;
@@ -255,14 +255,14 @@ int montauk_decode_main(int argc, char** argv) {
                        : a->func == ABORT_FN_LIBC_MESSAGE ? "__libc_message"
                        : a->func == ABORT_FN_ABORT        ? "abort"
                        : "?";
-        montauk_sink_appendf(&g_out, "[%10.3f] ABORT  %s pid=%u tid=%u comm='%.16s' "
+        sublimation_sink_appendf(&g_out, "[%10.3f] ABORT  %s pid=%u tid=%u comm='%.16s' "
                     "msg='%.128s' loc='%.128s' line=%u stack_depth=%u\n",
                     elapsed_ms(a->timestamp_ns), fn, a->pid, a->tid, a->comm,
                     a->msg, a->loc, a->line, a->stack_depth);
         unsigned an = a->stack_depth;
         if (an > TRACE_STACK_MAX_FRAMES) an = TRACE_STACK_MAX_FRAMES;
         for (unsigned i = 0; i < an; ++i) {
-          montauk_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
+          sublimation_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
                       i, (uint64_t)a->stack_user[i]);
         }
         break;
@@ -271,7 +271,7 @@ int montauk_decode_main(int argc, char** argv) {
         if (len < sizeof(montauk_heapstack_event)) break;
         auto* h = reinterpret_cast<const montauk_heapstack_event*>(data);
         const char* opn = h->op == HEAP_OP_CALLOC ? "calloc" : "malloc";
-        montauk_sink_appendf(&g_out, "[%10.3f] HEAPSTK %s pid=%u tid=%u addr=0x%016" PRIx64
+        sublimation_sink_appendf(&g_out, "[%10.3f] HEAPSTK %s pid=%u tid=%u addr=0x%016" PRIx64
                     " size=%" PRIu64 " comm='%.16s' stack_depth=%u\n",
                     elapsed_ms(h->timestamp_ns), opn, h->pid, h->tid,
                     (uint64_t)h->addr, (uint64_t)h->size, h->comm,
@@ -279,7 +279,7 @@ int montauk_decode_main(int argc, char** argv) {
         unsigned hn = h->stack_depth;
         if (hn > TRACE_STACK_MAX_FRAMES) hn = TRACE_STACK_MAX_FRAMES;
         for (unsigned i = 0; i < hn; ++i) {
-          montauk_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
+          sublimation_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
                       i, (uint64_t)h->stack_user[i]);
         }
         break;
@@ -287,14 +287,14 @@ int montauk_decode_main(int argc, char** argv) {
       case TRACE_EVT_WAITSTACK: {
         if (len < sizeof(montauk_waitstack_event)) break;
         auto* w = reinterpret_cast<const montauk_waitstack_event*>(data);
-        montauk_sink_appendf(&g_out, "[%10.3f] WAITSTK pid=%u tid=%u obj=0x%016" PRIx64
+        sublimation_sink_appendf(&g_out, "[%10.3f] WAITSTK pid=%u tid=%u obj=0x%016" PRIx64
                     " comm='%.16s' stack_depth=%u (INFINITE wait)\n",
                     elapsed_ms(w->timestamp_ns), w->pid, w->tid,
                     (uint64_t)w->obj_ptr, w->comm, w->stack_depth);
         unsigned wn = w->stack_depth;
         if (wn > TRACE_STACK_MAX_FRAMES) wn = TRACE_STACK_MAX_FRAMES;
         for (unsigned i = 0; i < wn; ++i) {
-          montauk_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
+          sublimation_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
                       i, (uint64_t)w->stack_user[i]);
         }
         break;
@@ -302,7 +302,7 @@ int montauk_decode_main(int argc, char** argv) {
       case TRACE_EVT_KEYEDEVT: {
         if (len < sizeof(montauk_keyedevt_event)) break;
         auto* k = reinterpret_cast<const montauk_keyedevt_event*>(data);
-        montauk_sink_appendf(&g_out, "[%10.3f] KEYEDEVT %-7s pid=%-7u tid=%-7u key=0x%016" PRIx64 " comm='%.16s'\n",
+        sublimation_sink_appendf(&g_out, "[%10.3f] KEYEDEVT %-7s pid=%-7u tid=%-7u key=0x%016" PRIx64 " comm='%.16s'\n",
                     elapsed_ms(k->timestamp_ns), k->op == KEVT_RELEASE ? "release" : "wait",
                     k->pid, k->tid, (uint64_t)k->key, k->comm);
         break;
@@ -313,16 +313,16 @@ int montauk_decode_main(int argc, char** argv) {
       case TRACE_EVT_COMM_CHANGE: {
         if (len < sizeof(montauk_ring_event)) break;
         auto* e = reinterpret_cast<const montauk_ring_event*>(data);
-        montauk_sink_appendf(&g_out, "[          ] %-5s pid=%-7u ppid=%-7u comm='%.16s'",
+        sublimation_sink_appendf(&g_out, "[          ] %-5s pid=%-7u ppid=%-7u comm='%.16s'",
                     lifecycle_type_name(type), e->pid, e->ppid, e->comm);
-        if (type == TRACE_EVT_EXEC) montauk_sink_appendf(&g_out, " file='%.64s'", e->filename);
-        montauk_sink_appendf(&g_out, "\n");
+        if (type == TRACE_EVT_EXEC) sublimation_sink_appendf(&g_out, " file='%.64s'", e->filename);
+        sublimation_sink_appendf(&g_out, "\n");
         break;
       }
       case TRACE_EVT_PROVIDER: {
         if (len < sizeof(montauk_provider_event)) break;
         auto* p = reinterpret_cast<const montauk_provider_event*>(data);
-        montauk_sink_appendf(&g_out, "[%10.3f] PROVIDER %.32s snapshot bytes=%u\n",
+        sublimation_sink_appendf(&g_out, "[%10.3f] PROVIDER %.32s snapshot bytes=%u\n",
                     elapsed_ms(p->timestamp_ns), p->name, p->payload_len);
         break;
       }
@@ -331,7 +331,7 @@ int montauk_decode_main(int argc, char** argv) {
         auto* d = reinterpret_cast<const montauk_drop_event*>(data);
         uint64_t total = 0;
         for (uint32_t i = 0; i < MONTAUK_DROP_SLOTS; ++i) total += d->dropped[i];
-        montauk_sink_appendf(&g_out,
+        sublimation_sink_appendf(&g_out,
             "[%10.3f] DROPS total=%" PRIu64 " (cumulative) writer_err=%" PRIu64
             " lost_bytes=%" PRIu64 "\n",
             elapsed_ms(d->ts_ns), total,
@@ -352,6 +352,6 @@ int montauk_decode_main(int argc, char** argv) {
     montauk::util::log_error("truncated record at event %" PRIu64, reader.events_read());
   }
 
-  if (!csv) montauk_sink_appendf(&g_out, "# %" PRIu64 " events\n", reader.events_read());
+  if (!csv) sublimation_sink_appendf(&g_out, "# %" PRIu64 " events\n", reader.events_read());
   return 0;
 }

@@ -48,9 +48,7 @@ static uint64_t now_ns(void) {
 // uint64_t
 #define SUB_TYPE uint64_t
 #define SUB_SUFFIX _u64
-#define SUB_TYPE_IS_U64
 #include "sort_impl.h"
-#undef SUB_TYPE_IS_U64
 #undef SUB_TYPE
 #undef SUB_SUFFIX
 

@@ -2,19 +2,27 @@
 """montauk test runner -- one entry point for the whole suite.
 
 Four layers, one command, a clear split:
-  unit   -- the C++ montauk_tests aggregate, the C23 montauk_sink_c_test,
+  unit   -- the C++ montauk_tests aggregate, sublimation's C23 sink and JSON
+            tests, test_fmt_double (the double formatter against
+            std::to_chars), montauk_stats_test,
             sublimation_fuzz_diff (seeded sort differential vs std::sort, all
             types, multiset + order, heavy on few-unique / NaN / signed-zero),
-            and the work-stealing DFS engine tests: test_wsdeque / test_dfspool
-            / test_psort (correctness) plus the _tsan variants (race-freedom
-            under ThreadSanitizer)
+            the work-stealing engine (test_wsdeque, test_dfspool and the
+            parallel radix and spectral merge) and sublimation's sort/search
+            core suite, with the _asan variants (ASan + UBSan) and the _tsan
+            variants (race-freedom under ThreadSanitizer)
   gate   -- the Python output gates. corpus_check.py checks the surfaces that
             can be WRONG rather than merely DIFFERENT (JSON parses, analyzer and
             decoder exit clean, every CLI case exits clean, tally/distinct
-            survive the StrMap grow boundaries). Plus the
-            search/learn/spectral/signal numpy-parity gates, and the
-  perf   -- the performance envelopes (perf_gate.py): CPU-time ceilings, a
-            growth bound and the sort-vs-sort oracle
+            survive the StrMap grow boundaries). Beside it: coreutils/grep
+            parity, the ABI, population, static-scan, query and coverage
+            gates, the bare-box and sort-ban checks, sublimation's oracle
+            gates (search, learn, spectral, signal, stats, tee, records,
+            --json, counted repeats, --confuse, text sort, C++ headers) and
+            the TUI's ^C check
+  perf   -- the performance envelopes (perf_gate.py): CPU-time ceilings and
+            growth bounds, the CLI sort against sort -n and the producer's
+            collection ceiling
   trace  -- the live BPF trace harness (trace_loadtest.py); needs root, so it is
             skipped (not failed) when not run as root
 
@@ -42,13 +50,13 @@ SUB_CORE_TESTS = ["test_basic", "test_tier1", "test_tier2", "test_tier4",
                   "test_bentley_mcilroy", "test_antiqsort", "test_types",
                   "test_sorted_perturbed", "test_zipfian", "test_saw_mixed",
                   "test_strings", "test_randomness", "test_profile_contract",
-                  "test_search", "test_affinity"]
+                  "test_search", "test_affinity", "test_diff"]
 
-TARGETS = ["montauk", "montauk_tests", "montauk_sink_c_test",
-           "montauk_json_test", "montauk_stats_test", "sublimation_fuzz_diff",
+TARGETS = ["montauk", "montauk_tests", "test_sink", "test_json",
+           "test_fmt_double", "montauk_stats_test", "sublimation_fuzz_diff",
            "test_wsdeque", "test_dfspool", "test_radix", "test_radix_par",
            "test_smerge_par", "test_pack", "test_kmerge",
-           *SUB_CORE_TESTS, "test_types_asan", "test_tier5_asan",
+           *SUB_CORE_TESTS, "test_types_asan", "test_tier5_asan", "test_diff_asan",
            "test_wsdeque_tsan", "test_dfspool_tsan", "test_radix_par_tsan",
            "sublimation_cli"]
 
@@ -125,7 +133,7 @@ def assert_build_dir_can_produce_tests():
 def layer_unit():
     assert_build_dir_can_produce_tests()
     ok = True
-    for exe in ("montauk_tests", "montauk_sink_c_test", "montauk_json_test",
+    for exe in ("montauk_tests", "test_sink", "test_json", "test_fmt_double",
                 "montauk_stats_test", "sublimation_fuzz_diff",
                 "test_wsdeque", "test_dfspool", "test_radix", "test_radix_par",
                 "test_smerge_par", "test_pack", "test_kmerge", *SUB_CORE_TESTS):
@@ -140,7 +148,7 @@ def layer_unit():
     # tests exercise sort paths, not allocation lifecycle, and montauk's own leak
     # posture is covered elsewhere.
     asan_env = dict(os.environ, ASAN_OPTIONS="detect_leaks=0:halt_on_error=1")
-    for exe in ("test_types_asan", "test_tier5_asan"):
+    for exe in ("test_types_asan", "test_tier5_asan", "test_diff_asan"):
         p = BUILD / exe
         if not p.exists():
             print(f"[run] unit: missing {exe} -- build first (drop --no-build)")
@@ -150,8 +158,8 @@ def layer_unit():
         ok = (run([str(p)], env=asan_env) == 0) and ok
     # Work-stealing DFS engine race gate (ThreadSanitizer). A smaller size is
     # deliberate: a data race shows at any concurrency, and TSan's ~15x slowdown
-    # makes full-size runs wasteful. test_psort's correctness is covered plain
-    # above; its executor's race-freedom is covered by test_dfspool_tsan.
+    # makes full-size runs wasteful. The parallel sorts' correctness is covered
+    # plain above; their executor's race-freedom is covered by test_dfspool_tsan.
     tsan_env = dict(os.environ, TSAN_OPTIONS="halt_on_error=1")
     for exe in ("test_wsdeque_tsan", "test_dfspool_tsan", "test_radix_par_tsan"):
         p = BUILD / exe
@@ -207,12 +215,25 @@ def layer_gate():
     # CORRECTNESS -- byte-parity freezes a wrong answer just as faithfully.
     stats = run([sys.executable, str(subt / "test_stats_oracle.py")]) == 0
     # tee against coreutils tee, on the zero-copy path and the copy loop.
-    tee = run([sys.executable, str(subt / "test_tee.py")]) == 0
+    tee = run([sys.executable, str(subt / "test_tee.py"), str(BUILD / "sublimation")]) == 0
+    # The f64 record stream between value verbs, held to the text path.
+    records = run([sys.executable, str(subt / "test_records.py"), str(BUILD / "sublimation")]) == 0
+    # The report verbs' --json face, held to their text reports.
+    jsonrep = run([sys.executable, str(subt / "test_json_report.py"), str(BUILD / "sublimation")]) == 0
+    # Bounded repeats as counters, held to GNU grep -E.
+    counted = run([sys.executable, str(subt / "test_counted_repeat.py"), str(BUILD / "sublimation")]) == 0
+    # search --confuse, held to the rewrite rule it documents.
+    confuse = run([sys.executable, str(subt / "test_confuse.py"), str(BUILD / "sublimation")]) == 0
+    # sort on text: whole lines in byte order, never a truncated line.
+    sorttext = run([sys.executable, str(subt / "test_sort_text.py"), str(BUILD / "sublimation")]) == 0
+    # The TUI's ^C teardown on a real pty: exits clean, nothing paints after
+    # the terminal is restored. Standard library only, so it always runs.
+    interrupt = run([sys.executable, str(ROOT / "tests" / "tui" / "interrupt_check.py")]) == 0
     # C++ consumer gate. Nothing else here compiles the public headers as C++,
     # which is how a bare unreachable() macro reached an outside consumer.
     cxx = run([sys.executable, str(subt / "test_cxx_headers.py")]) == 0
     return (corpus and parity and pop and semantic and static and inst and bare and cover and query and sortban and match and fuzz
-            and learn and spectral and signal and stats and tee and cxx and abi)
+            and learn and spectral and signal and stats and tee and records and jsonrep and counted and confuse and sorttext and interrupt and cxx and abi)
 
 
 def layer_perf():

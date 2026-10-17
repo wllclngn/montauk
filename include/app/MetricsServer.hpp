@@ -13,17 +13,17 @@ namespace montauk::app {
 
 // One process's anomaly feature vector over the FULL fused population (not just
 // the displayed top_procs). Order matches sublimation_anomaly_fuse's input
-// columns exactly (cpu%, rss, gpu%, fault delta, thread count), so a caller --
-// vector's montauk_anomalies -- can reproduce montauk's population-relative
+// columns exactly (cpu%, rss, gpu%, fault delta, thread count), so a caller can
+// reproduce montauk's population-relative
 // score by feeding this matrix to the same learn-lane primitive. JSON-only; the
 // Prometheus face keeps the per-process anomaly_score gauge it already emits.
 struct AnomalyFeatureRow {
   int64_t pid;
   double cpu_pct, rss_kb, gpu_util_pct, fault_delta, thread_count, ctxsw_delta;
   // montauk's OWN score for this row, published for the whole population rather
-  // than only the 64 displayed rows. vector used to recompute the fusion to
-  // reach the rest, which made it a second implementation: fed one frozen
-  // snapshot, the two agreed on 1 of 10 rankings. One computation, read by
+  // than only the 64 displayed rows. A consumer that recomputes the fusion to
+  // reach the rest is a second implementation: Fed one frozen snapshot, two
+  // such once agreed on 1 of 10 rankings. One computation, read by
   // everyone, cannot drift from itself.
   double anomaly_score;
   int anomaly_axis;

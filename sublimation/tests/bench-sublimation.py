@@ -36,7 +36,8 @@ except ImportError:
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_DIR = SCRIPT_DIR.parent
-BUILD_DIR = PROJECT_DIR / "build"
+# Build output stays out of the source tree, whose path has spaces in it.
+BUILD_DIR = Path("/tmp/sublimation-build/bench")
 BENCH_DIR = SCRIPT_DIR / "bench"
 SRC_DIR = PROJECT_DIR / "src"
 
@@ -188,55 +189,40 @@ def run_cmd(cmd, cwd=None, timeout=120, env=None):
 def build_c_bench():
     log_info("Building C benchmark (sublimation + qsort + introsort)")
 
-    # Build libsublimation from the in-tree sources. sublimation is vendored
-    # under montauk now -- there is no standalone install.py. Compile every
-    # src/**/*.c into a static .a (LTO, linked by the C bench) and a shared .so
-    # (real symbols, used by the Rust/Go-direct and Python paths -- the .a's LTO
-    # GIMPLE objects aren't linkable by rustc/cgo).
-    BUILD_DIR.mkdir(exist_ok=True)
-    srcs = sorted(str(p) for p in SRC_DIR.rglob("*.c"))
-    if not srcs:
-        log_error(f"no sublimation sources under {SRC_DIR}")
-        return None
-    base = ["gcc", "-std=c2x", "-O2", "-march=native", "-fPIC",
-            "-I", str(SRC_DIR / "include"), "-I", str(SRC_DIR)]
-    a_objs, so_objs = [], []
-    for s in srcs:
-        stem = Path(s).stem
-        a_o = BUILD_DIR / (stem + ".a.o")
-        so_o = BUILD_DIR / (stem + ".so.o")
-        ret, _, stderr = run_cmd(base + ["-flto=auto", "-c", s, "-o", str(a_o)])
-        if ret != 0:
-            log_error(f"lib compile failed ({Path(s).name}): {stderr[-300:]}")
-            return None
-        ret, _, stderr = run_cmd(base + ["-c", s, "-o", str(so_o)])
-        if ret != 0:
-            log_error(f"lib compile failed ({Path(s).name}): {stderr[-300:]}")
-            return None
-        a_objs.append(str(a_o))
-        so_objs.append(str(so_o))
-    # `ar rcs` REPLACES named members but keeps every other member already in the
-    # archive, so a stale object from an earlier source layout survives forever
-    # and collides at link time (pool.o vs dfspool.a.o both defining
-    # sub_default_num_workers). Remove the archive first so it is rebuilt from
-    # exactly the sources that exist now.
-    (BUILD_DIR / "libsublimation.a").unlink(missing_ok=True)
-    ret, _, stderr = run_cmd(["ar", "rcs", str(BUILD_DIR / "libsublimation.a")] + a_objs)
+    # sublimation builds through its own CMakeLists, the recipe every consumer
+    # uses, so the bench measures the library as it ships rather than a copy of
+    # the recipe that drifts. Only the library is wanted: CLI and suite are off.
+    lib_dir = BUILD_DIR / "lib"
+    ret, _, stderr = run_cmd(["cmake", "-S", str(PROJECT_DIR), "-B", str(lib_dir),
+                              "-DCMAKE_BUILD_TYPE=Release",
+                              "-DSUBLIMATION_BUILD_CLI=OFF",
+                              "-DSUBLIMATION_BUILD_TESTS=OFF"])
     if ret != 0:
-        log_error(f"ar (static lib) failed: {stderr[-300:]}")
+        log_error(f"sublimation configure failed: {stderr[-300:]}")
         return None
+    ret, _, stderr = run_cmd(["cmake", "--build", str(lib_dir), "-j",
+                              str(os.cpu_count() or 2)], timeout=600)
+    if ret != 0:
+        log_error(f"sublimation build failed: {stderr[-300:]}")
+        return None
+    archive = lib_dir / "libsublimation.a"
+
+    # The Python path loads a shared object. The archive is position-independent,
+    # so the .so is the same objects linked whole.
     ret, _, stderr = run_cmd(
-        ["gcc", "-shared", "-o", str(BUILD_DIR / "libsublimation.so")] + so_objs + ["-lpthread", "-lm"])
+        ["gcc", "-shared", "-o", str(BUILD_DIR / "libsublimation.so"),
+         "-Wl,--whole-archive", str(archive), "-Wl,--no-whole-archive",
+         "-lpthread", "-lm"])
     if ret != 0:
         log_error(f"shared lib link failed: {stderr[-300:]}")
         return None
 
     bench_bin = BUILD_DIR / "bench_c"
     cmd = [
-        "gcc", "-std=c2x", "-O2", "-march=native", "-flto=auto",
+        "gcc", "-std=c2x", "-O2", "-march=native",
         "-I", str(SRC_DIR / "include"), "-I", str(SRC_DIR),
         str(BENCH_DIR / "bench_c.c"),
-        str(BUILD_DIR / "libsublimation.a"),
+        str(archive),
         "-lpthread", "-lm",
         "-o", str(bench_bin),
     ]
@@ -490,7 +476,7 @@ def main():
             log_error("cannot read the CPU governor; refusing a --publish run")
             return 1
 
-    BUILD_DIR.mkdir(exist_ok=True)
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
 
     # build all comparison points
     c_bin = build_c_bench()

@@ -249,37 +249,6 @@ void Canvas::draw_rect(int x, int y, int w, int h, Style style) {
     }
 }
 
-void Canvas::fill_rect(int x, int y, int w, int h, const Cell& cell) {
-    for (int cy = y; cy < y + h; ++cy) {
-        for (int cx = x; cx < x + w; ++cx) {
-            if (is_in_bounds(cx, cy)) {
-                buffer_[static_cast<size_t>(cy) * static_cast<size_t>(width_) + static_cast<size_t>(cx)] = cell;
-            }
-        }
-    }
-}
-
-void Canvas::blit(const Canvas& source, int dest_x, int dest_y) {
-    blit(source, dest_x, dest_y, 0, 0, source.width(), source.height());
-}
-
-void Canvas::blit(const Canvas& source, int dest_x, int dest_y, int src_x, int src_y, int w, int h) {
-    for (int dy = 0; dy < h; ++dy) {
-        for (int dx = 0; dx < w; ++dx) {
-            int sx = src_x + dx;
-            int sy = src_y + dy;
-            int tx = dest_x + dx;
-            int ty = dest_y + dy;
-
-            if (is_in_bounds(tx, ty)) {
-                if (sx >= 0 && sx < source.width() && sy >= 0 && sy < source.height()) {
-                    buffer_[static_cast<size_t>(ty) * static_cast<size_t>(width_) + static_cast<size_t>(tx)] = source.at(sx, sy);
-                }
-            }
-        }
-    }
-}
-
 Style parse_sgr_style(std::string_view sgr) {
     Style s{};
     if (sgr.size() < 3 || sgr[0] != '\033' || sgr[1] != '[') return s;

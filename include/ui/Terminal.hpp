@@ -17,7 +17,6 @@ void on_atexit_restore();
 
 // Terminal capability detection
 [[nodiscard]] bool tty_stdout();
-[[nodiscard]] bool truecolor_capable();
 [[nodiscard]] int term_cols();
 [[nodiscard]] int term_rows();
 
@@ -29,7 +28,6 @@ void on_atexit_restore();
 [[nodiscard]] std::string sgr_truecolor(int r, int g, int b);
 
 // Unified color helpers (source thresholds and colors from UIConfig)
-[[nodiscard]] std::string bar_color(double pct);
 [[nodiscard]] std::string grey_bullet();
 
 // OSC 4 palette detection (one-time, for --init-theme)

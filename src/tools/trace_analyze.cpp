@@ -15,13 +15,13 @@
 #include "prom_stats.hpp"
 #include "trace_query.hpp"
 #include "util/Log.hpp"
+#include "util/Procfs.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cinttypes>
 #include <cstdlib>
 #include <deque>
-#include <dirent.h>
 #include <fstream>
 #include <string>
 #include <unordered_map>
@@ -52,10 +52,7 @@ struct MapsResolver {
     std::string dir = ".";
     auto slash = tp.find_last_of('/');
     if (slash != std::string::npos) dir = tp.substr(0, slash);
-    DIR* d = ::opendir(dir.c_str());
-    if (!d) return;
-    for (struct dirent* ent; (ent = ::readdir(d)) != nullptr; ) {
-      std::string name = ent->d_name;
+    for (const auto& name : montauk::util::list_dir(dir)) {
       if (name.size() < 6 || name.compare(name.size() - 5, 5, ".maps") != 0)
         continue;
       std::string pid_s = name.substr(0, name.size() - 5);
@@ -66,7 +63,6 @@ struct MapsResolver {
       load_file(dir + "/" + name,
                 static_cast<uint32_t>(std::strtoul(pid_s.c_str(), nullptr, 10)));
     }
-    ::closedir(d);
     for (auto& [pid, segs] : by_pid_) {
       (void)pid;
       sublimation_order_u64(segs, false, [](const Seg& s) { return s.start; });
@@ -247,8 +243,9 @@ static std::string redact_comm(const char* comm) {
 #include "sublimation_order.hpp" // sublimation_order_u64/_f64: struct-by-key ordering (pulls in sublimation_pack.h)
 #include "sublimation_locate.h" // structural locator: where a disorder pattern sits
 #include "sublimation_signal.h" // matrix profile (STOMP on the FFT): discords + motifs
+#include "sublimation_spectral.h" // Fiedler value and spectral clustering: a function's regions
 #include "util/sink.h"          // buffered stdout sink: one drain, not a printf per line
-#include "util/json.h"          // write-only JSON serializer on the sink (the --json renderer)
+#include "sublimation_json.h"          // write-only JSON serializer on the sink (the --json renderer)
 
 #include <chrono>
 #include <cmath>
@@ -276,8 +273,8 @@ namespace {
 // All report stdout flows through one buffered sink, drained once at exit
 // (atexit, set in main) -- one write instead of a syscall per std::printf. The
 // .prom file writers and stderr logs are unaffected.
-montauk_sink g_out;
-void drain_out() { montauk_sink_drain(&g_out); }
+sublimation_sink g_out;
+void drain_out() { sublimation_sink_drain(&g_out); }
 
 // NTSYNC wait result semantics: >= 0 is the signaled object index,
 // -110 is ETIMEDOUT, other negatives are -errno. The BPF side also emits
@@ -412,10 +409,6 @@ int take_row_qualifier(int argc, char** argv, int i, int* consumed) {
 }
 
 bool is_wait_op(uint8_t op) { return op == NTS_WAIT_ANY || op == NTS_WAIT_ALL; }
-bool is_signal_op(uint8_t op) {
-  return op == NTS_EVENT_SET || op == NTS_EVENT_RESET || op == NTS_SEM_RELEASE ||
-         op == NTS_MUTEX_UNLOCK;
-}
 // Wakeup-worthy: ops that can WAKE a waiter. event_reset CLEARS the signal and
 // wakes nothing, so a reset-heavy event is not a busy producer. Excluding reset
 // is what separates a genuine lost wakeup (a real wake landed after the park)
@@ -443,42 +436,6 @@ struct SyncSignal { uint32_t tid; uint64_t obj; uint64_t ts; };
 // Mix tid + opaque object id into one map key (obj is 64-bit: a futex uaddr).
 inline uint64_t tid_obj_key(uint32_t tid, uint64_t obj) {
   return (static_cast<uint64_t>(tid) * 0x9E3779B97F4A7C15ULL) ^ (obj + 0x165667B19E3779F9ULL);
-}
-
-// True iff this event is a generic wait COMPLETION; fills `w`.
-inline bool sync_wait(uint32_t type, const uint8_t* data, uint32_t len, SyncWait& w) {
-  if (type == TRACE_EVT_NTSYNC && len >= sizeof(montauk_ntsync_event)) {
-    auto* e = reinterpret_cast<const montauk_ntsync_event*>(data);
-    if (!is_wait_op(e->op) || e->result == kWaitEntrySentinel) return false;
-    w = {e->tid, e->pid, static_cast<uint32_t>(e->fd), e->timestamp_ns, e->result, false};
-    return true;
-  }
-  if (type == TRACE_EVT_IO && len >= sizeof(montauk_io_event)) {
-    auto* e = reinterpret_cast<const montauk_io_event*>(data);
-    if (e->syscall_nr != kFutexSyscallNr) return false;
-    if (!futex_is_wait(static_cast<uint32_t>(e->fd) & 0x7f)) return false;
-    w = {e->tid, e->pid, e->count, e->timestamp_ns, e->result, true};
-    return true;
-  }
-  return false;
-}
-
-// True iff this event is a generic SIGNAL (wake/release); fills `s`.
-inline bool sync_signal(uint32_t type, const uint8_t* data, uint32_t len, SyncSignal& s) {
-  if (type == TRACE_EVT_NTSYNC && len >= sizeof(montauk_ntsync_event)) {
-    auto* e = reinterpret_cast<const montauk_ntsync_event*>(data);
-    if (!is_signal_op(e->op)) return false;
-    s = {e->tid, static_cast<uint32_t>(e->fd), e->timestamp_ns};
-    return true;
-  }
-  if (type == TRACE_EVT_IO && len >= sizeof(montauk_io_event)) {
-    auto* e = reinterpret_cast<const montauk_io_event*>(data);
-    if (e->syscall_nr != kFutexSyscallNr) return false;
-    if (!futex_is_wake(static_cast<uint32_t>(e->fd) & 0x7f)) return false;
-    s = {e->tid, e->count, e->timestamp_ns};
-    return true;
-  }
-  return false;
 }
 
 // Humanize a count for VERDICT lines: 1700000 -> "1.7M", 580 -> "580".
@@ -545,16 +502,16 @@ static void emit_capture_loss(uint64_t observed,
                       std::string("type=\"") + evt_type_name(t) + "\"",
                       static_cast<double>(g_drop_final.dropped[t])});
   if (dropped > 0) {
-    montauk_sink_appendf(&g_out,
+    sublimation_sink_appendf(&g_out,
         "\nCAPTURE LOSS: %" PRIu64 " event(s) dropped at the ring "
         "(completeness %.4f%%)\n",
         dropped, completeness * 100.0);
     for (uint32_t t = 0; t < MONTAUK_DROP_SLOTS; ++t)
       if (g_drop_final.dropped[t] > 0)
-        montauk_sink_appendf(
+        sublimation_sink_appendf(
             &g_out, "  %s: %" PRIu64 "\n", evt_type_name(t),
             static_cast<uint64_t>(g_drop_final.dropped[t]));
-    montauk_sink_appendf(&g_out,
+    sublimation_sink_appendf(&g_out,
         "  counts above are lower bounds; tail quantiles are biased "
         "downward\n"
         "  (loss lands in the busy windows); absence-of-anomaly verdicts "
@@ -562,7 +519,7 @@ static void emit_capture_loss(uint64_t observed,
         "  types listed are qualified, not clean\n");
   }
   if (g_drop_final.writer_errors > 0)
-    montauk_sink_appendf(&g_out,
+    sublimation_sink_appendf(&g_out,
         "CAPTURE LOSS: %" PRIu64 " trace write error(s), %" PRIu64
         " byte(s) short at the disk path\n",
         static_cast<uint64_t>(g_drop_final.writer_errors),
@@ -1296,7 +1253,7 @@ struct Source {
 // source's fields. Text fields are interned. A TALLY source keeps no rows: it
 // counts its events by their field values (at most two), which is all a census
 // needs and costs a counter rather than a row per event.
-struct Collected {
+struct Collected : montauk::query::Interner {
   struct TallyKey {
     int64_t a, b;
     bool operator==(const TallyKey&) const = default;
@@ -1305,10 +1262,6 @@ struct Collected {
     size_t operator()(const TallyKey& k) const {
       return std::hash<int64_t>{}(k.a) * 0x9E3779B97F4A7C15ull ^ std::hash<int64_t>{}(k.b);
     }
-  };
-  struct TextHash {
-    using is_transparent = void;
-    size_t operator()(std::string_view s) const { return std::hash<std::string_view>{}(s); }
   };
   std::vector<montauk::query::Select> sel;
   std::vector<std::vector<int>> fidx;
@@ -1319,8 +1272,6 @@ struct Collected {
   size_t nrows = 0;
   const void* folder = nullptr;              // the report that folds this buffer
   std::vector<int64_t> cells;
-  std::vector<std::string> strings;
-  std::unordered_map<std::string, int64_t, TextHash, std::equal_to<>> interned;
   std::vector<uint8_t> raw_bytes;            // raw sources' records, back to back
   std::vector<size_t> raw_off;
 
@@ -1368,14 +1319,6 @@ struct Collected {
     // A row is exactly as wide as its source: no padding to the widest. A raw
     // source's last cell indexes its record.
     for (size_t i = 0; i < sel.size(); ++i) span.push_back(base + fidx[i].size() + (keep_raw[i] ? 1 : 0));
-  }
-  int64_t intern(std::string_view t) {
-    auto it = interned.find(t);
-    if (it != interned.end()) return it->second;
-    const auto id = static_cast<int64_t>(strings.size());
-    strings.emplace_back(t);
-    interned.emplace(strings.back(), id);
-    return id;
   }
   void fold(uint32_t type, const uint8_t* data, uint32_t len) {
     for (size_t s = 0; s < sel.size(); ++s) {
@@ -1491,21 +1434,21 @@ struct ReportDef {
   void (*derive_stream)(const Stream&, ReportResult&) = nullptr;
 };
 
-void json_detail(montauk_json& j, const Detail& d) {
+void json_detail(sublimation_json& j, const Detail& d) {
   switch (d.k) {
-    case Detail::Num: montauk_json_num(&j, d.num); break;
-    case Detail::U64: montauk_json_u64(&j, d.u); break;
-    case Detail::Bool: montauk_json_bool(&j, d.u ? 1 : 0); break;
-    case Detail::Str: montauk_json_str(&j, d.str.c_str()); break;
+    case Detail::Num: sublimation_json_num(&j, d.num); break;
+    case Detail::U64: sublimation_json_u64(&j, d.u); break;
+    case Detail::Bool: sublimation_json_bool(&j, d.u ? 1 : 0); break;
+    case Detail::Str: sublimation_json_str(&j, d.str.c_str()); break;
     case Detail::Obj:
-      montauk_json_obj_begin(&j);
-      for (const auto& v : d.obj) { montauk_json_key(&j, v.key.c_str()); json_detail(j, v); }
-      montauk_json_obj_end(&j);
+      sublimation_json_obj_begin(&j);
+      for (const auto& v : d.obj) { sublimation_json_key(&j, v.key.c_str()); json_detail(j, v); }
+      sublimation_json_obj_end(&j);
       break;
     case Detail::Arr:
-      montauk_json_arr_begin(&j);
+      sublimation_json_arr_begin(&j);
       for (const auto& v : d.arr) json_detail(j, v);
-      montauk_json_arr_end(&j);
+      sublimation_json_arr_end(&j);
       break;
   }
 }
@@ -1524,10 +1467,10 @@ std::string detail_text(const Detail& d) {
 // THE TEXT FACE, generic: the verdict, every detail block, every gauge. A
 // block that is an array of objects prints as a table, one column per key.
 void text_result(const char* name, const ReportResult& r) {
-  montauk_sink_appendf(&g_out, "REPORT %s\nVERDICT: %s\n", name, r.verdict.c_str());
+  sublimation_sink_appendf(&g_out, "REPORT %s\nVERDICT: %s\n", name, r.verdict.c_str());
   for (const auto& [key, d] : r.detail) {
     if (d.k == Detail::Arr && !d.arr.empty() && d.arr[0].k == Detail::Obj) {
-      montauk_sink_appendf(&g_out, "%s:\n", key.c_str());
+      sublimation_sink_appendf(&g_out, "%s:\n", key.c_str());
       std::vector<std::string> cols;
       for (const auto& v : d.arr[0].obj) if (v.k != Detail::Obj) cols.push_back(v.key);
       std::vector<size_t> w(cols.size());
@@ -1541,69 +1484,69 @@ void text_result(const char* name, const ReportResult& r) {
         cells.push_back(std::move(line));
       }
       auto put = [&](const std::vector<std::string>& line) {
-        montauk_sink_appendf(&g_out, " ");
+        sublimation_sink_appendf(&g_out, " ");
         for (size_t c = 0; c < cols.size(); ++c)
-          montauk_sink_appendf(&g_out, " %-*s", static_cast<int>(w[c]), line[c].c_str());
-        montauk_sink_appendc(&g_out, '\n');
+          sublimation_sink_appendf(&g_out, " %-*s", static_cast<int>(w[c]), line[c].c_str());
+        sublimation_sink_appendc(&g_out, '\n');
       };
       put(cols);
       for (const auto& line : cells) put(line);
     } else if (d.k == Detail::Obj) {
-      montauk_sink_appendf(&g_out, "%s:", key.c_str());
+      sublimation_sink_appendf(&g_out, "%s:", key.c_str());
       for (const auto& v : d.obj)
         if (v.k != Detail::Obj && v.k != Detail::Arr)
-          montauk_sink_appendf(&g_out, " %s=%s", v.key.c_str(), detail_text(v).c_str());
-      montauk_sink_appendc(&g_out, '\n');
+          sublimation_sink_appendf(&g_out, " %s=%s", v.key.c_str(), detail_text(v).c_str());
+      sublimation_sink_appendc(&g_out, '\n');
     } else if (d.k != Detail::Arr) {
-      montauk_sink_appendf(&g_out, "%s: %s\n", key.c_str(), detail_text(d).c_str());
+      sublimation_sink_appendf(&g_out, "%s: %s\n", key.c_str(), detail_text(d).c_str());
     }
   }
   for (const PromMetric& g : r.gauges) {
     const char* n = g.name;
     if (std::strncmp(n, "montauk_analysis_", 17) == 0) n += 17;
-    montauk_sink_appendf(&g_out, "  %s%s%s%s %s\n", n, g.labels.empty() ? "" : "{",
+    sublimation_sink_appendf(&g_out, "  %s%s%s%s %s\n", n, g.labels.empty() ? "" : "{",
                          g.labels.c_str(), g.labels.empty() ? "" : "}", prom_num(g.value).c_str());
   }
 }
 
 // The JSON face of one result: name, verdict, class, the detail blocks in
 // order, then the gauges (each with its HELP) and the offenders.
-void json_result(montauk_json& j, const char* name, const ReportResult& r) {
-  montauk_json_obj_begin(&j);
-  montauk_json_kstr(&j, "name", name);
-  if (!r.verdict.empty()) montauk_json_kstr(&j, "verdict", r.verdict.c_str());
-  if (!r.klass.empty()) montauk_json_kstr(&j, "class", r.klass.c_str());
-  for (const auto& [k, d] : r.detail) { montauk_json_key(&j, k.c_str()); json_detail(j, d); }
+void json_result(sublimation_json& j, const char* name, const ReportResult& r) {
+  sublimation_json_obj_begin(&j);
+  sublimation_json_kstr(&j, "name", name);
+  if (!r.verdict.empty()) sublimation_json_kstr(&j, "verdict", r.verdict.c_str());
+  if (!r.klass.empty()) sublimation_json_kstr(&j, "class", r.klass.c_str());
+  for (const auto& [k, d] : r.detail) { sublimation_json_key(&j, k.c_str()); json_detail(j, d); }
   if (!r.gauges.empty()) {
-    montauk_json_key(&j, "gauges");
-    montauk_json_arr_begin(&j);
+    sublimation_json_key(&j, "gauges");
+    sublimation_json_arr_begin(&j);
     for (const auto& m : r.gauges) {
-      montauk_json_obj_begin(&j);
-      montauk_json_kstr(&j, "name", m.name);
-      montauk_json_knum(&j, "value", m.value);
-      if (!m.labels.empty()) montauk_json_kstr(&j, "labels", m.labels.c_str());
+      sublimation_json_obj_begin(&j);
+      sublimation_json_kstr(&j, "name", m.name);
+      sublimation_json_knum(&j, "value", m.value);
+      if (!m.labels.empty()) sublimation_json_kstr(&j, "labels", m.labels.c_str());
       const char* help = prom_help(m.name);
-      if (help && *help) montauk_json_kstr(&j, "help", help);
-      montauk_json_obj_end(&j);
+      if (help && *help) sublimation_json_kstr(&j, "help", help);
+      sublimation_json_obj_end(&j);
     }
-    montauk_json_arr_end(&j);
+    sublimation_json_arr_end(&j);
   }
   if (!r.offenders.empty()) {
-    montauk_json_key(&j, "offenders");
-    montauk_json_arr_begin(&j);
+    sublimation_json_key(&j, "offenders");
+    sublimation_json_arr_begin(&j);
     for (const auto& o : r.offenders) {
-      montauk_json_obj_begin(&j);
-      montauk_json_kstr(&j, "kind", o.kind.c_str());
-      montauk_json_kstr(&j, "id", o.id.c_str());
-      if (!o.obj.empty()) montauk_json_kstr(&j, "obj", o.obj.c_str());
-      montauk_json_kstr(&j, "metric", o.metric.c_str());
-      montauk_json_knum(&j, "value", o.value);
-      montauk_json_ki64(&j, "sev", o.sev);
-      montauk_json_obj_end(&j);
+      sublimation_json_obj_begin(&j);
+      sublimation_json_kstr(&j, "kind", o.kind.c_str());
+      sublimation_json_kstr(&j, "id", o.id.c_str());
+      if (!o.obj.empty()) sublimation_json_kstr(&j, "obj", o.obj.c_str());
+      sublimation_json_kstr(&j, "metric", o.metric.c_str());
+      sublimation_json_knum(&j, "value", o.value);
+      sublimation_json_ki64(&j, "sev", o.sev);
+      sublimation_json_obj_end(&j);
     }
-    montauk_json_arr_end(&j);
+    sublimation_json_arr_end(&j);
   }
-  montauk_json_obj_end(&j);
+  sublimation_json_obj_end(&j);
 }
 
 // A REPORT is one run of a saved query: its definition, the rows or stream it
@@ -1631,11 +1574,11 @@ struct Report {
   const ReportResult& result_base() const { return res; }
   void emit(const montauk::model::TraceReader&) const {
     text_result(def.name, res);
-    montauk_sink_appendc(&g_out, '\n');
+    sublimation_sink_appendc(&g_out, '\n');
   }
   void prom(std::vector<PromMetric>& out) const { out.insert(out.end(), res.gauges.begin(), res.gauges.end()); }
   void offenders(std::vector<Offender>& out) const { out.insert(out.end(), res.offenders.begin(), res.offenders.end()); }
-  void json(montauk_json& j) const { json_result(j, def.name, res); }
+  void json(sublimation_json& j) const { json_result(j, def.name, res); }
 };
 
 // REPORT storm: the sched_ext cpu_release kick-storm, from TRACE_EVT_SCX_STORM
@@ -4434,15 +4377,15 @@ void rank_offenders(std::vector<Offender>& offs) {
 void emit_offenders_text(const std::vector<Offender>& offs,
                           std::vector<PromMetric>& prom) {
   if (offs.empty()) {
-    montauk_sink_appendf(&g_out, "\nPOORLY-BEHAVING ITEMS: none detected\n");
+    sublimation_sink_appendf(&g_out, "\nPOORLY-BEHAVING ITEMS: none detected\n");
     return;
   }
-  montauk_sink_appendf(&g_out, "\nPOORLY-BEHAVING ITEMS (ranked)\n");
-  montauk_sink_appendf(&g_out, "%-14s %-18s %-16s %14s  sev\n", "kind", "id", "metric", "value");
+  sublimation_sink_appendf(&g_out, "\nPOORLY-BEHAVING ITEMS (ranked)\n");
+  sublimation_sink_appendf(&g_out, "%-14s %-18s %-16s %14s  sev\n", "kind", "id", "metric", "value");
   for (const Offender& o : offs) {
     std::string idobj = o.obj.empty() ? o.id : (o.id + "/" + o.obj);
     const char* sv = o.sev >= 2 ? "HIGH" : (o.sev == 1 ? "MED" : "LOW");
-    montauk_sink_appendf(&g_out, "%-14s %-18s %-16s %14.6g  %s\n", o.kind.c_str(), idobj.c_str(),
+    sublimation_sink_appendf(&g_out, "%-14s %-18s %-16s %14.6g  %s\n", o.kind.c_str(), idobj.c_str(),
                 o.metric.c_str(), o.value, sv);
     std::string lab = "kind=\"" + o.kind + "\",id=\"" + o.id + "\"";
     if (!o.obj.empty()) lab += ",obj=\"" + o.obj + "\"";
@@ -4476,142 +4419,142 @@ void emit_digest_json(const std::string& dir, bool have_events,
   montauk::pop::ScxStability stab = montauk::pop::scx_stability_data(dir);
   montauk::pop::ThermalPower tp = montauk::pop::thermal_power_data(dir);
 
-  montauk_json j;
-  montauk_json_init(&j, &g_out);
-  montauk_json_obj_begin(&j);
-    montauk_json_ku64(&j, "schema_version", 1u);
-    montauk_json_key(&j, "digest");
-    montauk_json_obj_begin(&j);
-      montauk_json_kstr(&j, "dir", dir.c_str());
-      montauk_json_kbool(&j, "has_events", have_events);
+  sublimation_json j;
+  sublimation_json_init(&j, &g_out);
+  sublimation_json_obj_begin(&j);
+    sublimation_json_ku64(&j, "schema_version", 1u);
+    sublimation_json_key(&j, "digest");
+    sublimation_json_obj_begin(&j);
+      sublimation_json_kstr(&j, "dir", dir.c_str());
+      sublimation_json_kbool(&j, "has_events", have_events);
       // Name the layout so a consumer that got has_events:false knows what was
       // looked for -- the <dir>.events sibling or the in-dir events.bin.
-      montauk_json_kstr(&j, "events_path", events_path.c_str());
+      sublimation_json_kstr(&j, "events_path", events_path.c_str());
       // Loss beside the data it qualifies, the same numbers the text block
       // prints. Emitted only when a drop snapshot exists: a capture predating
       // drop accounting reports NOTHING here rather than a zero, because absence
       // of the counter is not evidence of a lossless capture and a consumer must
       // be able to tell those apart.
       if (have_events) {
-        montauk_json_ku64(&j, "events_observed", events_observed);
+        sublimation_json_ku64(&j, "events_observed", events_observed);
         if (g_drop_seen) {
-          montauk_json_ku64(&j, "dropped_events", drops_total());
-          montauk_json_knum(&j, "capture_completeness",
+          sublimation_json_ku64(&j, "dropped_events", drops_total());
+          sublimation_json_knum(&j, "capture_completeness",
                             capture_completeness(events_observed));
         }
       }
-    montauk_json_obj_end(&j);
+    sublimation_json_obj_end(&j);
 
     if (sys.found) {
-      montauk_json_key(&j, "system");
-      montauk_json_obj_begin(&j);
-        montauk_json_kstr(&j, "cpu_model", sys.cpu_model.c_str());
-        montauk_json_kstr(&j, "physical_cores", sys.physical_cores.c_str());
-        montauk_json_kstr(&j, "logical_cpus", sys.logical_cpus.c_str());
-        if (!sys.cache_domains.empty()) montauk_json_kstr(&j, "cache_domains", sys.cache_domains.c_str());
-        montauk_json_kstr(&j, "mem_total_gib", sys.mem_total_gib.c_str());
-        if (!sys.gpu.empty()) montauk_json_kstr(&j, "gpu", sys.gpu.c_str());
-        montauk_json_kstr(&j, "kernel", sys.kernel.c_str());
-        montauk_json_kstr(&j, "scheduler", sys.sched.c_str());
-      montauk_json_obj_end(&j);
+      sublimation_json_key(&j, "system");
+      sublimation_json_obj_begin(&j);
+        sublimation_json_kstr(&j, "cpu_model", sys.cpu_model.c_str());
+        sublimation_json_kstr(&j, "physical_cores", sys.physical_cores.c_str());
+        sublimation_json_kstr(&j, "logical_cpus", sys.logical_cpus.c_str());
+        if (!sys.cache_domains.empty()) sublimation_json_kstr(&j, "cache_domains", sys.cache_domains.c_str());
+        sublimation_json_kstr(&j, "mem_total_gib", sys.mem_total_gib.c_str());
+        if (!sys.gpu.empty()) sublimation_json_kstr(&j, "gpu", sys.gpu.c_str());
+        sublimation_json_kstr(&j, "kernel", sys.kernel.c_str());
+        sublimation_json_kstr(&j, "scheduler", sys.sched.c_str());
+      sublimation_json_obj_end(&j);
     }
 
     if (!stab.ejections.empty() || !stab.cleanroom_verdict.empty() || stab.watchdog_worst_pct >= 0) {
-      montauk_json_key(&j, "stability");
-      montauk_json_obj_begin(&j);
-        montauk_json_key(&j, "ejections");
-        montauk_json_arr_begin(&j);
+      sublimation_json_key(&j, "stability");
+      sublimation_json_obj_begin(&j);
+        sublimation_json_key(&j, "ejections");
+        sublimation_json_arr_begin(&j);
           for (const auto& e : stab.ejections) {
-            montauk_json_obj_begin(&j);
-              montauk_json_kstr(&j, "scheduler", e.scheduler.c_str());
-              montauk_json_kstr(&j, "reason", e.reason.c_str());
-              if (!e.phase.empty()) montauk_json_kstr(&j, "phase", e.phase.c_str());
-              if (!e.cores.empty()) montauk_json_kstr(&j, "cores", e.cores.c_str());
-            montauk_json_obj_end(&j);
+            sublimation_json_obj_begin(&j);
+              sublimation_json_kstr(&j, "scheduler", e.scheduler.c_str());
+              sublimation_json_kstr(&j, "reason", e.reason.c_str());
+              if (!e.phase.empty()) sublimation_json_kstr(&j, "phase", e.phase.c_str());
+              if (!e.cores.empty()) sublimation_json_kstr(&j, "cores", e.cores.c_str());
+            sublimation_json_obj_end(&j);
           }
-        montauk_json_arr_end(&j);
+        sublimation_json_arr_end(&j);
         if (!stab.cleanroom_verdict.empty()) {
-          montauk_json_kstr(&j, "cleanroom_verdict", stab.cleanroom_verdict.c_str());
-          if (!stab.cleanroom_detail.empty()) montauk_json_kstr(&j, "cleanroom_detail", stab.cleanroom_detail.c_str());
+          sublimation_json_kstr(&j, "cleanroom_verdict", stab.cleanroom_verdict.c_str());
+          if (!stab.cleanroom_detail.empty()) sublimation_json_kstr(&j, "cleanroom_detail", stab.cleanroom_detail.c_str());
         }
         if (stab.watchdog_worst_pct >= 0) {
-          montauk_json_knum(&j, "watchdog_worst_pct", stab.watchdog_worst_pct);
-          if (!stab.watchdog_where.empty()) montauk_json_kstr(&j, "watchdog_where", stab.watchdog_where.c_str());
+          sublimation_json_knum(&j, "watchdog_worst_pct", stab.watchdog_worst_pct);
+          if (!stab.watchdog_where.empty()) sublimation_json_kstr(&j, "watchdog_where", stab.watchdog_where.c_str());
         }
-      montauk_json_obj_end(&j);
+      sublimation_json_obj_end(&j);
     }
 
     if (tp.temp_n > 0 || tp.power_n > 0 || tp.fan_peak_rpm > 0.0 || tp.freq_n > 0 ||
         tp.ctx_n > 0 || tp.mig_n > 0 || !tp.dominant_cstate.empty() || tp.energy_joules_total >= 0.0) {
-      montauk_json_key(&j, "thermal_power");
-      montauk_json_obj_begin(&j);
-        if (tp.temp_n > 0) { montauk_json_knum(&j, "cpu_temp_peak_c", tp.temp_peak_c); montauk_json_knum(&j, "cpu_temp_avg_c", tp.temp_avg_c); }
-        if (tp.fan_peak_rpm > 0.0) montauk_json_knum(&j, "fan_peak_rpm", tp.fan_peak_rpm);
-        if (tp.power_n > 0) { montauk_json_knum(&j, "power_avg_w", tp.power_avg_w); montauk_json_knum(&j, "power_peak_w", tp.power_peak_w); }
-        if (tp.energy_joules_total >= 0.0) montauk_json_knum(&j, "energy_joules_total", tp.energy_joules_total);
-        if (tp.freq_n > 0) { montauk_json_knum(&j, "cpu_clock_avg_mhz", tp.freq_avg_mhz); montauk_json_knum(&j, "cpu_clock_peak_mhz", tp.freq_peak_mhz); }
-        if (tp.epi_n > 0) montauk_json_knum(&j, "energy_per_instr_pj", tp.energy_per_instr_pj);
-        if (tp.ctx_n > 0) montauk_json_knum(&j, "context_switches_per_sec", tp.ctx_switches_per_sec);
-        if (tp.mig_n > 0) montauk_json_knum(&j, "migrations_per_sec", tp.migrations_per_sec);
-        if (tp.br_n > 0) montauk_json_knum(&j, "branch_misses_per_sec", tp.branch_misses_per_sec);
+      sublimation_json_key(&j, "thermal_power");
+      sublimation_json_obj_begin(&j);
+        if (tp.temp_n > 0) { sublimation_json_knum(&j, "cpu_temp_peak_c", tp.temp_peak_c); sublimation_json_knum(&j, "cpu_temp_avg_c", tp.temp_avg_c); }
+        if (tp.fan_peak_rpm > 0.0) sublimation_json_knum(&j, "fan_peak_rpm", tp.fan_peak_rpm);
+        if (tp.power_n > 0) { sublimation_json_knum(&j, "power_avg_w", tp.power_avg_w); sublimation_json_knum(&j, "power_peak_w", tp.power_peak_w); }
+        if (tp.energy_joules_total >= 0.0) sublimation_json_knum(&j, "energy_joules_total", tp.energy_joules_total);
+        if (tp.freq_n > 0) { sublimation_json_knum(&j, "cpu_clock_avg_mhz", tp.freq_avg_mhz); sublimation_json_knum(&j, "cpu_clock_peak_mhz", tp.freq_peak_mhz); }
+        if (tp.epi_n > 0) sublimation_json_knum(&j, "energy_per_instr_pj", tp.energy_per_instr_pj);
+        if (tp.ctx_n > 0) sublimation_json_knum(&j, "context_switches_per_sec", tp.ctx_switches_per_sec);
+        if (tp.mig_n > 0) sublimation_json_knum(&j, "migrations_per_sec", tp.migrations_per_sec);
+        if (tp.br_n > 0) sublimation_json_knum(&j, "branch_misses_per_sec", tp.branch_misses_per_sec);
         if (!tp.dominant_cstate.empty()) {
-          montauk_json_kstr(&j, "dominant_cstate", tp.dominant_cstate.c_str());
-          montauk_json_knum(&j, "dominant_cstate_pct", tp.dominant_cstate_pct);
+          sublimation_json_kstr(&j, "dominant_cstate", tp.dominant_cstate.c_str());
+          sublimation_json_knum(&j, "dominant_cstate_pct", tp.dominant_cstate_pct);
         }
-      montauk_json_obj_end(&j);
+      sublimation_json_obj_end(&j);
     }
 
     if (hot.found) {
-      montauk_json_key(&j, "hot_cpu");
-      montauk_json_obj_begin(&j);
-        montauk_json_ki64(&j, "cpu", hot.cpu);
-        montauk_json_knum(&j, "share_pct", hot.share_pct);
-        montauk_json_knum(&j, "uniform_pct", hot.uniform_pct);
-        montauk_json_ki64(&j, "sev", hot.sev);
-      montauk_json_obj_end(&j);
+      sublimation_json_key(&j, "hot_cpu");
+      sublimation_json_obj_begin(&j);
+        sublimation_json_ki64(&j, "cpu", hot.cpu);
+        sublimation_json_knum(&j, "share_pct", hot.share_pct);
+        sublimation_json_knum(&j, "uniform_pct", hot.uniform_pct);
+        sublimation_json_ki64(&j, "sev", hot.sev);
+      sublimation_json_obj_end(&j);
     }
 
-    montauk_json_key(&j, "offenders");
-    montauk_json_arr_begin(&j);
+    sublimation_json_key(&j, "offenders");
+    sublimation_json_arr_begin(&j);
       for (const auto& o : offs) {
-        montauk_json_obj_begin(&j);
-          montauk_json_kstr(&j, "kind", o.kind.c_str());
-          montauk_json_kstr(&j, "id", o.id.c_str());
-          if (!o.obj.empty()) montauk_json_kstr(&j, "obj", o.obj.c_str());
-          montauk_json_kstr(&j, "metric", o.metric.c_str());
-          montauk_json_knum(&j, "value", o.value);
-          montauk_json_ki64(&j, "sev", o.sev);
-        montauk_json_obj_end(&j);
+        sublimation_json_obj_begin(&j);
+          sublimation_json_kstr(&j, "kind", o.kind.c_str());
+          sublimation_json_kstr(&j, "id", o.id.c_str());
+          if (!o.obj.empty()) sublimation_json_kstr(&j, "obj", o.obj.c_str());
+          sublimation_json_kstr(&j, "metric", o.metric.c_str());
+          sublimation_json_knum(&j, "value", o.value);
+          sublimation_json_ki64(&j, "sev", o.sev);
+        sublimation_json_obj_end(&j);
       }
-    montauk_json_arr_end(&j);
+    sublimation_json_arr_end(&j);
 
     if (have_events) {
-      montauk_json_key(&j, "reports");
-      montauk_json_arr_begin(&j);
+      sublimation_json_key(&j, "reports");
+      sublimation_json_arr_begin(&j);
         for (auto& r : reports)
           if (is_digest_headline(r->name())) r->json(j);
-      montauk_json_arr_end(&j);
+      sublimation_json_arr_end(&j);
 
       // EVERY report's conclusion, compactly. This is what retires the
       // hardcoded selection for a structured consumer: instead of montauk
       // choosing which three conclusions matter on the caller's behalf, the
       // caller gets all of them as {name, class, verdict} and selects for its
       // own audience. Costs a few hundred bytes against a KB-scale digest.
-      montauk_json_key(&j, "conclusions");
-      montauk_json_arr_begin(&j);
+      sublimation_json_key(&j, "conclusions");
+      sublimation_json_arr_begin(&j);
         for (auto& r : reports) {
           const ReportResult& rr = r->result_base();
           if (rr.klass.empty() && rr.verdict.empty()) continue;
-          montauk_json_obj_begin(&j);
-          montauk_json_kstr(&j, "name", r->name());
-          if (!rr.klass.empty()) montauk_json_kstr(&j, "class", rr.klass.c_str());
-          if (!rr.verdict.empty()) montauk_json_kstr(&j, "verdict", rr.verdict.c_str());
-          montauk_json_obj_end(&j);
+          sublimation_json_obj_begin(&j);
+          sublimation_json_kstr(&j, "name", r->name());
+          if (!rr.klass.empty()) sublimation_json_kstr(&j, "class", rr.klass.c_str());
+          if (!rr.verdict.empty()) sublimation_json_kstr(&j, "verdict", rr.verdict.c_str());
+          sublimation_json_obj_end(&j);
         }
-      montauk_json_arr_end(&j);
+      sublimation_json_arr_end(&j);
     }
-  montauk_json_obj_end(&j);
-  montauk_sink_appendc(&g_out, '\n');
+  sublimation_json_obj_end(&j);
+  sublimation_sink_appendc(&g_out, '\n');
 }
 
 // Compact, specs-first report over a montauk --trace RECORDING DIR: SYSTEM
@@ -4682,13 +4625,13 @@ int run_digest(const std::string& dir, bool redact, bool want_json) {
   // it meaningless, and a NOISY clean-room makes them untrustworthy -- so this
   // leads the digest, above SYSTEM, before the reader sees a single latency.
   std::string stab = montauk::pop::scx_stability_block(dir);
-  if (!stab.empty()) montauk_sink_appendf(&g_out, "%s\n", stab.c_str());
+  if (!stab.empty()) sublimation_sink_appendf(&g_out, "%s\n", stab.c_str());
 
   std::string specs = montauk::pop::system_info_block(dir);
-  if (!specs.empty()) montauk_sink_appendf(&g_out, "%s", specs.c_str());
+  if (!specs.empty()) sublimation_sink_appendf(&g_out, "%s", specs.c_str());
   else log_warn("no montauk_system_info in recording (pre-v7.1.0 capture?)");
   std::string tp = montauk::pop::thermal_power_block(dir);
-  if (!tp.empty()) montauk_sink_appendf(&g_out, "\n%s", tp.c_str());
+  if (!tp.empty()) sublimation_sink_appendf(&g_out, "\n%s", tp.c_str());
 
   emit_offenders_text(offs, prom);
 
@@ -4697,7 +4640,7 @@ int run_digest(const std::string& dir, bool redact, bool want_json) {
     // capture is a different claim from one read off a whole stream, and the
     // reader of a shared digest has no other way to know which they hold.
     emit_capture_loss(reader.events_read(), prom);
-    montauk_sink_appendf(&g_out, "\nKEY METRICS\n");
+    sublimation_sink_appendf(&g_out, "\nKEY METRICS\n");
     for (auto& r : reports)
       if (is_digest_headline(r->name())) {
         r->emit(reader);
@@ -4714,7 +4657,7 @@ int run_digest(const std::string& dir, bool redact, bool want_json) {
              "metrics + offenders only (wake2run latency needs the event stream, "
              "from a --trace-out capture or a freeze-archive events.bin)",
              base.c_str(), base.c_str());
-    montauk_sink_appendf(&g_out, "\nKEY METRICS: not analyzed (no per-event trace; "
+    sublimation_sink_appendf(&g_out, "\nKEY METRICS: not analyzed (no per-event trace; "
              "expected %s.events or %s/events.bin)\n", base.c_str(), base.c_str());
   }
   return 0;
@@ -4872,42 +4815,42 @@ int run_query(const char* path, int argc, char** argv) {
   }
 
   if (want_json) {
-    montauk_json j;
-    montauk_json_init(&j, &g_out);
-    montauk_json_obj_begin(&j);
-    montauk_json_key(&j, "columns");
-    montauk_json_arr_begin(&j);
-    for (const auto& c : tb.cols) montauk_json_str(&j, c.c_str());
-    montauk_json_arr_end(&j);
+    sublimation_json j;
+    sublimation_json_init(&j, &g_out);
+    sublimation_json_obj_begin(&j);
+    sublimation_json_key(&j, "columns");
+    sublimation_json_arr_begin(&j);
+    for (const auto& c : tb.cols) sublimation_json_str(&j, c.c_str());
+    sublimation_json_arr_end(&j);
     if (st.empty()) {
-      montauk_json_key(&j, "rows");
-      montauk_json_arr_begin(&j);
+      sublimation_json_key(&j, "rows");
+      sublimation_json_arr_begin(&j);
       for (size_t r = 0; r < tb.rows(); ++r) {
-        montauk_json_arr_begin(&j);
+        sublimation_json_arr_begin(&j);
         for (size_t c = 0; c < tb.width(); ++c) {
-          if (tb.text[c]) montauk_json_str(&j, tb.cell_text(r, c).c_str());
-          else montauk_json_i64(&j, tb.at(r, c));
+          if (tb.text[c]) sublimation_json_str(&j, tb.cell_text(r, c).c_str());
+          else sublimation_json_i64(&j, tb.at(r, c));
         }
-        montauk_json_arr_end(&j);
+        sublimation_json_arr_end(&j);
       }
-      montauk_json_arr_end(&j);
+      sublimation_json_arr_end(&j);
     } else {
-      montauk_json_key(&j, "stats");
-      montauk_json_obj_begin(&j);
-      montauk_json_kstr(&j, "of", tb.cols[static_cast<size_t>(mcol)].c_str());
-      for (const auto& [k, x] : st) montauk_json_knum(&j, k.c_str(), x);
-      montauk_json_obj_end(&j);
+      sublimation_json_key(&j, "stats");
+      sublimation_json_obj_begin(&j);
+      sublimation_json_kstr(&j, "of", tb.cols[static_cast<size_t>(mcol)].c_str());
+      for (const auto& [k, x] : st) sublimation_json_knum(&j, k.c_str(), x);
+      sublimation_json_obj_end(&j);
     }
-    if (qy.op == q::Op::Pair) montauk_json_ku64(&j, "unanswered", eng.misses());
-    montauk_json_obj_end(&j);
-    montauk_sink_appendc(&g_out, '\n');
+    if (qy.op == q::Op::Pair) sublimation_json_ku64(&j, "unanswered", eng.misses());
+    sublimation_json_obj_end(&j);
+    sublimation_sink_appendc(&g_out, '\n');
     return 0;
   }
 
   if (!st.empty()) {
-    montauk_sink_appendf(&g_out, "%s:", tb.cols[static_cast<size_t>(mcol)].c_str());
-    for (const auto& [k, x] : st) montauk_sink_appendf(&g_out, " %s=%.0f", k.c_str(), x);
-    montauk_sink_appendc(&g_out, '\n');
+    sublimation_sink_appendf(&g_out, "%s:", tb.cols[static_cast<size_t>(mcol)].c_str());
+    for (const auto& [k, x] : st) sublimation_sink_appendf(&g_out, " %s=%.0f", k.c_str(), x);
+    sublimation_sink_appendc(&g_out, '\n');
   } else {
     std::vector<size_t> w(tb.width());
     for (size_t c = 0; c < tb.width(); ++c) w[c] = tb.cols[c].size();
@@ -4915,15 +4858,15 @@ int run_query(const char* path, int argc, char** argv) {
       for (size_t c = 0; c < tb.width(); ++c) w[c] = std::max(w[c], tb.cell_text(r, c).size());
     auto line = [&](auto cell) {
       for (size_t c = 0; c + 1 < tb.width(); ++c)
-        montauk_sink_appendf(&g_out, "%-*s  ", static_cast<int>(w[c]), cell(c).c_str());
-      if (tb.width()) montauk_sink_appendf(&g_out, "%s", cell(tb.width() - 1).c_str());
-      montauk_sink_appendc(&g_out, '\n');
+        sublimation_sink_appendf(&g_out, "%-*s  ", static_cast<int>(w[c]), cell(c).c_str());
+      if (tb.width()) sublimation_sink_appendf(&g_out, "%s", cell(tb.width() - 1).c_str());
+      sublimation_sink_appendc(&g_out, '\n');
     };
     line([&](size_t c) { return tb.cols[c]; });
     for (size_t r = 0; r < tb.rows(); ++r) line([&](size_t c) { return tb.cell_text(r, c); });
   }
   if (qy.op == q::Op::Pair)
-    montauk_sink_appendf(&g_out, "unanswered: %" PRIu64 "\n", eng.misses());
+    sublimation_sink_appendf(&g_out, "unanswered: %" PRIu64 "\n", eng.misses());
   return 0;
 }
 
@@ -5132,6 +5075,96 @@ static CfgStats cfg_stats(const StaticFn& f) {
   return st;
 }
 
+// A FUNCTION'S NATURAL SEAM, from its graph alone. The block graph made
+// symmetric is a graph sublimation's spectral lane can read: Its Laplacian's
+// second eigenvector, the Fiedler vector, orders the blocks so that densely
+// joined ones sit together, and the sweep over that order -- every prefix as
+// one side, the rest as the other -- takes the cut of least conductance (cut
+// edges over the smaller side's edge volume). Cheeger's inequality bounds that
+// cut against the best one the graph has, and nobody chooses a threshold: Every
+// function has a seam, and a low conductance says it is nearly two functions.
+// SYMMETRIZING BUYS CLUSTERING, NEVER DOMINANCE: Direction is discarded here,
+// so a side is blocks that are densely joined, not blocks one dominates --
+// dominance stays with cfg_stats, from the directed edges.
+struct CfgSeam {
+  double lambda2 = 0.0, conductance = 1.0;
+  size_t blocks = 0, cut_edges = 0;
+  struct Side { size_t blocks = 0; uint64_t first_line = 0, last_line = 0; };
+  Side side[2];
+  bool ok = false;
+};
+
+static CfgSeam cfg_seam(const StaticFn& f) {
+  CfgSeam r;
+  const size_t n_all = f.blocks.size();
+  std::vector<std::vector<uint32_t>> succ(n_all);
+  for (const StaticEdge& e : f.edges)
+    if (e.from < n_all && e.to < n_all) succ[e.from].push_back(e.to);
+  std::vector<int> id(n_all, -1);
+  std::vector<uint32_t> nodes;
+  if (n_all) { id[0] = 0; nodes.push_back(0); }
+  for (size_t q = 0; q < nodes.size(); ++q)
+    for (uint32_t w : succ[nodes[q]])
+      if (id[w] < 0) { id[w] = (int)nodes.size(); nodes.push_back(w); }
+  const size_t n = nodes.size();
+  r.blocks = n;
+  // Below eight blocks there is nothing to divide; past 256 the dense
+  // eigendecomposition stops being a report-time cost.
+  if (n < 8 || n > 256) return r;
+  std::vector<double> W(n * n, 0.0), L(n * n), eval(n), V(n * n);
+  for (const StaticEdge& e : f.edges) {
+    if (e.from >= n_all || e.to >= n_all || id[e.from] < 0 || id[e.to] < 0 || e.from == e.to) continue;
+    const size_t a = (size_t)id[e.from], b = (size_t)id[e.to];
+    W[a * n + b] += 1.0; W[b * n + a] += 1.0;
+  }
+  sublimation_laplacian(W.data(), n, L.data());
+  if (sublimation_eigh(L.data(), n, eval.data(), V.data()) != 0) return r;
+  r.lambda2 = eval[1];
+  std::vector<size_t> order(n);
+  for (size_t i = 0; i < n; ++i) order[i] = i;
+  sublimation_order_f64(order, false, [&](size_t i) { return V[i * n + 1]; });
+  std::vector<double> deg(n, 0.0);
+  double vol_all = 0.0;
+  for (size_t i = 0; i < n; ++i) {
+    for (size_t k = 0; k < n; ++k) deg[i] += W[i * n + k];
+    vol_all += deg[i];
+  }
+  // Sweep: moving one block across changes the cut by its edges to the side it
+  // leaves minus its edges to the side it joins.
+  std::vector<uint8_t> in(n, 0);
+  double cut = 0.0, vol = 0.0, best = 2.0;
+  size_t best_k = 0;
+  for (size_t k = 0; k + 1 < n; ++k) {
+    const size_t v = order[k];
+    double to_in = 0.0;
+    for (size_t u = 0; u < n; ++u) if (in[u]) to_in += W[v * n + u];
+    cut += deg[v] - 2.0 * to_in;
+    vol += deg[v];
+    in[v] = 1;
+    const double smaller = std::min(vol, vol_all - vol);
+    if (smaller <= 0.0) continue;
+    const double phi = cut / smaller;
+    if (phi < best) { best = phi; best_k = k + 1; }
+  }
+  if (best_k == 0) return r;
+  std::vector<uint8_t> side(n, 1);
+  for (size_t k = 0; k < best_k; ++k) side[order[k]] = 0;
+  for (size_t i = 0; i < n; ++i) {
+    auto& s = r.side[side[i]];
+    const uint64_t line = f.blocks[nodes[i]].line;
+    if (s.blocks == 0 || line < s.first_line) s.first_line = line;
+    if (line > s.last_line) s.last_line = line;
+    ++s.blocks;
+  }
+  if (r.side[1].first_line < r.side[0].first_line) std::swap(r.side[0], r.side[1]);
+  for (const StaticEdge& e : f.edges)
+    if (e.from < n_all && e.to < n_all && id[e.from] >= 0 && id[e.to] >= 0 && e.from != e.to &&
+        side[(size_t)id[e.from]] != side[(size_t)id[e.to]]) ++r.cut_edges;
+  r.conductance = best;
+  r.ok = true;
+  return r;
+}
+
 static int run_guards(const std::string& path, bool want_json) {
   std::vector<StaticGuard> g;
   std::vector<StaticDecl> decls;
@@ -5197,45 +5230,86 @@ static int run_guards(const std::string& path, bool want_json) {
                           {"0.99", (double)q_at(depths, 0.99)}});
   }
 
-  // UNREFERENCED IS NOT DEAD, and the report says so where it is read. A name
-  // dispatched through a table, reached from a translation unit outside the
-  // scan, or called by the runtime rather than by us is unreferenced and alive.
-  // What the join gives is a SHORT list to look at, out of a corpus too large
-  // to read, and the arithmetic behind it is exact even when the conclusion is
-  // not.
+  // REACHED, NOT MERELY NAMED. A name counts only when it is named from code
+  // something reaches: a helper called only by a dead function is as dead as
+  // the function, and a count of who names it says it is alive. The entry
+  // points are `main` and every reference from file scope -- a table or an
+  // initialiser, a conditional directive, a function its head places in a
+  // section, an object's exports -- and the rest is reached by walking from
+  // each name to what its body (or a macro's) names. A function a macro
+  // defines (`TEST(name) { }`, scanned as `TEST:name`) is reached with the
+  // macro, whose expansion -- unseen -- may register it. Reaching is by
+  // spelling, so two declarations sharing a name are reached together.
+  //
+  // REACHED FROM NONE IS STILL NOT DEAD, and the report says so where it is
+  // read. A caller outside the scanned files, or a table filled at run time,
+  // looks like this too. What the walk gives is a SHORT list to look at, out of
+  // a corpus too large to read, and its arithmetic is exact even when the
+  // conclusion is not.
   {
-    std::set<std::string> referenced;
-    for (const StaticRef& r : refs) referenced.insert(r.name);
-    std::vector<const StaticDecl*> orphans;
-    std::map<std::string, uint64_t> orphan_kind;
+    std::set<std::string> declared_names, named;
+    for (const StaticDecl& d : decls) declared_names.insert(d.name);
+    std::map<std::string, std::vector<const std::string*>> names_from;
+    std::vector<std::string> todo;
+    std::set<std::string> reached;
+    auto reach = [&](const std::string& n) { if (reached.insert(n).second) todo.push_back(n); };
+    for (const StaticRef& r : refs) {
+      named.insert(r.name);
+      // From file scope, or from code the scan names nothing for, is an entry.
+      if (r.func == "<file>" || !declared_names.count(r.func)) reach(r.name);
+      else names_from[r.func].push_back(&r.name);
+    }
+    for (const StaticDecl& d : decls) {
+      const size_t colon = d.name.find(':');
+      if (colon != std::string::npos && declared_names.count(d.name.substr(0, colon)))
+        names_from[d.name.substr(0, colon)].push_back(&d.name);
+    }
+    if (declared_names.count("main")) reach("main");
+    while (!todo.empty()) {
+      const std::string n = std::move(todo.back());
+      todo.pop_back();
+      auto it = names_from.find(n);
+      if (it != names_from.end()) for (const std::string* m : it->second) reach(*m);
+    }
+    std::vector<const StaticDecl*> unreached;
+    std::map<std::string, uint64_t> unreached_kind;
+    size_t unnamed = 0;
     for (const StaticDecl& d : decls)
-      if (!referenced.count(d.name)) { orphans.push_back(&d); ++orphan_kind[d.kind]; }
+      if (!reached.count(d.name)) {
+        unreached.push_back(&d);
+        ++unreached_kind[d.kind];
+        if (!named.count(d.name)) ++unnamed;
+      }
     char v[512];
     std::snprintf(v, sizeof(v),
-                  "%zu declaration(s), %zu named again elsewhere, %zu reached by "
-                  "nothing in the scanned set",
-                  decls.size(), decls.size() - orphans.size(), orphans.size());
+                  "%zu declaration(s), %zu reached from an entry point, %zu reached from "
+                  "none: %zu named by nothing, %zu named only from code nothing reaches",
+                  decls.size(), decls.size() - unreached.size(), unreached.size(), unnamed,
+                  unreached.size() - unnamed);
     declared.verdict = v;
     declared.klass = decls.empty() ? "EMPTY"
-                   : orphans.empty() ? "FULLY-REFERENCED"
-                   : orphans.size() * 4 > decls.size() ? "SPARSELY-REFERENCED"
-                   : "MOSTLY-REFERENCED";
+                   : unreached.empty() ? "FULLY-REACHED"
+                   : unreached.size() * 4 > decls.size() ? "SPARSELY-REACHED"
+                   : "MOSTLY-REACHED";
     Detail rows = Detail::array();
-    for (size_t i = 0; i < orphans.size() && i < 32; ++i)
+    for (const StaticDecl* d : unreached)
       rows.arr.push_back(Detail::object()
-          .put("name", Detail::text(orphans[i]->name))
-          .put("kind", Detail::text(orphans[i]->kind))
-          .put("file", Detail::text(orphans[i]->file))
-          .put("line", Detail::count(orphans[i]->line)));
-    declared.detail.emplace_back("unreferenced", std::move(rows));
+          .put("name", Detail::text(d->name))
+          .put("kind", Detail::text(d->kind))
+          .put("file", Detail::text(d->file))
+          .put("line", Detail::count(d->line))
+          .put("named", Detail::text(named.count(d->name) ? "only from unreached code" : "by nothing")));
+    declared.detail.emplace_back("unreached", std::move(rows));
     declared.detail.emplace_back("caveat", Detail::text(
-        "unreferenced is not dead: a table dispatch, a caller outside the scanned "
-        "files and a runtime entry point all look like this"));
+        "reached from none is not dead: a caller outside the scanned files and a table "
+        "filled at run time look like this too, and a name shared with a reached "
+        "declaration is reached with it"));
     declared.gauges.push_back({"montauk_static_declarations_total", "", (double)decls.size()});
     declared.gauges.push_back({"montauk_static_references_total", "", (double)refs.size()});
-    declared.gauges.push_back({"montauk_static_unreferenced_total", "", (double)orphans.size()});
-    for (const auto& kv : orphan_kind)
-      declared.gauges.push_back({"montauk_static_unreferenced", "kind=\"" + kv.first + "\"",
+    declared.gauges.push_back({"montauk_static_unreached_total", "", (double)unreached.size()});
+    declared.gauges.push_back({"montauk_static_unreferenced_total", "", (double)unnamed});
+    for (const auto& kv : unreached_kind)
+      declared.gauges.push_back({"montauk_static_unreached", "kind=\"" + kv.first + "\"",
                                  (double)kv.second});
   }
 
@@ -5301,6 +5375,37 @@ static int run_guards(const std::string& path, bool want_json) {
             .put("kind", Detail::text(fns[i].blocks[b].kind)));
       }
     if (!unreach.arr.empty()) cfg.detail.emplace_back("unreachable", std::move(unreach));
+    // The functions most nearly two functions: least seam conductance first.
+    std::vector<CfgSeam> seams;
+    std::vector<size_t> seamed;
+    for (size_t i = 0; i < fns.size(); ++i) {
+      seams.push_back(cfg_seam(fns[i]));
+      if (seams.back().ok) seamed.push_back(i);
+    }
+    sublimation_order_f64(seamed, false, [&](size_t i) { return seams[i].conductance; });
+    Detail weakest = Detail::array();
+    for (size_t r = 0; r < seamed.size() && r < 10; ++r) {
+      const CfgSeam& s = seams[seamed[r]];
+      Detail sides = Detail::array();
+      for (const auto& sd : s.side)
+        sides.arr.push_back(Detail::object()
+            .put("blocks", Detail::count(sd.blocks))
+            .put("first_line", Detail::count(sd.first_line))
+            .put("last_line", Detail::count(sd.last_line)));
+      weakest.arr.push_back(Detail::object()
+          .put("function", Detail::text(fns[seamed[r]].func))
+          .put("file", Detail::text(fns[seamed[r]].file))
+          .put("blocks", Detail::count(s.blocks))
+          .put("conductance", Detail::of(s.conductance))
+          .put("cut_edges", Detail::count(s.cut_edges))
+          .put("algebraic_connectivity", Detail::of(s.lambda2))
+          .put("sides", std::move(sides)));
+    }
+    if (!weakest.arr.empty()) cfg.detail.emplace_back("weakest_seams", std::move(weakest));
+    cfg.gauges.push_back({"montauk_static_cfg_seamed_functions", "", (double)seamed.size()});
+    if (!seamed.empty())
+      cfg.gauges.push_back({"montauk_static_cfg_seam_conductance_min", "", seams[seamed[0]].conductance});
+
     cfg.detail.emplace_back("limits", Detail::object()
         .put("macro_loops", Detail::count(macros))
         .put("handler_edges", Detail::count(handlers))
@@ -5308,7 +5413,9 @@ static int run_guards(const std::string& path, bool want_json) {
     cfg.detail.emplace_back("caveat", Detail::text(
         "exceptions, longjmp, computed gotos and calls that never return are edges a "
         "lexer cannot see; a macro that opens a block is drawn as a loop and a catch "
-        "as a handler edge from its try, both from their shape"));
+        "as a handler edge from its try, both from their shape; a seam is cut in the "
+        "graph made symmetric, so its sides are densely joined blocks and never "
+        "dominance"));
     cfg.gauges.push_back({"montauk_static_cfg_functions", "", (double)fns.size()});
     cfg.gauges.push_back({"montauk_static_cfg_blocks", "", (double)nblocks});
     cfg.gauges.push_back({"montauk_static_cfg_edges", "", (double)nedges});
@@ -5322,49 +5429,49 @@ static int run_guards(const std::string& path, bool want_json) {
   }
 
   if (want_json) {
-    montauk_json j;
-    montauk_json_init(&j, &g_out);
-    montauk_json_obj_begin(&j);
-    montauk_json_ku64(&j, "schema_version", 1);
-    montauk_json_key(&j, "static");
-    montauk_json_obj_begin(&j);
-    montauk_json_kstr(&j, "path", path.c_str());
-    montauk_json_kstr(&j, "language", lang.c_str());
-    montauk_json_ku64(&j, "files", files.size());
-    montauk_json_ku64(&j, "guards", g.size());
-    montauk_json_ku64(&j, "declarations", decls.size());
-    montauk_json_ku64(&j, "references", refs.size());
-    montauk_json_ku64(&j, "blocks", nblocks);
-    montauk_json_ku64(&j, "edges", nedges);
-    montauk_json_obj_end(&j);
-    montauk_json_key(&j, "reports");
-    montauk_json_arr_begin(&j);
+    sublimation_json j;
+    sublimation_json_init(&j, &g_out);
+    sublimation_json_obj_begin(&j);
+    sublimation_json_ku64(&j, "schema_version", 1);
+    sublimation_json_key(&j, "static");
+    sublimation_json_obj_begin(&j);
+    sublimation_json_kstr(&j, "path", path.c_str());
+    sublimation_json_kstr(&j, "language", lang.c_str());
+    sublimation_json_ku64(&j, "files", files.size());
+    sublimation_json_ku64(&j, "guards", g.size());
+    sublimation_json_ku64(&j, "declarations", decls.size());
+    sublimation_json_ku64(&j, "references", refs.size());
+    sublimation_json_ku64(&j, "blocks", nblocks);
+    sublimation_json_ku64(&j, "edges", nedges);
+    sublimation_json_obj_end(&j);
+    sublimation_json_key(&j, "reports");
+    sublimation_json_arr_begin(&j);
     json_result(j, "guards", guards);
     if (!decls.empty()) json_result(j, "declarations", declared);
     if (!fns.empty()) json_result(j, "cfg", cfg);
-    montauk_json_arr_end(&j);
-    montauk_json_obj_end(&j);
-    montauk_sink_appendf(&g_out, "\n");
+    sublimation_json_arr_end(&j);
+    sublimation_json_obj_end(&j);
+    sublimation_sink_appendf(&g_out, "\n");
     return 0;
   }
-  montauk_sink_appendf(&g_out, "STATIC %s (%s)\n\n", path.c_str(), lang.c_str());
+  sublimation_sink_appendf(&g_out, "STATIC %s (%s)\n\n", path.c_str(), lang.c_str());
   text_result("guards", guards);
-  if (!decls.empty()) { montauk_sink_appendc(&g_out, '\n'); text_result("declarations", declared); }
-  if (!fns.empty()) { montauk_sink_appendc(&g_out, '\n'); text_result("cfg", cfg); }
+  if (!decls.empty()) { sublimation_sink_appendc(&g_out, '\n'); text_result("declarations", declared); }
+  if (!fns.empty()) { sublimation_sink_appendc(&g_out, '\n'); text_result("cfg", cfg); }
   return 0;
 }
 
 int montauk_analyze_main(int argc, char** argv) {
   // Report stdout buffers into g_out and drains once at exit; set up before any
   // output path (including --version) so every return drains.
-  montauk_sink_init(&g_out, 1);
+  sublimation_sink_init(&g_out, 1);
   std::atexit(drain_out);
 
   // --version: the upgrade detector (bench-enduser / install.py) reads this to
   // decide whether an installed montauk is older than the clone and needs a
   // reinstall. Plain "<n>.<n>.<n>" on stdout, nothing else.
   if (argc >= 2 && std::string(argv[1]) == "--version") {
-    montauk_sink_appendf(&g_out, "%s\n", MONTAUK_VERSION);
+    sublimation_sink_appendf(&g_out, "%s\n", MONTAUK_VERSION);
     return 0;
   }
   bool want_help = argc >= 2 &&
@@ -5704,26 +5811,26 @@ int montauk_analyze_main(int argc, char** argv) {
     char mpat[33];
     std::snprintf(mpat, sizeof mpat, "%.*s",
                   static_cast<int>(sizeof(mh.pattern)), mh.pattern);
-    montauk_json j;
-    montauk_json_init(&j, &g_out);
-    montauk_json_obj_begin(&j);
-      montauk_json_ku64(&j, "schema_version", 1u);
-      montauk_json_key(&j, "trace");
-      montauk_json_obj_begin(&j);
-        montauk_json_kstr(&j, "path", path);
-        montauk_json_kstr(&j, "pattern", mpat);
-        montauk_json_ku64(&j, "format_version", mh.version);
-        montauk_json_ku64(&j, "events", reader.events_read());
-        montauk_json_ku64(&j, "start_unix_ns", mh.real_anchor_ns);
+    sublimation_json j;
+    sublimation_json_init(&j, &g_out);
+    sublimation_json_obj_begin(&j);
+      sublimation_json_ku64(&j, "schema_version", 1u);
+      sublimation_json_key(&j, "trace");
+      sublimation_json_obj_begin(&j);
+        sublimation_json_kstr(&j, "path", path);
+        sublimation_json_kstr(&j, "pattern", mpat);
+        sublimation_json_ku64(&j, "format_version", mh.version);
+        sublimation_json_ku64(&j, "events", reader.events_read());
+        sublimation_json_ku64(&j, "start_unix_ns", mh.real_anchor_ns);
         // Data-loss provenance: one field answers "is this capture whole."
         // Emitted only when a drop snapshot exists in the trace; absent on
         // captures predating drop accounting (absence of the counter is not
         // evidence of zero loss).
         if (g_drop_seen) {
           const uint64_t dropped = drops_total();
-          montauk_json_ku64(&j, "dropped_events", dropped);
+          sublimation_json_ku64(&j, "dropped_events", dropped);
           const uint64_t observed = reader.events_read();
-          montauk_json_knum(
+          sublimation_json_knum(
               &j, "capture_completeness",
               (observed + dropped) > 0
                   ? static_cast<double>(observed) /
@@ -5738,31 +5845,31 @@ int montauk_analyze_main(int argc, char** argv) {
         // unqualified envelopes are byte-stable.
         if (g_qual_pid >= 0 || g_qual_tid >= 0 || !g_qual_comm.empty() ||
             g_qual_sig >= 0) {
-          montauk_json_key(&j, "qualifiers");
-          montauk_json_obj_begin(&j);
+          sublimation_json_key(&j, "qualifiers");
+          sublimation_json_obj_begin(&j);
             if (g_qual_pid >= 0)
-              montauk_json_ku64(&j, "pid", static_cast<uint64_t>(g_qual_pid));
+              sublimation_json_ku64(&j, "pid", static_cast<uint64_t>(g_qual_pid));
             if (g_qual_tid >= 0)
-              montauk_json_ku64(&j, "tid", static_cast<uint64_t>(g_qual_tid));
+              sublimation_json_ku64(&j, "tid", static_cast<uint64_t>(g_qual_tid));
             if (!g_qual_comm.empty())
-              montauk_json_kstr(&j, "comm", g_qual_comm.c_str());
+              sublimation_json_kstr(&j, "comm", g_qual_comm.c_str());
             if (g_qual_sig >= 0)
-              montauk_json_ku64(&j, "sig", static_cast<uint64_t>(g_qual_sig));
-          montauk_json_obj_end(&j);
+              sublimation_json_ku64(&j, "sig", static_cast<uint64_t>(g_qual_sig));
+          sublimation_json_obj_end(&j);
         }
-      montauk_json_obj_end(&j);
-      montauk_json_key(&j, "reports");
-      montauk_json_arr_begin(&j);
+      sublimation_json_obj_end(&j);
+      sublimation_json_key(&j, "reports");
+      sublimation_json_arr_begin(&j);
         for (Report* r : active) r->json(j);
-      montauk_json_arr_end(&j);
-    montauk_json_obj_end(&j);
-    montauk_sink_appendc(&g_out, '\n');
+      sublimation_json_arr_end(&j);
+    sublimation_json_obj_end(&j);
+    sublimation_sink_appendc(&g_out, '\n');
     return 0;
   }
 
   bool first = true;
   for (Report* r : active) {
-    if (!first) montauk_sink_appendf(&g_out, "\n");
+    if (!first) sublimation_sink_appendf(&g_out, "\n");
     first = false;
     r->emit(reader);
   }

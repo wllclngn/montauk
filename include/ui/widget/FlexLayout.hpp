@@ -31,7 +31,6 @@ public:
     void set_direction(FlexDirection dir) { direction_ = dir; }
     void set_spacing(int spacing) { spacing_ = spacing; }
     void clear() { items_.clear(); }
-    size_t item_count() const { return items_.size(); }
 
     // Compute layout for all items given available space.
     // Returns one LayoutRect per item, in the order they were added,

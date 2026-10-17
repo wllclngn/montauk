@@ -47,10 +47,13 @@ std::atomic<bool>       g_writer_running{false};
 //
 // The handler cannot join the writer or take g_writer_mtx: neither is
 // async-signal-safe, and locking a mutex a signalled thread may already hold
-// deadlocks. An atomic the writer checks before each write is the whole fix --
-// once muted, no further frame reaches fd 1 and the handler owns it alone.
-// A write already inside the kernel can still complete, which narrows the
-// window to one chunk instead of leaving it open for every frame that follows.
+// deadlocks. So while the writer runs, the first interrupt does not touch the
+// terminal at all: It mutes the writer and sets g_stop, the render loop sees
+// g_stop within one poll (at most a second), and the main thread joins the
+// writer and only then restores -- before the slow BPF detach, so the
+// terminal is still usable while that runs. A restore from the handler could
+// only ever narrow the race to the one write already inside the kernel, and
+// that one write could land a frame on the user's shell after the restore.
 std::atomic<bool>       g_writer_muted{false};
 
 // Bound the queue. If we ever pile up beyond this it means the terminal
@@ -154,13 +157,18 @@ void on_sigint(int){
   // nothing more a repeated graceful request can do -- so escalate to _exit so a
   // slow teardown can always be cut. Async-signal-safe: atomics, write(2), _exit.
   static std::atomic<int> hits{0};
-  g_writer_muted.store(true);   // must precede the restore: see g_writer_muted
-  restore_terminal_minimal();
+  g_writer_muted.store(true);   // no frame reaches fd 1 after this: see g_writer_muted
   if (hits.fetch_add(1) > 0) {
+    // Forcing: The writer may be mid-write, and the operator asked to cut it.
+    restore_terminal_minimal();
     const char* m = "\nmontauk: second interrupt -- forcing exit\n";
     best_effort_write(STDERR_FILENO, m, std::char_traits<char>::length(m));
     _exit(130);
   }
+  // With no async writer (headless modes) nothing else writes frames, so the
+  // terminal is restored here at once; with one, the main thread restores
+  // after joining it.
+  if (!g_writer_running.load()) restore_terminal_minimal();
   g_stop.store(true);
 }
 
@@ -176,16 +184,6 @@ void on_atexit_restore(){
 
 bool tty_stdout() {
   return ::isatty(STDOUT_FILENO) == 1;
-}
-
-bool truecolor_capable() {
-  const char* ct = std::getenv("COLORTERM");
-  if (ct) {
-    std::string s = ct; 
-    for (auto& c : s) c = montauk::util::ascii_lower((unsigned char)c);
-    if (s.find("truecolor") != std::string::npos || s.find("24bit") != std::string::npos) return true;
-  }
-  return false;
 }
 
 int term_cols() {
@@ -228,14 +226,6 @@ std::string sgr_truecolor(int r, int g, int b) {
   r = std::clamp(r,0,255); g = std::clamp(g,0,255); b = std::clamp(b,0,255);
   return std::format("\x1B[38;2;{};{};{}m", r, g, b);
 }
-std::string bar_color(double pct) {
-  if (!tty_stdout()) return {};
-  const auto& ui = ui_config();
-  if (pct <= (double)ui.caution_pct) return ui.normal;
-  if (pct <= (double)ui.warning_pct) return ui.caution;
-  return ui.warning;
-}
-
 std::string grey_bullet() {
   if (!tty_stdout()) return std::string("\xE2\x80\xA2");
   const auto& ui = ui_config();

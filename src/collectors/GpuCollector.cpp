@@ -3,20 +3,17 @@
 #include "util/Procfs.hpp"
 #include "ui/Config.hpp"
 
-#include <filesystem>
 #include <chrono>
 #include <vector>
 #include <cstdio>
 #include "sublimation_text.h"
 #include <string_view>
-#include <fstream>
-#include <sstream>
+#include <unistd.h>
 #include <unordered_set>
 #include "util/Churn.hpp"
 #include "util/NvmlDyn.hpp"
 #include "util/AsciiLower.hpp"
-
-namespace fs = std::filesystem;
+#include "util/Text.hpp"
 
 namespace montauk::collectors {
 
@@ -33,7 +30,7 @@ static std::string aggregate_gpu_name(const std::vector<std::string>& names) {
   return names[0] + " +" + std::to_string(names.size() - 1) + " more";
 }
 
-static std::string find_nvidia_smi_path() {
+std::string find_nvidia_smi_path() {
   // Env override wins over the cached config singleton: config() is built once
   // on first access, so a MONTAUK_NVIDIA_SMI_PATH set later (a test injecting a
   // fake nvidia-smi) would otherwise be ignored. Read it live here.
@@ -51,7 +48,7 @@ static std::string find_nvidia_smi_path() {
       std::string dir = p.substr(start, end == std::string::npos ? std::string::npos : end - start);
       if (!dir.empty()) {
         std::string cand = dir + "/nvidia-smi";
-        std::error_code ec; if (std::filesystem::exists(cand, ec)) return cand;
+        if (::access(cand.c_str(), X_OK) == 0) return cand;
       }
       if (end == std::string::npos) break; else start = end + 1;
     }
@@ -64,7 +61,7 @@ static std::string find_nvidia_smi_path() {
     "/bin/nvidia-smi"
   };
   for (const char* c : candidates) {
-    std::error_code ec; if (std::filesystem::exists(c, ec)) return std::string(c);
+    if (::access(c, X_OK) == 0) return std::string(c);
   }
   return std::string();
 }
@@ -160,27 +157,31 @@ static bool read_nvidia_smi_device(montauk::model::GpuVram& out) {
   cached = v; have_cache = true; last_call = now; out = v; return true;
 }
 
-static std::string trim(std::string s) {
-  auto issp = [](unsigned char c){ return c==' '||c=='\t'||c=='\r'||c=='\n'; };
-  // One erase, not one per leading space: erase(begin()) shifts the whole
-  // string each time it is called.
-  while (!s.empty() && issp(s.back())) s.pop_back();
-  size_t b = 0;
-  while (b < s.size() && issp(static_cast<unsigned char>(s[b]))) ++b;
-  if (b) s.erase(0, b);
-  return s;
+// The first line of `txt` that starts with `key`, trimmed of whitespace after
+// it: one sysfs or procfs KEY: VALUE / KEY=VALUE record.
+static std::string field_after(const std::string& txt, std::string_view key) {
+  for (size_t at = 0; at < txt.size();) {
+    size_t nl = txt.find('\n', at);
+    if (nl == std::string::npos) nl = txt.size();
+    std::string_view line(txt.data() + at, nl - at);
+    if (line.starts_with(key)) return std::string(montauk::util::trim(line.substr(key.size())));
+    at = nl + 1;
+  }
+  return {};
 }
 
+using montauk::util::read_number;
+
 static bool read_nvidia_proc(montauk::model::GpuVram& out) {
-  fs::path root(montauk::util::map_proc_path("/proc/driver/nvidia/gpus"));
-  if (!fs::exists(root)) return false;
+  const std::string root = "/proc/driver/nvidia/gpus";
+  auto gpus = montauk::util::read_dir(root);
+  if (!gpus) return false;
   bool any = false;
   uint64_t total_mb_sum = 0, used_mb_sum = 0;
   std::vector<std::string> model_names;
-  for (auto& entry : fs::directory_iterator(root)) {
-    if (!entry.is_directory()) continue;
-    auto p = entry.path() / "fb_memory_usage";
-    auto txt = montauk::util::read_file_string(p.string());
+  for (const auto& gpu : *gpus) {
+    const std::string dir = root + "/" + gpu;
+    auto txt = montauk::util::read_file_string(dir + "/fb_memory_usage");
     if (!txt) continue;
     uint64_t total_mb = 0, used_mb = 0;
     for (const auto& line : {std::string("Total"), std::string("Used")}) {
@@ -206,25 +207,12 @@ static bool read_nvidia_proc(montauk::model::GpuVram& out) {
         else used_mb = v;
       }
     }
-    // Try to read a friendly model name
-    std::string friendly = entry.path().filename().string();
-    try {
-      auto inf = entry.path() / "information";
-      std::ifstream in(inf);
-      if (!in) { /* optional; ignore */ }
-      else {
-        std::string line;
-        while (std::getline(in, line)) {
-          if (line.rfind("Model:", 0) == 0) {
-            auto pos = line.find(':');
-            if (pos != std::string::npos) {
-              friendly = trim(line.substr(pos + 1));
-            }
-            break;
-          }
-        }
-      }
-    } catch (...) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); }
+    // A friendly model name where the driver gives one.
+    std::string friendly = gpu;
+    if (auto inf = montauk::util::read_file_string(dir + "/information")) {
+      std::string model = field_after(*inf, "Model:");
+      if (!model.empty()) friendly = model;
+    }
 
     if (total_mb > 0) {
       any = true;
@@ -250,53 +238,30 @@ static bool read_nvidia_proc(montauk::model::GpuVram& out) {
 static bool read_amd_sysfs(montauk::model::GpuVram& out, double& sum_busy,
                            unsigned& busy_cnt, double& total_power_w,
                            bool& have_power) {
-  fs::path drm(montauk::util::map_sys_path("/sys/class/drm"));
-  if (!fs::exists(drm)) return false;
+  auto cards = montauk::util::read_dir("/sys/class/drm");
+  if (!cards) return false;
   bool any = false;
   uint64_t total_mb_sum = 0, used_mb_sum = 0;
   std::vector<std::string> names;
-  for (auto& entry : fs::directory_iterator(drm)) {
-    auto name = entry.path().filename().string();
-    if (!entry.is_directory()) continue;
+  for (const auto& name : *cards) {
     if (!name.starts_with("card")) continue;
-    auto dev = entry.path() / "device";
+    const std::string dev = "/sys/class/drm/" + name + "/device";
     // AMD core busy percent (any card exposing gpu_busy_percent)
-    {
-      std::ifstream f(dev / "gpu_busy_percent");
-      if (f) {
-        double v = 0.0; f >> v;
-        if (f) { sum_busy += v; busy_cnt++; }
+    if (double v = 0.0; read_number(dev + "/gpu_busy_percent", v)) { sum_busy += v; busy_cnt++; }
+    // Power via hwmon (all vendors): sum power1_average/input if present.
+    // The hwmon directory is enumerated once and its listing reused by the
+    // temperature pass below.
+    std::vector<std::string> hwmon_dirs;
+    for (const auto& hm : montauk::util::list_dir(dev + "/hwmon")) hwmon_dirs.push_back(dev + "/hwmon/" + hm);
+    for (const auto& hm : hwmon_dirs) {
+      for (const char* f : {"/power1_average", "/power1_input"}) {
+        double microw = 0.0;
+        if (!read_number(hm + f, microw)) continue;
+        if (microw > 0) { total_power_w += microw / 1'000'000.0; have_power = true; break; }
       }
     }
-    // Power via hwmon (all vendors): sum power1_average/input if present.
-    //
-    // The hwmon directory is enumerated ONCE and its entries kept: the
-    // temperature pass below used to walk it a second time, paying another
-    // exists() plus a directory open/read/close per card per sample for a
-    // listing that cannot have changed in between.
-    std::vector<fs::path> hwmon_dirs;
-    try {
-      fs::path hwmons = dev / "hwmon";
-      if (fs::exists(hwmons)) {
-        for (auto& hm : fs::directory_iterator(hwmons)) hwmon_dirs.push_back(hm.path());
-        for (auto& hmp : hwmon_dirs) {
-          struct { fs::path path() const { return p; } fs::path p; } hm{hmp};
-          auto pavg = hm.path() / "power1_average";
-          auto pinp = hm.path() / "power1_input";
-          for (auto p : {pavg, pinp}) {
-            std::ifstream f(p);
-            if (!f) continue;
-            long long microw = 0; f >> microw; if (!f) continue;
-            if (microw > 0) { total_power_w += static_cast<double>(microw) / 1'000'000.0; have_power = true; break; }
-          }
-        }
-      }
-    } catch (...) { /* ignore */ }
-    auto tot = dev / "mem_info_vram_total";
-    auto usd = dev / "mem_info_vram_used";
-    if (!fs::exists(tot) || !fs::exists(usd)) continue;
-    auto s_tot = montauk::util::read_file_string(tot.string());
-    auto s_usd = montauk::util::read_file_string(usd.string());
+    auto s_tot = montauk::util::read_file_string(dev + "/mem_info_vram_total");
+    auto s_usd = montauk::util::read_file_string(dev + "/mem_info_vram_used");
     if (!s_tot || !s_usd) continue;
     uint64_t t = 0, u = 0;
     try {
@@ -309,61 +274,47 @@ static bool read_amd_sysfs(montauk::model::GpuVram& out, double& sum_busy,
     if (t_mb == 0) continue;
     any = true;
     total_mb_sum += t_mb; used_mb_sum += u_mb;
-    // Try build a friendly string from uevent (DRIVER + PCI ID)
+    // A friendly string from uevent (DRIVER + PCI ID)
     std::string friendly = name;
-    try {
-      std::ifstream ue(dev / "uevent");
-      std::string line; std::string driver; std::string pciid;
-      while (std::getline(ue, line)) {
-        if (line.rfind("DRIVER=",0)==0) driver = trim(line.substr(7));
-        else if (line.rfind("PCI_ID=",0)==0) pciid = trim(line.substr(7));
-      }
+    if (auto ue = montauk::util::read_file_string(dev + "/uevent")) {
+      const std::string driver = field_after(*ue, "DRIVER=");
+      const std::string pciid = field_after(*ue, "PCI_ID=");
       if (!driver.empty() || !pciid.empty()) {
         friendly.clear();
         if (!driver.empty()) friendly += driver;
         if (!pciid.empty()) friendly += (friendly.empty()?"":" ") + std::string("(") + pciid + ")";
       }
-    } catch(...) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); }
+    }
     if (friendly.empty()) friendly = name;
     montauk::model::GpuVramDevice rec{ friendly, t_mb, u_mb };
     // Read temps via hwmon if exposed, reusing the listing taken above.
-    try {
-      {
-        for (auto& hmp : hwmon_dirs) {
-          struct { fs::path path() const { return p; } fs::path p; } hm{hmp};
-          for (auto& file : fs::directory_iterator(hm.path())) {
-            auto fn = file.path().filename().string();
-            if (fn.rfind("temp",0)==0 && fn.find("_input")!=std::string::npos) {
-              // Determine label
-              auto base = fn.substr(0, fn.find("_input"));
-              std::string label;
-              try {
-                std::ifstream lf(hm.path() / (base + "_label"));
-                if (lf) std::getline(lf, label);
-              } catch(...) {}
-              long mdeg=0; std::ifstream inf(file.path()); if (!inf) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); continue; } inf >> mdeg; if (!inf) continue;
-              double c = mdeg / 1000.0;
-              // Try thresholds for this sensor (crit/max/emergency)
-              double warn_tc = 0.0; bool have_warn = false;
-              for (const char* suff : {"_crit", "_max", "_emergency"}) {
-                long thr = 0; std::ifstream tf(hm.path() / (base + suff));
-                if (tf) { tf >> thr; if (tf) { warn_tc = thr / 1000.0; have_warn = true; break; } }
-              }
-              std::string lab = label; for (auto& ch : lab) ch = montauk::util::ascii_lower((unsigned char)ch);
-              if (lab.find("edge")!=std::string::npos || (label.empty() && !rec.has_temp_edge)) { rec.has_temp_edge = true; rec.temp_edge_c = c; }
-              else if (lab.find("junction")!=std::string::npos || lab.find("hotspot")!=std::string::npos) { rec.has_temp_hotspot = true; rec.temp_hotspot_c = c; }
-              else if (lab.find("mem")!=std::string::npos || lab.find("hbm")!=std::string::npos) { rec.has_temp_mem = true; rec.temp_mem_c = c; }
-              else if (!rec.has_temp_edge) { rec.has_temp_edge = true; rec.temp_edge_c = c; } // fallback first temp as edge
-              if (have_warn) {
-                if (lab.find("edge")!=std::string::npos || label.empty()) { rec.has_thr_edge = true; rec.thr_edge_c = warn_tc; }
-                else if (lab.find("junction")!=std::string::npos || lab.find("hotspot")!=std::string::npos) { rec.has_thr_hotspot = true; rec.thr_hotspot_c = warn_tc; }
-                else if (lab.find("mem")!=std::string::npos || lab.find("hbm")!=std::string::npos) { rec.has_thr_mem = true; rec.thr_mem_c = warn_tc; }
-              }
-            }
-          }
+    for (const auto& hm : hwmon_dirs) {
+      for (const auto& fn : montauk::util::list_dir(hm)) {
+        if (fn.rfind("temp", 0) != 0 || fn.find("_input") == std::string::npos) continue;
+        const std::string base = fn.substr(0, fn.find("_input"));
+        std::string label;
+        if (auto l = montauk::util::read_file_string(hm + "/" + base + "_label")) label = l->substr(0, l->find('\n'));
+        double mdeg = 0.0;
+        if (!read_number(hm + "/" + fn, mdeg)) { montauk::util::note_churn(montauk::util::ChurnKind::Sysfs); continue; }
+        const double c = mdeg / 1000.0;
+        // Thresholds for this sensor (crit/max/emergency)
+        double warn_tc = 0.0; bool have_warn = false;
+        for (const char* suff : {"_crit", "_max", "_emergency"}) {
+          double thr = 0.0;
+          if (read_number(hm + "/" + base + suff, thr)) { warn_tc = thr / 1000.0; have_warn = true; break; }
+        }
+        std::string lab = label; for (auto& ch : lab) ch = montauk::util::ascii_lower((unsigned char)ch);
+        if (lab.find("edge")!=std::string::npos || (label.empty() && !rec.has_temp_edge)) { rec.has_temp_edge = true; rec.temp_edge_c = c; }
+        else if (lab.find("junction")!=std::string::npos || lab.find("hotspot")!=std::string::npos) { rec.has_temp_hotspot = true; rec.temp_hotspot_c = c; }
+        else if (lab.find("mem")!=std::string::npos || lab.find("hbm")!=std::string::npos) { rec.has_temp_mem = true; rec.temp_mem_c = c; }
+        else if (!rec.has_temp_edge) { rec.has_temp_edge = true; rec.temp_edge_c = c; } // fallback first temp as edge
+        if (have_warn) {
+          if (lab.find("edge")!=std::string::npos || label.empty()) { rec.has_thr_edge = true; rec.thr_edge_c = warn_tc; }
+          else if (lab.find("junction")!=std::string::npos || lab.find("hotspot")!=std::string::npos) { rec.has_thr_hotspot = true; rec.thr_hotspot_c = warn_tc; }
+          else if (lab.find("mem")!=std::string::npos || lab.find("hbm")!=std::string::npos) { rec.has_thr_mem = true; rec.thr_mem_c = warn_tc; }
         }
       }
-    } catch(...) { /* ignore */ }
+    }
     out.devices.push_back(std::move(rec));
     names.push_back(friendly);
   }

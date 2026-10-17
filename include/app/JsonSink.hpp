@@ -2,13 +2,13 @@
 
 #include "app/MetricsSink.hpp"
 #include "util/sink.h"
-#include "util/json.h"
+#include "sublimation_json.h"
 
 #include <vector>
 
 namespace montauk::app {
 
-// Concrete MetricsSink writing through include/util/json.h -- the same
+// Concrete MetricsSink writing through sublimation_json.h -- the same
 // write-only JSON writer used everywhere else in montauk, so this surface
 // cannot diverge from the rest of the codebase's JSON encoding.
 class JsonSink : public MetricsSink {
@@ -39,8 +39,8 @@ public:
   [[nodiscard]] std::string finish() override;
 
 private:
-  montauk_sink sink_;
-  montauk_json j_;
+  sublimation_sink sink_;
+  sublimation_json j_;
   std::vector<Shape> collection_stack_;
 };
 

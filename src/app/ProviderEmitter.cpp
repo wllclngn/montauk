@@ -11,15 +11,11 @@
 
 namespace montauk::app {
 
-namespace {
-// Same location ProviderCollector scans, so montauk's emitter sits in the mesh
-// alongside every other producer's own socket.
 std::string providers_dir() {
   const char* xdg = std::getenv("XDG_RUNTIME_DIR");
   if (xdg && *xdg) return std::string(xdg) + "/montauk/providers";
   return "/run/montauk/providers";
 }
-} // namespace
 
 ProviderEmitter::ProviderEmitter(std::string name) : name_(std::move(name)) {
   path_ = providers_dir() + "/" + name_ + ".sock";

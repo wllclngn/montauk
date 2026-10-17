@@ -37,12 +37,20 @@ public:
 
 private:
   NvmlDyn() = default;
+  ~NvmlDyn();
   NvmlDyn(const NvmlDyn&) = delete;
   NvmlDyn& operator=(const NvmlDyn&) = delete;
 
   void* handle_{};
   bool loaded_{false};
   bool suppressed_{false};
+  // NVML is initialised once and held: An init/shutdown pair per sample costs
+  // ~3 ms whenever nothing else holds a reference, and nothing while one is.
+  bool inited_{false};
+  // What a device does not change while montauk runs, read once per device
+  // set: its name and its power-management limit.
+  struct Fixed { std::string name; bool has_limit; double limit_w; };
+  std::vector<Fixed> fixed_;
 
   // Function pointers (subset used by GpuCollector)
   using nvmlReturn_t = int; // NVML_SUCCESS == 0
@@ -69,34 +77,6 @@ private:
   // Helpers
   bool dlsym_all();
 
-  friend class NvmlGuard;
-};
-
-class NvmlGuard {
-public:
-  NvmlGuard() {
-    auto& nvml = NvmlDyn::instance();
-    if (nvml.p_nvmlInit_v2) {
-      success_ = (nvml.p_nvmlInit_v2() == 0);
-    }
-  }
-  
-  ~NvmlGuard() {
-    if (success_) {
-      auto& nvml = NvmlDyn::instance();
-      if (nvml.p_nvmlShutdown) {
-        nvml.p_nvmlShutdown();
-      }
-    }
-  }
-  
-  [[nodiscard]] bool ok() const { return success_; }
-  
-  NvmlGuard(const NvmlGuard&) = delete;
-  NvmlGuard& operator=(const NvmlGuard&) = delete;
-  
-private:
-  bool success_ = false;
 };
 
 } // namespace montauk::util

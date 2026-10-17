@@ -9,7 +9,6 @@
 using montauk::app::SecurityFinding;
 using montauk::app::collect_security_findings;
 using montauk::app::format_security_line_default;
-using montauk::app::format_security_line_system;
 
 static montauk::model::ProcSample make_proc(int pid,
                                             const std::string& user,
@@ -42,8 +41,8 @@ TEST(security_fake_kernel_thread) {
   auto findings = collect_security_findings(snap);
   ASSERT_EQ(1u, findings.size());
   ASSERT_EQ(2, findings[0].severity);
-  auto line = format_security_line_system(findings[0]);
-  ASSERT_TRUE(line.find("FAKE KERNEL THREAD") != std::string::npos);
+  auto line = format_security_line_default(findings[0]);
+  ASSERT_TRUE(line.find("fake kernel thread") != std::string::npos);
 }
 
 TEST(security_curl_bash_caution) {
@@ -66,7 +65,7 @@ TEST(security_python_home_caution) {
   auto findings = collect_security_findings(snap);
   ASSERT_EQ(1u, findings.size());
   ASSERT_EQ(1, findings[0].severity);
-  ASSERT_TRUE(format_security_line_system(findings[0]).find("HOME SCRIPT") != std::string::npos);
+  ASSERT_TRUE(format_security_line_default(findings[0]).find("home script") != std::string::npos);
 }
 
 TEST(security_tmp_shell_warning) {
@@ -128,5 +127,5 @@ TEST(security_net_exfil_caution) {
   auto findings = collect_security_findings(snap);
   ASSERT_EQ(1u, findings.size());
   ASSERT_EQ(1, findings[0].severity);
-  ASSERT_TRUE(format_security_line_system(findings[0]).find("POSSIBLE EXFIL") != std::string::npos);
+  ASSERT_TRUE(format_security_line_default(findings[0]).find("possible exfil") != std::string::npos);
 }

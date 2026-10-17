@@ -3,6 +3,8 @@
 #include "app/ChartHistories.hpp"
 #include "app/AnomalyEnrichment.hpp"
 #include <unistd.h>
+#include <sys/timerfd.h>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -143,6 +145,31 @@ void Producer::refresh_pmu_targets(const montauk::model::ProcessSnapshot& procs)
   pmu_.set_process_targets(targets);
 }
 
+static uint64_t thread_cpu_ns() {
+  timespec ts{};
+  ::clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+  return static_cast<uint64_t>(ts.tv_sec) * 1000000000ull + static_cast<uint64_t>(ts.tv_nsec);
+}
+
+template <class F> void Producer::timed(Stage s, F&& f) {
+  if (!stage_timing_) { f(); return; }
+  const uint64_t t0 = thread_cpu_ns();
+  f();
+  stage_ns_[static_cast<size_t>(s)] += thread_cpu_ns() - t0;
+  stage_calls_[static_cast<size_t>(s)]++;
+}
+
+std::vector<Producer::StageCost> Producer::stage_costs() const {
+  static constexpr const char* names[] = {
+    "cpu", "pmu", "memory", "gpu", "net", "disk", "fs", "processes", "thermal",
+    "providers", "alerts", "gpu-attribution", "anomalies", "changepoint", "history",
+  };
+  static_assert(std::size(names) == static_cast<size_t>(Stage::Count));
+  std::vector<StageCost> out;
+  for (size_t i = 0; i < std::size(names); i++) out.push_back({names[i], stage_calls_[i], stage_ns_[i]});
+  return out;
+}
+
 void Producer::run(std::stop_token st) {
   // Small helper: compute kernel tick in milliseconds for warm-up pacing
   auto tick_ms = []{
@@ -247,41 +274,59 @@ void Producer::run(std::stop_token st) {
     s.cpu.changepoint_score = cpu_changepoint(s);  // before push: reads prior frames
     chart_histories().push_snapshot(s);
     buffers_.publish();
+    buffers_.carry_forward();
   }
 
   // Main collection loop. Sample return values intentionally ignored for resilience.
+  //
+  // The anomaly fusion reads fault and context-switch DELTAS against the
+  // previous process sample, so it runs on a publish that carries a fresh one
+  // and on no other: Run again over the same sample, every delta is zero, the
+  // two axes drop out as constant, and the scores alternate between a six-axis
+  // and a four-axis ranking. The carried buffer keeps the last scores.
+  bool procs_fresh = false;
+  // THE WAIT IS A DEADLINE, and the kernel has an object for one: A timerfd on
+  // CLOCK_MONOTONIC (steady_clock's clock) armed at the absolute time the next
+  // collector is due, so a late wake does not push every later one back the
+  // way a relative sleep does. A box that will not make one sleeps as before.
+  const int tfd = ::timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
   while (!st.stop_requested()) {
     auto now = steady_clock::now();
     bool ran = false;
     auto& s = buffers_.begin_write();
-    if (now >= next_cpu) { (void)cpu_.sample(s.cpu); next_cpu = now + cpu_interval; ran = true; }
+    if (now >= next_cpu) { timed(Stage::Cpu, [&]{ (void)cpu_.sample(s.cpu); }); next_cpu = now + cpu_interval; ran = true; }
     if (now >= next_pmu) {
       // Re-resolve the per-process selection before every read, so a workload
       // that starts (or restarts) mid-run is picked up rather than needing
       // montauk to have been launched after it.
-      if (pmu_proc_enabled_) refresh_pmu_targets(s.procs);
-      if (pmu_enabled_ || pmu_proc_enabled_) { (void)pmu_.sample(s.pmu); ran = true; }
+      if (pmu_enabled_ || pmu_proc_enabled_) {
+        timed(Stage::Pmu, [&]{
+          if (pmu_proc_enabled_) refresh_pmu_targets(s.procs);
+          (void)pmu_.sample(s.pmu);
+        });
+        ran = true;
+      }
       next_pmu = now + pmu_interval;
     }
-    if (now >= next_mem) { (void)mem_.sample(s.mem); next_mem = now + mem_interval; ran = true; }
-    if (now >= next_gpu) { (void)gpu_.sample(s.vram); next_gpu = now + gpu_interval; ran = true; }
-    if (now >= next_net) { (void)net_.sample(s.net); next_net = now + net_interval; ran = true; }
-    if (now >= next_disk){ (void)disk_.sample(s.disk); next_disk = now + disk_interval; ran = true; }
-    if (now >= next_fs)  { (void)fs_.sample(s.fs);     next_fs  = now + fs_interval; ran = true; }
-    if (now >= next_proc){ if (proc_) { (void)proc_->sample(s.procs); process_samples_.fetch_add(1, std::memory_order_release); } next_proc = now + proc_interval; ran = true; }
-    if (now >= next_therm){ (void)thermal_.sample(s.thermal); next_therm = now + therm_interval; ran = true; }
-    if (now >= next_prov){ (void)providers_.sample(s.providers); next_prov = now + prov_interval; ran = true; }
+    if (now >= next_mem) { timed(Stage::Memory, [&]{ (void)mem_.sample(s.mem); }); next_mem = now + mem_interval; ran = true; }
+    if (now >= next_gpu) { timed(Stage::Gpu, [&]{ (void)gpu_.sample(s.vram); }); next_gpu = now + gpu_interval; ran = true; }
+    if (now >= next_net) { timed(Stage::Net, [&]{ (void)net_.sample(s.net); }); next_net = now + net_interval; ran = true; }
+    if (now >= next_disk){ timed(Stage::Disk, [&]{ (void)disk_.sample(s.disk); }); next_disk = now + disk_interval; ran = true; }
+    if (now >= next_fs)  { timed(Stage::Fs, [&]{ (void)fs_.sample(s.fs); });     next_fs  = now + fs_interval; ran = true; }
+    if (now >= next_proc){ if (proc_) { timed(Stage::Processes, [&]{ (void)proc_->sample(s.procs); }); process_samples_.fetch_add(1, std::memory_order_release); procs_fresh = true; } next_proc = now + proc_interval; ran = true; }
+    if (now >= next_therm){ timed(Stage::Thermal, [&]{ (void)thermal_.sample(s.thermal); }); next_therm = now + therm_interval; ran = true; }
+    if (now >= next_prov){ timed(Stage::Providers, [&]{ (void)providers_.sample(s.providers); }); next_prov = now + prov_interval; ran = true; }
     bool time_to_publish = false;
     if (now >= next_pub) { time_to_publish = true; next_pub = now + pub_interval; }
     bool nvml_ran = false;
     if (now >= next_nvml) nvml_ran = true;
     if (ran || time_to_publish || nvml_ran) {
       if (proc_) { s.collector_name = proc_->name(); }
-      {
+      timed(Stage::Alerts, [&]{
         auto a = alerts_.evaluate(s);
         s.alerts.clear();
         for (auto& it : a) s.alerts.push_back(montauk::model::AlertItem{it.severity, it.message});
-      }
+      });
       // Populate churn diagnostics for SYSTEM sticky line
       s.churn.recent_2s_events = montauk::util::count_recent_ms(2000);
       s.churn.recent_2s_proc   = montauk::util::count_recent_kind_ms(montauk::util::ChurnKind::Proc, 2000);
@@ -289,28 +334,38 @@ void Producer::run(std::stop_token st) {
       // Enrich per-process GPU utilization using NVML (best effort, throttled)
       if (nvml_ran) {
         // Attribute per-process GPU% across NVML/fdinfo backends
-        gpu_attr_->enrich(s);
+        timed(Stage::GpuAttribution, [&]{ gpu_attr_->enrich(s); });
         next_nvml = now + nvml_interval;
       }
-      montauk::app::enrich_anomalies(s.procs, anomaly_prev_faults_, anomaly_prev_ctxsw_);
-      s.cpu.changepoint_score = cpu_changepoint(s);  // before push: reads prior frames
-      chart_histories().push_snapshot(s);
+      if (procs_fresh) {
+        timed(Stage::Anomalies, [&]{ montauk::app::enrich_anomalies(s.procs, anomaly_prev_faults_, anomaly_prev_ctxsw_); });
+        procs_fresh = false;
+      }
+      timed(Stage::Changepoint, [&]{ s.cpu.changepoint_score = cpu_changepoint(s); });  // before push: reads prior frames
+      timed(Stage::History, [&]{ chart_histories().push_snapshot(s); });
       buffers_.publish();
+      buffers_.carry_forward();
     }
-    // sleep until the earliest next_due or next_pub, bounded
-    auto next_due = std::min({next_cpu, next_pmu, next_mem, next_gpu, next_net, next_disk, next_proc, next_therm, next_prov, next_pub});
-    auto sleep_for = duration_cast<milliseconds>(next_due - steady_clock::now());
-    if (sleep_for < 20ms) {
-      sleep_for = 20ms;
+    // Wait until the earliest next_due or next_pub, held to 20..100 ms from now.
+    const auto next_due = std::min({next_cpu, next_pmu, next_mem, next_gpu, next_net, next_disk, next_proc, next_therm, next_prov, next_pub});
+    const auto at = steady_clock::now();
+    const auto wake = std::clamp(next_due, at + 20ms, at + 100ms);
+    if (tfd >= 0) {
+      const auto ns = duration_cast<nanoseconds>(wake.time_since_epoch()).count();
+      itimerspec its{};
+      its.it_value.tv_sec = ns / 1000000000;
+      its.it_value.tv_nsec = ns % 1000000000;
+      uint64_t expirations = 0;
+      if (::timerfd_settime(tfd, TFD_TIMER_ABSTIME, &its, nullptr) == 0)
+        while (::read(tfd, &expirations, sizeof expirations) < 0 && errno == EINTR) {}
+      else std::this_thread::sleep_until(wake);
+    } else {
+      std::this_thread::sleep_until(wake);
     }
-    if (sleep_for > 100ms) {
-      sleep_for = 100ms;
-    }
-    std::this_thread::sleep_for(sleep_for);
   }
+  if (tfd >= 0) ::close(tfd);
   // gpu_attr_ cleanup handled by unique_ptr destructor
 }
 
-// test_apply_gpu_samples is defined inline in Producer.hpp under MONTAUK_TESTING
 
 } // namespace montauk::app

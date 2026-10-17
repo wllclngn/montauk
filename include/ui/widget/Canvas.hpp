@@ -49,13 +49,6 @@ public:
     // Draw a bordered rectangle using Unicode box-drawing chars.
     void draw_rect(int x, int y, int w, int h, Style style = {});
 
-    // Fill a rectangle with a cell value.
-    void fill_rect(int x, int y, int w, int h, const Cell& cell);
-
-    // Blit (copy) another canvas onto this one.
-    void blit(const Canvas& source, int dest_x, int dest_y);
-    void blit(const Canvas& source, int dest_x, int dest_y, int src_x, int src_y, int w, int h);
-
     // Resize the canvas (clears content).
     void resize(int width, int height);
 

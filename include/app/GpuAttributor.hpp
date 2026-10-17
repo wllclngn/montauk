@@ -21,6 +21,12 @@ private:
   struct GpuSmooth { double ema{0.0}; Clock::time_point last_sample{}; Clock::time_point last_running{}; };
   std::unordered_map<int, GpuSmooth> gpu_smooth_;
   montauk::collectors::FdinfoProcessCollector fdinfo_{};
+  // nvidia-smi's version strings, asked for once. The answer does not change
+  // while montauk runs, and a query this driver refuses must not be re-forked
+  // every second waiting for it to change its mind.
+  bool smi_versions_tried_{false};
+  std::string smi_driver_version_{};
+  std::string smi_cuda_version_{};
 
 #ifdef MONTAUK_HAVE_NVML
   bool nvml_inited_{false};

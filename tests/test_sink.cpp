@@ -1,4 +1,4 @@
-// montauk_sink (C++ side): append/format/grow-past-SBO behavior of the
+// sublimation_sink (C++ side): append/format/grow-past-SBO behavior of the
 // shared C23/C++23 output sink.
 #include "minitest.hpp"
 #include "util/sink.h"
@@ -16,7 +16,7 @@ static std::string drained_bytes(montauk::Sink& sink) {
   int fds[2];
   if (::pipe(fds) != 0) throw std::runtime_error("pipe");
   sink.s.fd = fds[1];
-  montauk_sink_drain(&sink.s);
+  sublimation_sink_drain(&sink.s);
   ::close(fds[1]);
   std::string out;
   char buf[4096];
@@ -47,7 +47,7 @@ TEST(sink_grows_past_sbo) {
     std::format_to(std::back_inserter(sink), "{},", i);
     expect += std::to_string(i) + ",";
   }
-  ASSERT_TRUE(sink.size() > MONTAUK_SINK_SBO);
+  ASSERT_TRUE(sink.size() > SUBLIMATION_SINK_SBO);
   ASSERT_EQ(drained_bytes(sink), expect);
 }
 
@@ -56,7 +56,7 @@ TEST(sink_u64_matches_snprintf) {
                            18446744073709551615ull};
   for (uint64_t v : vals) {
     montauk::Sink sink;
-    montauk_sink_append_u64(&sink.s, v);
+    sublimation_sink_append_u64(&sink.s, v);
     char ref[32];
     std::snprintf(ref, sizeof(ref), "%llu", (unsigned long long)v);
     ASSERT_EQ(drained_bytes(sink), std::string(ref));
@@ -65,12 +65,12 @@ TEST(sink_u64_matches_snprintf) {
 
 TEST(sink_i64_signed) {
   montauk::Sink sink;
-  montauk_sink_append_i64(&sink.s, -9223372036854775807LL - 1);  // INT64_MIN
+  sublimation_sink_append_i64(&sink.s, -9223372036854775807LL - 1);  // INT64_MIN
   ASSERT_EQ(drained_bytes(sink), std::string("-9223372036854775808"));
 }
 
 TEST(sink_appendf) {
   montauk::Sink sink;
-  montauk_sink_appendf(&sink.s, "%s=%d %.2f", "k", 5, 1.5);
+  sublimation_sink_appendf(&sink.s, "%s=%d %.2f", "k", 5, 1.5);
   ASSERT_EQ(drained_bytes(sink), std::string("k=5 1.50"));
 }

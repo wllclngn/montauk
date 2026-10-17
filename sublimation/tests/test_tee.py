@@ -14,8 +14,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-SUB = ROOT / "build" / "sublimation"
+# The binary under test is named by the caller (tests/run.py passes montauk's
+# build/sublimation; a standalone sublimation build passes its own), so the
+# test needs nothing outside this directory.
+SUB = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else None
 GNU = shutil.which("tee", path="/usr/bin:/bin")
 
 
@@ -36,7 +38,7 @@ def run(tool, args, data, cwd, from_file):
             r = subprocess.run(argv, stdin=f, capture_output=True, cwd=cwd)
     else:
         r = subprocess.run(argv, input=data, capture_output=True, cwd=cwd)
-    return r.returncode, r.stdout
+    return r.returncode, r.stdout, r.stderr
 
 
 def case(label, files, data, extra=(), seed=None, from_file=False):
@@ -51,13 +53,20 @@ def case(label, files, data, extra=(), seed=None, from_file=False):
                 if name.startswith("ro/"):
                     (d / "ro").mkdir(exist_ok=True)
                     os.chmod(d / "ro", 0o500)
-            rc, out = run(tool, [*extra, *files], data, d, from_file)
+            rc, out, err = run(tool, [*extra, *files], data, d, from_file)
             written = {n: (d / n).read_bytes() for n in files if (d / n).is_file()}
             if (d / "ro").exists():
                 os.chmod(d / "ro", 0o700)
             got[tool] = (rc, out, written)
+            if tool == "sub":
+                sub_err = err
     ok = got["sub"] == got["gnu"]
     path = "copy loop" if from_file else "pipes"
+    # A message built from an errno nobody set reads "Success". Whatever the
+    # exit status, an error line must name what actually happened.
+    if b": Success" in sub_err:
+        note(f"FAIL {label} ({path}): stderr reports an error as Success: {sub_err[:120]!r}")
+        ok = False
     if not ok:
         s, g = got["sub"], got["gnu"]
         note(f"FAIL {label} ({path}): rc {s[0]} vs {g[0]}, stdout {len(s[1])} vs "
@@ -66,18 +75,25 @@ def case(label, files, data, extra=(), seed=None, from_file=False):
 
 
 def main() -> int:
-    if not SUB.is_file() or not GNU:
-        note("DECLINED: needs build/sublimation and coreutils tee")
+    if SUB is None or not SUB.is_file() or not GNU:
+        note("DECLINED: usage: test_tee.py PATH/TO/sublimation (needs coreutils tee)")
         return 2
     fails = 0
-    sizes = {"empty": 0, "one byte": 1, "64 KiB": 65536, "1 MiB": 1 << 20,
-             "1 MiB + 1": (1 << 20) + 1}
+    sizes = {"empty": 0, "one byte": 1, "64 KiB": 65536, "64 KiB + 1": 65537,
+             "1 MiB": 1 << 20, "1 MiB + 1": (1 << 20) + 1}
     for from_file in (False, True):
-        for label, n in sizes.items():
-            data = payload(n)
-            fails += not case(f"{label}, no file", [], data, from_file=from_file)
-            fails += not case(f"{label}, one file", ["a"], data, from_file=from_file)
-            fails += not case(f"{label}, three files", ["a", "b", "c"], data, from_file=from_file)
+        # Every size and file count with and without -a: -a with no FILE once
+        # lost everything past the first pipe buffer, and only this matrix,
+        # pipe to pipe, reaches that leg.
+        for extra in ((), ("-a",)):
+            for label, n in sizes.items():
+                data = payload(n)
+                tag = f"{label}{' -a' if extra else ''}"
+                fails += not case(f"{tag}, no file", [], data, extra, from_file=from_file)
+                fails += not case(f"{tag}, one file", ["a"], data, extra, from_file=from_file)
+                fails += not case(f"{tag}, three files", ["a", "b", "c"], data, extra, from_file=from_file)
+            fails += not case(f"every FILE unopenable{' -a' if extra else ''}", ["ro/x"],
+                              payload(1 << 20), extra, from_file=from_file)
         big = payload(1 << 20)
         seed = {"a": b"kept\n", "b": b"also kept\n"}
         fails += not case("-a onto existing content", ["a", "b"], big, ("-a",), seed, from_file)

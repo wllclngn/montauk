@@ -26,9 +26,9 @@ extern "C" {
 
 // Release version (source-of-truth for the library tag, pkgbuild, tests).
 #define SUBLIMATION_VERSION_MAJOR  3
-#define SUBLIMATION_VERSION_MINOR  3
+#define SUBLIMATION_VERSION_MINOR  4
 #define SUBLIMATION_VERSION_PATCH  0
-#define SUBLIMATION_VERSION_STRING "3.3.0"
+#define SUBLIMATION_VERSION_STRING "3.4.0"
 
 // ABI version. Bumped only when the library ABI breaks; independent from
 // the release version above. Readers should compare this value at runtime
@@ -51,7 +51,15 @@ extern "C" {
 // Advanced to 7: sublimation_tally and sub_tally_t were removed. The CLI's tally
 // verb is the one tally; the library copy existed for an in-process caller that
 // now runs the CLI, and nothing else called it.
-#define SUBLIMATION_API_VERSION 7
+// Advanced to 8: sublimation_fmt_double (sublimation_fmt.h) was added, the one
+// shortest round-trip double formatter, moved down from montauk with the sink
+// and the JSON writer; and the public sublimation_search_gnfa gained the
+// counted-repeat set, its (position, lo, hi) triples and the costliest
+// construct's span, and the search its confusion classes, so sublimation_search
+// grew from 11392 to 12064 bytes (a layout change), with
+// sublimation_search_costliest added to name that span and
+// sublimation_search_confuse to declare the classes.
+#define SUBLIMATION_API_VERSION 8
 
 // Disorder classification (the classifier's verdict)
 typedef enum {

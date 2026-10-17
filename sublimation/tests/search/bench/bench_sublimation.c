@@ -4,7 +4,7 @@
 // shipped engine") as the thing the bench labels "sublimation". Every number the
 // README attributes to sublimation now comes from libsublimation's public API --
 // sublimation_search_compile + sublimation_search_count -- the same entry points
-// the CLI and vector call.
+// the CLI calls.
 //
 // One consequence worth stating: the scaffold exposed INTERNAL strategies as
 // separate modes (field vs prefiltered, brute vs pigeonhole). The shipped engine

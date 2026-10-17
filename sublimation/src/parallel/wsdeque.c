@@ -127,9 +127,3 @@ sub_steal_t sub_wsdeque_steal(sub_wsdeque_t *q, sub_dfs_frame_t *out) {
     }
     return SUB_STEAL_EMPTY;
 }
-
-size_t sub_wsdeque_size(sub_wsdeque_t *q) {
-    int64_t b = atomic_load_explicit(&q->bottom, memory_order_relaxed);
-    int64_t t = atomic_load_explicit(&q->top, memory_order_relaxed);
-    return b > t ? (size_t)(b - t) : 0;
-}

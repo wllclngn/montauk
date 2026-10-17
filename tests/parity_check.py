@@ -69,6 +69,12 @@ CASES = [
                                                              "sort -t' ' -k2,2n -s",   KEYED),
     ("sort --keyed --desc",["sort", "--keyed", "--field", "2", "--desc"],
                                                              "sort -t' ' -k2,2nr -s",  KEYED),
+    # sort(1)'s own spellings of the same orders.
+    ("sort -k N",          ["sort", "-k", "2"],             "sort -t' ' -k2,2n -s",    KEYED),
+    ("sort -t -k N,Nn -r", ["sort", "-t", " ", "-k", "2,2n", "-r"],
+                                                             "sort -t' ' -k2,2nr -s",  KEYED),
+    ("sort -rn (sort's)",  ["sort", "-rn"],                 "sort -rn",                NUMS),
+    ("distinct --list",    ["distinct", "--list"],          "awk '!seen[$0]++'",       ADJ),
     ("count == wc -l",     ["count"],                       "wc -l",                   NUMS),
     ("search regex",       ["search", "foo"],                 "grep -E 'foo'",           WORDS),
     ("search -v",          ["search", "-v", "foo"],           "grep -E -v 'foo'",        WORDS),
@@ -217,6 +223,14 @@ FILE_CASES = [
     ("head N FILE",         ["head", "2", "{pa}"],       "head -2 {pa}"),
     ("tail N FILE",         ["tail", "2", "{pa}"],       "tail -2 {pa}"),
     ("cut RANGE FILE",      ["cut", "2-4", "{pa}"],      "cut -c 2-4 {pa}"),
+    # The coreutils forms of the same verbs, and more than one FILE.
+    ("head -n N FILE",      ["head", "-n", "2", "{pa}"], "head -n 2 {pa}"),
+    ("head -N FILE",        ["head", "-2", "{pa}"],      "head -2 {pa}"),
+    ("head N FILE..",       ["head", "1", "{pa}", "{pb}", "{pn}"], "head -n 1 {pa} {pb} {pn}"),
+    ("tail N FILE..",       ["tail", "2", "{pa}", "{pb}"], "tail -n 2 {pa} {pb}"),
+    ("tail -n N FILE..",    ["tail", "-n", "1", "{pa}", "{pn}"], "tail -n 1 {pa} {pn}"),
+    ("cut -c RANGE FILE",   ["cut", "-c", "2-4", "{pa}"], "cut -c 2-4 {pa}"),
+    ("column -t FILE",      ["column", "-t", "{rows}"],  "column -t {rows}"),
     ("column FILE",         ["column", "{rows}"],        "column -t {rows}"),
     ("paste -s FILE",       ["paste", "-s", "{pa}"],     "paste -s {pa}"),
 ]
@@ -258,8 +272,25 @@ CONTRACT_CASES = [
     ("-A6 does NOT say unknown",       ["search", "-A6", "x"], "x\n", 2, "-A 6"),
     ("-m3 says which form it wants",   ["search", "-m3", "x"], "x\n", 2, "takes a SEPARATE value"),
     ("a real unknown still says so",   ["search", "-Z", "x"], "x\n", 2, "unknown option '-Z'"),
-    ("cut names the positional",       ["cut", "-c1-3"], "abcd\n", 2, "POSITIONALLY"),
-    ("head names the positional",      ["head", "-n2"], "a\nb\nc\n", 2, "POSITIONALLY"),
+    # cut -c and head/tail -n carry the positional as coreutils does, so the
+    # attached form is a value-taking flag in the wrong form, said as such.
+    ("cut -c1-3 says which form",      ["cut", "-c1-3"], "abcd\n", 2, "-c 1-3"),
+    ("head -n2 says which form",       ["head", "-n2"], "a\nb\nc\n", 2, "-n 2"),
+    ("cut -c RANGE is accepted",       ["cut", "-c", "1-3"], "abcd\n", 0, ""),
+    ("head -n N is accepted",          ["head", "-n", "2"], "a\nb\nc\n", 0, ""),
+    ("head -N is accepted",            ["head", "-2"], "a\nb\nc\n", 0, ""),
+    ("head -n -N is refused",          ["head", "-n", "-2"], "a\nb\nc\n", 2, "signed form"),
+    ("cut -f points to field",         ["cut", "-d", ":", "-f", "2"], "a:b\n", 2, "field 2 --delim :"),
+    ("sort -k N is accepted",          ["sort", "-k", "2"], "x 2\ny 1\n", 0, ""),
+    ("sort -k spanning is refused",    ["sort", "-k", "1,2"], "x 2\n", 2, "spans fields"),
+    ("sort -rn is accepted",           ["sort", "-rn"], "1\n2\n", 0, ""),
+    ("column -t is accepted",          ["column", "-t"], "a b\n", 0, ""),
+    ("distinct --list is accepted",    ["distinct", "--list"], "a\na\n", 0, ""),
+    ("--list off distinct is refused", ["sum", "--list"], "1\n", 2, "--list is for distinct"),
+    # diff is diff(1)'s status, the one verb outside the grep contract.
+    ("diff of identical inputs is 0",  ["diff", "{pn}"], "nothing here\n", 0, ""),
+    ("diff of differing inputs is 1",  ["diff", "{pn}"], "something\n", 1, ""),
+    ("diff of an unreadable FILE is 2", ["diff", "{missing}"], "x\n", 2, "cannot open"),
     # --opt=value works for EVERY long option now, not just the two that parsed
     # '=' themselves. --delim=, used to answer "unknown option '--delim=,'".
     ("--delim= is accepted",           ["field", "2", "--delim=,"], "a,b\n", 0, ""),

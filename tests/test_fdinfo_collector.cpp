@@ -18,6 +18,8 @@ namespace fs = std::filesystem;
 TEST(fdinfo_intel_cycles_basic) {
   auto root = fs::temp_directory_path() / fs::path("montauk_test_gpu_") / fs::path(std::to_string(::getpid()));
   fs::create_directories(root / "proc/4242/fdinfo");
+  fs::create_directories(root / "proc/4242/fd");
+  fs::create_symlink("/dev/dri/renderD128", root / "proc/4242/fd/3");
   auto fdpath = root / "proc/4242/fdinfo/3";
   // First snapshot: baseline counters
   {
@@ -58,6 +60,8 @@ TEST(fdinfo_amd_engines_and_vram) {
   auto root = fs::temp_directory_path() / fs::path("montauk_test_gpu_amd_") /
               fs::path(std::to_string(::getpid()));
   fs::create_directories(root / "proc/4343/fdinfo");
+  fs::create_directories(root / "proc/4343/fd");
+  fs::create_symlink("/dev/dri/renderD128", root / "proc/4343/fd/7");
   auto fdpath = root / "proc/4343/fdinfo/7";
   {
     std::ofstream(fdpath) <<
@@ -83,6 +87,8 @@ TEST(fdinfo_malformed_values_are_ignored) {
   auto root = fs::temp_directory_path() / fs::path("montauk_test_gpu_bad_") /
               fs::path(std::to_string(::getpid()));
   fs::create_directories(root / "proc/4444/fdinfo");
+  fs::create_directories(root / "proc/4444/fd");
+  fs::create_symlink("/dev/dri/renderD128", root / "proc/4444/fd/2");
   auto fdpath = root / "proc/4444/fdinfo/2";
   {
     // CRLF line endings, a junk engine value, and a VRAM field with no digits.
@@ -99,4 +105,24 @@ TEST(fdinfo_malformed_values_are_ignored) {
   // Must not crash, and must not invent a VRAM figure from an unparseable field.
   (void)fdi.sample(pid_to_gpu, pid_to_mem, running);
   ASSERT_TRUE(pid_to_mem.find(4444) == pid_to_mem.end() || pid_to_mem[4444] == 0u);
+}
+
+// Only a DRM node's fdinfo is read. The filter is the fd's link, not the
+// fdinfo text, so an fd whose link is not under /dev/dri is skipped even when
+// its fdinfo would parse as engine counters.
+TEST(fdinfo_non_drm_fd_is_skipped) {
+  auto root = fs::temp_directory_path() / fs::path("montauk_test_gpu_nodrm_") /
+              fs::path(std::to_string(::getpid()));
+  fs::create_directories(root / "proc/4545/fdinfo");
+  fs::create_directories(root / "proc/4545/fd");
+  fs::create_symlink("/dev/null", root / "proc/4545/fd/5");
+  std::ofstream(root / "proc/4545/fdinfo/5") <<
+    "drm-client-id:\t9\n"
+    "drm-memory-vram:\t4096 KiB\n";
+  TempRootGuard proc_root("MONTAUK_PROC_ROOT", root.string());
+  montauk::collectors::FdinfoProcessCollector fdi;
+  std::unordered_map<int,int> pid_to_gpu; std::unordered_map<int,uint64_t> pid_to_mem;
+  std::unordered_set<int> running;
+  ASSERT_TRUE(!fdi.sample(pid_to_gpu, pid_to_mem, running));
+  ASSERT_TRUE(running.empty() && pid_to_mem.empty());
 }

@@ -3,7 +3,7 @@
 //
 // The reductions and order statistics the CLI's stat verbs used to compute
 // inline. The library owns the numbers and every face formats them -- the CLI,
-// a direct FFI caller, the MCP server -- so no two faces can disagree about
+// montauk, a direct FFI caller -- so no two faces can disagree about
 // what a mean or a quartile is. Sample (n-1) convention throughout, matching
 // the CLI these were lifted from. Callers guard n == 0.
 #ifndef SUBLIMATION_STATS_H

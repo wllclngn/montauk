@@ -15,6 +15,7 @@ static inline void FW(ps_or)(uint64_t *a, const uint64_t *b) { for (int i = 0; i
 static inline void FW(ps_and)(uint64_t *a, const uint64_t *b) { for (int i = 0; i < PW; i++) a[i] &= b[i]; }
 static inline int FW(ps_any)(const uint64_t *a) { uint64_t t = 0; for (int i = 0; i < PW; i++) t |= a[i]; return t != 0; }
 static inline void FW(ps_set)(uint64_t *a, int p) { a[p >> 6] |= 1ull << (p & 63); }
+static inline void FW(ps_clr)(uint64_t *a, int p) { a[p >> 6] &= ~(1ull << (p & 63)); }
 static inline int FW(ps_test)(const uint64_t *a, int p) { return (int)((a[p >> 6] >> (p & 63)) & 1u); }
 static inline int FW(ps_eq)(const uint64_t *a, const uint64_t *b) {
     for (int i = 0; i < PW; i++) if (a[i] != b[i]) return 0;
@@ -206,6 +207,7 @@ static gattr_t FW(g_repeat)(gpar_t *x) {
             (hi >= 0 && hi < lo)) { x->g->ok = 0; return a; }
         x->p++;
         const char *after = x->p;
+        const int per_copy = x->g->npos - pos_before;
         if (hi == 0) {
             // {0} / {0,0}: zero copies. Reclaim every position the atom took, so
             // it contributes nothing and its budget is returned.
@@ -213,8 +215,58 @@ static gattr_t FW(g_repeat)(gpar_t *x) {
                 memset(x->g->setb[p], 0, 32);
                 FW(ps_zero)(x->g->follow[p]);
             }
+            // Counters inside the atom go with its positions, or they would
+            // stay registered on positions the next atom takes.
+            while (x->g->ncounted > 0 && x->g->ctr_pos[x->g->ncounted - 1] >= pos_before)
+                FW(ps_clr)(x->g->counted, x->g->ctr_pos[--x->g->ncounted]);
             x->g->npos = pos_before;
             return FW(g_empty)(NUL_ANY);
+        }
+        // A COUNTED REPEAT: the one position the atom took, and a counter in
+        // place of every further copy (see ctr_run in match.c). Only an atom of
+        // exactly one position qualifies -- a byte, a class, a dot -- since only
+        // then do all of its live counts advance and die on the same bytes.
+        // X{lo,} counts to lo and then loops on one more copy, X{lo}X*.
+        //
+        // ONE ITERATION IS EXACTLY ONE BYTE, or the ring's arithmetic is wrong.
+        // The counting-set automata are sound only for flat, synchronizing
+        // counting (Holik et al., FoSSaCS 2023), and taking one position is not
+        // enough to be that: ([bc]?){2,8} may iterate on nothing, (a+){3} on
+        // many bytes, and ([ab]{8}){4} would nest one count inside another on
+        // one ring. So the atom must not match empty, its position must have no
+        // edge of its own yet (no loop), carry no assertion, and not already be
+        // counted; anything else unrolls into copies, each counted on its own.
+        const int reps = hi < 0 ? lo : hi;
+        if (x->count && per_copy == 1 && reps >= 2 && a.nul == 0 &&
+            !FW(ps_any)(x->g->follow[pos_before]) && !FW(ps_any)(a.first_bol) &&
+            !FW(ps_any)(a.last_eol) && !FW(ps_test)(x->g->counted, pos_before) &&
+            x->g->ncounted < SUBLIMATION_SEARCH_MAX_COUNTERS) {
+            const int c = x->g->ncounted++;
+            x->g->ctr_pos[c] = pos_before;
+            x->g->ctr_lo[c] = lo;
+            x->g->ctr_hi[c] = reps;
+            FW(ps_set)(x->g->counted, pos_before);
+            if (lo == 0) a.nul |= NUL_ANY;
+            if (hi < 0) {
+                x->p = atom_at;
+                gattr_t b = FW(g_atom)(x);
+                FW(g_loop)(x->g, &b);
+                b.nul |= NUL_ANY;
+                a = FW(g_cat)(x->g, &a, &b);
+            }
+            x->p = after;
+            return a;
+        }
+        // What the copies below will cost, recorded before they are built: A
+        // refusal names the costliest construct, and its copies stop at the
+        // cap, so the count has to come from the shape rather than the build.
+        {
+            const long cost = (long)per_copy * (hi < 0 ? (lo > 1 ? lo : 1) : hi);
+            if (cost > x->g->cost) {
+                x->g->cost = cost > FIELD_DUP_MAX * 64L ? FIELD_DUP_MAX * 64 : (int)cost;
+                x->g->cost_at = (int)(atom_at - x->p0);
+                x->g->cost_len = (int)(after - atom_at);
+            }
         }
         // COPIES ARE RE-PARSES. Each copy of the atom is parsed again from its
         // own source, so it gets fresh positions and its own internal edges --
@@ -264,13 +316,13 @@ static gattr_t FW(g_alt)(gpar_t *x) {
     return a;
 }
 
-static int FW(build_gnfa)(const char *pat, gnfa_t *g, int icase) {
+static int FW(build_gnfa)(const char *pat, gnfa_t *g, int icase, int count) {
     memset(g, 0, sizeof(*g)); g->ok = 1; g->icase = icase;
     g->nwords = PW;
     // A pattern with no positions at all ("", "^", "$", "^$", "a{0}", "()") is
     // legal: it matches the empty string wherever its assertions allow. sed's
     // own insertion idioms (s/^/P /, s/$/ S/) depend on it.
-    gpar_t x = { pat, g, 0, 0 };
+    gpar_t x = { pat, pat, g, 0, 0, count };
     gattr_t a = FW(g_alt)(&x);
     if (!g->ok || *x.p != '\0') return 0;
     FW(ps_copy)(g->first, a.first);  FW(ps_copy)(g->first_bol, a.first_bol);
@@ -326,6 +378,25 @@ static inline int FW(accepts)(const gnfa_t *g, const uint64_t *D, size_t j, size
     return FW(ps_any)(acc);
 }
 
+// THE COUNTERS' HALF OF A STEP. D is reach & I[c] for the byte at j, so a
+// counted position's bit in it means entered from outside, and its bit in Ic
+// whether the byte is in its class. Each counter steps, then D's bit for it
+// says whether any count is live and G's whether one may exit. G is the set the
+// rest of the step reads -- the reach and the accept -- since a counted
+// position's follow[] holds its exit edges only.
+static inline void FW(ctr_advance)(const gnfa_t *g, ctr_set *cs, uint64_t *D, uint64_t *G,
+                                   const uint64_t *Ic, size_t j) {
+    FW(ps_copy)(G, D);
+    for (int c = 0; c < g->ncounted; c++) {
+        const int p = g->ctr_pos[c];
+        ctr_run *r = &cs->r[c];
+        ctr_step(r, FW(ps_test)(Ic, p), FW(ps_test)(D, p), j, 0);
+        FW(ps_clr)(D, p); FW(ps_clr)(G, p);
+        if (ctr_alive(r)) FW(ps_set)(D, p);
+        if (ctr_eligible(r)) FW(ps_set)(G, p);
+    }
+}
+
 // Full-field match-end count over hay[0..n): the number of offsets in [0, n]
 // at which some match ends. Byte-parity reference for the regex face; the
 // prefilter and class fast path must reproduce this exactly. `I` is the
@@ -337,15 +408,21 @@ static size_t FW(scan_gnfa)(const uint8_t *hay, size_t n, const gnfa_t *g,
     size_t count = nul_at(nm, 0, n) ? 1 : 0;
     const int roots = FW(ps_any)(g->first);
     uint64_t D[SUBLIMATION_SEARCH_POS_WORDS]; FW(ps_zero)(D);
+    uint64_t Gc[SUBLIMATION_SEARCH_POS_WORDS]; FW(ps_zero)(Gc);
     uint64_t reach[SUBLIMATION_SEARCH_POS_WORDS];
+    // With no counter the gated set IS the live set, and nothing is copied.
+    const uint64_t *G = g->ncounted ? Gc : D;
+    ctr_set cs;
+    if (g->ncounted && !ctr_begin(g, &cs, 0)) return 0;
     // A NULL memo (allocation failure) recomputes the reach per step;
     // byte-identical count either way.
     reach_ent *cache = n ? reach_cache_get() : NULL;
     for (size_t j = 0; j < n; j++) {
         if (j == 0) { FW(ps_copy)(reach, g->first); FW(ps_or)(reach, g->first_bol); }
-        else FW(reach_of)(D, g, cache, reach);
+        else FW(reach_of)(G, g, cache, reach);
         FW(ps_copy)(D, reach); FW(ps_and)(D, I[(unsigned char)hay[j]]);
-        if (FW(accepts)(g, D, j, n) || nul_at(nm, j + 1, n)) count++;
+        if (g->ncounted) FW(ctr_advance)(g, &cs, D, Gc, I[(unsigned char)hay[j]], j);
+        if (FW(accepts)(g, G, j, n) || nul_at(nm, j + 1, n)) count++;
         // Nothing live and nothing that can start past offset 0: the rest of
         // the input can hold only an empty match at the very end.
         if (!roots && !FW(ps_any)(D)) {
@@ -380,7 +457,7 @@ static size_t FW(regex_prefiltered)(const uint8_t *hay, size_t n, const char *pa
                                 const uint64_t I[256][SUBLIMATION_SEARCH_POS_WORDS],
                                 int *used) {
     *used = 0;
-    if (g->assertions || g->null_mask) return 0;
+    if (g->assertions || g->null_mask || g->ncounted) return 0;
     int ml = regex_maxlen(pat);
     if (ml < 1 || ml > 60) return 0;
     uint8_t lit[64];
@@ -426,7 +503,7 @@ static size_t FW(regex_count)(const sublimation_search *s, const uint8_t *hay, s
     // No positions, case folding and assertions all go to the full field: the
     // prefilter and class path have nothing to anchor on, fold nothing, and read
     // the raw pattern text, where a ^ or $ would be taken for a literal.
-    if (s->g.npos == 0 || s->icase || s->g.assertions)
+    if (s->g.npos == 0 || s->icase || s->g.assertions || s->g.ncounted)
         return FW(scan_gnfa)(hay, n, &s->g, s->imap);
     int used = 0;
     size_t r = FW(regex_prefiltered)(hay, n, s->pattern, &s->g, s->imap, &used);
@@ -449,18 +526,23 @@ static long FW(gnfa_start_longest)(const gnfa_t *g,
     if (nul_at(g->null_mask, start, n) && (!ok || ok(hay, n, (long)start, (long)start)))
         best = (long)start;
     uint64_t D[SUBLIMATION_SEARCH_POS_WORDS], cand[SUBLIMATION_SEARCH_POS_WORDS];
-    FW(ps_zero)(D);
+    uint64_t Gc[SUBLIMATION_SEARCH_POS_WORDS];
+    FW(ps_zero)(D); FW(ps_zero)(Gc);
+    const uint64_t *G = g->ncounted ? Gc : D;
+    ctr_set cs;
+    if (g->ncounted && !ctr_begin(g, &cs, 0)) return best;
     for (size_t j = start; j < n; j++) {
         if (j == start) {
             FW(ps_copy)(cand, g->first);
             if (j == 0) FW(ps_or)(cand, g->first_bol);
         } else {
             FW(ps_zero)(cand);
-            PS_FOREACH(D, i, { FW(ps_or)(cand, g->follow[i]); });
+            PS_FOREACH(G, i, { FW(ps_or)(cand, g->follow[i]); });
         }
         FW(ps_copy)(D, cand); FW(ps_and)(D, I[hay[j]]);
+        if (g->ncounted) FW(ctr_advance)(g, &cs, D, Gc, I[hay[j]], j);
         if (!FW(ps_any)(D)) break;
-        if (FW(accepts)(g, D, j, n) && (!ok || ok(hay, n, (long)start, (long)(j + 1))))
+        if (FW(accepts)(g, G, j, n) && (!ok || ok(hay, n, (long)start, (long)(j + 1))))
             best = (long)(j + 1);
     }
     return best;
@@ -487,6 +569,12 @@ static long FW(gnfa_find)(const gnfa_t *g,
     size_t ls[2][SUBLIMATION_SEARCH_MAX_POS];
     int nl = 0, cur = 0;
     long bs = -1, be = -1;
+    // A counted position is not carried in the list like the others: Its
+    // entries live in its ring, and it joins the list only while one may exit,
+    // at the smallest start among those that may (see ctr_run in match.c).
+    ctr_set cs;
+    if (g->ncounted && !ctr_begin(g, &cs, 1)) return -1;
+    int ctr_live = 0;
     for (size_t j = from; ; j++) {
         if (bs < 0 && nul_at(nm, j, n)) { bs = (long)j; be = (long)j; }
         if (j == n) break;
@@ -494,6 +582,8 @@ static long FW(gnfa_find)(const gnfa_t *g,
         const int nxt = cur ^ 1;
         int nn = 0;
         uint64_t taken[SUBLIMATION_SEARCH_POS_WORDS], q[SUBLIMATION_SEARCH_POS_WORDS];
+        int enter[SUBLIMATION_SEARCH_MAX_COUNTERS] = {0};
+        size_t enter_st[SUBLIMATION_SEARCH_MAX_COUNTERS];
         FW(ps_zero)(taken);
         for (int k = 0; k < nl; k++) {
             const size_t st = ls[cur][k];
@@ -501,6 +591,11 @@ static long FW(gnfa_find)(const gnfa_t *g,
             FW(ps_copy)(q, g->follow[lp[cur][k]]); FW(ps_and)(q, I[c]);
             for (int w = 0; w < PW; w++) q[w] &= ~taken[w];
             FW(ps_or)(taken, q);
+            // The first owner in start order is the earliest start entering.
+            for (int cc = 0; cc < g->ncounted; cc++)
+                if (FW(ps_test)(q, g->ctr_pos[cc])) {
+                    enter[cc] = 1; enter_st[cc] = st; FW(ps_clr)(q, g->ctr_pos[cc]);
+                }
             PS_FOREACH(q, p, { lp[nxt][nn] = p; ls[nxt][nn] = st; nn++; });
         }
         if (bs < 0 || (size_t)bs == j) {
@@ -508,7 +603,28 @@ static long FW(gnfa_find)(const gnfa_t *g,
             if (j == 0) FW(ps_or)(q, g->first_bol);
             FW(ps_and)(q, I[c]);
             for (int w = 0; w < PW; w++) q[w] &= ~taken[w];
+            for (int cc = 0; cc < g->ncounted; cc++)
+                if (FW(ps_test)(q, g->ctr_pos[cc])) {
+                    enter[cc] = 1; enter_st[cc] = j; FW(ps_clr)(q, g->ctr_pos[cc]);
+                }
             PS_FOREACH(q, p, { lp[nxt][nn] = p; ls[nxt][nn] = j; nn++; });
+        }
+        if (g->ncounted) {
+            ctr_live = 0;
+            for (int cc = 0; cc < g->ncounted; cc++) {
+                ctr_run *r = &cs.r[cc];
+                const int p = g->ctr_pos[cc];
+                ctr_step(r, FW(ps_test)(I[c], p), enter[cc], j, enter_st[cc]);
+                ctr_live |= ctr_alive(r);
+                if (!ctr_eligible(r)) continue;
+                // Into the list at its exit start, keeping start order.
+                const size_t xs = ctr_exit_start(r);
+                int at = nn;
+                while (at > 0 && ls[nxt][at - 1] > xs) {
+                    lp[nxt][at] = lp[nxt][at - 1]; ls[nxt][at] = ls[nxt][at - 1]; at--;
+                }
+                lp[nxt][at] = p; ls[nxt][at] = xs; nn++;
+            }
         }
         // The first accepting entry in start order is the earliest start that
         // ends here; a later step with the same start only lengthens it.
@@ -521,7 +637,7 @@ static long FW(gnfa_find)(const gnfa_t *g,
             }
         }
         cur = nxt; nl = nn;
-        if (nl == 0) {
+        if (nl == 0 && !ctr_live) {
             if (bs >= 0) break;
             // Nothing live, nothing found, and no start can be entered past
             // offset 0: only an empty match at the end remains possible.
@@ -542,15 +658,21 @@ static int FW(gnfa_full)(const gnfa_t *g,
                      const uint8_t *hay, size_t n) {
     if (n == 0) return g->null_mask != 0;
     uint64_t D[SUBLIMATION_SEARCH_POS_WORDS], reach[SUBLIMATION_SEARCH_POS_WORDS];
+    uint64_t Gc[SUBLIMATION_SEARCH_POS_WORDS];
+    const uint64_t *G = g->ncounted ? Gc : D;
+    ctr_set cs;
+    if (g->ncounted && !ctr_begin(g, &cs, 0)) return 0;
     FW(ps_copy)(D, g->first); FW(ps_or)(D, g->first_bol); FW(ps_and)(D, I[hay[0]]);
+    if (g->ncounted) FW(ctr_advance)(g, &cs, D, Gc, I[hay[0]], 0);
     if (!FW(ps_any)(D)) return 0;
     for (size_t j = 1; j < n; j++) {
         FW(ps_zero)(reach);
-        PS_FOREACH(D, i, { FW(ps_or)(reach, g->follow[i]); });
+        PS_FOREACH(G, i, { FW(ps_or)(reach, g->follow[i]); });
         FW(ps_copy)(D, reach); FW(ps_and)(D, I[hay[j]]);
+        if (g->ncounted) FW(ctr_advance)(g, &cs, D, Gc, I[hay[j]], j);
         if (!FW(ps_any)(D)) return 0;
     }
-    return FW(accepts)(g, D, n - 1, n);
+    return FW(accepts)(g, G, n - 1, n);
 }
 
 #undef PS_FOREACH

@@ -1,6 +1,7 @@
 #include "collectors/BpfTraceCollector.hpp"
 #include "montauk_trace.h"
 #include "model/TraceBinary.hpp"
+#include "model/TraceEnumNames.hpp"
 #include "app/MetricsServer.hpp"
 #include "util/Log.hpp"
 #include "util/Procfs.hpp"
@@ -72,49 +73,6 @@ void populate_cache_domain_map(int map_fd) {
 }
 
 namespace montauk::collectors {
-
-// Syscall decode table (x86_64, curated)
-const char* BpfTraceCollector::syscall_name(int nr) {
-  switch (nr) {
-    case 0:   return "read";
-    case 1:   return "write";
-    case 2:   return "open";
-    case 3:   return "close";
-    case 7:   return "poll";
-    case 8:   return "lseek";
-    case 9:   return "mmap";
-    case 10:  return "mprotect";
-    case 11:  return "munmap";
-    case 16:  return "ioctl";
-    case 17:  return "pread64";
-    case 18:  return "pwrite64";
-    case 23:  return "select";
-    case 35:  return "nanosleep";
-    case 44:  return "sendto";
-    case 45:  return "recvfrom";
-    case 46:  return "sendmsg";
-    case 47:  return "recvmsg";
-    case 48:  return "shutdown";
-    case 56:  return "clone";
-    case 59:  return "execve";
-    case 61:  return "wait4";
-    case 62:  return "kill";
-    case 202: return "futex";
-    case 228: return "clock_nanosleep";
-    case 232: return "epoll_wait";
-    case 257: return "openat";
-    case 270: return "pselect6";
-    case 271: return "ppoll";
-    case 281: return "epoll_pwait";
-    case 290: return "eventfd2";
-    case 302: return "prlimit64";
-    case 332: return "statx";
-    case 426: return "io_uring_enter";
-    case 435: return "clone3";
-    case 441: return "epoll_pwait2";
-    default:  return nullptr;
-  }
-}
 
 // Constructor / lifecycle
 BpfTraceCollector::BpfTraceCollector(montauk::app::TraceBuffers& buffers,
@@ -506,27 +464,6 @@ void BpfTraceCollector::append_cache_topology_snapshot() {
   trace_append(rec.data(), rec.size());
 }
 
-// ntsync op name decode
-static const char* ntsync_op_name(uint8_t op) {
-  switch (op) {
-    case 0:  return "create_sem";
-    case 1:  return "sem_release";
-    case 2:  return "wait_any";
-    case 3:  return "wait_all";
-    case 4:  return "create_mutex";
-    case 5:  return "mutex_unlock";
-    case 6:  return "mutex_kill";
-    case 7:  return "create_event";
-    case 8:  return "event_set";
-    case 9:  return "event_reset";
-    case 10: return "event_pulse";
-    case 11: return "sem_read";
-    case 12: return "mutex_read";
-    case 13: return "event_read";
-    default: return "unknown";
-  }
-}
-
 // Ring buffer event handler — NO /proc reads
 
 // Per-event stderr printing is a single-app debugging aid (e.g. --trace firefox).
@@ -574,7 +511,7 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
       auto* nts = static_cast<const struct montauk_ntsync_event*>(data);
 
       if (trace_event_verbose()) {
-        const char* op = ntsync_op_name(nts->op);
+        const char* op = montauk::model::ntsync_op_name(nts->op);
         if (nts->op == NTS_WAIT_ANY || nts->op == NTS_WAIT_ALL) {
           const char* tag = (nts->result == -999) ? "ENTER" : "EXIT";
           std::fprintf(stderr, "montauk: NTSYNC %s pid=%d tid=%d %s(fds=[",
@@ -1112,7 +1049,7 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
         if (ts.syscall_nr == -1) {
           std::memcpy(th.syscall_name, "running", 8);
         } else {
-          const char* name = syscall_name(ts.syscall_nr);
+          const char* name = montauk::model::syscall_name(ts.syscall_nr);
           if (name) {
             auto len = std::strlen(name);
             if (len > sizeof(th.syscall_name) - 1) len = sizeof(th.syscall_name) - 1;

@@ -41,14 +41,14 @@ void enrich_anomalies(montauk::model::ProcessSnapshot& procs,
     auto pc = prev_ctxsw.find(ps[i].pid);
     x[i * d + 5] = (pc != prev_ctxsw.end() && ps[i].nvctx_raw > pc->second)
                        ? static_cast<double>(ps[i].nvctx_raw - pc->second) : 0.0;
-    ps[i].fault_delta = x[i * d + 3];   // publish the stateful features for --json / vector
+    ps[i].fault_delta = x[i * d + 3];   // publish the stateful features for --json
     ps[i].ctxsw_delta = x[i * d + 5];
   }
 
   // The fusion is the sublimation learn-lane primitive: the three spatial
   // detectors (MAD, Mahalanobis, Half-Space Trees) rank-averaged, plus the
-  // dominant-axis attribution, computed ONCE in the core -- the same
-  // sublimation_anomaly_fuse vector's montauk_anomalies calls. montauk owns the
+  // dominant-axis attribution, computed ONCE in the core -- the
+  // sublimation_anomaly_fuse primitive. montauk owns the
   // feature matrix built above; sublimation owns the score. (EWMA stays out: it
   // is temporal, and belongs to the changepoint field, not this spatial fusion.)
   // FUSE ONLY THE AXES THAT CARRY SIGNAL. A column that is constant across the

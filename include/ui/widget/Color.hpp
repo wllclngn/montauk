@@ -51,8 +51,7 @@ enum class Attribute : uint8_t {
     Dim = 1 << 1,
     Underline = 1 << 2,
     Blink = 1 << 3,
-    Reverse = 1 << 4,
-    Hidden = 1 << 5
+    Reverse = 1 << 4
 };
 
 inline Attribute operator|(Attribute a, Attribute b) {

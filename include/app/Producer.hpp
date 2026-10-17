@@ -38,6 +38,19 @@ public:
   void stop();
   ~Producer();
 
+  // WHERE THE PRODUCER'S CPU GOES, stage by stage. Off unless asked for:
+  // When on, each stage of the steady collection loop is bracketed by the
+  // thread's own CPU clock, so a stage's total is CPU this thread spent in it
+  // and nothing else on the box. The warm-up is not counted. Read the totals
+  // only after stop(), which joins the thread.
+  enum class Stage : uint8_t {
+    Cpu, Pmu, Memory, Gpu, Net, Disk, Fs, Processes, Thermal, Providers,
+    Alerts, GpuAttribution, Anomalies, Changepoint, History, Count
+  };
+  struct StageCost { const char* name; uint64_t calls; uint64_t cpu_ns; };
+  void enable_stage_timing() { stage_timing_ = true; }
+  [[nodiscard]] std::vector<StageCost> stage_costs() const;
+
   // Opt into hardware PMU sampling (perf_event_open: L2 miss/ref, IPC,
   // per-cache-domain L3). PMU data exists for the trace→analyze pipeline, not the
   // monitor — it needs CAP_PERFMON or perf_event_paranoid<=0, which the
@@ -70,17 +83,12 @@ public:
     return process_samples_.load(std::memory_order_acquire);
   }
 
-#ifdef MONTAUK_TESTING
-  // Test-only helper: apply a set of per-process GPU samples (pid->util%)
-  // to the given ProcessSnapshot while updating the rolling cache. A TTL
-  // is applied so intermittent sample windows still display stable values.
-  void test_apply_gpu_samples(const std::unordered_map<int,int>& pid_to_gpu,
-                              montauk::model::ProcessSnapshot& procs,
-                              std::chrono::steady_clock::time_point now_tp);
-#endif
-
 private:
   void run(std::stop_token st);
+  template <class F> void timed(Stage s, F&& f);
+  bool stage_timing_{false};
+  std::array<uint64_t, static_cast<size_t>(Stage::Count)> stage_calls_{};
+  std::array<uint64_t, static_cast<size_t>(Stage::Count)> stage_ns_{};
   SnapshotBuffers& buffers_;
   std::jthread thread_{};
   // collectors
@@ -105,8 +113,6 @@ private:
   std::unique_ptr<montauk::collectors::IProcessCollector> proc_;
   montauk::app::AlertEngine alerts_{};
   montauk::collectors::ThermalCollector thermal_{};
-  // Rolling cache of per-process GPU util with a short TTL to avoid flicker between NVML sample windows (test helper)
-  std::unordered_map<int, std::pair<int, std::chrono::steady_clock::time_point>> last_proc_gpu_;
   // Per-pid cumulative fault count from the previous cycle; the anomaly
   // enrichment derives its fault-delta feature from this and refreshes it.
   std::unordered_map<int32_t, uint64_t> anomaly_prev_faults_;
@@ -115,29 +121,5 @@ private:
   // Unified GPU attributor (NVML + fdinfo)
   std::unique_ptr<montauk::app::GpuAttributor> gpu_attr_;
 };
-
-#ifdef MONTAUK_TESTING
-inline void Producer::test_apply_gpu_samples(const std::unordered_map<int,int>& pid_to_gpu,
-                                             montauk::model::ProcessSnapshot& procs,
-                                             std::chrono::steady_clock::time_point now_tp) {
-  for (const auto& kv : pid_to_gpu) {
-    last_proc_gpu_[kv.first] = std::make_pair(kv.second, now_tp);
-  }
-  const auto ttl = std::chrono::milliseconds(2000);
-  for (auto& p : procs.processes) {
-    auto it = pid_to_gpu.find(p.pid);
-    if (it != pid_to_gpu.end()) {
-      p.has_gpu_util = true; p.gpu_util_pct = (double)it->second; continue;
-    }
-    auto it2 = last_proc_gpu_.find(p.pid);
-    if (it2 != last_proc_gpu_.end() && (now_tp - it2->second.second) <= ttl) {
-      p.has_gpu_util = true; p.gpu_util_pct = (double)it2->second.first; continue;
-    }
-  }
-  for (auto it = last_proc_gpu_.begin(); it != last_proc_gpu_.end(); ) {
-    if ((now_tp - it->second.second) > ttl) it = last_proc_gpu_.erase(it); else ++it;
-  }
-}
-#endif
 
 } // namespace montauk::app

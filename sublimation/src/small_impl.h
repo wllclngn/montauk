@@ -14,6 +14,10 @@ SUB_INLINE void SUB_TYPED(cswap)(SUB_TYPE *a, SUB_TYPE *b) {
 #define SUB_TYPED_CS(i, j) SUB_TYPED(cswap)(&arr[i], &arr[j])
 
 // OPTIMAL SORTING NETWORKS
+// Fixed comparator networks of branchless conditional swaps for the smallest
+// sizes: the shape AlphaDev optimized for sort3 through sort5 (D. J. Mankowitz
+// et al., "Faster sorting algorithms discovered using deep reinforcement
+// learning", Nature 618, 2023).
 
 SUB_INLINE void SUB_TYPED(sort2)(SUB_TYPE *arr) { SUB_TYPED_CS(0,1); }
 

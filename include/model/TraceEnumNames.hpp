@@ -4,7 +4,8 @@
 // trace_analyze.cpp, and signal_name existed only in trace_analyze.cpp
 // (trace_decode.cpp formatted signals ad hoc inline instead of via a table).
 // sched_op_name and ntsync_op_name were identical copies, resynced by hand
-// once rather than hoisted. One copy here closes the drift class for good.
+// once rather than hoisted. One copy here closes the drift class for good, and
+// BpfTraceCollector reads its ntsync and syscall names from here too.
 #pragma once
 
 #include "montauk_trace.h"
@@ -55,30 +56,59 @@ inline const char* ntsync_op_name(uint8_t op) {
   }
 }
 
-// Union of both prior copies -- trace_analyze.cpp's was the fuller one (18
-// cases vs trace_decode.cpp's 6), confirmed drift before this hoist.
-inline const char* io_syscall_name(int32_t nr) {
+// x86-64 syscall number -> name, nullptr when unnamed: The live thread view's
+// current syscall and, through io_syscall_name, every IO report and decode
+// line. One table, the union of the collector's and the analyzer's, which had
+// drifted apart -- each named syscalls the other printed as unknown.
+inline const char* syscall_name(int32_t nr) {
   switch (nr) {
     case 0:   return "read";
     case 1:   return "write";
+    case 2:   return "open";
+    case 3:   return "close";
     case 5:   return "fstat";
     case 7:   return "poll";
     case 8:   return "lseek";
+    case 9:   return "mmap";
+    case 10:  return "mprotect";
+    case 11:  return "munmap";
     case 16:  return "ioctl";
     case 17:  return "pread64";
     case 18:  return "pwrite64";
     case 23:  return "select";
+    case 35:  return "nanosleep";
+    case 44:  return "sendto";
     case 45:  return "recvfrom";
+    case 46:  return "sendmsg";
     case 47:  return "recvmsg";
+    case 48:  return "shutdown";
+    case 56:  return "clone";
+    case 59:  return "execve";
+    case 61:  return "wait4";
+    case 62:  return "kill";
+    case 202: return "futex";
     case 208: return "io_getevents";
     case 209: return "io_submit";
+    case 228: return "clock_nanosleep";
     case 232: return "epoll_wait";
     case 257: return "openat";
     case 270: return "pselect6";
     case 271: return "ppoll";
     case 281: return "epoll_pwait";
-    default:  return "?";
+    case 290: return "eventfd2";
+    case 302: return "prlimit64";
+    case 332: return "statx";
+    case 426: return "io_uring_enter";
+    case 435: return "clone3";
+    case 441: return "epoll_pwait2";
+    default:  return nullptr;
   }
+}
+
+// The same name for a report or decode line, "?" when unnamed.
+inline const char* io_syscall_name(int32_t nr) {
+  const char* n = syscall_name(nr);
+  return n ? n : "?";
 }
 
 // Event TYPE -> lowercase name: the analyzer's summary rows and prom labels.

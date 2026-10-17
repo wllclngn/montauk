@@ -44,6 +44,7 @@ alert_frames = 5
 [ui]
 alt_screen = true
 system_focus = false
+cpu_topology = false
 cpu_scale = "total"
 gpu_scale = "utilization"
 time_format = ""
@@ -64,27 +65,30 @@ gpu_debug = false
 disable_nvml = false
 nvml_path = ""
 
-[keybinds]
-quit = "q"
-help = "h"
-fps_up = "+"
-fps_down = "-"
-sort_cpu = "c"
-sort_mem = "m"
-sort_pid = "p"
-sort_name = "n"
-sort_gpu = "g"
-sort_gmem = "v"
-toggle_gpu = "G"
-toggle_thermal = "t"
-toggle_disk = "d"
-toggle_net = "N"
-toggle_cpu_scale = "i"
-toggle_gpu_scale = "u"
-toggle_system_focus = "s"
-reset_ui = "R"
-search = "/"
+[chart]
+history_seconds = 60   # the rolling window every chart and the CPU grid draw, 1-3600
+# line, line_alt, fill and fill_alpha here apply to every chart; the
+# per-chart sections below override them
+
+[chart.cpu]
+line = "accent"        # a role name or "#RRGGBB"
+fill = "auto"          # "auto" = the line color at fill_alpha (default 0.40)
+
+[chart.gpu]
+line = "warning"
+fill = "auto"
+
+[chart.memory]
+line = "normal"
+fill = "auto"
+
+[chart.network]
+line = "binary"
+line_alt = "caution"   # the second curve (TX)
+fill = "auto"
 ```
+
+Keys are fixed in the widgets, not configured: The TUI's bindings are listed in the README and in `man montauk`.
 
 ### Process Settings
 

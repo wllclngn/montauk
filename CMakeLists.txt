@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 8.13.1 LANGUAGES C CXX)
+project(montauk VERSION 8.14.0 LANGUAGES C CXX)
 # (7.17.0: kick-capture honesty -- the storm report no longer manufactures a
 #  false kick/s=0 when the scx storm probes are unattached, and kick-latency
 #  surfaces the KICK_ISSUE->RESCHED pairing (availability, unanswered share,
@@ -92,6 +92,10 @@ option(MONTAUK_KERNEL "Build with kernel module collector support (requires mont
 # The explicit binary dir is required, not stylistic: the CLI executable is
 # itself named `sublimation` and lands at build/sublimation, so letting this
 # default would make CMake try to create a directory over that file.
+# sublimation defines its own CLI and test suite, both opt-in; montauk ships the
+# CLI and runs the suite beside its own.
+set(SUBLIMATION_BUILD_CLI ON)
+set(SUBLIMATION_BUILD_TESTS ${MONTAUK_BUILD_TESTS})
 add_subdirectory(sublimation ${CMAKE_CURRENT_BINARY_DIR}/sublimation-lib)
 
 set(MONTAUK_CORE_SRCS
@@ -99,7 +103,6 @@ set(MONTAUK_CORE_SRCS
     src/util/Churn.cpp
     src/util/SortDispatch.cpp
     src/util/Log.cpp
-    src/util/FmtDouble.cpp
     src/util/NvmlDyn.cpp
     src/model/TraceReader.cpp
     src/ui/Terminal.cpp
@@ -285,30 +288,14 @@ target_sources(montauk PRIVATE
     src/tools/trace_analyze.cpp
     src/tools/trace_query.cpp
     src/tools/static_scan.cpp
+    src/tools/static_object.cpp
+    src/tools/static_python.cpp
     src/tools/prom_stats.cpp
     src/tools/prom_population.cpp
     src/tools/trace_decode.cpp)
 target_include_directories(montauk PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/bpf)
 # Stamp the project version into the analysis .prom _info metric (house style).
 target_compile_definitions(montauk PRIVATE MONTAUK_VERSION="${PROJECT_VERSION}")
-
-
-# ── sublimation CLI ─────────────────────────────────────────────────────────
-# The command-line front door to the sort sub-system: pipe a numeric stream in,
-# get sort / quantile / select / searchsorted / classify / locate / rand out.
-# Output name is `sublimation` (the static lib is libsublimation.a -- no clash).
-add_executable(sublimation_cli sublimation/cli.c)
-set_target_properties(sublimation_cli PROPERTIES
-    OUTPUT_NAME sublimation
-    C_STANDARD 23 C_STANDARD_REQUIRED ON)
-# First-party, hot-edited C: the same wall every C++ target carries. The old
-# "third-party warnings" exemption never described this file.
-target_link_libraries(sublimation_cli PRIVATE montauk_warnings)
-target_link_libraries(sublimation_cli PRIVATE montauk_hardening)
-# montauk's include/ for the shared output sink (util/sink.h); the CLI's data
-# output drains through it like the rest of montauk.
-target_include_directories(sublimation_cli PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(sublimation_cli PRIVATE sublimation)
 
 if(MONTAUK_BUILD_TESTS)
   # Lightweight unit tests without external deps
@@ -321,7 +308,6 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_fs.cpp
     tests/test_process_parsing.cpp
     tests/test_gpu_fallback.cpp
-    tests/test_gpu_cache.cpp
     tests/test_fdinfo_collector.cpp
     tests/test_snapshot_buffers.cpp
     tests/test_trace_buffers.cpp
@@ -348,22 +334,6 @@ if(MONTAUK_BUILD_TESTS)
   target_link_libraries(montauk_tests PRIVATE montauk_warnings)
   target_compile_definitions(montauk_tests PRIVATE MONTAUK_TESTING=1)
 
-  # The output sink (include/util/sink.h) is a shared C23/C++23 header. The C++
-  # front-end is covered above; this target proves the same header compiles and
-  # runs as C23 -- the shared-header property the whole unification rests on.
-  add_executable(montauk_sink_c_test tests/test_sink_c.c)
-  set_target_properties(montauk_sink_c_test PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
-  target_include_directories(montauk_sink_c_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_link_libraries(montauk_sink_c_test PRIVATE montauk_warnings)
-
-  # json.h calls montauk_fmt_double, so the C test links the C++ TU that
-  # implements it -- the point of the split is that ONE formatter serves both
-  # the C JSON header and the C++ Prometheus sink.
-  add_executable(montauk_json_test tests/test_json.c src/util/FmtDouble.cpp)
-  set_target_properties(montauk_json_test PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
-  target_include_directories(montauk_json_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-  target_link_libraries(montauk_json_test PRIVATE montauk_warnings)
-
   # Stats-kernel characterization tests: prom_stats.cpp only compiles into
   # the analyzer, so it gets its own small test executable (the
   # montauk_sink_c_test pattern) rather than a montauk_core dependency.
@@ -381,79 +351,12 @@ if(MONTAUK_BUILD_TESTS)
   target_link_libraries(montauk_stats_test PRIVATE montauk_warnings)
   target_link_libraries(montauk_stats_test PRIVATE sublimation)
 
-  # Seeded differential fuzzer for the sort core: multiset preservation + order
-  # vs std::sort across every shipped type, heavy on the few-unique / NaN /
-  # signed-zero region a value-corruption bug once lived in. Runs in the unit
-  # layer so the sort is differentially guarded on every build.
-  add_executable(sublimation_fuzz_diff sublimation/tests/fuzz_sort_diff.cpp)
-  target_include_directories(sublimation_fuzz_diff PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src/include)
-  target_link_libraries(sublimation_fuzz_diff PRIVATE montauk_warnings)
-  target_link_libraries(sublimation_fuzz_diff PRIVATE sublimation)
-
-  # Work-stealing DFS engine (Pillar A). Plain targets prove correctness (deque
-  # exactly-once, executor sort vs oracle, all-type parallel sort differential);
-  # the _tsan variants prove race-freedom and must COMPILE the engine sources
-  # directly (not link the un-instrumented libsublimation) so ThreadSanitizer
-  # sees the deque/pool atomics.
-  set(SUB_INC ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src/include)
-  # The sublimation sort/search/core C tests. Formerly run only by the separate
-  # sublimation/tests/test.py "second engine"; folded here as first-class CMake
-  # targets so run.py is the ONE runner and no correctness test hides off to the
-  # side. Each is a single .c linking libsublimation, like the engine tests above.
-  foreach(t
-      test_wsdeque test_dfspool test_radix test_radix_par test_smerge_par test_pack
-      test_kmerge
-      test_basic test_tier1 test_tier2 test_tier4 test_tier5
-      test_adversarial test_adversarial_types test_bentley_mcilroy test_antiqsort
-      test_types test_sorted_perturbed test_zipfian test_saw_mixed
-      test_strings test_randomness test_profile_contract test_search test_affinity
-      test_diff)
-    add_executable(${t} sublimation/tests/${t}.c)
-    set_target_properties(${t} PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
-    target_include_directories(${t} PRIVATE ${SUB_INC})
-    target_link_libraries(${t} PRIVATE sublimation)
-  endforeach()
-
-  # Sort core under AddressSanitizer + UBSan. The engine's race-freedom is gated
-  # by the _tsan targets below; this catches memory/UB faults in the serial and
-  # value paths. test_types (all six types, every disorder class) and test_tier5
-  # (the parallel path + spectral allocations) are the broadest-coverage cores,
-  # so they carry the sanitized pass; they COMPILE the lib sources directly so the
-  # sanitizer instruments sublimation, not just the test.
-  file(GLOB_RECURSE SUB_LIB_SRCS ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src/*.c)
-  # test_diff joins them because diff.c is the one place in the library doing
-  # manual allocation and index arithmetic over a computed path, which is the
-  # shape a sanitizer catches and review does not.
-  foreach(t test_types test_tier5 test_diff)
-    add_executable(${t}_asan sublimation/tests/${t}.c ${SUB_LIB_SRCS})
-    set_target_properties(${t}_asan PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
-    target_include_directories(${t}_asan PRIVATE ${SUB_INC} ${CMAKE_CURRENT_SOURCE_DIR}/sublimation/src)
-    target_compile_options(${t}_asan PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g -O1 -pthread)
-    target_link_options(${t}_asan PRIVATE -fsanitize=address,undefined -pthread)
-    target_link_libraries(${t}_asan PRIVATE m)
-  endforeach()
-
-  add_executable(test_wsdeque_tsan sublimation/tests/test_wsdeque.c
-      sublimation/src/parallel/wsdeque.c)
-  add_executable(test_dfspool_tsan sublimation/tests/test_dfspool.c
-      sublimation/src/parallel/wsdeque.c sublimation/src/parallel/dfspool.c)
-  add_executable(test_radix_par_tsan sublimation/tests/test_radix_par.c
-      sublimation/src/parallel/wsdeque.c sublimation/src/parallel/dfspool.c
-      sublimation/src/parallel/radix_par.c)
-  foreach(t test_wsdeque_tsan test_dfspool_tsan test_radix_par_tsan)
-    set_target_properties(${t} PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
-    target_include_directories(${t} PRIVATE ${SUB_INC})
-    target_compile_options(${t} PRIVATE -fsanitize=thread -g -O1 -pthread)
-    target_link_options(${t} PRIVATE -fsanitize=thread -pthread)
-  endforeach()
-
   # App-level concurrency stress harness under ThreadSanitizer: test_stress.cpp
   # already hammers the real Producer/SnapshotBuffers lock-free double-buffer
   # handoff with a concurrent mutator thread; this proves race-freedom directly
   # instead of just progress. SnapshotBuffers is header-only (DoubleBuffer.hpp),
   # so its atomics live inlined in Producer.cpp's object code -- same reasoning
-  # as the sublimation _tsan targets above, this compiles montauk_core's sources
+  # as sublimation's own _tsan targets, this compiles montauk_core's sources
   # directly rather than linking the unsanitized library. NVML/BPF/io_uring are
   # optional additions to montauk_core (target_sources calls further below,
   # never touching MONTAUK_CORE_SRCS) and are skipped here: MONTAUK_GPU_DISABLE_NATIVE
@@ -475,5 +378,5 @@ if(MONTAUK_BUILD_TESTS)
   # below already builds the binaries run.py invokes.
   add_custom_target(check
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/run.py --no-build
-    DEPENDS montauk montauk_tests montauk_sink_c_test montauk_json_test montauk_stats_test sublimation_fuzz_diff test_wsdeque test_dfspool test_radix test_radix_par test_smerge_par test_pack test_basic test_tier1 test_tier2 test_tier4 test_tier5 test_adversarial test_adversarial_types test_bentley_mcilroy test_antiqsort test_types test_sorted_perturbed test_zipfian test_saw_mixed test_strings test_randomness test_profile_contract test_search test_affinity test_types_asan test_tier5_asan test_wsdeque_tsan test_dfspool_tsan test_radix_par_tsan test_stress_tsan sublimation_cli)
+    DEPENDS montauk montauk_tests montauk_stats_test sublimation_fuzz_diff test_fmt_double test_sink test_json test_wsdeque test_dfspool test_radix test_radix_par test_smerge_par test_pack test_kmerge test_basic test_tier1 test_tier2 test_tier4 test_tier5 test_adversarial test_adversarial_types test_bentley_mcilroy test_antiqsort test_types test_sorted_perturbed test_zipfian test_saw_mixed test_strings test_randomness test_profile_contract test_search test_affinity test_diff test_types_asan test_tier5_asan test_diff_asan test_wsdeque_tsan test_dfspool_tsan test_radix_par_tsan test_stress_tsan sublimation_cli)
 endif()

@@ -16,7 +16,6 @@ struct SecurityFinding {
     -> std::vector<SecurityFinding>;
 
 [[nodiscard]] auto format_security_line_default(const SecurityFinding& f) -> std::string;
-[[nodiscard]] auto format_security_line_system(const SecurityFinding& f) -> std::string;
 
 } // namespace montauk::app
 

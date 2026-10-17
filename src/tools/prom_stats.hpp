@@ -21,7 +21,6 @@ struct Rng {
   uint64_t s[4];
   explicit Rng(uint64_t seed);
   uint64_t next_u64();
-  double next_unit();        // [0, 1)
   uint64_t below(uint64_t n); // uniform [0, n), Lemire-debiased
 };
 
@@ -60,8 +59,6 @@ std::vector<McbResult> bootstrap_mcb(
 // Student-t upper-tail P(T > t) for t >= 0, via the regularized incomplete
 // beta. Deterministic; matches scipy.stats.t.sf.
 double student_t_sf(double t, double df);
-// Two-sided Welch t-test p-value for unequal variance / n. 1.0 if degenerate.
-double welch_t_p(const std::vector<double>& a, const std::vector<double>& b);
 
 // Studentized-range upper tail P(Q > q) for k groups and df error d.o.f.,
 // via Gauss-Legendre quadrature of the Tukey range integral. Deterministic;

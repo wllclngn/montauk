@@ -497,7 +497,7 @@ def install_atomic(src: Path, dst: Path) -> int:
 
 # THE MANIFEST. cmd_uninstall used to carry its own hardcoded list of targets,
 # and a second list of the same thing drifts -- provably: a live install here
-# carried an orphaned bin/montauk-mcp from the retired MCP server, a
+# carried an orphaned binary from a retired tool, a
 # share/montauk/ this installer never creates, and the manpage at BOTH
 # share/man/man1/ and man/man1/. Every one of them survived an uninstall that
 # reported success. The same root cause shipped in PANDEMONIUM (Issue #17) and
@@ -514,8 +514,6 @@ MANIFEST_REL = Path("lib") / "montauk" / "install_manifest.txt"
 LEGACY_TARGETS = [
     Path("bin") / "montauk_analyze",      # folded into `montauk --analyze`
     Path("bin") / "montauk_trace_decode", # folded into `montauk --decode`
-    Path("bin") / "montauk-mcp",          # the retired MCP server, pre-rename
-    Path("bin") / "vector",               # the retired MCP server
     Path("man") / "man1" / "montauk.1",   # moved under share/
     Path("share") / "montauk",            # logo dir, no longer installed
 ]
@@ -732,7 +730,7 @@ def cmd_uninstall(args, source_dir: Path) -> bool:
 
 
 def cmd_test(args, source_dir: Path) -> bool:
-    """Run the full suite via tests/run.py -- all five layers (unit, gate,
+    """Run the full suite via tests/run.py -- all four layers (unit, gate,
     perf, trace), not just the test binary. run.py does its
     own configure-and-build of the test targets."""
     log_info("RUNNING TESTS")

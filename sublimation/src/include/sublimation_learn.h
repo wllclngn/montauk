@@ -5,7 +5,7 @@
 // thread-safe on disjoint buffers, with no process-lifetime shared state.
 // Matrices are row-major, n rows (samples) by d columns (features). Output
 // buffers are caller-allocated. These are the detectors montauk's snapshot
-// enrichment and vector's montauk_anomalies tool are built on.
+// enrichment is built on.
 #ifndef SUBLIMATION_LEARN_H
 #define SUBLIMATION_LEARN_H
 
@@ -56,7 +56,7 @@ void sublimation_ewma_scores(const double *x, size_t n, size_t d, double alpha,
 // detector contributes a neutral 0.5 rather than a phantom ramp -- and reports
 // each row's dominant axis (the feature with the largest standardized deviation,
 // or -1 if every column is flat). The one anomaly fusion montauk's snapshot
-// enrichment and vector's montauk_anomalies both call, so the conclusion is
+// enrichment calls, so the conclusion is
 // computed once, in the core. Deterministic (fixed HST seed). scores[n] and
 // axes[n] are caller-allocated. Returns 0 on success, nonzero on allocation
 // failure (scores/axes then untouched).

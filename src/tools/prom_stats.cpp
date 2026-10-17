@@ -113,9 +113,6 @@ uint64_t Rng::next_u64() {
   s[3] = rotl(s[3], 45);
   return result;
 }
-double Rng::next_unit() {
-  return (next_u64() >> 11) * (1.0 / 9007199254740992.0);
-}
 uint64_t Rng::below(uint64_t n) {
   if (n == 0) return 0;
   // Lemire's debiased multiply-shift.
@@ -404,17 +401,6 @@ double student_t_sf(double t, double df) {
   double x = df / (df + t * t);
   double p = 0.5 * betai(0.5 * df, 0.5, x);  // P(T > |t|)
   return t >= 0.0 ? p : 1.0 - p;
-}
-
-double welch_t_p(const std::vector<double>& a, const std::vector<double>& b) {
-  if (a.size() < 2 || b.size() < 2) return 1.0;
-  double va = variance(a) / a.size(), vb = variance(b) / b.size();
-  double se = std::sqrt(va + vb);
-  if (se == 0.0) return 1.0;
-  double t = (mean(a) - mean(b)) / se;
-  double df = (va + vb) * (va + vb) /
-              (va * va / (a.size() - 1) + vb * vb / (b.size() - 1));
-  return std::min(1.0, 2.0 * student_t_sf(std::fabs(t), df));
 }
 
 double studentized_range_sf(double q, int k, double df) {

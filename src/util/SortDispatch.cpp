@@ -28,11 +28,6 @@ void sort_by_key_u32(std::span<const uint32_t> keys, std::span<uint32_t> indices
                                          descending, frame_scratch(indices.size()));
 }
 
-void sort_by_key_i32(std::span<const int32_t> keys, std::span<uint32_t> indices, bool descending) {
-  sublimation_pack_sort_i32_with_scratch(keys.data(), indices.data(), indices.size(),
-                                         descending, frame_scratch(indices.size()));
-}
-
 void sort_by_string(std::span<const char* const> arr, std::span<uint32_t> indices) {
   // sublimation_strings_indices takes (const char**, ...) — the array is
   // documented read-only despite the non-const signature. Cast away const.

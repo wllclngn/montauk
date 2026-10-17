@@ -80,7 +80,8 @@ def dialect_for(path, forced=None):
     return next((d for d in DIALECTS if suffix in d.exts), DIALECTS[0])
 
 
-def mask_code(src: str, keep_strings: bool = False, d: Dialect = DIALECTS[0], pp=None) -> str:
+def mask_code(src: str, keep_strings: bool = False, d: Dialect = DIALECTS[0], pp=None,
+              lines=None) -> str:
     """Blank comments, literals and preprocessor lines, byte offsets preserved.
 
     Every replacement is one space per byte and newlines are kept, so an offset
@@ -99,6 +100,10 @@ def mask_code(src: str, keep_strings: bool = False, d: Dialect = DIALECTS[0], pp
 
     `pp`, when a list, receives every conditional-compilation directive as
     (offset, kind): 'i' #if/#ifdef/#ifndef, 'l' #elif, 'e' #else, 'n' #endif.
+
+    `lines`, when a list, receives (hash, after_word, line_end, kind) for each
+    directive that names something: 'd' for #define, 'u' for a conditional
+    (#if, #ifdef, #ifndef, #elif, #elifdef, #elifndef).
     """
     out = list(src)
     n = len(src)
@@ -114,14 +119,21 @@ def mask_code(src: str, keep_strings: bool = False, d: Dialect = DIALECTS[0], pp
             i += 1
             continue
         if at_line_start and c == "#":
-            if pp is not None:
+            hash_at, named, after = i, None, 0
+            if pp is not None or lines is not None:
                 w = i + 1
                 while w < n and src[w] in " \t":
                     w += 1
+                after = word_end(src, w)
+                word = src[w:after]
                 k = {"if": "i", "ifdef": "i", "ifndef": "i", "elif": "l", "else": "e",
-                     "endif": "n"}.get(src[w:word_end(src, w)])
-                if k:
+                     "endif": "n"}.get(word)
+                if k and pp is not None:
                     pp.append((i, k))
+                if word == "define":
+                    named = "d"
+                elif k in ("i", "l") or word in ("elifdef", "elifndef"):
+                    named = "u"
             while i < n and src[i] != "\n":
                 if src[i] == "\\" and i + 1 < n and src[i + 1] == "\n":
                     out[i] = " "
@@ -129,6 +141,8 @@ def mask_code(src: str, keep_strings: bool = False, d: Dialect = DIALECTS[0], pp
                     continue
                 out[i] = " "
                 i += 1
+            if lines is not None and named:
+                lines.append((hash_at, after, i, named))
             continue
         at_line_start = False
         if c == "/" and i + 1 < n and src[i + 1] == "/":
@@ -1155,13 +1169,96 @@ def find_declarations(mask: str, funcs) -> list[tuple[int, str, str]]:
     return out
 
 
+def is_prototype(mask: str, i: int, k: int) -> bool:
+    """`T name(...);` at file scope declares the function again; it does not
+    use it. The type ends in a word, `*`, `&` or `>`, and `;` follows the
+    parameter list before any `{`."""
+    p = i
+    while p > 0 and mask[p - 1] in SPACE:
+        p -= 1
+    if p == 0 or not (mask[p - 1] in IDENT or mask[p - 1] in "*&>"):
+        return False
+    q = skip_space(mask, k)
+    if q >= len(mask) or mask[q] != "(":
+        return False
+    close = match_pair(mask, q, "(", ")")
+    if close < 0:
+        return False
+    semi, brace = mask.find(";", close), mask.find("{", close)
+    return semi >= 0 and (brace < 0 or semi < brace)
+
+
+WORD = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*")
+
+
+def pasting_macros(ppm: str, regions) -> set[str]:
+    """Macros that paste: a body with `##`, or one naming a macro that does."""
+    words, pasting = {}, set()
+    for start, end, macro, _params in regions:
+        if not macro:
+            continue
+        body = ppm[start:end]
+        if "##" in body:
+            pasting.add(macro)
+        words.setdefault(macro, set()).update(WORD.findall(body))
+    grew = True
+    while grew:
+        grew = False
+        for m, ws in words.items():
+            if m not in pasting and ws & pasting:
+                pasting.add(m)
+                grew = True
+    return pasting
+
+
+def is_pasted(m: str, i: int, k: int, pasting: set[str]) -> bool:
+    """A stem next to `##`, or an argument of a macro that pastes, within its
+    statement."""
+    a = k
+    while a < len(m) and m[a] in " \t":
+        a += 1
+    if m.startswith("##", a):
+        return True
+    b = i
+    while b > 0 and m[b - 1] in " \t":
+        b -= 1
+    if b >= 2 and m[b - 2:b] == "##":
+        return True
+    depth = 0
+    p = i
+    while p > 0:
+        p -= 1
+        c = m[p]
+        if c in ";{}":
+            return False
+        if c == ")":
+            depth += 1
+        elif c == "(":
+            if depth:
+                depth -= 1
+                continue
+            e = p
+            while e > 0 and m[e - 1] in SPACE:
+                e -= 1
+            s = e
+            while s > 0 and m[s - 1] in IDENT:
+                s -= 1
+            return s < e and m[s:e] in pasting
+    return False
+
+
+def stemmed(stem: str, known: set[str]) -> list[str]:
+    return sorted(n for n in known if n.startswith(stem) and n != stem)
+
+
 def find_references(mask: str, funcs, known: set[str],
-                    decl_offsets: set[int]) -> list[tuple[int, str, str]]:
+                    decl_offsets: set[int], pasting=frozenset()) -> list[tuple[int, str, str]]:
     """(offset, enclosing function, name) wherever a KNOWN name is named again.
 
     Only names this scan declared: every other identifier is a local, a keyword
     or something outside the set, and none of the three says anything about
-    whether what IS in the set is reached."""
+    whether what IS in the set is reached. A prototype at file scope is a
+    second declaration, not a reference."""
     out = []
     i = 0
     n = len(mask)
@@ -1175,29 +1272,132 @@ def find_references(mask: str, funcs, known: set[str],
             k += 1
         name = mask[i:k]
         if name in known and i not in decl_offsets:
-            func = "<file>"
+            func = None
             for start, end, fname, _off in funcs:
                 if start <= i <= end:
                     func = fname
                     break
-            out.append((i, func, name))
+            if func is not None or not is_prototype(mask, i, k):
+                out.append((i, func or "<file>", name))
+        elif i in decl_offsets:
+            # `TEST(name) {` defines TEST:name, and the macro expands here.
+            for _s, _e, fname, off in funcs:
+                if off == i and fname.startswith(name + ":") and name in known:
+                    func = next((f for start, end, f, _o in funcs if start <= i <= end), "<file>")
+                    out.append((i, func, name))
+                    break
+        elif name not in known and is_pasted(mask, i, k, pasting):
+            func = next((fname for start, end, fname, _off in funcs if start <= i <= end), "<file>")
+            out += [(i, func, n) for n in stemmed(name, known)]
         i = k
+    return out
+
+
+PLACING = {"section", "__section__", "constructor", "__constructor__", "destructor",
+           "__destructor__", "used", "__used__"}
+
+
+def find_placements(mask: str, funcs) -> list[tuple[int, str, str]]:
+    """(offset, "<file>", function) for each function its head places in a
+    section or hands to the runtime: SEC(...), or __attribute__((...)) holding
+    section, constructor, destructor or used. A loader enters it, not a call."""
+    out = []
+    for start, _end, name, _off in funcs:
+        if name == "<file>":
+            continue
+        head_start = max(mask.rfind(";", 0, start), mask.rfind("}", 0, start),
+                         mask.rfind("{", 0, start)) + 1
+        for m in re.finditer(r"[A-Za-z0-9_]+", mask[head_start:start]):
+            at = head_start + m.start()
+            o = skip_space(mask, head_start + m.end())
+            if o >= start or mask[o] != "(":
+                continue
+            if m.group() == "SEC":
+                out.append((at, "<file>", name))
+                break
+            if m.group() == "__attribute__":
+                c = match_pair(mask, o, "(", ")")
+                if c >= 0 and PLACING & set(re.findall(r"[A-Za-z0-9_]+", mask[o:c])):
+                    out.append((at, "<file>", name))
+                    break
+    return out
+
+
+def macro_regions(src: str, lines):
+    """(declarations, regions): a ("macro", name) per #define with the offset
+    of its '#', and (from, end, macro) for the words each naming directive
+    references -- a define's body past its name and parameters, a
+    conditional's whole tail with an empty macro."""
+    decls, regions = [], []
+    for hash_at, after, end, kind in lines:
+        start, macro, params = after, "", set()
+        if kind == "d":
+            a = skip_space(src, after)
+            b = word_end(src, a)
+            if a >= end or b == a:
+                continue
+            macro = src[a:b]
+            decls.append((hash_at, "macro", macro))
+            start = b
+            if b < end and src[b] == "(":
+                c = src.find(")", b)
+                start = c + 1 if 0 <= c < end else end
+                params = set(re.findall(r"[A-Za-z0-9_]+", src[b + 1:start]))
+        regions.append((start, end, macro, params))
+    return decls, regions
+
+
+def pp_mask(src: str, regions, d) -> str:
+    out = ["\n" if ch == "\n" else " " for ch in src]
+    for start, end, _macro, _params in regions:
+        out[start:end] = src[start:end]
+    return mask_code("".join(out), False, d)
+
+
+def find_pp_references(ppm: str, funcs, regions, known, pasting) -> list[tuple[int, str, str]]:
+    out = []
+    for start, end, macro, params in regions:
+        for m in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", ppm[start:end]):
+            at = start + m.start()
+            if at > start and ppm[at - 1] in IDENT:
+                continue
+            if m.group() in params:
+                continue
+            whole = m.group() in known
+            if not whole and not is_pasted(ppm, at, at + len(m.group()), pasting):
+                continue
+            func = macro
+            if not func:
+                func = next((fname for fs, fe, fname, _o in funcs
+                             if fname != "<file>" and fs <= at <= fe), "<file>")
+            if whole:
+                out.append((at, func, m.group()))
+            else:
+                out += [(at, func, n) for n in stemmed(m.group(), known)]
     return out
 
 
 def extract_declared(path: Path, lang=None) -> list[tuple[str, ...]]:
     """D and R rows for one file, in the order the artifact carries them."""
     d = dialect_for(path, lang)
-    mask = mask_code(path.read_text(errors="replace"), False, d)
+    src = path.read_text(errors="replace")
+    lines = []
+    mask = mask_code(src, False, d, lines=lines)
     funcs = find_functions(mask, d)
     decls = find_declarations(mask, funcs)
-    known = {name for _off, _kind, name in decls}
     decl_offsets = {off for off, _kind, _name in decls}
+    macros, regions = macro_regions(src, lines)
+    decls += macros
+    known = {name for _off, _kind, name in decls}
     rows = [("D", str(line_of(mask, off)), kind, name)
             for off, kind, name in decls]
-    rows += [("R", str(line_of(mask, off)), func, name)
-             for off, func, name in find_references(mask, funcs, known,
-                                                    decl_offsets)]
+    ppm = pp_mask(src, regions, d) if regions else ""
+    pasting = pasting_macros(ppm, regions)
+    refs = find_references(mask, funcs, known, decl_offsets, pasting)
+    refs += find_placements(mask, funcs)
+    if regions:
+        refs += find_pp_references(ppm, funcs, regions, known, pasting)
+    rows += [("R", str(line_of(mask, off)), func, name) for off, func, name in refs]
     return rows
 
 

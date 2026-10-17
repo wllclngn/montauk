@@ -88,9 +88,9 @@ static void *thief_main(void *arg) {
         sub_steal_t r = sub_wsdeque_steal(&g_q, &f);
         if (r == SUB_STEAL_OK) { consume(f); continue; }
         if (r == SUB_STEAL_ABORT) continue;               // lost CAS, retry
-        // EMPTY: done only when the owner has finished and nothing remains
-        if (atomic_load_explicit(&g_all_done, memory_order_acquire) &&
-            sub_wsdeque_size(&g_q) == 0)
+        // EMPTY: done once the owner has finished, since nothing is pushed
+        // after that and the owner drained what was left
+        if (atomic_load_explicit(&g_all_done, memory_order_acquire))
             return nullptr;
         sched_yield();
     }
@@ -109,8 +109,7 @@ static void *owner_main(void *arg) {
     atomic_store_explicit(&g_pushing_done, 1, memory_order_release);
     // Owner drains what thieves have not stolen.
     sub_dfs_frame_t f;
-    while (sub_wsdeque_size(&g_q) > 0)
-        if (sub_wsdeque_take(&g_q, &f)) consume(f);
+    while (sub_wsdeque_take(&g_q, &f)) consume(f);
     atomic_store_explicit(&g_all_done, 1, memory_order_release);
     return nullptr;
 }

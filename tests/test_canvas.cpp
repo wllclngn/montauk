@@ -98,44 +98,6 @@ TEST(canvas_draw_rect_border) {
   ASSERT_EQ(c.at(2, 2).content, std::string(" "));
 }
 
-// fill_rect fills w*h cells and clips at canvas bounds.
-TEST(canvas_fill_rect_clipping) {
-  Canvas c(10, 5);
-  Cell fill{"#", Style{Color::Green}};
-  c.fill_rect(2, 1, 4, 2, fill);
-  // Filled region
-  ASSERT_EQ(c.at(2, 1).content, std::string("#"));
-  ASSERT_EQ(c.at(5, 2).content, std::string("#"));
-  // Just outside
-  ASSERT_EQ(c.at(1, 1).content, std::string(" "));
-  ASSERT_EQ(c.at(6, 1).content, std::string(" "));
-  // Off-canvas: must not crash
-  c.fill_rect(8, 3, 100, 100, fill);
-  ASSERT_EQ(c.at(8, 3).content, std::string("#"));
-  ASSERT_EQ(c.at(9, 4).content, std::string("#"));
-}
-
-// blit copies cells; respects source and dest bounds on both sides.
-TEST(canvas_blit_clipping) {
-  Canvas src(4, 2);
-  src.put(0, 0, "A", {});
-  src.put(1, 0, "B", {});
-  src.put(2, 0, "C", {});
-  src.put(3, 0, "D", {});
-
-  Canvas dst(10, 5);
-  dst.blit(src, 5, 1);
-  ASSERT_EQ(dst.at(5, 1).content, std::string("A"));
-  ASSERT_EQ(dst.at(8, 1).content, std::string("D"));
-
-  // Blit near the right edge — D goes out of bounds, A/B/C survive
-  Canvas dst2(7, 5);
-  dst2.blit(src, 5, 2);  // would write at x=5,6,7,8 — 7 and 8 out of bounds
-  ASSERT_EQ(dst2.at(5, 2).content, std::string("A"));
-  ASSERT_EQ(dst2.at(6, 2).content, std::string("B"));
-  // Past the edge: no crash, nothing written
-}
-
 // TestWidget proves Component virtual dispatch compiles and works end-to-end.
 namespace {
 class TestWidget : public Component {

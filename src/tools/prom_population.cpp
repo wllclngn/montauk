@@ -6,7 +6,8 @@
 
 #include "prom_stats.hpp"
 #include "util/Log.hpp"
-#include "util/json.h"          // write-only JSON serializer on the sink (the --json renderer)
+#include "util/Procfs.hpp"
+#include "sublimation_json.h"          // write-only JSON serializer on the sink (the --json renderer)
 
 #include <algorithm>
 #include <atomic>
@@ -24,7 +25,6 @@
 #include <thread>
 #include <vector>
 
-#include <dirent.h>
 #include <sys/stat.h>
 
 #include "util/sink.h"
@@ -39,12 +39,12 @@ namespace {
 
 // Population / l2-by-cpu stdout drains through one buffered sink, lazily set up
 // on first use (these paths run from montauk_analyze's main) and drained at exit.
-montauk_sink g_pop_out;
+sublimation_sink g_pop_out;
 bool g_pop_out_init = false;
-void drain_pop_out() { montauk_sink_drain(&g_pop_out); }
+void drain_pop_out() { sublimation_sink_drain(&g_pop_out); }
 void ensure_pop_out() {
   if (!g_pop_out_init) {
-    montauk_sink_init(&g_pop_out, 1);
+    sublimation_sink_init(&g_pop_out, 1);
     std::atexit(drain_pop_out);
     g_pop_out_init = true;
   }
@@ -286,16 +286,12 @@ struct Hist {
 
 std::vector<std::string> glob_proms(const std::string& dir) {
   std::vector<std::string> out;
-  DIR* d = ::opendir(dir.c_str());
-  if (!d) return out;
-  for (dirent* e; (e = ::readdir(d)) != nullptr;) {
-    std::string name = e->d_name;
+  for (const auto& name : montauk::util::list_dir(dir)) {
     if (name.size() < 6 || name.compare(name.size() - 5, 5, ".prom") != 0)
       continue;
     if (name.rfind("analysis-", 0) == 0) continue;  // our own outputs
     out.push_back(dir + "/" + name);
   }
-  ::closedir(d);
   sublimation_order_strings(out, false, [](const std::string& s){ return s.c_str(); });
   return out;
 }
@@ -806,7 +802,7 @@ int run_trajectory(std::map<std::string, Family>& data, size_t files_n,
     if (vers.size() < 2) continue;
     std::vector<std::pair<const std::string*, const Cell*>> cells;
     for (auto& c : fam.cells) cells.push_back({&c.first, &c.second});
-    montauk_sink_appendf(&g_pop_out, "\nTRAJECTORY %s (%zu %s values, %zu cells)\n",
+    sublimation_sink_appendf(&g_pop_out, "\nTRAJECTORY %s (%zu %s values, %zu cells)\n",
                          metric.c_str(), vers.size(), opt.compare_axis.c_str(),
                          cells.size());
 
@@ -822,7 +818,7 @@ int run_trajectory(std::map<std::string, Family>& data, size_t files_n,
       }
       if (seq.size() >= 4) {
         sub_profile_t prof = sublimation_classify_f64(seq.data(), seq.size());
-        montauk_sink_appendf(&g_pop_out, "  shape: %s\n",
+        sublimation_sink_appendf(&g_pop_out, "  shape: %s\n",
                              traj_class_name(prof.disorder));
         prom.push_back({"montauk_pop_traj_class",
                         "metric=\"" + metric + "\",class=\"" +
@@ -962,7 +958,7 @@ int run_trajectory(std::map<std::string, Family>& data, size_t files_n,
       const std::string& vb = vers[lo + K];
       std::string at = display_axis(va, opt) + "__" + display_axis(vb, opt);
       if (rlo != rhi)
-        montauk_sink_appendf(
+        sublimation_sink_appendf(
             &g_pop_out,
             "  jump %s -> %s [range %s..%s]: p_dense=%.4g p_sparse=%.4g, "
             "cells moved %zu/%zu, median |delta| %.2f\n",
@@ -971,7 +967,7 @@ int run_trajectory(std::map<std::string, Family>& data, size_t files_n,
             display_axis(vers[lo + rhi], opt).c_str(), pd, psp, moved,
             eligible, fam_eff);
       else
-        montauk_sink_appendf(
+        sublimation_sink_appendf(
             &g_pop_out,
             "  jump %s -> %s: p_dense=%.4g p_sparse=%.4g, cells moved "
             "%zu/%zu, median |delta| %.2f\n",
@@ -979,7 +975,7 @@ int run_trajectory(std::map<std::string, Family>& data, size_t files_n,
             psp, moved, eligible, fam_eff);
       sublimation_order_f64(hits, true, [](const CellHit& h) { return h.absT; });
       for (size_t t = 0; t < hits.size() && t < 3; ++t)
-        montauk_sink_appendf(
+        sublimation_sink_appendf(
             &g_pop_out, "    top: [%s] delta %+.2f\n",
             cell_label_str(cells[hits[t].j].second->display).c_str(),
             hits[t].delta);
@@ -996,7 +992,7 @@ int run_trajectory(std::map<std::string, Family>& data, size_t files_n,
       stack.push_back({lo + K, hi});
     }
     if (findings == 0)
-      montauk_sink_appendf(&g_pop_out, "  no change point at alpha %.3g\n",
+      sublimation_sink_appendf(&g_pop_out, "  no change point at alpha %.3g\n",
                            opt.traj_alpha);
   }
   if (opt.emit_prom && !prom.empty()) {
@@ -1008,7 +1004,7 @@ int run_trajectory(std::map<std::string, Family>& data, size_t files_n,
     prom.insert(prom.begin(), header.begin(), header.end());
     emit_prom(prom, opt);
   }
-  montauk_sink_drain(&g_pop_out);
+  sublimation_sink_drain(&g_pop_out);
   return 0;
 }
 
@@ -1318,10 +1314,10 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
   const std::string* cur_metric = nullptr;
   for (auto& w : work) {
     if (!cur_metric || *cur_metric != *w.metric) {
-      montauk_sink_appendf(&g_pop_out, "\nMETRIC %s\n", w.metric->c_str());
+      sublimation_sink_appendf(&g_pop_out, "\nMETRIC %s\n", w.metric->c_str());
       cur_metric = w.metric;
     }
-    montauk_sink_append(&g_pop_out, w.text.data(), w.text.size());
+    sublimation_sink_append(&g_pop_out, w.text.data(), w.text.size());
     prom.insert(prom.end(), w.out.begin(), w.out.end());
   }
 
@@ -1337,7 +1333,7 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
   }
   // Drain the report explicitly rather than relying on atexit alone, so the
   // full text is on stdout before the caller sees this function return.
-  montauk_sink_drain(&g_pop_out);
+  sublimation_sink_drain(&g_pop_out);
   return 0;
 }
 
@@ -1743,53 +1739,53 @@ int run_l2_by_cpu(const std::string& dir, bool want_json) {
     const double top_pct = 100.0 * s.rows.front().second / s.grand;
     const double uniform_pct = 100.0 / static_cast<double>(s.rows.size());
     const int sev = l2_severity(top_pct, uniform_pct);
-    montauk_json j;
-    montauk_json_init(&j, &g_pop_out);
-    montauk_json_obj_begin(&j);
-      montauk_json_ku64(&j, "schema_version", 1u);
-      montauk_json_key(&j, "l2_by_cpu");
-      montauk_json_obj_begin(&j);
-        montauk_json_kstr(&j, "dir", dir.c_str());
-        montauk_json_ku64(&j, "scrapes", static_cast<uint64_t>(s.scrapes));
-        montauk_json_ki64(&j, "busy_scrapes", s.busy);
-        montauk_json_knum(&j, "total_misses", s.grand);
-        montauk_json_knum(&j, "uniform_pct", uniform_pct);
-        montauk_json_ki64(&j, "top_cpu", s.rows.front().first);
-        montauk_json_knum(&j, "top_share_pct", top_pct);
-        montauk_json_ki64(&j, "sev", sev);
-        montauk_json_kstr(&j, "class", sev == 2 ? "concentrated"
+    sublimation_json j;
+    sublimation_json_init(&j, &g_pop_out);
+    sublimation_json_obj_begin(&j);
+      sublimation_json_ku64(&j, "schema_version", 1u);
+      sublimation_json_key(&j, "l2_by_cpu");
+      sublimation_json_obj_begin(&j);
+        sublimation_json_kstr(&j, "dir", dir.c_str());
+        sublimation_json_ku64(&j, "scrapes", static_cast<uint64_t>(s.scrapes));
+        sublimation_json_ki64(&j, "busy_scrapes", s.busy);
+        sublimation_json_knum(&j, "total_misses", s.grand);
+        sublimation_json_knum(&j, "uniform_pct", uniform_pct);
+        sublimation_json_ki64(&j, "top_cpu", s.rows.front().first);
+        sublimation_json_knum(&j, "top_share_pct", top_pct);
+        sublimation_json_ki64(&j, "sev", sev);
+        sublimation_json_kstr(&j, "class", sev == 2 ? "concentrated"
                                      : sev == 1 ? "skewed" : "spread");
-        montauk_json_key(&j, "cpus");
-        montauk_json_arr_begin(&j);
+        sublimation_json_key(&j, "cpus");
+        sublimation_json_arr_begin(&j);
           for (const auto& r : s.rows) {
-            montauk_json_obj_begin(&j);
-              montauk_json_ki64(&j, "cpu", r.first);
-              montauk_json_knum(&j, "misses", r.second);
-              montauk_json_knum(&j, "share_pct", 100.0 * r.second / s.grand);
-            montauk_json_obj_end(&j);
+            sublimation_json_obj_begin(&j);
+              sublimation_json_ki64(&j, "cpu", r.first);
+              sublimation_json_knum(&j, "misses", r.second);
+              sublimation_json_knum(&j, "share_pct", 100.0 * r.second / s.grand);
+            sublimation_json_obj_end(&j);
           }
-        montauk_json_arr_end(&j);
-      montauk_json_obj_end(&j);
-    montauk_json_obj_end(&j);
-    montauk_sink_appendc(&g_pop_out, '\n');
+        sublimation_json_arr_end(&j);
+      sublimation_json_obj_end(&j);
+    sublimation_json_obj_end(&j);
+    sublimation_sink_appendc(&g_pop_out, '\n');
     return 0;
   }
 
-  montauk_sink_appendf(&g_pop_out, "\nREPORT l2-by-cpu  (%d busy of %zu scrapes)\n", s.busy, s.scrapes);
-  montauk_sink_appendf(&g_pop_out, "%-6s %18s %9s\n", "CPU", "L2-misses", "share");
+  sublimation_sink_appendf(&g_pop_out, "\nREPORT l2-by-cpu  (%d busy of %zu scrapes)\n", s.busy, s.scrapes);
+  sublimation_sink_appendf(&g_pop_out, "%-6s %18s %9s\n", "CPU", "L2-misses", "share");
   for (const auto& r : s.rows)
-    montauk_sink_appendf(&g_pop_out, "%-6d %18.0f %8.1f%%\n", r.first, r.second,
+    sublimation_sink_appendf(&g_pop_out, "%-6d %18.0f %8.1f%%\n", r.first, r.second,
                 100.0 * r.second / s.grand);
   double top = 100.0 * s.rows.front().second / s.grand;
   double uniform = 100.0 / static_cast<double>(s.rows.size());
   int sev = l2_severity(top, uniform);
   const char* verdict = sev == 2 ? "CONCENTRATED (hotspot)"
                         : sev == 1 ? "skewed" : "spread";
-  montauk_sink_appendf(&g_pop_out, "top CPU %d holds %.1f%% (uniform = %.1f%%) -- %s\n",
+  sublimation_sink_appendf(&g_pop_out, "top CPU %d holds %.1f%% (uniform = %.1f%%) -- %s\n",
               s.rows.front().first, top, uniform, verdict);
   // Join the offender family so the hot core sits alongside the trace-side
   // offenders in the report's machine-readable list (one montauk_offender{}).
-  montauk_sink_appendf(&g_pop_out, "montauk_offender{kind=\"hot-cpu\",id=\"%d\",metric=\"l2_miss_share\",sev=\"%d\"} %.1f\n",
+  sublimation_sink_appendf(&g_pop_out, "montauk_offender{kind=\"hot-cpu\",id=\"%d\",metric=\"l2_miss_share\",sev=\"%d\"} %.1f\n",
               s.rows.front().first, sev, top);
   return 0;
 }

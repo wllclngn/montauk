@@ -152,12 +152,6 @@ const EventClass kClasses[] = {
     {TRACE_EVT_COMM_CHANGE, "comm", sizeof(montauk_ring_event), kRing, count(kRing), -1, nullptr, -1},
     {TRACE_EVT_THREAD_NAME, "thread_name", sizeof(montauk_ring_event), kRing, count(kRing), -1, nullptr, -1},
 };
-const EventClass* const kClassPtrs[] = {
-    &kClasses[0], &kClasses[1], &kClasses[2],  &kClasses[3],  &kClasses[4],  &kClasses[5],
-    &kClasses[6], &kClasses[7], &kClasses[8],  &kClasses[9],  &kClasses[10], &kClasses[11],
-    &kClasses[12], &kClasses[13], &kClasses[14], &kClasses[15], &kClasses[16],
-    &kClasses[17], &kClasses[18]};
-static_assert(sizeof(kClassPtrs) / sizeof(kClassPtrs[0]) == sizeof(kClasses) / sizeof(kClasses[0]));
 
 bool iequal(std::string_view a, std::string_view b) {
   if (a.size() != b.size()) return false;
@@ -197,11 +191,6 @@ const EventClass* class_of(uint32_t type) {
     return t;
   }();
   return type < table.size() ? table[type] : nullptr;
-}
-
-const EventClass* const* all_classes(size_t* n) {
-  *n = sizeof(kClassPtrs) / sizeof(kClassPtrs[0]);
-  return kClassPtrs;
 }
 
 int field_named(const EventClass& c, std::string_view name) {
@@ -303,15 +292,6 @@ bool parse_clause(std::string_view spec, Select& sel, std::string& err) {
   }
   err = "no comparison in '" + std::string(spec) + "' (use = != < <= > >=)";
   return false;
-}
-
-int64_t Table::intern(std::string_view s) {
-  auto it = interned.find(std::string(s));
-  if (it != interned.end()) return it->second;
-  const auto id = static_cast<int64_t>(strings.size());
-  strings.emplace_back(s);
-  interned.emplace(std::string(s), id);
-  return id;
 }
 
 std::string Table::cell_text(size_t r, size_t c) const {
