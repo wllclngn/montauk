@@ -113,15 +113,16 @@ struct MetricsSnapshot {
                             p.has_gpu_util ? p.gpu_util_pct : 0.0,
                             p.fault_delta, static_cast<double>(p.thread_count),
                             p.ctxsw_delta, p.anomaly_score, p.anomaly_axis, {}};
-      // The PROGRAM, not the first 15 bytes of a command line. p.cmd is the
-      // full cmdline for enriched rows, so a raw truncation yields things like
-      // "python3 -c \nimp" -- a cut mid-argument, newline included. Take the
-      // first token, and its basename when that token is an absolute path
-      // (/usr/lib/firefox/firefox -> firefox). Kernel threads like
-      // "kworker/4:0H" carry slashes but no leading one, so they pass through.
-      std::string_view name{p.cmd};
-      name = name.substr(0, name.find_first_of(" \t\n"));
-      if (name.starts_with('/')) {
+      // The PROGRAM, by the kernel's name for it. The command line is not that
+      // name: Wine rewrites it to the Windows one, so Hollow Knight's reads
+      // "s:\steamapps\co", and a relative argv[0] keeps its "./". The comm is
+      // the exec'd file's basename cut to 15 bytes, the width of this field,
+      // so an absolute-path process reads as it did. Only a row with no comm
+      // falls back to the command line's first token, and its basename when
+      // that token is an absolute path.
+      std::string_view name{p.comm};
+      if (name.empty()) name = std::string_view{p.cmd}.substr(0, p.cmd.find_first_of(" \t\n"));
+      if (p.comm.empty() && name.starts_with('/')) {
         const size_t slash = name.find_last_of('/');
         if (slash != std::string_view::npos && slash + 1 < name.size())
           name = name.substr(slash + 1);

@@ -29,6 +29,7 @@ struct PopOptions {
   bool lower_is_better = true;
   bool emit_prom = true;
   bool full = false;  // Path A: within-run Games-Howell on the histograms
+  bool want_json = false;  // the pairwise comparison as a --json envelope
   // Explicit A/B: input path -> comparison-group name, injected as a synthetic
   // `group` label. Set by --group NAME=path; when non-empty the CLI forces
   // compare_axis="group". Lets two run-sets whose committed labels are identical
@@ -59,6 +60,15 @@ struct PopOptions {
   // Axis-value display aliasing (--alias-axis OLD=NEW), replacing any
   // hardcoded display compression.
   std::map<std::string, std::string> axis_alias;
+  // Label-value aliasing (--alias-label LABEL:OLD=NEW, repeatable, exact, no
+  // chaining): label -> old value -> new, applied to a series' labels as they
+  // are parsed, before any cell is keyed, so a value renamed between a
+  // producer's releases pairs across them.
+  std::map<std::string, std::map<std::string, std::string>> label_alias;
+  // --relative-to LABEL=VALUE: the control arm. Each cell is divided, run by
+  // run within the same file, by the cell differing from it only in
+  // LABEL=VALUE, and compared on that ratio. Empty when not given.
+  std::string relative_label, relative_value;
   // Labels dropped from cell identity (--drop-label L, repeatable): the
   // generic answer to high-cardinality foreign archives and to co-moving
   // label pairs beyond the built-in version/commit rule.

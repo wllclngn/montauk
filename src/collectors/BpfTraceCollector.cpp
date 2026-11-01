@@ -12,15 +12,23 @@
 // declarations above, and redirects the skeleton's own libbpf calls below.
 #include "util/BpfDyn.hpp"
 #include "montauk_trace.skel.h"
+#include "sublimation_order.hpp"
+#include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <charconv>
 #include <ctime>
+#include <dlfcn.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
 #include <cerrno>
+#include <csignal>
 #include <filesystem>
 #include <string>
 #include <map>
@@ -74,6 +82,16 @@ void populate_cache_domain_map(int map_fd) {
 
 namespace montauk::collectors {
 
+namespace {
+// One trace-loop cycle: a ring poll, then the inter-snapshot drain in short
+// steps so the ring cannot fill between snapshots. The discovery rescan runs
+// once per cycle, so a cycle is how often a --trace name is checked.
+constexpr int kPollMs = 100;
+constexpr int kDrainSteps = 40;
+constexpr int kDrainStepMs = 10;
+constexpr int kCycleMs = kPollMs + kDrainSteps * kDrainStepMs;
+}  // namespace
+
 // Constructor / lifecycle
 BpfTraceCollector::BpfTraceCollector(montauk::app::TraceBuffers& buffers,
                                      std::string pattern)
@@ -95,18 +113,23 @@ BpfTraceCollector::BpfTraceCollector(montauk::app::TraceBuffers& buffers,
       tok = tok.substr(b, e - b + 1);
       if (!tok.empty()) {
         if (primary_pattern_.empty()) primary_pattern_ = tok;
-        sublimation_search m;
-        sublimation_search_compile(&m, tok.data(), tok.size(),
-                                   SUBLIMATION_SEARCH_FIXED | SUBLIMATION_SEARCH_ICASE, 0);
-        matchers_.push_back(m);
+        names_.push_back(tok);
       }
     }
     start = comma + 1;
   }
-  if (matchers_.empty()) {  // no usable token — fall back to the whole string
+  if (names_.empty()) {  // no usable token — fall back to the whole string
     primary_pattern_ = pattern_;
+    names_.push_back(pattern_);
+  }
+  // The literal face borrows its needle, so each matcher points into names_,
+  // compiled only once names_ is final and never changed after. Compiled from
+  // the loop's own `tok`, every name short enough for the small-string buffer
+  // borrowed the same stack bytes, and every matcher compared against the
+  // last name in the list.
+  for (const std::string& n : names_) {
     sublimation_search m;
-    sublimation_search_compile(&m, pattern_.data(), pattern_.size(),
+    sublimation_search_compile(&m, n.data(), n.size(),
                                SUBLIMATION_SEARCH_FIXED | SUBLIMATION_SEARCH_ICASE, 0);
     matchers_.push_back(m);
   }
@@ -120,12 +143,6 @@ bool BpfTraceCollector::matches_any(const std::string& s) const {
 
 BpfTraceCollector::~BpfTraceCollector() {
   stop();
-  if (rb_)
-    ring_buffer__free(rb_);
-  if (enroll_iter_link_)
-    bpf_link__destroy(enroll_iter_link_);
-  if (skel_)
-    montauk_trace_bpf__destroy(skel_);
 }
 
 void BpfTraceCollector::start() {
@@ -148,6 +165,202 @@ void BpfTraceCollector::stop() {
     ::close(stream_fd_);
     stream_fd_ = -1;
   }
+  detach();
+}
+
+namespace {
+// What the kernel attached a link as, since that decides what its detach waits
+// on: A tracepoint or uprobe goes through a perf event, a tp_btf program is a
+// raw tracepoint and an fentry or fexit program is a trampoline.
+const char* link_kind(bpf_link* link) {
+  const auto get_info = montauk::util::bpf_api().p_bpf_link_get_info_by_fd;
+  if (!get_info) return "link";
+  bpf_link_info info{};
+  __u32 len = sizeof(info);
+  if (get_info(bpf_link__fd(link), &info, &len) != 0) return "link";
+  switch (info.type) {
+    case BPF_LINK_TYPE_RAW_TRACEPOINT: return "raw tracepoint";
+    case BPF_LINK_TYPE_TRACING:        return "trampoline";
+    case BPF_LINK_TYPE_ITER:           return "iterator";
+    case BPF_LINK_TYPE_UPROBE_MULTI:   return "uprobe";
+    case BPF_LINK_TYPE_PERF_EVENT:
+      switch (info.perf_event.type) {
+        case BPF_PERF_EVENT_UPROBE:
+        case BPF_PERF_EVENT_URETPROBE:  return "uprobe";
+        case BPF_PERF_EVENT_TRACEPOINT: return "tracepoint";
+        default:                        return "perf event";
+      }
+    default: return "link";
+  }
+}
+constexpr auto kDetachNotice = std::chrono::seconds(2);
+// Past the slowest teardown measured (9.5 s), so a slow detach never trips it
+// and a stuck one always does.
+constexpr auto kDetachDeadline = std::chrono::seconds(12);
+}  // namespace
+
+// BPF DETACH, EXPLICIT AND TIMED. The capture is complete and closed before
+// this runs, so nothing here can cost a record; what it can cost is the
+// operator's terminal, and a teardown measured at up to 9.5 s reads as a hang.
+// Each link is destroyed on its own and timed, the totals go to the log by
+// link kind, and a watchdog names the link a detach is in once it runs past a
+// notice and again past a deadline, so a slow detach and a stuck one read
+// apart. The sched_ext kfunc trampolines go first: Armed, they are the hottest
+// probes in the set, and their removal is done here at a known point after the
+// last drain rather than wherever the destructor happens to run.
+void BpfTraceCollector::detach() {
+  if (rb_) { ring_buffer__free(rb_); rb_ = nullptr; }
+  if (!skel_) return;
+  using clock = std::chrono::steady_clock;
+
+  // What the libc probes cost: They trap a call in every process that maps
+  // libc, and turn away each one in a process the capture does not follow.
+  if (libc_probes_) {
+    const int fd = bpf_map__fd(skel_->maps.libc_hits);
+    const int ncpu = libbpf_num_possible_cpus();
+    uint64_t hits[2] = {0, 0};
+    if (fd >= 0 && ncpu > 0) {
+      std::vector<uint64_t> per(static_cast<size_t>(ncpu));
+      for (uint32_t k = 0; k < 2; ++k)
+        if (bpf_map_lookup_elem(fd, &k, per.data()) == 0)
+          for (uint64_t v : per) hits[k] += v;
+    }
+    const uint64_t all = hits[0] + hits[1];
+    montauk::util::log_info("libc probes: %llu heap calls trapped, %llu in traced processes and %llu "
+                            "(%.1f%%) in the rest of the machine, turned away",
+                            (unsigned long long)all, (unsigned long long)hits[0],
+                            (unsigned long long)hits[1], all ? 100.0 * (double)hits[1] / (double)all : 0.0);
+  }
+
+  struct Pending { const char* name; bpf_link** link; };
+  std::vector<Pending> todo;
+  const bpf_object_skeleton* s = skel_->skeleton;
+  bpf_link** const first[] = {
+    &skel_->links.handle_scx_kick, &skel_->links.handle_scx_reenq,
+    &skel_->links.handle_resched_curr, &skel_->links.handle_scx_dsq_insert,
+    &skel_->links.handle_scx_dsq_insert_vtime, &skel_->links.handle_scx_dsq_drain,
+  };
+  auto is_first = [&](bpf_link** l) {
+    for (auto* f : first) if (f == l) return true;
+    return false;
+  };
+  for (int pass = 0; pass < 2; ++pass)
+    for (int i = 0; i < s->prog_cnt; ++i) {
+      const auto* p = reinterpret_cast<const bpf_prog_skeleton*>(
+          reinterpret_cast<const char*>(s->progs) + static_cast<size_t>(i) * s->prog_skel_sz);
+      if (p->link && *p->link && is_first(p->link) == (pass == 0))
+        todo.push_back({p->name, p->link});
+    }
+  if (enroll_iter_link_) todo.push_back({"enroll_threads", &enroll_iter_link_});
+
+  std::atomic<size_t> done{0};
+  std::atomic<const char*> current{nullptr};
+  std::atomic<clock::rep> current_since{0};
+  const auto t0 = clock::now();
+  std::jthread watchdog([&](std::stop_token wst) {
+    std::mutex mu;
+    std::condition_variable_any cv;
+    std::unique_lock lk(mu);
+    if (cv.wait_until(lk, wst, t0 + kDetachNotice, [&] { return wst.stop_requested(); })) return;
+    auto in = [&] {
+      const char* n = current.load();
+      const double held = std::chrono::duration<double>(
+          clock::now() - clock::time_point(clock::duration(current_since.load()))).count();
+      return std::pair{n ? n : "the object close", held};
+    };
+    auto [n1, h1] = in();
+    montauk::util::log_info("BPF detach running %.0f s: %zu of %zu links left, in %s for %.1f s",
+                            std::chrono::duration<double>(kDetachNotice).count(),
+                            todo.size() - done.load(), todo.size(), n1, h1);
+    if (cv.wait_until(lk, wst, t0 + kDetachDeadline, [&] { return wst.stop_requested(); })) return;
+    auto [n2, h2] = in();
+    montauk::util::log_warn("BPF detach past its %.0f s deadline: %zu of %zu links left, "
+                            "in %s for %.1f s",
+                            std::chrono::duration<double>(kDetachDeadline).count(),
+                            todo.size() - done.load(), todo.size(), n2, h2);
+  });
+
+  struct Kind { const char* name; size_t n = 0; double ms = 0; };
+  std::vector<Kind> kinds;
+  std::vector<std::pair<double, const char*>> slowest;
+  for (const Pending& p : todo) {
+    const char* kind = link_kind(*p.link);
+    const auto at = clock::now();
+    current_since.store(at.time_since_epoch().count());
+    current.store(p.name);
+    bpf_link__destroy(*p.link);
+    *p.link = nullptr;
+    const double ms = std::chrono::duration<double, std::milli>(clock::now() - at).count();
+    done.fetch_add(1);
+    auto k = std::find_if(kinds.begin(), kinds.end(),
+                          [&](const Kind& x) { return std::strcmp(x.name, kind) == 0; });
+    if (k == kinds.end()) k = kinds.insert(kinds.end(), Kind{kind});
+    k->n++;
+    k->ms += ms;
+    slowest.emplace_back(ms, p.name);
+  }
+  const auto at = clock::now();
+  current_since.store(at.time_since_epoch().count());
+  current.store(nullptr);
+  montauk_trace_bpf__destroy(skel_);
+  skel_ = nullptr;
+  const auto t1 = clock::now();
+  watchdog.request_stop();
+
+  std::string by_kind;
+  for (const Kind& k : kinds)
+    by_kind += (by_kind.empty() ? "" : ", ") + std::to_string(k.n) + " " + k.name + " " +
+               std::to_string(static_cast<long long>(k.ms + 0.5)) + " ms";
+  sublimation_order_f64(slowest, true, [](const auto& e) { return e.first; });
+  std::string top;
+  for (size_t i = 0; i < slowest.size() && i < 5; ++i) {
+    char b[96];
+    std::snprintf(b, sizeof(b), "%s%s %.0f ms", i ? ", " : "", slowest[i].second, slowest[i].first);
+    top += b;
+  }
+  montauk::util::log_info("BPF detach: %zu links in %.0f ms (%s), object close %.0f ms%s%s",
+                          todo.size(), std::chrono::duration<double, std::milli>(t1 - t0).count(),
+                          by_kind.empty() ? "none" : by_kind.c_str(),
+                          std::chrono::duration<double, std::milli>(t1 - at).count(),
+                          top.empty() ? "" : "; slowest ", top.c_str());
+}
+
+bool BpfTraceCollector::write_trace_header(int fd) const {
+  // Capture both clocks at the same instant so the decoder can map event
+  // timestamps (CLOCK_MONOTONIC, from bpf_ktime_get_ns) to absolute wall
+  // time. Read mono first, real second; the tiny skew between them is
+  // sub-microsecond and irrelevant at trace granularity.
+  timespec mono{}, real{};
+  clock_gettime(CLOCK_MONOTONIC, &mono);
+  clock_gettime(CLOCK_REALTIME, &real);
+
+  static_assert(montauk::model::kTracePatternRecordType == TRACE_EVT_PATTERN);
+  montauk::model::TraceFileHeader hdr{};
+  std::memcpy(hdr.magic, montauk::model::kTraceMagic, sizeof(hdr.magic));
+  hdr.version        = montauk::model::kTraceFormatVersion;
+  hdr.mono_anchor_ns = static_cast<uint64_t>(mono.tv_sec) * 1000000000ull + mono.tv_nsec;
+  hdr.real_anchor_ns = static_cast<uint64_t>(real.tv_sec) * 1000000000ull + real.tv_nsec;
+  std::snprintf(hdr.pattern, sizeof(hdr.pattern), "%s", pattern_.c_str());
+  // A pattern the field cannot hold goes whole into the first record.
+  std::vector<uint8_t> out(sizeof(hdr));
+  if (pattern_.size() >= sizeof(hdr.pattern)) {
+    hdr.flags |= montauk::model::kTraceFlagPatternRecord;
+    const uint32_t type = montauk::model::kTracePatternRecordType;
+    const auto len = static_cast<montauk::model::TraceRecordLen>(sizeof(type) + pattern_.size());
+    out.resize(sizeof(hdr) + sizeof(len) + len);
+    std::memcpy(out.data() + sizeof(hdr), &len, sizeof(len));
+    std::memcpy(out.data() + sizeof(hdr) + sizeof(len), &type, sizeof(type));
+    std::memcpy(out.data() + sizeof(hdr) + sizeof(len) + sizeof(type), pattern_.data(), pattern_.size());
+  }
+  std::memcpy(out.data(), &hdr, sizeof(hdr));
+
+  size_t off = 0;
+  while (off < out.size()) {
+    ssize_t n = ::write(fd, out.data() + off, out.size() - off);
+    if (n <= 0) return false;
+    off += static_cast<size_t>(n);
+  }
+  return true;
 }
 
 void BpfTraceCollector::set_binary_output(const std::string& path) {
@@ -165,29 +378,7 @@ void BpfTraceCollector::set_binary_output(const std::string& path) {
     return;
   }
 
-  // Capture both clocks at the same instant so the decoder can map event
-  // timestamps (CLOCK_MONOTONIC, from bpf_ktime_get_ns) to absolute wall
-  // time. Read mono first, real second; the tiny skew between them is
-  // sub-microsecond and irrelevant at trace granularity.
-  timespec mono{}, real{};
-  clock_gettime(CLOCK_MONOTONIC, &mono);
-  clock_gettime(CLOCK_REALTIME, &real);
-
-  montauk::model::TraceFileHeader hdr{};
-  std::memcpy(hdr.magic, montauk::model::kTraceMagic, sizeof(hdr.magic));
-  hdr.version        = montauk::model::kTraceFormatVersion;
-  hdr.flags          = 0;
-  hdr.mono_anchor_ns = static_cast<uint64_t>(mono.tv_sec) * 1000000000ull + mono.tv_nsec;
-  hdr.real_anchor_ns = static_cast<uint64_t>(real.tv_sec) * 1000000000ull + real.tv_nsec;
-  std::snprintf(hdr.pattern, sizeof(hdr.pattern), "%s", pattern_.c_str());
-
-  size_t off = 0;
-  const auto* p = reinterpret_cast<const uint8_t*>(&hdr);
-  while (off < sizeof(hdr)) {
-    ssize_t n = ::write(fd, p + off, sizeof(hdr) - off);
-    if (n <= 0) { ::close(fd); return; }
-    off += static_cast<size_t>(n);
-  }
+  if (!write_trace_header(fd)) { ::close(fd); return; }
 
   trace_fd_ = fd;
   trace_buf_.reserve(kTraceFlushThreshold + 4096);
@@ -218,25 +409,7 @@ void BpfTraceCollector::set_stream_output(const std::string& path) {
     }
   }
 
-  timespec mono{}, real{};
-  clock_gettime(CLOCK_MONOTONIC, &mono);
-  clock_gettime(CLOCK_REALTIME, &real);
-
-  montauk::model::TraceFileHeader hdr{};
-  std::memcpy(hdr.magic, montauk::model::kTraceMagic, sizeof(hdr.magic));
-  hdr.version        = montauk::model::kTraceFormatVersion;
-  hdr.flags          = 0;
-  hdr.mono_anchor_ns = static_cast<uint64_t>(mono.tv_sec) * 1000000000ull + mono.tv_nsec;
-  hdr.real_anchor_ns = static_cast<uint64_t>(real.tv_sec) * 1000000000ull + real.tv_nsec;
-  std::snprintf(hdr.pattern, sizeof(hdr.pattern), "%s", pattern_.c_str());
-
-  size_t off = 0;
-  const auto* p = reinterpret_cast<const uint8_t*>(&hdr);
-  while (off < sizeof(hdr)) {
-    ssize_t n = ::write(fd, p + off, sizeof(hdr) - off);
-    if (n <= 0) { ::close(fd); return; }
-    off += static_cast<size_t>(n);
-  }
+  if (!write_trace_header(fd)) { ::close(fd); return; }
 
   stream_fd_ = fd;
   stream_buf_.reserve(kTraceFlushThreshold + 4096);
@@ -492,15 +665,25 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
   // ROOTS (a launcher/preloader process); the aborting process itself is a
   // fork-inherited DESCENDANT tracked in-BPF, so it never hit track_pid's
   // snapshot and the death-time snapshot races the reap (empty file). Snapshot
-  // on the first HEAP event from any pid — the process is provably alive and
-  // allocating, and its module mappings are loaded. Once per pid (cheap set
-  // guard).
-  if (len >= sizeof(uint32_t)) {
-    uint32_t etype = *static_cast<const uint32_t*>(data);
-    if (etype == TRACE_EVT_HEAP && len >= sizeof(struct montauk_heap_event)) {
-      uint32_t hpid = static_cast<const struct montauk_heap_event*>(data)->pid;
-      if (hpid && self->maps_snapshotted_.insert(hpid).second)
-        self->snapshot_maps(hpid);
+  // on a process's first record that carries an address to resolve -- a
+  // stack, a signal or abort site, a syscall's return address -- or its first
+  // heap event: it is provably alive and its module mappings are loaded. Keyed
+  // on the heap alone, a capture narrowed to futex or ntsync never took one,
+  // and none of its wait sites could be named. Once per pid (cheap set guard).
+  // Each of these records carries its pid right after its type.
+  if (len >= 2 * sizeof(uint32_t)) {
+    uint32_t etype, epid;
+    std::memcpy(&etype, data, sizeof etype);
+    std::memcpy(&epid, static_cast<const uint8_t*>(data) + sizeof(uint32_t), sizeof epid);
+    switch (etype) {
+      case TRACE_EVT_HEAP: case TRACE_EVT_HEAPSTACK: case TRACE_EVT_WAITSTACK:
+      case TRACE_EVT_RAWSTACK: case TRACE_EVT_FUTEXSTACK: case TRACE_EVT_SIGNAL:
+      case TRACE_EVT_ABORT: case TRACE_EVT_SYSCALL:
+        if (epid && self->maps_snapshotted_.insert(epid).second)
+          self->snapshot_maps(epid);
+        break;
+      default:
+        break;
     }
   }
 
@@ -618,26 +801,15 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
       // exit code set) and delivered signals get the verbose WARN + user-stack here.
       bool signal_killed = (sig->signal_nr != 0) || ((sig->exit_code & 0x7f) != 0);
       if (sig->kind != SIGEVT_DELIVER && !signal_killed) return 0;
-      const char* signame;
-      switch (sig->signal_nr) {
-        case 4:  signame = "SIGILL";  break;
-        case 5:  signame = "SIGTRAP"; break;
-        case 6:  signame = "SIGABRT"; break;
-        case 7:  signame = "SIGBUS";  break;
-        case 8:  signame = "SIGFPE";  break;
-        case 9:  signame = "SIGKILL"; break;
-        case 11: signame = "SIGSEGV"; break;
-        case 15: signame = "SIGTERM"; break;
-        case 0:  signame = "(none)";  break;
-        default: signame = "?";       break;
-      }
+      const char* signame = sig->signal_nr == 0 ? "(none)" : montauk::model::signal_name(sig->signal_nr);
+      if (!signame) signame = "?";
       const char* kind = (sig->kind == SIGEVT_DELIVER) ? "DELIVER" : "EXIT_ABNL";
       montauk::util::log_warn(
-                   "SIGNAL %s pid=%u tid=%u sig=%s(%d) sender=%d "
+                   "SIGNAL %s pid=%u tid=%u sig=%s(%d) sender=%d disposition=%s "
                    "exit_code=0x%x comm='%.16s' stack_depth=%u",
                    kind, sig->pid, sig->tid, signame, sig->signal_nr,
-                   sig->sender_pid, (unsigned)sig->exit_code,
-                   sig->comm, sig->stack_depth);
+                   sig->sender_pid, montauk::model::signal_disposition_name(sig->disposition),
+                   (unsigned)sig->exit_code, sig->comm, sig->stack_depth);
       // Per-thread context at signal time — answers "what syscall was
       // this thread executing when it got killed?" Critical when stack
       // capture is shallow (frame pointer omitted, DWARF unwind fails).
@@ -742,7 +914,7 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
     }
   }
 
-  // Abort-path events — libc __assert_fail/__libc_message/abort uprobes.
+  // Abort-path events — libc __assert_fail/abort uprobes.
   // Like SIGNAL events: rare, load-bearing, always surfaced to stderr.
   // The abort text otherwise only exists on the dying process's stderr.
   if (len >= sizeof(struct montauk_abort_event)) {
@@ -798,12 +970,9 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
   auto* evt = static_cast<struct montauk_ring_event*>(data);
   int32_t pid = static_cast<int32_t>(evt->pid);
 
-  if (evt->type == TRACE_EVT_COMM_CHANGE) {
-    montauk::util::log_info("COMM_CHANGE pid=%d comm='%.16s'", pid, evt->comm);
-  } else if (evt->type == TRACE_EVT_EXEC) {
+  if (evt->type == TRACE_EVT_EXEC)
     montauk::util::log_info("EXEC pid=%d comm='%.16s' file='%.64s'",
                  pid, evt->comm, evt->filename);
-  }
 
   // Skip our own process chain
   if (self->excluded_pids_.count(pid))
@@ -826,26 +995,9 @@ int BpfTraceCollector::handle_event(void* ctx, void* data, size_t len) {
     if (matched) {
       self->track_pid(pid, 0, true, evt->comm);
     }
-  } else if (evt->type == TRACE_EVT_COMM_CHANGE) {
-    // A process renamed itself via prctl(PR_SET_NAME) — re-evaluate pattern match
-    // Read updated comm from BPF proc_map
-    if (!self->skel_) return 0;
-    uint32_t key = static_cast<uint32_t>(pid);
-    struct proc_bpf_info info;
-    int proc_fd = bpf_map__fd(self->skel_->maps.proc_map);
-    if (bpf_map_lookup_elem(proc_fd, &key, &info) == 0) {
-      // Already tracked — comm updated in-kernel
-      return 0;
-    }
-    // Not tracked yet — check if new comm matches pattern
-    if (evt->comm[0] != '\0') {
-      std::string comm(evt->comm);
-      if (self->matches_any(comm)) {
-        self->track_pid(pid, 0, true, evt->comm);
-      }
-    }
   }
-  // FORK and EXIT handled entirely in BPF
+  // FORK and EXIT are handled entirely in BPF, and a rename is matched by the
+  // in-kernel THREAD_NAME path and each scan, never by a record here.
   return 0;
 }
 
@@ -979,15 +1131,27 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
              static_cast<uint64_t>(ts.tv_nsec);
   }
 
-  // Read proc_map → TracedProcess array
+  // Read proc_map → TracedProcess array. An exited process stays for a few
+  // cycles so the live view shows how it ended, then is reaped: The map holds
+  // TRACE_MAX_PIDS processes, and a tree that churned through that many would
+  // otherwise stop tracking its new children with no word said. The flag is
+  // set when the group leader's thread exits, which a leader calling
+  // pthread_exit does with its other threads still running, so an entry goes
+  // only once the process itself is gone. Reaped after the walk, since a
+  // deletion mid-walk restarts get_next_key.
   snap.procs_count = 0;
   {
+    constexpr uint64_t kExitedKeptNs = 2'000'000'000ULL;
+    std::vector<uint32_t> reap;
     uint32_t key = 0, next_key = 0;
     int map_fd = bpf_map__fd(skel_->maps.proc_map);
     while (bpf_map_get_next_key(map_fd, &key, &next_key) == 0) {
-      if (snap.procs_count >= montauk::model::TraceSnapshot::MAX_PROCS) break;
       struct proc_bpf_info info;
-      if (bpf_map_lookup_elem(map_fd, &next_key, &info) == 0) {
+      if (bpf_map_lookup_elem(map_fd, &next_key, &info) != 0) { key = next_key; continue; }
+      if (info.exited && info.exit_ts && now_ns > info.exit_ts && now_ns - info.exit_ts > kExitedKeptNs &&
+          ::kill(static_cast<pid_t>(next_key), 0) != 0 && errno == ESRCH)
+        reap.push_back(next_key);
+      if (snap.procs_count < montauk::model::TraceSnapshot::MAX_PROCS) {
         auto& tp = snap.procs[snap.procs_count];
         tp.pid = static_cast<int32_t>(info.pid);
         tp.ppid = static_cast<int32_t>(info.ppid);
@@ -1003,6 +1167,7 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
       }
       key = next_key;
     }
+    for (uint32_t pid : reap) bpf_map_delete_elem(map_fd, &pid);
   }
 
   // Drive the task iterator first, so every tracked process's threads are
@@ -1014,6 +1179,21 @@ void BpfTraceCollector::snapshot_from_maps(montauk::model::TraceSnapshot& snap) 
       char it_buf[256];
       while (read(it_fd, it_buf, sizeof(it_buf)) > 0) { }
       close(it_fd);
+      if (!sweep_reported_) {
+        sweep_reported_ = true;
+        const auto* b = skel_->bss;
+        if (b->sweep_refused)
+          montauk::util::log_warn("discovery sweep: %llu live processes named, %llu refused "
+                                  "by the map (error %lld)",
+                                  (unsigned long long)b->sweep_named,
+                                  (unsigned long long)b->sweep_refused, (long long)b->sweep_error);
+        else
+          montauk::util::log_info("discovery sweep: %llu live processes named",
+                                  (unsigned long long)b->sweep_named);
+      }
+    } else if (!sweep_reported_) {
+      sweep_reported_ = true;
+      montauk::util::log_warn("discovery sweep did not run: %s", strerror(errno));
     }
   }
 
@@ -1243,8 +1423,16 @@ void BpfTraceCollector::run(std::stop_token st) {
       skel_->rodata->trace_pat.pattern[i] = (c >= 'A' && c <= 'Z') ? c + 32 : c;
     }
     skel_->rodata->trace_pat.len = static_cast<uint8_t>(len);
-    montauk::util::log_info("BPF pattern set in .rodata (%zu bytes: %s)",
-                 len, pattern_.c_str());
+    // Each name and how it is matched: All are a case-insensitive substring of
+    // a process name, the first is also checked in-kernel the moment a
+    // process execs, starts making syscalls or renames itself.
+    montauk::util::log_info("trace name '%.*s'%s: in-kernel at exec (name or path), "
+                            "first syscall and rename, plus each scan",
+                            (int)len, primary_pattern_.c_str(),
+                            len < primary_pattern_.size() ? " (cut to its first bytes)" : "");
+    for (size_t i = 1; i < names_.size(); ++i)
+      montauk::util::log_info("trace name '%s': each scan (every %d ms) of every live "
+                              "process name", names_[i].c_str(), kCycleMs);
   }
 
   // Per-event sched streaming to the ringbuf is a firehose on a hot dispatch
@@ -1259,18 +1447,27 @@ void BpfTraceCollector::run(std::stop_token st) {
   // PER-CLASS CAPTURE MASK. 0 from the operator means "everything", which is
   // NOT the same as a zero mask in BPF (that would capture nothing), so the
   // translation happens here rather than being left to a caller to remember.
-  skel_->rodata->capture_mask = capture_mask_ ? capture_mask_ : ~0ULL;
+  // The syscall class is a record per call, so "everything" leaves it out: It
+  // is captured only when named, by --trace-classes or a --trace-syscalls flag.
+  const uint64_t effective_mask = capture_mask_ ? capture_mask_ : ~(1ULL << TRACE_EVT_SYSCALL);
+  skel_->rodata->capture_mask = effective_mask;
   if (capture_mask_)
     montauk::util::log_info("capture mask 0x%llx: classes outside it are not "
                             "reserved at all, and are NOT counted as drops "
                             "(a narrowed capture is not a damaged one)",
                             (unsigned long long)capture_mask_);
+  const bool syscall_class = (effective_mask >> TRACE_EVT_SYSCALL) & 1;
+  for (size_t w = 0; w < sc_numbers_.size(); ++w) skel_->rodata->sc_nr_mask[w] = sc_numbers_[w];
+  skel_->rodata->sc_from_anon = sc_from_anon_ ? 1 : 0;
+  skel_->rodata->path_bytes = path_bytes_;
 
   // Heap caller-stack capture: MONTAUK_HEAP_STACK_SIZE=<bytes> makes every
   // malloc/calloc of exactly that size emit a TRACE_EVT_HEAPSTACK with the
   // allocator's user stack. Targets the top-chunk/!prev corruption class:
   // once forensics name the victim allocation's size, one run with this set
   // names the allocation site. .rodata, so it must be set before load.
+  if (const long ps = sysconf(_SC_PAGESIZE); ps > 0)
+    skel_->rodata->page_size = static_cast<uint64_t>(ps);
   if (const char* hss = std::getenv("MONTAUK_HEAP_STACK_SIZE")) {
     skel_->rodata->heap_stack_size = std::strtoull(hss, nullptr, 0);
     if (skel_->rodata->heap_stack_size)
@@ -1312,6 +1509,12 @@ void BpfTraceCollector::run(std::stop_token st) {
     if (!have_scx) {
       bpf_program__set_autoload(skel_->progs.handle_scx_kick,  false);
       bpf_program__set_autoload(skel_->progs.handle_scx_reenq, false);
+      // resched_curr exists on every kernel, but without the kfuncs it is a
+      // storm capture's third probe with nothing to pair against, so it loads
+      // only when MONTAUK_SCX_RESCHED asks for it alone.
+      const char* rv = std::getenv("MONTAUK_SCX_RESCHED");
+      if (!(rv && rv[0] && rv[0] != '0'))
+        bpf_program__set_autoload(skel_->progs.handle_resched_curr, false);
       montauk::util::log_info("kernel BTF lacks sched_ext kfuncs; "
                               "scx storm probes disabled for this boot");
     }
@@ -1370,8 +1573,17 @@ void BpfTraceCollector::run(std::stop_token st) {
   bpf_program__set_autoattach(skel_->progs.uretprobe_realloc,false);
   bpf_program__set_autoattach(skel_->progs.uprobe_calloc,    false);
   bpf_program__set_autoattach(skel_->progs.uretprobe_calloc, false);
+  bpf_program__set_autoattach(skel_->progs.uprobe_posix_memalign, false);
+  bpf_program__set_autoattach(skel_->progs.uretprobe_posix_memalign, false);
+  bpf_program__set_autoattach(skel_->progs.uprobe_aligned_alloc, false);
+  bpf_program__set_autoattach(skel_->progs.uretprobe_aligned_alloc, false);
+  bpf_program__set_autoattach(skel_->progs.uprobe_memalign, false);
+  bpf_program__set_autoattach(skel_->progs.uretprobe_memalign, false);
+  bpf_program__set_autoattach(skel_->progs.uprobe_valloc, false);
+  bpf_program__set_autoattach(skel_->progs.uretprobe_valloc, false);
+  bpf_program__set_autoattach(skel_->progs.uprobe_pvalloc, false);
+  bpf_program__set_autoattach(skel_->progs.uretprobe_pvalloc, false);
   bpf_program__set_autoattach(skel_->progs.uprobe_assert_fail,  false);
-  bpf_program__set_autoattach(skel_->progs.uprobe_libc_message, false);
   bpf_program__set_autoattach(skel_->progs.uprobe_abort,        false);
 
   // THE KICK PROBES ARE OFF BY DEFAULT ON COST, NOT ON SAFETY. The 7.1.x freeze
@@ -1399,6 +1611,10 @@ void BpfTraceCollector::run(std::stop_token st) {
   bpf_program__set_autoattach(skel_->progs.handle_scx_dsq_insert,       false);
   bpf_program__set_autoattach(skel_->progs.handle_scx_dsq_insert_vtime, false);
   bpf_program__set_autoattach(skel_->progs.handle_scx_dsq_drain,        false);
+  // The syscall class runs on every syscall of the traced tree, so its two
+  // programs attach only when it is captured, never ambient.
+  bpf_program__set_autoattach(skel_->progs.handle_sc_enter, false);
+  bpf_program__set_autoattach(skel_->progs.handle_sc_exit,  false);
 
   // Atomic skeleton attach now covers only the universal handlers -- always
   // present, so this cannot fail on a missing scheduler tracepoint.
@@ -1409,6 +1625,23 @@ void BpfTraceCollector::run(std::stop_token st) {
     skel_ = nullptr;
     load_failed_.store(true);
     return;
+  }
+
+  if (syscall_class) {
+    skel_->links.handle_sc_exit  = bpf_program__attach(skel_->progs.handle_sc_exit);
+    skel_->links.handle_sc_enter = bpf_program__attach(skel_->progs.handle_sc_enter);
+    if (skel_->links.handle_sc_enter && skel_->links.handle_sc_exit) {
+      size_t named = 0;
+      for (uint64_t w : sc_numbers_) named += static_cast<size_t>(__builtin_popcountll(w));
+      montauk::util::log_info("syscall class attached: %s%s, paths up to %u bytes",
+                              named == MONTAUK_SC_NR_WORDS * 64 ? "every number"
+                                                                : (std::to_string(named) + " number(s)").c_str(),
+                              sc_from_anon_ ? ", only calls from memory no file backs" : "",
+                              path_bytes_);
+    } else {
+      montauk::util::log_warn("syscall class requested but its programs did not attach -- "
+                              "the capture carries no syscall records");
+    }
   }
 
   // KICK CADENCE. MONTAUK_SCX_STORM arms the full set -- the two kick kfuncs
@@ -1536,12 +1769,21 @@ void BpfTraceCollector::run(std::stop_token st) {
   // syscall-level traces miss ~99% of allocations (libc's arena services
   // most malloc calls without touching the kernel). Best-effort: a libc
   // without these symbols just logs and continues without heap events.
+  //
+  // A probe attaches only when a class it feeds is captured. The class mask
+  // drops an event at rb_reserve, after its probe has trapped, so an excluded
+  // class's probes would still cost every hit: A narrowed capture of a launch
+  // paid for a million malloc and free traps it then threw away.
+  const uint64_t want = capture_mask_ ? capture_mask_ : ~0ULL;
+  constexpr uint64_t kHeapClasses = (1ULL << TRACE_EVT_HEAP) | (1ULL << TRACE_EVT_HEAPSTACK);
+  constexpr uint64_t kAbortClasses = 1ULL << TRACE_EVT_ABORT;
   {
     struct HeapAttach {
       bpf_program *prog;
       bpf_link    **link;
       const char  *func;
       bool         retprobe;
+      uint64_t     classes = kHeapClasses;
     };
     const HeapAttach attaches[] = {
       { skel_->progs.uprobe_malloc,     &skel_->links.uprobe_malloc,     "malloc",  false },
@@ -1551,14 +1793,24 @@ void BpfTraceCollector::run(std::stop_token st) {
       { skel_->progs.uretprobe_realloc, &skel_->links.uretprobe_realloc, "realloc", true  },
       { skel_->progs.uprobe_calloc,     &skel_->links.uprobe_calloc,     "calloc",  false },
       { skel_->progs.uretprobe_calloc,  &skel_->links.uretprobe_calloc,  "calloc",  true  },
+      { skel_->progs.uprobe_posix_memalign, &skel_->links.uprobe_posix_memalign, "posix_memalign", false },
+      { skel_->progs.uretprobe_posix_memalign, &skel_->links.uretprobe_posix_memalign, "posix_memalign", true },
+      { skel_->progs.uprobe_aligned_alloc, &skel_->links.uprobe_aligned_alloc, "aligned_alloc", false },
+      { skel_->progs.uretprobe_aligned_alloc, &skel_->links.uretprobe_aligned_alloc, "aligned_alloc", true },
+      { skel_->progs.uprobe_memalign, &skel_->links.uprobe_memalign, "memalign", false },
+      { skel_->progs.uretprobe_memalign, &skel_->links.uretprobe_memalign, "memalign", true },
+      { skel_->progs.uprobe_valloc, &skel_->links.uprobe_valloc, "valloc", false },
+      { skel_->progs.uretprobe_valloc, &skel_->links.uretprobe_valloc, "valloc", true },
+      { skel_->progs.uprobe_pvalloc, &skel_->links.uprobe_pvalloc, "pvalloc", false },
+      { skel_->progs.uretprobe_pvalloc, &skel_->links.uretprobe_pvalloc, "pvalloc", true },
       // Abort-path uprobes: record the abort text + caller stack at the
-      // glibc abort site itself. __libc_message is GLIBC-internal (not in
-      // .dynsym on a stripped libc) — its attach failing is expected and
-      // harmless; abort() covers that path with the caller stack.
-      { skel_->progs.uprobe_assert_fail,  &skel_->links.uprobe_assert_fail,  "__assert_fail",  false },
-      { skel_->progs.uprobe_libc_message, &skel_->links.uprobe_libc_message, "__libc_message", false },
-      { skel_->progs.uprobe_abort,        &skel_->links.uprobe_abort,        "abort",          false },
+      // glibc abort site itself. abort() reads the text glibc's printer left
+      // in __abort_msg (see uprobe_abort).
+      { skel_->progs.uprobe_assert_fail,  &skel_->links.uprobe_assert_fail,  "__assert_fail",  false, kAbortClasses },
+      { skel_->progs.uprobe_abort,        &skel_->links.uprobe_abort,        "abort",          false, kAbortClasses },
     };
+    size_t wanted = 0;
+    for (const auto &a : attaches) wanted += (a.classes & want) != 0;
     // Common libc paths — pick the first that exists.
     const char *libc_candidates[] = {
       "/usr/lib/libc.so.6",
@@ -1575,8 +1827,28 @@ void BpfTraceCollector::run(std::stop_token st) {
       }
     }
     int heap_attached = 0;
-    if (libc_path) {
+    if (!wanted) {
+      montauk::util::log_info("libc uprobes: none attached, heap, heapstack and abort "
+                              "are not captured");
+    } else if (libc_path) {
+      // __abort_msg's distance from abort(), measured in this process's own
+      // libc. It holds for a traced process only when both map the same file,
+      // so the file is checked by device and inode first.
+      Dl_info di{};
+      struct stat mine{}, theirs{};
+      void* abort_at = dlsym(RTLD_DEFAULT, "abort");
+      void* msg_at = dlvsym(RTLD_DEFAULT, "__abort_msg", "GLIBC_PRIVATE");
+      if (abort_at && msg_at && dladdr(abort_at, &di) && di.dli_fname &&
+          stat(di.dli_fname, &mine) == 0 && stat(libc_path, &theirs) == 0 &&
+          mine.st_dev == theirs.st_dev && mine.st_ino == theirs.st_ino)
+        skel_->bss->abort_msg_delta = reinterpret_cast<intptr_t>(msg_at) -
+                                      reinterpret_cast<intptr_t>(abort_at);
+      else
+        montauk::util::log_warn("abort text off: __abort_msg not located in %s; an abort "
+                                "still records its caller stack", libc_path);
+      std::string missing;
       for (const auto &a : attaches) {
+        if (!(a.classes & want)) continue;
         LIBBPF_OPTS(bpf_uprobe_opts, opts,
                     .retprobe  = a.retprobe,
                     .func_name = a.func);
@@ -1587,12 +1859,16 @@ void BpfTraceCollector::run(std::stop_token st) {
         if (link && libbpf_get_error(link) == 0) {
           *a.link = link;
           ++heap_attached;
+        } else {
+          missing += missing.empty() ? " (not attached: " : ", ";
+          missing += a.retprobe ? std::string(a.func) + " return" : std::string(a.func);
         }
       }
+      if (!missing.empty()) missing += ")";
       montauk::util::log_info(
-                   "libc uprobes attached: %d/%zu to %s",
-                   heap_attached, sizeof(attaches) / sizeof(attaches[0]),
-                   libc_path);
+                   "libc uprobes attached: %d/%zu to %s%s",
+                   heap_attached, wanted, libc_path, missing.c_str());
+      libc_probes_ = heap_attached > 0;
     } else {
       montauk::util::log_warn(
                    "libc not found — heap/abort uprobes disabled");
@@ -1623,17 +1899,23 @@ void BpfTraceCollector::run(std::stop_token st) {
     const char *waitstack_func2 = getenv("MONTAUK_WAITSTACK_FUNC2");
     if (!waitstack_func2 || !*waitstack_func2) waitstack_func2 = "NtWaitForMultipleObjects";
 
-    struct KevtAttach { bpf_program *prog; bpf_link **link; const char *func; };
+    struct KevtAttach { bpf_program *prog; bpf_link **link; const char *func; uint64_t classes; };
     const KevtAttach kattaches[] = {
-      { skel_->progs.uprobe_keyed_wait,    &skel_->links.uprobe_keyed_wait,    "NtWaitForKeyedEvent" },
-      { skel_->progs.uprobe_keyed_release, &skel_->links.uprobe_keyed_release, "NtReleaseKeyedEvent" },
-      { skel_->progs.uprobe_wait_single,   &skel_->links.uprobe_wait_single,   waitstack_func1 },
-      { skel_->progs.uprobe_wait_multiple, &skel_->links.uprobe_wait_multiple, waitstack_func2 },
+      { skel_->progs.uprobe_keyed_wait,    &skel_->links.uprobe_keyed_wait,    "NtWaitForKeyedEvent", 1ULL << TRACE_EVT_KEYEDEVT },
+      { skel_->progs.uprobe_keyed_release, &skel_->links.uprobe_keyed_release, "NtReleaseKeyedEvent", 1ULL << TRACE_EVT_KEYEDEVT },
+      { skel_->progs.uprobe_wait_single,   &skel_->links.uprobe_wait_single,   waitstack_func1, 1ULL << TRACE_EVT_RAWSTACK },
+      { skel_->progs.uprobe_wait_multiple, &skel_->links.uprobe_wait_multiple, waitstack_func2, 1ULL << TRACE_EVT_RAWSTACK },
     };
+    size_t kwanted = 0;
+    for (const auto &a : kattaches) kwanted += (a.classes & want) != 0;
     const char *ntdll_path = getenv("MONTAUK_NTDLL_PATH");
-    if (ntdll_path && access(ntdll_path, R_OK) == 0) {
+    if (ntdll_path && access(ntdll_path, R_OK) == 0 && !kwanted) {
+      montauk::util::log_info("ntdll uprobes: none attached, keyedevt and the wait-site "
+                              "stacks are not captured");
+    } else if (ntdll_path && access(ntdll_path, R_OK) == 0) {
       int kattached = 0;
       for (const auto &a : kattaches) {
+        if (!(a.classes & want)) continue;
         LIBBPF_OPTS(bpf_uprobe_opts, opts,
                     .retprobe  = false,
                     .func_name = a.func);
@@ -1647,8 +1929,8 @@ void BpfTraceCollector::run(std::stop_token st) {
         }
       }
       montauk::util::log_info(
-                   "ntdll keyed-event + wait-site uprobes attached: %d/4 to %s",
-                   kattached, ntdll_path);
+                   "ntdll keyed-event + wait-site uprobes attached: %d/%zu to %s",
+                   kattached, kwanted, ntdll_path);
     } else {
       montauk::util::log_info(
                    "MONTAUK_NTDLL_PATH unset/unreadable — "
@@ -1674,7 +1956,7 @@ void BpfTraceCollector::run(std::stop_token st) {
   // never mask the process name. No /proc discovery scan.
 
   while (!st.stop_requested()) {
-    ring_buffer__poll(rb_, 100);
+    ring_buffer__poll(rb_, kPollMs);
 
     // Latency-bound the binary log: flush whatever the poll drained so a
     // low-rate trace still lands on disk promptly (the size threshold only
@@ -1720,12 +2002,16 @@ void BpfTraceCollector::run(std::stop_token st) {
     // whether the machine was idle or loaded because the cause was montauk's
     // own nap, not the workload. Consume every 10ms so the ring can never fill
     // between snapshots; trace_flush() lands the drained bytes promptly.
-    for (int i = 0; i < 40 && !st.stop_requested(); ++i) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    for (int i = 0; i < kDrainSteps && !st.stop_requested(); ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(kDrainStepMs));
       ring_buffer__consume(rb_);
       trace_flush();
     }
   }
+
+  // Whatever the ring still holds at the stop request is the end of the
+  // recording, not a loss: Drain it before the totals are stamped.
+  ring_buffer__consume(rb_);
 
   // Final drop snapshot at teardown, unconditional: the capture's last bytes
   // state the whole recording's loss totals even if no snapshot fired during

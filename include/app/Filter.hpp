@@ -16,6 +16,10 @@ struct ProcessFilterSpec {
 class ProcessFilter {
 public:
   explicit ProcessFilter(ProcessFilterSpec spec);
+  // The fixed-face matcher borrows its needle from spec_, so a copy or move
+  // would leave it pointing into the old object.
+  ProcessFilter(const ProcessFilter&) = delete;
+  ProcessFilter& operator=(const ProcessFilter&) = delete;
   // Returns filtered indices into ps.processes
   [[nodiscard]] std::vector<size_t> apply(const montauk::model::ProcessSnapshot& ps) const;
 private:

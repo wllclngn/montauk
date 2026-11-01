@@ -329,7 +329,12 @@ def check_cfg(path):
 # do-while, a goto over dead code to a label, a block-opening macro, and in g a
 # goto into a loop body, which gives the loop a second entry. The Rust file
 # covers nested comments, raw strings, lifetimes, labeled break and continue,
-# while let, match arms with return, let-else, loop, unsafe and `?`.
+# while let, match arms with return, let-else, loop, unsafe and `?`. cond.rs
+# holds the blocks a Rust condition carries, which are not its body: `unsafe`
+# alone, negated and as an operand, in a while and a match scrutinee, an `if`
+# expression inside a condition, a struct pattern in `while let`, an open range
+# before a for body, and a `{` inside a string and a char literal; and the same
+# guarded return with its `unsafe` block in the condition and lifted to a `let`.
 CFG_FIXTURES = {
     "cfg.c": ('int f(int a, int b) {\n    int x = 0;\n    if (a && b)\n        x = 1;\n    else\n        x = 2;\n    for (int i = 0; i < a; i++) {\n        if (i == 3) continue;\n        if (i == 5) break;\n        x += i;\n    }\n    switch (x) {\n    case 1: x = 4;\n    case 2: return x;\n    default: break;\n    }\n    while (x > 0) { x--; }\n    do { x++; } while (x < 3);\n    goto out;\n    x = 99;\nout:\n    bpf_for(i, 0, 4) { x += i; }\n    return x;\n}\nint g(int a) {\n    if (a) goto in;\n    while (a < 9) {\n        a++;\nin:\n        a += 2;\n    }\n    return a;\n}\n', {
         "f": ("entry exit stmt cond cond stmt stmt stmt cond cond stmt cond stmt stmt stmt "
@@ -354,7 +359,28 @@ CFG_FIXTURES = {
                 "14>15 fall, 15>16 false, 15>17 true, 17>18 fall, 18>19 true, 18>17 back, "
                 "19>20 break, 20>1 fall, 2>1 try, 12>1 return, 16>1 return"),
     }),
+    "cond.rs": ('fn shapes(p: *const u8, n: usize) -> u32 {\n    if unsafe { is_null(p) } {\n        return 0;\n    }\n    if !unsafe { ready(p) } {\n        return 1;\n    }\n    if unsafe { peek(p) } == 0 {\n        return 2;\n    }\n    let mut i = 0;\n    while unsafe { *p.add(i) } != 0 {\n        i += 1;\n    }\n    let w = match unsafe { tag(p) } {\n        0 => 3,\n        _ => 4,\n    };\n    if n != if w > 3 { 8 } else { 9 } {\n        return 5;\n    }\n    6\n}\nfn walk(v: &[Slot], s: &str) -> usize {\n    let mut cur = 0;\n    while let Slot::Vacant { next, .. } = v[cur] {\n        cur = next;\n    }\n    for i in 0.. {\n        if i == cur { break; }\n    }\n    if s == "{" || s.starts_with(\'{\') {\n        return 1;\n    }\n    cur\n}\nfn inline(p: *const u8) -> u32 {\n    if unsafe { is_null(p) } {\n        return 0;\n    }\n    1\n}\nfn lifted(p: *const u8) -> u32 {\n    let c = unsafe { is_null(p) };\n    if c {\n        return 0;\n    }\n    1\n}\n', {
+        "shapes": ("entry exit cond stmt cond stmt cond stmt stmt cond stmt stmt match arm arm "
+                   "cond stmt stmt",
+                   "0>2 fall, 2>3 true, 2>4 false, 4>5 true, 4>6 false, 6>7 true, 6>8 false, "
+                   "8>9 fall, 9>10 true, 10>9 back, 9>11 false, 11>12 fall, 12>13 arm, 12>14 arm, "
+                   "13>15 fall, 14>15 fall, 15>16 true, 15>17 false, 17>1 fall, 3>1 return, "
+                   "5>1 return, 7>1 return, 16>1 return"),
+        "walk": ("entry exit stmt cond stmt cond cond stmt cond cond stmt stmt",
+                 "0>2 fall, 2>3 fall, 3>4 true, 4>3 back, 3>5 false, 5>6 true, 6>7 true, "
+                 "6>5 back, 8>9 false, 5>8 false, 7>8 break, 8>10 true, 9>10 true, 9>11 false, "
+                 "11>1 fall, 10>1 return"),
+        "inline": ("entry exit cond stmt stmt",
+                   "0>2 fall, 2>3 true, 2>4 false, 4>1 fall, 3>1 return"),
+        "lifted": ("entry exit stmt cond stmt stmt",
+                   "0>2 fall, 2>3 fall, 3>4 true, 3>5 false, 5>1 fall, 4>1 return"),
+    }),
 }
+
+# Pairs of functions in CFG_FIXTURES that are one graph once the first's `let`
+# statement block is contracted: A condition's block lifted out of it changes
+# nothing the graph says.
+ALIKE = [("cond.rs", "lifted", "inline")]
 
 
 # Python's graph, checked by hand: A short-circuit `and`, an elif chain, a for
@@ -363,12 +389,27 @@ CFG_FIXTURES = {
 PY_CFG_FIXTURES = {
     "cfg.py": ("def f(a, b, xs):\n    x = 0\n    if a and b:\n        x = 1\n    elif a:\n        x = 2\n    else:\n        x = 3\n    for i in xs:\n        if i == 3:\n            continue\n        if i == 5:\n            break\n        x += i\n    else:\n        x = -1\n    while x > 0:\n        x -= 1\n    try:\n        x = int(b)\n    except ValueError as e:\n        raise\n    finally:\n        x += 1\n    match x:\n        case 1:\n            return 1\n        case _:\n            pass\n    with open(b) as fh:\n        x = len(fh.read())\n    return x\n", {
         "f": ("entry exit stmt cond cond stmt cond stmt stmt cond cond stmt cond stmt stmt stmt "
-              "cond stmt try stmt handler stmt match arm arm stmt",
+              "cond stmt try stmt handler finally match arm arm stmt",
               "0>2 fall, 3>4 true, 2>3 fall, 4>5 true, 3>6 false, 4>6 false, 6>7 true, 6>8 false, "
               "5>9 fall, 7>9 fall, 8>9 fall, 9>10 true, 10>11 true, 10>12 false, 12>13 true, "
               "12>14 false, 14>9 back, 11>9 continue, 9>15 false, 13>15 break, 15>16 fall, "
               "16>17 true, 17>16 back, 16>18 false, 18>19 fall, 18>20 handler, 19>21 fall, "
-              "21>22 fall, 22>23 arm, 22>24 arm, 24>25 fall, 20>1 return, 23>1 return, 25>1 return"),
+              "20>21 return, 18>21 unwind, 21>22 fall, 22>23 arm, 22>24 arm, 24>25 fall, "
+              "21>1 return, 23>1 return, 25>1 return"),
+    }),
+    # A finally is reached from every way out of its try: Its body's return, an
+    # uncaught exception (the unwind edge) and each fall, and only a fall carries
+    # on past it. So cleanup() after a `return True` is live and tail() is dead;
+    # a try's else is reached from its body's fall alone.
+    "finally.py": ("def work():\n    try:\n        return True\n    finally:\n        cleanup()\n"
+                   "    tail()\n\n\ndef falls(x):\n    try:\n        x = 1\n    except ValueError:\n"
+                   "        x = 2\n    else:\n        x = 3\n    finally:\n        cleanup()\n"
+                   "    return x\n", {
+        "work": ("entry exit try stmt finally stmt",
+                 "0>2 fall, 2>3 fall, 3>4 return, 2>4 unwind, 5>1 fall, 4>1 return"),
+        "falls": ("entry exit try stmt handler stmt finally stmt",
+                  "0>2 fall, 2>3 fall, 2>4 handler, 3>5 fall, 5>6 fall, 4>6 fall, 2>6 unwind, "
+                  "6>7 fall, 6>1 return, 7>1 return"),
     }),
 }
 
@@ -522,6 +563,22 @@ def check_python(paths):
         if refs != {("2", "<file>", "__init__")}:
             ok = False
             note(f"FAIL python dunder: R rows {sorted(refs)}, want __init__ rooted at line 2 alone")
+    # A call inside an f-string's field is a reference, in the spec's nested
+    # field, beside a conversion or a debug `=`, and across a triple-quoted
+    # field's newline; a plain string's braces name nothing.
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "fstring.py"
+        path.write_text('def stamp():\n    return "t"\n\n\ndef width():\n    return 3\n\n\n'
+                        'def main():\n    print(f"{stamp()} x {1:>{width()}} {stamp()!r} {stamp()=}")\n'
+                        '    if f"{stamp():3}" == "x":\n        return f"""{\n            width()}"""\n'
+                        '    return "{width()}"\n')
+        r = subprocess.run([str(MONTAUK), "--static", str(path)], capture_output=True, text=True)
+        refs = sorted(tuple(ln.split("\t")[2:]) for ln in r.stdout.split("\n") if ln.startswith("R\t"))
+        want_refs = sorted([("10", "main", "stamp")] * 3 + [("10", "main", "width"),
+                           ("11", "main", "stamp"), ("13", "main", "width")])
+        if refs != want_refs:
+            ok = False
+            note(f"FAIL python f-string: R rows {refs}, want {want_refs}")
     with tempfile.TemporaryDirectory() as d:
         for name, (src, want) in PY_CFG_FIXTURES.items():
             path = Path(d) / name
@@ -542,7 +599,8 @@ def check_python(paths):
                     ok = False
     if ok:
         note(f"PASS python: {nguards} guards and every declaration over {files} file(s) match "
-             f"CPython's ast and tokenize, and cfg.py matches the hand-checked graph")
+             f"CPython's ast and tokenize, f-string fields are references, and the cfg "
+             f"fixtures match their hand-checked graphs")
     return ok
 
 
@@ -550,6 +608,7 @@ def check_cfg_fixtures():
     """The oracle catches two implementations disagreeing, never both agreeing
     on the wrong graph. These are small enough to have been checked by hand."""
     ok = True
+    scanned = {}
     with tempfile.TemporaryDirectory() as d:
         for name, (src, want) in CFG_FIXTURES.items():
             path = Path(d) / name
@@ -564,6 +623,8 @@ def check_cfg_fixtures():
                     blocks.setdefault(c[2], []).append(c[4])
                 else:
                     edges.setdefault(c[2], []).append(f"{c[3]}>{c[4]} {c[5]}")
+            scanned[name] = {fn: (" ".join(blocks.get(fn, [])), ", ".join(edges.get(fn, [])))
+                             for fn in want}
             for fn, (kinds, edge_list) in want.items():
                 if " ".join(blocks.get(fn, [])) != kinds or ", ".join(edges.get(fn, [])) != edge_list:
                     note(f"FAIL {name} {fn}: the graph is not the hand-checked one")
@@ -572,6 +633,25 @@ def check_cfg_fixtures():
                     ok = False
             if ok:
                 note(f"PASS {name} ({len(want)} function(s) match the hand-checked graph)")
+    for name, lifted, inline in ALIKE:
+        kinds_l, edges_l = scanned[name][lifted]
+        kinds_i, edges_i = scanned[name][inline]
+        k = kinds_l.split()
+        # Contract block 2, the `let`, into entry: Its edges go, later blocks renumber.
+        renum = lambda v: v if v < 2 else v - 1
+        contracted = []
+        for e in edges_l.split(", "):
+            span, kind = e.split(" ")
+            a, b = map(int, span.split(">"))
+            if a == 2 or (a, b) == (0, 2):
+                if a == 2:
+                    contracted.append(f"0>{renum(b)} {kind}")
+                continue
+            contracted.append(f"{renum(a)}>{renum(b)} {kind}")
+        same = (" ".join(k[:2] + k[3:]) == kinds_i
+                and sorted(contracted) == sorted(edges_i.split(", ")))
+        note(f"{'PASS' if same else 'FAIL'} {name}: {lifted} is {inline}'s graph with its `let` lifted out")
+        ok = ok and same
     return ok
 
 
@@ -633,22 +713,86 @@ def independent_cfg(blocks, edges):
         "dom_depth": max(bin(dom[v]).count("1") - 1 for v in reach),
         "natural": len(natural),
         "irreducible": irreducible,
-        "dead": sum(1 for v in range(n) if not state[v] and blocks[v] != "exit"),
+        "dead": [v for v in range(n) if not state[v] and blocks[v] != "exit"],
     }
 
 
+# WHAT A RUNNER OR A TABLE ENTERS. Each file below is scanned alone and its
+# declarations report read: the functions a test runner calls are reached from
+# file scope, with what only they call; a callback a macro declares is reached
+# from the table that names it; and code nothing enters stays unreached.
+ENTRY_FIXTURES = {
+    "test_mod.py": ("import unittest\n\n\ndef helper():\n    return 1\n\n\n"
+                    "class Base(unittest.TestCase):\n    def setUp(self):\n        self.x = helper()\n\n"
+                    "    def tool(self):\n        return 3\n\n\n"
+                    "class Derived(Base):\n    def test_one(self):\n        assert self.x == 1\n\n\n"
+                    "class TestPlain:\n    def test_two(self):\n        assert helper()\n\n"
+                    "    def other(self):\n        return 0\n\n\n"
+                    "class Other:\n    def test_not(self):\n        return 0\n\n\n"
+                    "def test_module():\n    def inner():\n        return 1\n    assert inner()\n\n\n"
+                    "def setUpModule():\n    pass\n\n\ndef unused():\n    pass\n",
+                    ["tool", "other", "test_not", "unused"]),
+    "plain.py": ("import unittest\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n\n\n"
+                 "def test_free():\n    pass\n",
+                 ["test_free"]),
+    "lib.rs": ("fn helper() -> u32 { 1 }\n\nfn dead() -> u32 { 2 }\n\n#[cfg(test)]\nmod tests {\n"
+               "    use super::*;\n    #[test]\n    fn a() { assert_eq!(helper(), 1); }\n"
+               "    #[test] fn b() { helper(); }\n    #[tokio::test]\n    #[ignore]\n    async fn c() {}\n"
+               "    #[inline] fn d() {}\n}\n",
+               ["dead", "d"]),
+    "ops.bpf.c": ("void helper(void) {}\nvoid dead(void) {}\n"
+                  "int BPF_STRUCT_OPS(sched_tick, int cpu) { helper(); return 0; }\n"
+                  "int BPF_STRUCT_OPS(sched_unnamed, int cpu) { return 0; }\n"
+                  "SEC(\".struct_ops\")\nstruct sched_ext_ops ops = {\n    .tick = (void *)sched_tick,\n};\n",
+                  ["dead", "BPF_STRUCT_OPS:sched_unnamed"]),
+}
+
+
+def check_entries():
+    """Each entry fixture's unreached list, exactly."""
+    ok = True
+    with tempfile.TemporaryDirectory() as d:
+        for name, (src, want) in ENTRY_FIXTURES.items():
+            path, art = Path(d) / name, Path(d) / (name + ".guards")
+            path.write_text(src)
+            r = subprocess.run([str(MONTAUK), "--static", str(path), "-o", str(art)], capture_output=True, text=True)
+            a = subprocess.run([str(MONTAUK), "--analyze", str(art), "--json"], capture_output=True, text=True)
+            if r.returncode != 0 or a.returncode != 0:
+                note(f"FAIL entries {name}: static rc {r.returncode}, analyze rc {a.returncode}")
+                ok = False
+                continue
+            rep = next(x for x in json.loads(a.stdout)["reports"] if x["name"] == "declarations")
+            got = [x["name"] for x in rep.get("unreached", [])]
+            if got != want:
+                note(f"FAIL entries {name}: unreached {got}, want {want}")
+                ok = False
+    if ok:
+        note(f"PASS entries: test runners' functions and a struct_ops table's callbacks are entry "
+             f"points over {len(ENTRY_FIXTURES)} fixtures, and what nothing enters stays unreached")
+    return ok
+
+
 def check_cfg_report(art, env):
-    """The cfg report's arithmetic against independent_cfg over the same rows."""
-    fns = {}
+    """The cfg report's arithmetic against independent_cfg over the same rows,
+    and its unreachable listing against the blocks that recomputation leaves
+    unreached, every one."""
+    fns, rows, files = {}, {}, {}
     for ln in art.read_text().split("\n"):
         c = ln.split("\t")
         if c[0] == "B":
             fns.setdefault((c[1], c[2]), ([], []))[0].append(c[5])
+            rows.setdefault((c[1], c[2]), []).append((c[3], int(c[6]), c[5]))
         elif c[0] == "E":
             fns.setdefault((c[1], c[2]), ([], []))[1].append((int(c[4]), int(c[5])))
+        elif ln.startswith("file "):
+            _, idx, _, path = ln.split(" ", 3)
+            files[idx] = path
     if not fns:
         return []
     stats = [independent_cfg(b, e) for b, e in fns.values()]
+    dead_rows = sorted((files.get(k[0], ""), *rows[k][v]) for k, s in zip(fns, stats) for v in s["dead"])
+    for s in stats:
+        s["dead"] = len(s["dead"])
     want = {
         "montauk_static_cfg_functions": len(fns),
         "montauk_static_cfg_blocks": sum(len(b) for b, _ in fns.values()),
@@ -665,6 +809,10 @@ def check_cfg_report(art, env):
     got_max = [g["value"] for g in rep[0]["gauges"]
                if g["name"] == "montauk_static_cfg_cyclomatic" and g.get("labels") == 'quantile="max"']
     problems = [f"{k} {got.get(k)} vs {v} recomputed" for k, v in want.items() if got.get(k) != v]
+    listed = sorted((u["file"], u["function"], u["line"], u["kind"]) for u in rep[0].get("unreachable", []))
+    if listed != dead_rows:
+        problems.append(f"unreachable lists {len(listed)} block(s) vs {len(dead_rows)} recomputed"
+                        f" (first difference {next((p for p in zip(listed, dead_rows) if p[0] != p[1]), None)})")
     if got_max != [max(s["cyclomatic"] for s in stats)]:
         problems.append(f"cyclomatic max {got_max} vs {max(s['cyclomatic'] for s in stats)}")
     return problems
@@ -941,6 +1089,18 @@ def oracle_object_rows(path, machine):
         return [(m[0], marks[k + 1][0] if k + 1 < len(marks) else nslots)
                 for k, m in enumerate(marks) if m[1] == "d"]
 
+    def reloc_function(r, addend):
+        # The function a relocation points at: its symbol when that is one, or
+        # the function starting where it lands in an executable section.
+        y = r[0]
+        if y["type"] == 2:
+            return y["name"]
+        if y["type"] != 3 or y["shndx"] >= len(secs) or not secs[y["shndx"]]["flags"] & 4:
+            return ""
+        if addend < 0 or addend % unit:
+            return ""
+        return fn_name(y["shndx"], addend // unit) or ""
+
     rows = set()
     for sec, start, end, name in fns:
         rows.add(("D", str(start), "function", name))
@@ -999,6 +1159,42 @@ def oracle_object_rows(path, machine):
         for pc, op in ops.items():
             if op[4]:
                 rows.add(("R", str(pc), name, op[4]))
+        # An address taken in code: an aarch64 adrp/adr or literal, or a BPF
+        # ld_imm64 (a callback); never a branch's own target.
+        if e_type == 1:
+            for (rs, off), r in sorted(reloc.items(), key=lambda kv: kv[0]):
+                if rs != sec or not start * unit <= off < end * unit:
+                    continue
+                pc = max((q for q in ops if q <= off // unit), default=None)
+                if pc is None:
+                    continue
+                if machine == "aarch64" and r[1] not in (274, 275, 311, 257):
+                    continue
+                if machine == "bpf" and ops[pc][0] == "call":
+                    continue
+                addend = r[2]
+                if machine == "bpf" and r[0]["type"] == 3:
+                    addend, = struct.unpack_from("<i", img, secs[sec]["off"] + off + 4)
+                n = reloc_function(r, addend)
+                if n:
+                    rows.add(("R", str(pc), name, n))
+    # An address held in allocated data is a reference from file scope, by an
+    # absolute relocation (a PC-relative one in data is a jump table's).
+    absolute = {257, 258} if machine == "aarch64" else {2, 3}
+    if e_type == 1:
+        for (rs, off), r in sorted(reloc.items(), key=lambda kv: kv[0]):
+            if rs >= len(secs) or r[1] not in absolute:
+                continue
+            ds = secs[rs]
+            if (not ds["flags"] & 2 or ds["flags"] & 4 or ds["name"] == ".eh_frame"
+                    or ds["name"].startswith((".BTF", ".debug"))):
+                continue
+            addend = r[2]
+            if machine == "bpf" and r[1] == 2 and ds["type"] == 1:
+                addend, = struct.unpack_from("<q", img, ds["off"] + off)
+            n = reloc_function(r, addend)
+            if n:
+                rows.add(("R", "0", "<file>", n))
     return rows
 
 
@@ -1225,6 +1421,55 @@ def check_walk():
     return True
 
 
+# A function reached only through a pointer: twice's address is passed as a
+# callback, add_one's sits in a data table, and unused_fn is kept (`used`) but
+# named by nothing. In an object, a function's address taken by code or held
+# in data is a reference, so only unused_fn is reached from none.
+ADDR_FIXTURE = r"""
+typedef int (*op_fn)(int);
+int apply(op_fn f, int x);
+static int add_one(int x) { return x + 1; }
+static int twice(int x) { return x * 2; }
+static __attribute__((used)) int unused_fn(int x) { return x - 1; }
+op_fn table[] = { add_one };
+int run(int x) { return apply(twice, x) + table[0](x); }
+"""
+
+
+def check_address_refs(clang):
+    """The address-taken fixture, built for x86-64 and aarch64: its R rows name
+    twice from run and add_one from file scope, and the analyzer reaches all
+    but unused_fn. aarch64's rows ride the oracle as well."""
+    ok = True
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "addr.c"
+        src.write_text(ADDR_FIXTURE)
+        builds = [("x86-64", ["cc", "-O2", "-c"])]
+        if clang:
+            builds.append(("aarch64", [clang, "-target", "aarch64-linux-gnu", "-O2", "-ffreestanding",
+                                       "-fno-asynchronous-unwind-tables", "-c"]))
+        for label, cmd in builds:
+            obj, art = Path(d) / f"addr-{label}.o", Path(d) / f"addr-{label}.guards"
+            if subprocess.run([*cmd, str(src), "-o", str(obj)], capture_output=True).returncode != 0:
+                note(f"SKIP address refs ({label}): the fixture does not build")
+                continue
+            subprocess.run([str(MONTAUK), "--static", str(obj), "-o", str(art)], capture_output=True)
+            rows = {tuple(ln.split("\t")[3:5]) for ln in art.read_text().split("\n") if ln.startswith("R\t")}
+            env = json.loads(subprocess.run([str(MONTAUK), "--analyze", str(art), "--json"],
+                                            capture_output=True, text=True).stdout)
+            rep = next(x for x in env["reports"] if x["name"] == "declarations")
+            unreached = [x["name"] for x in rep.get("unreached", [])]
+            if ("run", "twice") not in rows or ("<file>", "add_one") not in rows or unreached != ["unused_fn"]:
+                note(f"FAIL address refs ({label}): R rows {sorted(rows)}, unreached {unreached}")
+                ok = False
+            if label == "aarch64":
+                ok = check_object(obj, "aarch64", "the address-taken fixture for aarch64") and ok
+    if ok:
+        note("PASS address refs: a callback's address and a table's entry are references, in x86-64 "
+             "and aarch64 code and data, and a function nothing names stays unreached")
+    return ok
+
+
 def check_objects():
     ok = True
     obj = ROOT / "build" / "montauk_trace.bpf.o"
@@ -1248,6 +1493,7 @@ def check_objects():
     if libc.exists():
         objs.append(libc)
     ok = check_x86(objs) and ok
+    ok = check_address_refs(clang) and ok
     with tempfile.TemporaryDirectory() as d:
         src, rv = Path(d) / "rv.c", Path(d) / "rv.o"
         src.write_text("int f(int a) { return a ? 1 : 2; }\n")
@@ -1294,10 +1540,12 @@ def check_analyzer(targets):
                 frontier.append(c[4])
             else:
                 edges.setdefault(c[3], []).append(c[4])
-        for name in declared:          # `TEST:x` is reached with the macro TEST
+        for name in declared:          # `TEST:x` is reached with the macro TEST, and by x
             stem = name.split(":", 1)[0]
             if ":" in name and stem in names:
                 edges.setdefault(stem, []).append(name)
+            if ":" in name:
+                edges.setdefault(name.split(":", 1)[1], []).append(name)
         if "main" in names:
             frontier.append("main")
         reached = set()
@@ -1307,7 +1555,10 @@ def check_analyzer(targets):
                 reached.add(n)
                 frontier.extend(edges.get(n, []))
         want_unreached = [name for name in declared if name not in reached]
-        want_orphans = [name for name in want_unreached if name not in referenced]
+
+        def is_named(name):
+            return name in referenced or (":" in name and name.split(":", 1)[1] in referenced)
+        want_orphans = [name for name in want_unreached if not is_named(name)]
 
         r = subprocess.run([str(MONTAUK), "--analyze", str(art), "--json"],
                            capture_output=True, text=True)
@@ -1344,7 +1595,7 @@ def check_analyzer(targets):
             problems.append(f"{len(listed)} names listed as unreached, the walk finds "
                             f"{len(want_unreached)}")
         wrong = [x["name"] for x in listed
-                 if (x["named"] == "by nothing") != (x["name"] not in referenced)]
+                 if (x["named"] == "by nothing") != (not is_named(x["name"]))]
         if wrong:
             problems.append(f"named-by-nothing marked wrong for: {', '.join(wrong[:5])}")
 
@@ -1449,6 +1700,7 @@ def main():
     ok = check_cfg_fixtures() and ok
     ok = check_analyzer(targets) and ok
     ok = check_seam() and ok
+    ok = check_entries() and ok
     ok = check_objects() and ok
     ok = check_walk() and ok
     py = sorted({p for d in ("tests", "sublimation/tests", "sublimation/tools") for p in (ROOT / d).rglob("*.py")})

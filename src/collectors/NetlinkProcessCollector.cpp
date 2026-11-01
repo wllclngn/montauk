@@ -190,7 +190,7 @@ bool NetlinkProcessCollector::sample(montauk::model::ProcessSnapshot& out) {
     montauk::model::ProcSample ps; ps.pid = pid;
     ps.total_time = total_proc;
     ps.rss_kb = (rssp > 0 ? static_cast<uint64_t>(rssp) * page_kb : 0);
-    ps.cpu_pct = cpu_pct; ps.cmd = comm; // exe/command/user enriched after top-K below
+    ps.cpu_pct = cpu_pct; ps.cmd = comm; ps.comm = comm; // exe/command/user enriched after top-K below
     ps.flt_raw = minflt + majflt; ps.thread_count = nthreads;
     out.processes.push_back(std::move(ps));
     if (stch == 'R') out.state_running++;

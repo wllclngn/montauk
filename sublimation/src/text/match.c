@@ -932,6 +932,30 @@ int sublimation_search_confuse(sublimation_search *s, const char *spec) {
     return 1;
 }
 
+// The offset of the first `\b \B \< \>` outside a bracket class, or -1. Each is
+// a zero-width assertion and every position in the field consumes a byte, so
+// read as the escaped byte it would match a literal 'b' or '<': A pattern
+// carried over from grep -E would match nothing and report a false clean. It is
+// refused by name instead. Inside a bracket a backslash is a member (`[\b]` is
+// {'\\','b'}), so classes are skipped whole.
+static long find_assertion(const char *p, size_t len) {
+    uint8_t S[32];
+    for (size_t i = 0; i < len;) {
+        if (p[i] == '[') {
+            size_t e = class_span(p, len, i, S, 0);
+            if (!e) return -1;   // malformed: the parser reports it
+            i = e;
+        } else if (p[i] == '\\' && i + 1 < len) {
+            char c = p[i + 1];
+            if (c == 'b' || c == 'B' || c == '<' || c == '>') return (long)i;
+            i += 2;
+        } else {
+            i++;
+        }
+    }
+    return -1;
+}
+
 void sublimation_search_compile(sublimation_search *out, const char *pattern,
                                 size_t len, unsigned flags, int k) {
     memset(out, 0, sizeof(*out));
@@ -964,6 +988,13 @@ void sublimation_search_compile(sublimation_search *out, const char *pattern,
         if (len > SUBLIMATION_SEARCH_MAX_PATTERN) {
             out->valid = 0;
             out->error = SUBLIMATION_SEARCH_ERR_TOO_LONG;
+            return;
+        }
+        long at = find_assertion(pattern, len);
+        if (at >= 0) {
+            out->valid = 0;
+            out->error = SUBLIMATION_SEARCH_ERR_ASSERTION;
+            out->error_at = (uint32_t)at;
             return;
         }
         memcpy(out->pattern, pattern, len);
@@ -1005,6 +1036,9 @@ const char *sublimation_search_error(const sublimation_search *s) {
                    "has no such limit";
         case SUBLIMATION_SEARCH_ERR_SYNTAX:
             return "the expression does not parse";
+        case SUBLIMATION_SEARCH_ERR_ASSERTION:
+            return "\\b, \\B, \\< and \\> are zero-width assertions the regex "
+                   "face does not carry";
         default:
             return "invalid pattern";
     }
@@ -1079,7 +1113,9 @@ int sublimation_search_split_alternation(const char *pattern, char ***out, int *
 // matching needs no spec and no allocation of its own: Up to 64 members in
 // 256 packed bytes, with their starts, lengths, representatives and a
 // first-byte set.
-static_assert(sizeof(sublimation_search) == 12064,
+// 12064 -> 12072: the offset of a refused zero-width assertion, so the refusal
+// names which of \b \B \< \> it met instead of matching nothing.
+static_assert(sizeof(sublimation_search) == 12072,
               "sublimation_search changed size: that is a deliberate decision, "
               "not an accident -- update this assert with the reason");
 

@@ -245,6 +245,7 @@ bool KernelProcessCollector::recv_snapshot(montauk::model::ProcessSnapshot& out)
                     break;
                 case MONTAUK_ATTR_COMM:
                     ps.cmd = std::string(data);
+                    ps.comm = ps.cmd;
                     break;
                 case MONTAUK_ATTR_STATE:
                     // State char stored for potential future use

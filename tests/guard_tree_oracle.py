@@ -56,8 +56,9 @@ class Dialect:
     """One row of the dialect table: everything a language changes about the scan."""
 
     def __init__(self, name, exts, nested, lifetimes, raw, paren, ternary,
-                 fn_word, containers, branches, block_words):
+                 fn_word, containers, branches, block_words, block_exprs=False):
         self.name, self.exts = name, exts.split()
+        self.block_exprs = block_exprs
         self.nested, self.lifetimes, self.raw = nested, lifetimes, raw
         self.paren, self.ternary, self.fn_word = paren, ternary, fn_word
         self.containers = containers.split()
@@ -69,7 +70,7 @@ DIALECTS = [
     Dialect("c", ".c .h .cc .cpp .cxx .hh .hpp .hxx .inc", False, False, False, True,
             True, None, "namespace extern struct class union enum", "if while for switch", ""),
     Dialect("rust", ".rs", True, True, True, False, False, "fn", "impl mod trait extern",
-            "if while for match", "unsafe async"),
+            "if while for match", "unsafe async", block_exprs=True),
 ]
 
 
@@ -117,6 +118,28 @@ def mask_code(src: str, keep_strings: bool = False, d: Dialect = DIALECTS[0], pp
             continue
         if at_line_start and c in " \t":
             i += 1
+            continue
+        # Rust has no preprocessor: `#[...]` and `#![...]` are attributes, and
+        # code may follow one on its line. Only the attribute is blanked.
+        if (c == "#" and d.name == "rust" and i + 1 < n and
+                (src[i + 1] == "[" or (src[i + 1] == "!" and i + 2 < n and src[i + 2] == "["))):
+            k = i + (3 if src[i + 1] == "!" else 2)
+            depth = 1
+            while k < n and depth:
+                if src[k] == '"':
+                    k += 1
+                    while k < n and src[k] != '"':
+                        k += 2 if src[k] == "\\" else 1
+                elif src[k] == "[":
+                    depth += 1
+                elif src[k] == "]":
+                    depth -= 1
+                k += 1
+            while i < k and i < n:
+                if src[i] != "\n":
+                    out[i] = " "
+                i += 1
+            at_line_start = False
             continue
         if at_line_start and c == "#":
             hash_at, named, after = i, None, 0
@@ -323,7 +346,141 @@ def match_arms(mask: str, a: int, b: int):
     return arms
 
 
-def condition(d, mask, kw_end, end):
+def blank(lit, mask, i, b):
+    """Past blank scan mask from i, and whether a literal sat in it: The scan
+    mask blanks a literal, the strings-kept one does not."""
+    seen = False
+    while i < b and mask[i] in SPACE:
+        seen = seen or lit[i] not in SPACE
+        i += 1
+    return i, seen
+
+
+def pattern_end(mask, i, b, to_in):
+    """Past a `let` pattern's lone `=`, or a `for` pattern's `in`; -1 if neither."""
+    depth = 0
+    while i < b:
+        c = mask[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth < 0:
+                return -1
+        elif depth == 0:
+            if c == ";":
+                return -1
+            if to_in and mask.startswith("in", i) and mask[i - 1] not in IDENT \
+                    and (i + 2 >= len(mask) or mask[i + 2] not in IDENT):
+                return i + 2
+            if not to_in and c == "=" and mask[i - 1] not in "=!<>." \
+                    and (i + 1 >= b or mask[i + 1] not in "=>"):
+                return i + 1
+        i += 1
+    return -1
+
+
+def rust_postfix(lit, mask, i, b):
+    """Past an operand's postfix chain: `?`, `.field`, `.method(..)`, `[..]`."""
+    while True:
+        j, _ = blank(lit, mask, i, b)
+        if j < b and mask[j] == "?":
+            i = j + 1
+        elif j < b and mask[j] == "." and not mask.startswith("..", j):
+            i = word_end(mask, skip_space(mask, j + 1))
+        elif j < b and mask[j] in "([":
+            i = match_pair(mask, j, mask[j], ")" if mask[j] == "(" else "]")
+            if i < 0:
+                return -1
+        else:
+            return i
+
+
+def rust_operand(lit, mask, i, b):
+    """Past one operand of a Rust condition, prefixes and postfixes included,
+    or -1. A `{` here is a block the condition carries."""
+    i, literal = blank(lit, mask, i, b)
+    if literal:
+        return rust_postfix(lit, mask, i, b)
+    if i >= b or mask[i] in ")]}":
+        return -1
+    c = mask[i]
+    if c in "([{":
+        close = match_pair(mask, i, c, {"(": ")", "[": "]", "{": "}"}[c])
+        return -1 if close < 0 else rust_postfix(lit, mask, close, b)
+    if c == "'":
+        return rust_operand(lit, mask, word_end(mask, i + 1), b)
+    if c == "|":
+        params = i + 1 if mask.startswith("||", i) else find_depth0(mask, i + 1, b, "|")
+        if params < 0:
+            return -1
+        k = skip_space(mask, params + 1)
+        if mask.startswith("->", k):
+            br = brace_at_depth0(mask, k, b)
+            close = match_pair(mask, br, "{", "}") if br >= 0 else -1
+            return -1 if close < 0 else rust_postfix(lit, mask, close, b)
+        return rust_operand(lit, mask, k, b)
+    if c == "." and mask.startswith("..", i):
+        k = i + 3 if mask.startswith("..=", i) else i + 2
+        n = skip_space(mask, k)
+        return n if n < b and mask[n] == "{" else rust_operand(lit, mask, k, b)
+    if c not in IDENT:
+        return rust_operand(lit, mask, i + 1, b)
+    we = word_end(mask, i)
+    w = mask[i:we]
+    if w == "let":
+        k = pattern_end(mask, we, b, False)
+        return -1 if k < 0 else rust_operand(lit, mask, k, b)
+    if w in ("unsafe", "async", "const", "loop", "move", "return", "break"):
+        return rust_operand(lit, mask, we, b)
+    if w in ("if", "while", "match", "for"):
+        k = pattern_end(mask, we, b, True) if w == "for" else we
+        br = rust_body(lit, mask, k, b) if k >= 0 else -1
+        close = match_pair(mask, br, "{", "}") if br >= 0 else -1
+        while close >= 0 and w == "if":
+            e = skip_space(mask, close)
+            if not (mask.startswith("else", e) and (e + 4 >= len(mask) or mask[e + 4] not in IDENT)):
+                break
+            n = skip_space(mask, e + 4)
+            more = mask.startswith("if", n) and (n + 2 >= len(mask) or mask[n + 2] not in IDENT)
+            br = rust_body(lit, mask, n + 2, b) if more else (n if n < b and mask[n] == "{" else -1)
+            close = match_pair(mask, br, "{", "}") if br >= 0 else -1
+            if not more:
+                break
+        return -1 if close < 0 else rust_postfix(lit, mask, close, b)
+    return rust_postfix(lit, mask, we, b)
+
+
+def rust_body(lit, mask, i, b):
+    """The body's `{` for a Rust condition, read as an expression: operands
+    joined by operators until a `{` follows a complete operand, which Rust's
+    ban on a struct literal in a condition makes the body. -1 if none."""
+    while True:
+        i = rust_operand(lit, mask, i, b)
+        if i < 0:
+            return -1
+        j, _ = blank(lit, mask, i, b)
+        if j >= b or mask[j] in ")]}":
+            return -1
+        if mask[j] == "{":
+            return j
+        if mask.startswith("..", j):
+            k = j + 3 if mask.startswith("..=", j) else j + 2
+            n = skip_space(mask, k)
+            if n < b and mask[n] == "{":
+                return n
+            i = k
+        elif mask.startswith("as", j) and (j + 2 >= len(mask) or mask[j + 2] not in IDENT):
+            i = j + 2
+        elif mask.startswith("||", j):
+            i = j + 2
+        elif mask[j] in IDENT or mask[j] == "'":
+            i = j
+        else:
+            i = j + 1
+
+
+def condition(d, src, mask, kw_end, end):
     """(state, a, b, body): 0 no condition here, -1 unbalanced, 1 found."""
     if d.paren:
         popen = skip_space(mask, kw_end)
@@ -333,7 +490,13 @@ def condition(d, mask, kw_end, end):
         if pclose < 0:
             return -1, 0, 0, 0
         return 1, popen + 1, pclose - 1, pclose
-    br = brace_at_depth0(mask, kw_end, end)
+    if not d.block_exprs:
+        br = brace_at_depth0(mask, kw_end, end)
+    elif mask[max(0, kw_end - 3):kw_end] == "for" and (kw_end == 3 or mask[kw_end - 4] not in IDENT):
+        k = pattern_end(mask, kw_end, end, True)
+        br = rust_body(src, mask, k, end) if k >= 0 else brace_at_depth0(mask, kw_end, end)
+    else:
+        br = rust_body(src, mask, kw_end, end)
     if br < 0:
         return 0, 0, 0, 0
     return 1, kw_end, br, br
@@ -363,11 +526,13 @@ class Row:
                 f"{self.guard}\t{path_str}")
 
 
-def find_functions(mask: str, d: Dialect = DIALECTS[0]) -> list[tuple[int, int, str, int]]:
+def find_functions(mask: str, d: Dialect = DIALECTS[0], aliases=None) -> list[tuple[int, int, str, int]]:
     """(body_start, body_end, name, name_offset) for every top-level body.
 
     The offset is what separates a definition from a reference to it: the
-    name in the head is the declaration, every other spelling is not."""
+    name in the head is the declaration, every other spelling is not.
+    `aliases`, when a list, receives (offset, name) for each function a macro
+    declares: the name it declares, which it also answers to."""
     out = []
     i = 0
     n = len(mask)
@@ -407,8 +572,10 @@ def find_functions(mask: str, d: Dialect = DIALECTS[0]) -> list[tuple[int, int, 
                 name = head[k:stop]
                 name_off = head_start + k
         elif not d.fn_word:
+            # An initializer is data: a `=` past the head's last paren is one,
+            # whatever call-shaped macro sits before it.
             paren = head.rfind(")")
-            if paren >= 0:
+            if paren >= 0 and "=" not in head[paren:]:
                 depth = 0
                 j = paren
                 while j >= 0:
@@ -437,6 +604,8 @@ def find_functions(mask: str, d: Dialect = DIALECTS[0]) -> list[tuple[int, int, 
                         first = head[j + 1:paren].split(",")[0].strip()
                         if first and all(ch in IDENT for ch in first):
                             name = f"{name}:{first}"
+                            if aliases is not None:
+                                aliases.append((head_start + skip_space(head, j + 1), first))
         out.append((i, end, name, name_off))
         i = end
     return out
@@ -469,7 +638,7 @@ def walk(d, src, mask, start, end, func, stack, rows) -> None:
         if w == "match":
             i = walk_match(d, src, mask, i, end, func, stack, rows)
             continue
-        st, a, b, body = condition(d, mask, we, end)
+        st, a, b, body = condition(d, src, mask, we, end)
         if st == 0:
             i = we
             continue
@@ -490,7 +659,7 @@ def walk_if(d, src, mask, i, end, func, stack, rows) -> int:
     classifier that arm is half the behaviour, and an audit that only records
     the positive test sees half the code.
     """
-    st, a, b, body = condition(d, mask, i + 2, end)
+    st, a, b, body = condition(d, src, mask, i + 2, end)
     if st == 0:
         return i + 2
     if st < 0:
@@ -518,7 +687,7 @@ def walk_if(d, src, mask, i, end, func, stack, rows) -> int:
 def walk_match(d, src, mask, i, end, func, stack, rows) -> int:
     """A guard on the scrutinee and one per arm on its pattern, each arm's body
     nested under both."""
-    st, a, b, body = condition(d, mask, i + 5, end)
+    st, a, b, body = condition(d, src, mask, i + 5, end)
     if st == 0:
         return i + 5
     if st < 0:
@@ -842,7 +1011,7 @@ class Cfg:
         self.pend = exits + done[3]
 
     def parse_if(self, i, end):
-        st, a, b, body = condition(self.d, self.mask, i + 2, end)
+        st, a, b, body = condition(self.d, self.src, self.mask, i + 2, end)
         if st != 1:
             return self.plain(i, end)
         inflow = self.flow()
@@ -862,7 +1031,7 @@ class Cfg:
         return resume
 
     def parse_while(self, i, we, end):
-        st, a, b, body = condition(self.d, self.mask, we, end)
+        st, a, b, body = condition(self.d, self.src, self.mask, we, end)
         if st != 1:
             return self.plain(i, end)
         inflow = self.flow()
@@ -915,7 +1084,7 @@ class Cfg:
         resume = self.statement(skip_space(self.mask, i + 2), end)
         w = skip_space(self.mask, resume)
         if w < end and is_word_at(self.mask, w, "while"):
-            st, a, b, body = condition(self.d, self.mask, w + 5, end)
+            st, a, b, body = condition(self.d, self.src, self.mask, w + 5, end)
             if st == 1:
                 tail = self.flow()
                 done = self.ctx.pop()
@@ -941,7 +1110,7 @@ class Cfg:
         return resume
 
     def parse_switch(self, i, end):
-        st, a, b, body = condition(self.d, self.mask, i + 6, end)
+        st, a, b, body = condition(self.d, self.src, self.mask, i + 6, end)
         if st != 1:
             return self.plain(i, end)
         head = self.node("switch", i, norm(self.src[a:b]))
@@ -991,7 +1160,7 @@ class Cfg:
         return e
 
     def parse_match(self, i, end):
-        st, a, b, body = condition(self.d, self.mask, i + 5, end)
+        st, a, b, body = condition(self.d, self.src, self.mask, i + 5, end)
         if st != 1:
             return self.plain(i, end)
         close = match_pair(self.mask, body, "{", "}")
@@ -1323,6 +1492,33 @@ def find_placements(mask: str, funcs) -> list[tuple[int, str, str]]:
     return out
 
 
+def find_test_entries(src: str, mask: str, d, funcs) -> list[tuple[int, str, str]]:
+    """(offset, "<file>", function) for each Rust function under an attribute
+    whose path ends in test or bench (#[test], #[tokio::test]): libtest runs
+    it, so nothing in the source calls it. Read from the source's lines in the
+    head, since the mask blanks an attribute."""
+    out = []
+    if d.name != "rust":
+        return out
+    for start, _end, name, off in funcs:
+        if name == "<file>" or off < 0:
+            continue
+        head_start = max(mask.rfind(";", 0, start), mask.rfind("}", 0, start),
+                         mask.rfind("{", 0, start)) + 1
+        p = head_start
+        while p < off:
+            eol = src.find("\n", p)
+            if eol < 0 or eol > off:
+                eol = off
+            line = src[p:eol].lstrip(" \t")
+            m = re.match(r"#\[[ \t]*((?:[A-Za-z0-9_]+::[ \t]*)*[A-Za-z0-9_]+)", line)
+            if m and re.split(r"::[ \t]*", m.group(1))[-1] in ("test", "bench"):
+                out.append((off, "<file>", name))
+                break
+            p = eol + 1
+    return out
+
+
 def macro_regions(src: str, lines):
     """(declarations, regions): a ("macro", name) per #define with the offset
     of its '#', and (from, end, macro) for the words each naming directive
@@ -1383,18 +1579,20 @@ def extract_declared(path: Path, lang=None) -> list[tuple[str, ...]]:
     src = path.read_text(errors="replace")
     lines = []
     mask = mask_code(src, False, d, lines=lines)
-    funcs = find_functions(mask, d)
+    aliases = []
+    funcs = find_functions(mask, d, aliases)
     decls = find_declarations(mask, funcs)
-    decl_offsets = {off for off, _kind, _name in decls}
+    decl_offsets = {off for off, _kind, _name in decls} | {off for off, _name in aliases}
     macros, regions = macro_regions(src, lines)
     decls += macros
-    known = {name for _off, _kind, name in decls}
+    known = {name for _off, _kind, name in decls} | {name for _off, name in aliases}
     rows = [("D", str(line_of(mask, off)), kind, name)
             for off, kind, name in decls]
     ppm = pp_mask(src, regions, d) if regions else ""
     pasting = pasting_macros(ppm, regions)
     refs = find_references(mask, funcs, known, decl_offsets, pasting)
     refs += find_placements(mask, funcs)
+    refs += find_test_entries(src, mask, d, funcs)
     if regions:
         refs += find_pp_references(ppm, funcs, regions, known, pasting)
     rows += [("R", str(line_of(mask, off)), func, name) for off, func, name in refs]

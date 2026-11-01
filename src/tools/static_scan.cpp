@@ -80,7 +80,6 @@ using montauk::util::log_warn;
 namespace {
 
 sublimation_sink g_out;
-void drain_out() { sublimation_sink_drain(&g_out); }
 
 constexpr int kStaticFormat = 2;
 constexpr size_t npos = std::string::npos;
@@ -127,15 +126,16 @@ struct Dialect {
   const char* block_words;   // a word that opens a plain block
   bool handlers;             // `try { } catch (spec) { }` is a construct
   bool indented;             // blocks are indentation, rewritten to braces (static_python.cpp)
+  bool block_exprs;          // a `{` where an operand is expected is a block inside the condition
 };
 
 constexpr Dialect kDialects[] = {
     {"c", ".c .h .cc .cpp .cxx .hh .hpp .hxx .inc", false, false, false, true, true, nullptr,
-     "namespace extern struct class union enum", "if while for switch", nullptr, true, false},
+     "namespace extern struct class union enum", "if while for switch", nullptr, true, false, false},
     {"rust", ".rs", true, true, true, false, false, "fn", "impl mod trait extern",
-     "if while for match", "unsafe async", false, false},
+     "if while for match", "unsafe async", false, false, true},
     {"python", ".py .pyi", false, false, false, false, false, "def", "class",
-     "if while for match", nullptr, true, true},
+     "if while for match", nullptr, true, true, false},
 };
 
 const Dialect* dialect_named(std::string_view n) {
@@ -184,6 +184,28 @@ std::string mask_code(const std::string& src, bool keep_strings, const Dialect& 
     const char c = src[i];
     if (c == '\n') { at_line_start = true; ++i; continue; }
     if (at_line_start && (c == ' ' || c == '\t')) { ++i; continue; }
+    // RUST HAS NO PREPROCESSOR: A `#` there opens an attribute, `#[...]` or
+    // `#![...]`, and code may follow it on the line (`#[test] fn f() {`).
+    // Only the attribute is blanked, through its closing bracket, a string
+    // inside it skipped whole.
+    if (c == '#' && std::string_view(d.name) == "rust" && i + 1 < n &&
+        (src[i + 1] == '[' || (src[i + 1] == '!' && i + 2 < n && src[i + 2] == '['))) {
+      size_t k = i + (src[i + 1] == '!' ? 3 : 2);
+      int depth = 1;
+      while (k < n && depth) {
+        if (src[k] == '"') {
+          for (++k; k < n && src[k] != '"'; ++k) if (src[k] == '\\') ++k;
+        } else if (src[k] == '[') {
+          ++depth;
+        } else if (src[k] == ']') {
+          --depth;
+        }
+        ++k;
+      }
+      for (; i < k && i < n; ++i) if (src[i] != '\n') out[i] = ' ';
+      at_line_start = false;
+      continue;
+    }
     if (at_line_start && c == '#') {                 // preprocessor line, or an attribute
       const size_t hash = i;
       char named = 0;
@@ -324,7 +346,7 @@ size_t find_depth0(const std::string& mask, size_t a, size_t b, std::string_view
 }
 
 // The body's opening brace for a condition with no parens: the first `{` at
-// depth zero, since Rust forbids a struct literal there.
+// depth zero.
 size_t brace_at_depth0(const std::string& mask, size_t a, size_t b) {
   int depth = 0;
   for (size_t i = a; i < b; ++i) {
@@ -332,6 +354,118 @@ size_t brace_at_depth0(const std::string& mask, size_t a, size_t b) {
     if (c == '{' && depth == 0) return i;
     if (c == '(' || c == '[') ++depth;
     else if (c == ')' || c == ']') --depth;
+  }
+  return npos;
+}
+
+// Past a `let` pattern's lone `=`, or a `for` pattern's `in`, braces and all:
+// A struct pattern's `{` is the pattern's.
+size_t past_pattern(const std::string& mask, size_t i, size_t b, bool to_in) {
+  int depth = 0;
+  for (; i < b; ++i) {
+    const char c = mask[i];
+    if (c == '(' || c == '[' || c == '{') ++depth;
+    else if (c == ')' || c == ']' || c == '}') { if (--depth < 0) return npos; }
+    else if (depth == 0 && c == ';') return npos;
+    else if (depth == 0 && to_in && word_at(mask, i, "in")) return i + 2;
+    else if (depth == 0 && !to_in && c == '=' && !std::strchr("=!<>.", mask[i - 1]) &&
+             (i + 1 >= b || (mask[i + 1] != '=' && mask[i + 1] != '>')))
+      return i + 1;
+  }
+  return npos;
+}
+
+// A RUST CONDITION'S BODY. Rust forbids a struct literal in a condition, so a
+// `{` after a complete operand opens the body, and one where an operand is
+// still expected opens a block the condition carries: `if unsafe { f() } {`,
+// `if !unsafe { g() } {`, `if unsafe { h() } == 0 {`. An `if`, `match`,
+// `while` or `for` inside the condition carries its own braces (`x != if w { a }
+// else { b } {`), a `let` pattern runs to its `=`, a closure's `|..|` is no
+// operand, and a `{` after `..` is the body (`for i in 0.. {`). A literal is
+// blank in `mask` and kept in `lit`, which is how it reads as an operand.
+size_t rust_body(const std::string& lit, const std::string& mask, size_t i, size_t b) {
+  bool operand = true;   // an operand is expected next
+  while (i < b) {
+    const char c = mask[i];
+    if (is_space(c)) {
+      if (!is_space(lit[i])) operand = false;
+      ++i;
+      continue;
+    }
+    if (c == '(' || c == '[') {
+      i = match_pair(mask, i, c, c == '(' ? ')' : ']');
+      if (i == npos) return npos;
+      operand = false;
+      continue;
+    }
+    if (c == '{') {
+      if (!operand) return i;
+      i = match_pair(mask, i, '{', '}');
+      if (i == npos) return npos;
+      operand = false;
+      continue;
+    }
+    if (c == ')' || c == ']' || c == '}') return npos;
+    if (c == '\'') {                          // a lifetime or a label
+      i = word_end(mask, i + 1);
+      continue;
+    }
+    if (ident_char(c)) {
+      const size_t we = word_end(mask, i);
+      const std::string_view w(mask.data() + i, we - i);
+      if (w == "let") {
+        i = past_pattern(mask, we, b, false);
+        if (i == npos) return npos;
+        operand = true;
+        continue;
+      }
+      if (w == "if" || w == "while" || w == "match" || w == "for") {
+        size_t from = we;
+        if (w == "for" && (from = past_pattern(mask, we, b, true)) == npos) return npos;
+        size_t br = rust_body(lit, mask, from, b);
+        if (br == npos || (i = match_pair(mask, br, '{', '}')) == npos) return npos;
+        for (bool chain = w == "if"; chain;) {
+          const size_t e = skip_space(mask, i);
+          if (e >= b || !word_at(mask, e, "else")) break;
+          const size_t n = skip_space(mask, e + 4);
+          chain = word_at(mask, n, "if");
+          br = chain ? rust_body(lit, mask, n + 2, b) : n < b && mask[n] == '{' ? n : npos;
+          if (br == npos || (i = match_pair(mask, br, '{', '}')) == npos) return npos;
+        }
+        operand = false;
+        continue;
+      }
+      // A word that leads an operand rather than ending one.
+      operand = w == "unsafe" || w == "async" || w == "const" || w == "loop" ||
+                w == "move" || w == "as" || w == "return" || w == "break";
+      i = we;
+      continue;
+    }
+    if (c == '|' && operand) {                 // a closure: its parameters, then its body
+      const size_t close = i + 1 < b && mask[i + 1] == '|' ? i + 1 : find_depth0(mask, i + 1, b, "|");
+      if (close == npos) return npos;
+      i = skip_space(mask, close + 1);
+      if (mask.compare(i, 2, "->") == 0) {     // a return type, and then a block
+        const size_t br = brace_at_depth0(mask, i, b);
+        if (br == npos || (i = match_pair(mask, br, '{', '}')) == npos) return npos;
+        operand = false;
+      }
+      continue;
+    }
+    if (c == '|' && i + 1 < b && mask[i + 1] == '|') {   // `||` after an operand is an or
+      i += 2;
+      operand = true;
+      continue;
+    }
+    if (c == '.' && i + 1 < b && mask[i + 1] == '.') {
+      i += i + 2 < b && mask[i + 2] == '=' ? 3 : 2;
+      const size_t n = skip_space(mask, i);
+      if (n < b && mask[n] == '{') return n;   // an open range ends at the body
+      operand = true;
+      continue;
+    }
+    operand = c != '?';                        // `?` ends an operand; any other operator wants one
+    ++i;
   }
   return npos;
 }
@@ -422,7 +556,12 @@ struct Scanner {
       *a = popen + 1; *b = pclose - 1; *body = pclose;
       return 1;
     }
-    size_t br = brace_at_depth0(mask, kw_end, end);
+    size_t br = npos;
+    if (!d.block_exprs) br = brace_at_depth0(mask, kw_end, end);
+    else if (kw_end < 3 || !word_at(mask, kw_end - 3, "for")) br = rust_body(src, mask, kw_end, end);
+    else if (const size_t in = past_pattern(mask, kw_end, end, true); in != npos)
+      br = rust_body(src, mask, in, end);
+    else br = brace_at_depth0(mask, kw_end, end);   // `impl T for U {`: no loop
     if (br == npos) return 0;
     *a = kw_end; *b = br; *body = br;
     return 1;
@@ -551,7 +690,9 @@ struct Scanner {
 // (body_start, body_end, name) for every top-level braced body. An opener with
 // no closer ends the scan, and `*unbalanced` names where, so the caller can say
 // the rest of the file went unread rather than return a short list as if whole.
-struct Func { size_t start, end; std::string name; size_t name_off; };
+// alias_off: For a function a macro declares (`M(name, ...)`, named `M:name`),
+// where the name it declares sits, the name it also answers to.
+struct Func { size_t start, end; std::string name; size_t name_off; size_t alias_off = npos; };
 
 std::vector<Func> find_functions(const std::string& mask, const Dialect& d, size_t* unbalanced) {
   std::vector<Func> out;
@@ -571,7 +712,7 @@ std::vector<Func> find_functions(const std::string& mask, const Dialect& d, size
     }
     std::string head = mask.substr(head_start, i - head_start);
     std::string name = "<file>";
-    size_t name_off = npos;
+    size_t name_off = npos, alias_off = npos;
     // A CONTAINER IS NOT A BODY. A namespace's brace is the first one in the
     // file, so taking it as one swallows every function inside and files the
     // whole translation unit under <file> -- which is what montauk's own C++
@@ -600,8 +741,13 @@ std::vector<Func> find_functions(const std::string& mask, const Dialect& d, size
       const size_t stop = word_end(head, k);
       if (stop > k) { name = head.substr(k, stop - k); name_off = head_start + k; }
     } else if (!d.fn_word) {
+      // AN INITIALIZER IS DATA, WHATEVER PRECEDES IT. `SEC(".struct_ops")
+      // struct sched_ext_ops ops = {` reads as a call to SEC by the paren, which
+      // filed the table under a function named SEC that nothing reaches, and
+      // with it every callback it names. A `=` past the head's last paren is
+      // an initializer's, and its braces are file scope.
       size_t paren = head.rfind(')');
-      if (paren != npos) {
+      if (paren != npos && head.find('=', paren) == npos) {
         int depth = 0;
         size_t j = paren + 1;
         while (j > 0) {
@@ -628,12 +774,15 @@ std::vector<Func> find_functions(const std::string& mask, const Dialect& d, size
             std::string first = norm(args.substr(0, comma == npos ? args.size() : comma));
             bool ok = !first.empty();
             for (char c : first) if (!ident_char(c)) ok = false;
-            if (ok) name += ":" + first;
+            if (ok) {
+              name += ":" + first;
+              alias_off = head_start + skip_space(head, j + 1);
+            }
           }
         }
       }
     }
-    out.push_back({i, end, name, name_off});
+    out.push_back({i, end, name, name_off, alias_off});
     i = end;
   }
   return out;
@@ -1104,9 +1253,10 @@ struct Cfg {
     const size_t b = skip_space(mask, i + 3);
     if (b >= end || mask[b] != '{') return plain(i, end);
     const int head = node("try", i);
+    const size_t rets0 = rets.size();
     pend = {{head, "fall"}};
     size_t resume = statement(b, end);
-    std::vector<Pend> out = flow();
+    std::vector<Pend> body = flow(), out;
     for (;;) {
       const size_t k = skip_space(mask, resume);
       if (k >= end || !word_at(mask, k, "catch")) break;
@@ -1117,6 +1267,43 @@ struct Cfg {
       edges.push_back({head, open, "handler"});
       resume = statement(skip_space(mask, pc), end);
       append(out, flow());
+    }
+    // Python's try carries two more clauses, and only its rewrite emits them.
+    // `else` runs when the body finished without raising, so only the body's
+    // fall reaches it. `finally` runs on every way out: The body's and each
+    // handler's fall, every return or raise inside them, and an exception
+    // nothing caught, which leaves from the try itself. Past it, the code after
+    // the statement is reached only if something fell through to the finally;
+    // every other way in leaves the function when the finally ends.
+    if (d.indented) {
+      size_t k = skip_space(mask, resume);
+      if (k < end && word_at(mask, k, "else") && skip_space(mask, k + 4) < end &&
+          mask[skip_space(mask, k + 4)] == '{') {
+        pend = std::move(body);
+        resume = statement(skip_space(mask, k + 4), end);
+        body = flow();
+        k = skip_space(mask, resume);
+      }
+      body.insert(body.end(), out.begin(), out.end());
+      out = std::move(body);
+      if (k < end && word_at(mask, k, "finally") && skip_space(mask, k + 7) < end &&
+          mask[skip_space(mask, k + 7)] == '{') {
+        const bool falls = !out.empty();
+        open = block("finally", k);
+        link(out, open);
+        link(std::vector<Pend>(rets.begin() + (long)rets0, rets.end()), open);
+        rets.resize(rets0);
+        edges.push_back({head, open, "unwind"});
+        resume = statement(skip_space(mask, k + 7), end);
+        std::vector<Pend> after = flow();
+        for (const Pend& p : after) rets.push_back({p.from, "return"});
+        if (!falls) after.clear();
+        pend = std::move(after);
+        return resume;
+      }
+    } else {
+      body.insert(body.end(), out.begin(), out.end());
+      out = std::move(body);
     }
     pend = std::move(out);
     return resume;
@@ -1350,6 +1537,112 @@ void find_placements(const std::string& mask, const Scanner& sc,
   }
 }
 
+// A FUNCTION A TEST RUNNER CALLS IS AN ENTRY POINT. A runner finds its tests
+// by an attribute or by reflection, so nothing in the source names them, and
+// everything only tests call would read as reached by nothing. Rust's libtest
+// runs a function under #[test] or #[bench], or an attribute whose path ends in
+// either (#[tokio::test]); unittest runs a TestCase's test* methods and its
+// fixtures (setUp, tearDown and their class and async forms, and setUpModule
+// and tearDownModule beside a TestCase); pytest runs test* functions at module
+// level and test* methods of a Test* class, in a file named test_*.py or
+// *_test.py. A class derives TestCase when a base's last dotted name ends in
+// TestCase or is a class this file already found deriving it. Returns each
+// entry's name offset and name. `src` is the unmasked source for Rust, whose
+// attribute lines the mask blanks, and the rewritten text for Python, whose
+// mask blanks a class's bases.
+std::vector<std::pair<size_t, std::string>> find_test_entries(const std::string& src, const std::string& mask,
+                                                              const Dialect& d, const std::vector<Func>& funcs,
+                                                              const std::string& path) {
+  std::vector<std::pair<size_t, std::string>> out;
+  if (!d.indented && d.fn_word && std::string_view(d.fn_word) == "fn") {
+    for (const Func& f : funcs) {
+      if (f.name == "<file>" || f.name_off == npos) continue;
+      bool hit = false;
+      for (size_t p = head_start_of(mask, f.start); p < f.name_off && !hit;) {
+        size_t eol = src.find('\n', p);
+        if (eol == npos || eol > f.name_off) eol = f.name_off;
+        size_t q = p;
+        while (q < eol && (src[q] == ' ' || src[q] == '\t')) ++q;
+        if (q + 1 < eol && src[q] == '#' && src[q + 1] == '[') {
+          std::string_view last;
+          for (size_t a = q + 2; a < eol;) {
+            while (a < eol && (src[a] == ' ' || src[a] == '\t')) ++a;
+            const size_t e = word_end(src, a);
+            if (e == a) break;
+            last = std::string_view(src).substr(a, e - a);
+            a = e;
+            if (src.compare(a, 2, "::") != 0) break;
+            a += 2;
+          }
+          hit = last == "test" || last == "bench";
+        }
+        p = eol + 1;
+      }
+      if (hit) out.emplace_back(f.name_off, f.name);
+    }
+    return out;
+  }
+  if (!d.indented) return out;
+
+  const size_t slash = path.find_last_of('/');
+  const std::string base = slash == npos ? path : path.substr(slash + 1);
+  const bool pytest_file = (base.starts_with("test_") && base.ends_with(".py")) || base.ends_with("_test.py");
+  struct Class { size_t open, close; bool testcase, pytest; };
+  std::vector<Class> classes;
+  std::set<std::string> testcases;
+  for (size_t i = 0; i < mask.size();) {
+    if (!ident_char(mask[i]) || (i && ident_char(mask[i - 1]))) { ++i; continue; }
+    const size_t e = word_end(mask, i);
+    if (std::string_view(mask).substr(i, e - i) != "class") { i = e; continue; }
+    const size_t n0 = skip_space(mask, e), n1 = word_end(mask, n0);
+    const size_t open = mask.find('{', n1);
+    const size_t close = open == npos ? npos : match_pair(mask, open, '{', '}');
+    if (n1 == n0 || close == npos) { i = e; continue; }
+    const std::string name = mask.substr(n0, n1 - n0);
+    bool tc = false;
+    for (size_t a = n1; a < open;) {
+      if (!ident_char(src[a]) && src[a] != '.') { ++a; continue; }
+      size_t b = a;
+      while (b < open && (ident_char(src[b]) || src[b] == '.')) ++b;
+      const std::string dotted = src.substr(a, b - a);
+      const size_t dot = dotted.rfind('.');
+      const std::string last = dot == npos ? dotted : dotted.substr(dot + 1);
+      if (last.ends_with("TestCase") || testcases.count(last)) tc = true;
+      a = b;
+    }
+    if (tc) testcases.insert(name);
+    classes.push_back({open, close, tc, pytest_file && name.starts_with("Test")});
+    i = e;
+  }
+  auto enclosed_by_fn = [&](const Func& f, size_t floor) {
+    for (const Func& g : funcs)
+      if (&g != &f && g.name != "<file>" && g.start > floor && g.start < f.name_off && f.end <= g.end) return true;
+    return false;
+  };
+  const bool has_testcase = !testcases.empty();
+  for (const Func& f : funcs) {
+    if (f.name == "<file>" || f.name_off == npos) continue;
+    const Class* in = nullptr;
+    for (const Class& c : classes)
+      if (f.name_off > c.open && f.end <= c.close && (!in || c.open > in->open)) in = &c;
+    const std::string& n = f.name;
+    bool entry = false;
+    if (in) {
+      if (enclosed_by_fn(f, in->open)) continue;
+      if (in->testcase)
+        entry = n.starts_with("test") || n == "setUp" || n == "tearDown" || n == "setUpClass" ||
+                n == "tearDownClass" || n == "asyncSetUp" || n == "asyncTearDown";
+      else if (in->pytest)
+        entry = n.starts_with("test");
+    } else if (!enclosed_by_fn(f, 0)) {
+      entry = (pytest_file && n.starts_with("test")) ||
+              (has_testcase && (n == "setUpModule" || n == "tearDownModule"));
+    }
+    if (entry) out.emplace_back(f.name_off, f.name);
+  }
+  return out;
+}
+
 // WHAT A DIRECTIVE NAMES. A #define's body references from the macro it
 // defines, so a function named only inside a macro is reached when the macro
 // is; a conditional's words reference from wherever the line sits.
@@ -1408,8 +1701,8 @@ void usage() {
       "                        or x86-64 object takes the object lane instead: the\n"
       "                        same records from its instructions, a block's line\n"
       "                        being an instruction index, a guard each conditional\n"
-      "                        branch, a reference each call, tail call and BPF\n"
-      "                        map load)\n");
+      "                        branch, a reference each call, tail call, BPF map\n"
+      "                        load and function address code or data takes)\n");
 }
 
 }  // namespace
@@ -1417,8 +1710,7 @@ void usage() {
 #include "tools/Entrypoints.hpp"
 
 int montauk_static_main(int argc, char** argv) {
-  sublimation_sink_init(&g_out, 1);
-  std::atexit(drain_out);
+  sublimation_sink_init_at_exit(&g_out, 1);
 
   std::vector<std::string> args;
   std::string out_path;
@@ -1530,6 +1822,7 @@ int montauk_static_main(int argc, char** argv) {
     // nothing else: every other byte is a space, every newline kept.
     std::string ppm;
     std::vector<PpRegion> pp_regions;
+    std::vector<std::pair<size_t, std::string>> test_entries;
   };
   std::vector<Scanned> scanned(files.size());
   std::set<std::string> known;
@@ -1564,7 +1857,15 @@ int montauk_static_main(int argc, char** argv) {
                          "function", f.name, f.name_off});
       if (f.name_off != npos) s.decl_offsets.insert(f.name_off);
       known.insert(f.name);
+      // A function a macro declares answers to the name it declares, which
+      // is how a table of callbacks names it; the declaring argument itself
+      // is no reference.
+      if (f.alias_off != npos) {
+        known.insert(f.name.substr(f.name.find(':') + 1));
+        s.decl_offsets.insert(f.alias_off);
+      }
     }
+    s.test_entries = find_test_entries(s.d->indented ? s.text : src, s.mask, *s.d, s.funcs, files[fi]);
     // Python has no enum construct: An `enum` there is a name or a module.
     if (!s.d->indented) find_enumerators(s.mask, sc, s.decls);
     for (const Decl& d : s.decls) {
@@ -1674,6 +1975,7 @@ int montauk_static_main(int argc, char** argv) {
     std::vector<Ref> refs;
     find_references(s.mask, sc, s.funcs, known, s.decl_offsets, pasting, refs);
     find_placements(s.mask, sc, s.funcs, s.d->indented, refs);
+    for (const auto& [off, name] : s.test_entries) refs.push_back({sc.line_of(off), "<file>", name});
     find_pp_references(s.ppm, sc, s.funcs, s.pp_regions, known, pasting, refs);
 
     const std::string fs = std::to_string(fi);

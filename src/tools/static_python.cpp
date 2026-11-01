@@ -12,8 +12,8 @@
 // rest is spelling:
 //
 //   elif c:                 else if c {
-//   for/while/try ... else: a plain block, since the engine's else is an if's
-//   finally:                a plain block after the handlers
+//   for/while ... else:     a plain block, since the engine's else is an if's
+//   try ... else/finally:   else { } / finally { }, which the walker routes
 //   except E as e:          catch( E as e){
 //   with X as y:            X as y;{  -- the context manager is a statement
 //   match s: / case P:      match s {  P => {
@@ -55,12 +55,21 @@ struct Lexer {
   const std::string& s;
   std::vector<uint8_t> cls;
   std::vector<int> depth;   // bracket depth before each character
-  explicit Lexer(const std::string& src) : s(src), cls(src.size(), Code), depth(src.size(), 0) {}
+  std::vector<char> paren;  // a mask character standing in for this one, or 0
+  int cur = 0;              // bracket depth around the string being lexed
+  explicit Lexer(const std::string& src)
+      : s(src), cls(src.size(), Code), depth(src.size(), 0), paren(src.size(), 0) {}
+
+  void lit(size_t a, size_t b) {
+    for (size_t k = a; k < b && k < s.size(); ++k) { cls[k] = Str; depth[k] = cur; }
+  }
 
   // A string literal starting at its first prefix letter or quote; returns the
-  // index past it. An f-string's replacement fields are lexed as code so a
-  // nested string of the same quote cannot end it early, and are marked as the
-  // string they sit in.
+  // index past it. An f-string's replacement fields are code: A call made only
+  // inside one is a reference like any other. So the mask turns such a string
+  // into a parenthesized expression, its quotes and each field's braces into
+  // parentheses and its text into blanks, and `f"{stamp()} x"` reads as
+  // `((stamp())  )`. A string with no field keeps its quotes.
   size_t string(size_t i) {
     const size_t n = s.size(), start = i;
     bool fmt = false;
@@ -71,40 +80,96 @@ struct Lexer {
     }
     if (i >= n) return i;
     const char q = s[i];
+    const size_t open = i;
     const bool triple = i + 2 < n && s[i + 1] == q && s[i + 2] == q;
-    i += triple ? 3 : 1;
+    const size_t ql = triple ? 3 : 1;
+    i += ql;
+    size_t close = n;
+    bool fields = false;
     while (i < n) {
       const char c = s[i];
       // A raw string keeps its backslashes, but one still stops the next quote
       // ending the string: r"\"" is one string.
-      if (c == '\\') { i += 2; continue; }
+      if (c == '\\') { lit(i, i + 2); i += 2; continue; }
       if (fmt && c == '{') {
-        if (i + 1 < n && s[i + 1] == '{') { i += 2; continue; }
+        if (i + 1 < n && s[i + 1] == '{') { lit(i, i + 2); i += 2; continue; }
         i = field(i + 1);
+        fields = true;
         continue;
       }
-      if (c == q && (!triple || (i + 2 < n && s[i + 1] == q && s[i + 2] == q))) { i += triple ? 3 : 1; break; }
+      if (c == q && (!triple || (i + 2 < n && s[i + 1] == q && s[i + 2] == q))) {
+        close = i;
+        lit(i, i + ql);
+        i += ql;
+        break;
+      }
       if (c == '\n' && !triple) break;   // unterminated: never swallow the file
+      lit(i, i + 1);
       ++i;
     }
     if (i > n) i = n;
-    for (size_t k = start; k < i; ++k) cls[k] = Str;
+    lit(start, open + ql);
+    if (fields && close < n) {
+      for (size_t k = 0; k < ql; ++k) { paren[open + k] = k ? ' ' : '('; paren[close + k] = k ? ' ' : ')'; }
+    } else if (fields) {
+      // Unterminated: The whole literal is string, as it was before any field.
+      for (size_t k = start; k < i; ++k) paren[k] = 0;
+      lit(start, i);
+    }
     return i;
   }
 
   // An f-string replacement field from just past its `{` to just past its `}`.
+  // The expression sits one bracket level inside the string, so a `:` in it
+  // never reads as a header's and a newline in it never ends a line. Its `!r`
+  // conversion, its format spec and a trailing `=` are string.
   size_t field(size_t i) {
     const size_t n = s.size();
+    const int base = cur + 1;
+    lit(i - 1, i);
+    paren[i - 1] = '(';
     int d = 0;
     while (i < n) {
       const char c = s[i];
-      if (starts_string(i)) { i = string(i); continue; }
+      if (starts_string(i)) {
+        const int save = cur;
+        cur = base + d;
+        i = string(i);
+        cur = save;
+        continue;
+      }
+      if (d == 0 && (c == ':' || (c == '!' && !(i + 1 < n && s[i + 1] == '=')))) return spec(i);
+      if (d == 0 && c == '}') { lit(i, i + 1); paren[i] = ')'; return i + 1; }
+      depth[i] = base + d;
+      if (d == 0 && c == '=' && debug_eq(i)) cls[i] = Str;
       if (c == '(' || c == '[' || c == '{') ++d;
-      else if (c == ')' || c == ']') --d;
-      else if (c == '}') { if (d == 0) return i + 1; --d; }
+      else if ((c == ')' || c == ']' || c == '}') && d > 0) --d;
       ++i;
     }
     return i;
+  }
+
+  // A field's conversion and format spec, to just past the field's `}`. Both
+  // are string, but a spec can nest a field of its own (`{x:{w}}`).
+  size_t spec(size_t i) {
+    const size_t n = s.size();
+    while (i < n) {
+      const char c = s[i];
+      if (c == '{') { i = field(i + 1); continue; }
+      lit(i, i + 1);
+      if (c == '}') { paren[i] = ')'; return i + 1; }
+      ++i;
+    }
+    return i;
+  }
+
+  // `{x=}` and `{x = !r}`: The `=` asks for the expression's text, and is not
+  // an assignment.
+  bool debug_eq(size_t i) const {
+    if (i == 0 || std::strchr("=!<>", s[i - 1]) || (i + 1 < s.size() && s[i + 1] == '=')) return false;
+    size_t k = i + 1;
+    while (k < s.size() && (s[k] == ' ' || s[k] == '\t')) ++k;
+    return k < s.size() && (s[k] == '}' || s[k] == '!' || s[k] == ':');
   }
 
   bool starts_string(size_t i) const {
@@ -126,9 +191,8 @@ struct Lexer {
         continue;
       }
       if (starts_string(i)) {
-        const size_t e = string(i);
-        for (size_t k = i; k < e; ++k) depth[k] = d;
-        i = e;
+        cur = d;
+        i = string(i);
         continue;
       }
       if (c == '(' || c == '[' || c == '{') ++d;
@@ -281,9 +345,8 @@ void python_masks(const std::string& src, std::string& mask, std::string& text) 
     if (kind == "elif") replace_word(kw, w, "else if");
     else if (kind == "else") {
       const std::string prev = last_closed.count(ind) ? last_closed[ind] : "";
-      if (prev != "if" && prev != "elif") replace_word(kw, w, std::string(w.size(), ' '));
-    } else if (kind == "finally") replace_word(kw, w, std::string(w.size(), ' '));
-    else if (kind == "except") { replace_word(kw, w, "catch("); rep[colon] = {"){", "){"}; }
+      if (prev != "if" && prev != "elif" && prev != "except") replace_word(kw, w, std::string(w.size(), ' '));
+    } else if (kind == "except") { replace_word(kw, w, "catch("); rep[colon] = {"){", "){"}; }
     else if (kind == "with") { replace_word(kw, w, std::string(w.size(), ' ')); rep[colon] = {";{", ";{"}; }
     else if (kind == "case") { replace_word(kw, w, std::string(w.size(), ' ')); rep[colon] = {"=> {", "=> {"}; }
     else if (kind == "class") {
@@ -361,7 +424,8 @@ void python_masks(const std::string& src, std::string& mask, std::string& text) 
     }
     // A string keeps its quotes in the mask, and only its content is blanked:
     // A case arm whose pattern is a string must not read as an empty pattern.
-    if (lx.cls[i] == Str) mask += (c == '\'' || c == '"') && !blank[i] ? c : ' ';
+    if (lx.paren[i]) mask += lx.paren[i];
+    else if (lx.cls[i] == Str) mask += (c == '\'' || c == '"') && !blank[i] ? c : ' ';
     else if (blank[i]) mask += ' ';
     else if (c == '{') mask += '(';
     else if (c == '}') mask += ')';

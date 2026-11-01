@@ -14,6 +14,7 @@
 #include "model/TraceReader.hpp"
 #include "model/TraceEnumNames.hpp"
 #include "montauk_trace.h"
+#include "trace_query.hpp"
 #include "util/Log.hpp"
 #include "util/sink.h"
 
@@ -24,15 +25,16 @@
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <vector>
 
 namespace {
 
 // Decoded output drains through one buffered sink, drained at exit.
 sublimation_sink g_out;
-void drain_out() { sublimation_sink_drain(&g_out); }
 
 using montauk::model::sched_op_name;
 using montauk::model::ntsync_op_name;
+using montauk::model::futex_cmd_name;
 using montauk::model::io_syscall_name;
 using montauk::model::signal_name;
 using montauk::model::lifecycle_type_name;
@@ -53,8 +55,7 @@ std::string wall_str(uint64_t wall_ns) {
 #include "tools/Entrypoints.hpp"
 
 int montauk_decode_main(int argc, char** argv) {
-  sublimation_sink_init(&g_out, 1);
-  std::atexit(drain_out);
+  sublimation_sink_init_at_exit(&g_out, 1);
   if (argc < 2) {
     montauk::util::log_error("usage: montauk --decode FILE [--csv]");
     return 2;
@@ -86,14 +87,25 @@ int montauk_decode_main(int argc, char** argv) {
   auto elapsed_ms = [&](uint64_t ts_ns) { return reader.elapsed_ms(ts_ns); };
 
   if (!csv) {
-    char pat[33];
-    std::snprintf(pat, sizeof(pat), "%.*s", static_cast<int>(sizeof(hdr.pattern)), hdr.pattern);
-    sublimation_sink_appendf(&g_out, "# montauk trace log  pattern='%s'  start=%s\n", pat, wall_str(hdr.real_anchor_ns).c_str());
+    sublimation_sink_appendf(&g_out, "# montauk trace log  pattern='%s'  start=%s\n",
+                             reader.pattern().c_str(), wall_str(hdr.real_anchor_ns).c_str());
   } else {
     sublimation_sink_appendf(&g_out, "type,op,elapsed_ms,wall,pid,tid,cpu,detail\n");
   }
 
+  std::vector<uint8_t> fitted;
+  // A tail of text after a record's fixed part, its NULs (an argument vector's
+  // separators) as spaces.
+  auto tail_text = [](const uint8_t* p, uint32_t n) {
+    std::string t(reinterpret_cast<const char*>(p), n);
+    for (char& ch : t) if (ch == '\0') ch = ' ';
+    while (!t.empty() && t.back() == ' ') t.pop_back();
+    return t;
+  };
   auto status = reader.for_each([&](uint32_t type, const uint8_t* data, uint32_t len) {
+    // An older capture's shorter records read at today's layout, and a record
+    // whose text runs past it is skipped.
+    if (!(data = montauk::query::fit(type, data, len, fitted))) return;
     switch (type) {
       case TRACE_EVT_SCHED: {
         if (len < sizeof(montauk_sched_event)) break;
@@ -209,18 +221,20 @@ int montauk_decode_main(int argc, char** argv) {
       case TRACE_EVT_HEAP: {
         if (len < sizeof(montauk_heap_event)) break;
         auto* h = reinterpret_cast<const montauk_heap_event*>(data);
-        const char* op = h->op == HEAP_OP_MALLOC  ? "malloc"
-                       : h->op == HEAP_OP_FREE    ? "free"
-                       : h->op == HEAP_OP_REALLOC ? "realloc"
-                       : h->op == HEAP_OP_CALLOC  ? "calloc"
-                       : "?";
-        if (h->op == HEAP_OP_REALLOC) {
+        const char* op = montauk::model::heap_op_name(h->op);
+        if (montauk::model::heap_op_moves(h->op)) {
           sublimation_sink_appendf(&g_out, "[%10.3f] HEAP   %-9s pid=%-7u tid=%-7u "
                       "old=0x%016" PRIx64 " new=0x%016" PRIx64 " size=%" PRIu64
                       " comm='%.16s'\n",
                       elapsed_ms(h->timestamp_ns), op, h->pid, h->tid,
                       (uint64_t)h->addr, (uint64_t)h->new_addr,
                       (uint64_t)h->size, h->comm);
+        } else if (h->op >= HEAP_OP_POSIX_MEMALIGN) {
+          sublimation_sink_appendf(&g_out, "[%10.3f] HEAP   %-9s pid=%-7u tid=%-7u "
+                      "addr=0x%016" PRIx64 " size=%" PRIu64 " align=%" PRIu64
+                      " comm='%.16s'\n",
+                      elapsed_ms(h->timestamp_ns), op, h->pid, h->tid,
+                      (uint64_t)h->addr, (uint64_t)h->size, (uint64_t)h->align, h->comm);
         } else {
           sublimation_sink_appendf(&g_out, "[%10.3f] HEAP   %-9s pid=%-7u tid=%-7u "
                       "addr=0x%016" PRIx64 " size=%" PRIu64 " comm='%.16s'\n",
@@ -236,10 +250,11 @@ int montauk_decode_main(int argc, char** argv) {
         if (!signame) signame = "?";
         const char* kind = (s->kind == SIGEVT_DELIVER) ? "DELIVER" : "EXIT_ABNL";
         sublimation_sink_appendf(&g_out, "[%10.3f] SIGNAL %s pid=%u tid=%u sig=%s(%d) sender=%d "
-                    "exit_code=0x%x comm='%.16s' stack_depth=%u\n",
+                    "disposition=%s exit_code=0x%x comm='%.16s' stack_depth=%u user_stack=%u\n",
                     elapsed_ms(s->timestamp_ns), kind, s->pid, s->tid,
                     signame, s->signal_nr, s->sender_pid,
-                    (unsigned)s->exit_code, s->comm, s->stack_depth);
+                    montauk::model::signal_disposition_name(s->disposition),
+                    (unsigned)s->exit_code, s->comm, s->stack_depth, s->user_stack_len);
         unsigned n = s->stack_depth;
         if (n > TRACE_STACK_MAX_FRAMES) n = TRACE_STACK_MAX_FRAMES;
         for (unsigned i = 0; i < n; ++i) {
@@ -270,7 +285,7 @@ int montauk_decode_main(int argc, char** argv) {
       case TRACE_EVT_HEAPSTACK: {
         if (len < sizeof(montauk_heapstack_event)) break;
         auto* h = reinterpret_cast<const montauk_heapstack_event*>(data);
-        const char* opn = h->op == HEAP_OP_CALLOC ? "calloc" : "malloc";
+        const char* opn = montauk::model::heap_op_name(h->op);
         sublimation_sink_appendf(&g_out, "[%10.3f] HEAPSTK %s pid=%u tid=%u addr=0x%016" PRIx64
                     " size=%" PRIu64 " comm='%.16s' stack_depth=%u\n",
                     elapsed_ms(h->timestamp_ns), opn, h->pid, h->tid,
@@ -299,6 +314,35 @@ int montauk_decode_main(int argc, char** argv) {
         }
         break;
       }
+      case TRACE_EVT_FUTEX: {
+        if (len < sizeof(montauk_futex_event)) break;
+        auto* f = reinterpret_cast<const montauk_futex_event*>(data);
+        sublimation_sink_appendf(&g_out, "[%10.3f] FUTEX  %-13s pid=%-7u tid=%-7u uaddr=0x%016" PRIx64 " val=%" PRIu64,
+                    elapsed_ms(f->timestamp_ns), futex_cmd_name(f->op), f->pid, f->tid,
+                    (uint64_t)f->uaddr, (uint64_t)f->val);
+        if (f->nr_futexes > 1) sublimation_sink_appendf(&g_out, " words=%u", f->nr_futexes);
+        if (f->timeout_ns == ~0ULL) sublimation_sink_appendf(&g_out, " timeout=none");
+        else sublimation_sink_appendf(&g_out, " timeout=%" PRIu64 "ns", (uint64_t)f->timeout_ns);
+        if (f->result == -999) sublimation_sink_appendf(&g_out, " enter");
+        else sublimation_sink_appendf(&g_out, " leave result=%ld", (long)f->result);
+        sublimation_sink_appendf(&g_out, " comm='%.16s'\n", f->comm);
+        break;
+      }
+      case TRACE_EVT_FUTEXSTACK: {
+        if (len < sizeof(montauk_futexstack_event)) break;
+        auto* w = reinterpret_cast<const montauk_futexstack_event*>(data);
+        sublimation_sink_appendf(&g_out, "[%10.3f] FUTEXSTK pid=%u tid=%u uaddr=0x%016" PRIx64
+                    " comm='%.16s' stack_depth=%u (no deadline)\n",
+                    elapsed_ms(w->timestamp_ns), w->pid, w->tid,
+                    (uint64_t)w->uaddr, w->comm, w->stack_depth);
+        unsigned wn = w->stack_depth;
+        if (wn > TRACE_STACK_MAX_FRAMES) wn = TRACE_STACK_MAX_FRAMES;
+        for (unsigned i = 0; i < wn; ++i) {
+          sublimation_sink_appendf(&g_out, "              #%-2u 0x%016" PRIx64 "\n",
+                      i, (uint64_t)w->stack_user[i]);
+        }
+        break;
+      }
       case TRACE_EVT_KEYEDEVT: {
         if (len < sizeof(montauk_keyedevt_event)) break;
         auto* k = reinterpret_cast<const montauk_keyedevt_event*>(data);
@@ -313,10 +357,43 @@ int montauk_decode_main(int argc, char** argv) {
       case TRACE_EVT_COMM_CHANGE: {
         if (len < sizeof(montauk_ring_event)) break;
         auto* e = reinterpret_cast<const montauk_ring_event*>(data);
-        sublimation_sink_appendf(&g_out, "[          ] %-5s pid=%-7u ppid=%-7u comm='%.16s'",
-                    lifecycle_type_name(type), e->pid, e->ppid, e->comm);
-        if (type == TRACE_EVT_EXEC) sublimation_sink_appendf(&g_out, " file='%.64s'", e->filename);
+        // A record from before lifecycle records carried their time has none.
+        if (e->timestamp_ns)
+          sublimation_sink_appendf(&g_out, "[%10.3f] %-5s pid=%-7u ppid=%-7u comm='%.16s'",
+                      elapsed_ms(e->timestamp_ns), lifecycle_type_name(type), e->pid, e->ppid, e->comm);
+        else
+          sublimation_sink_appendf(&g_out, "[          ] %-5s pid=%-7u ppid=%-7u comm='%.16s'",
+                      lifecycle_type_name(type), e->pid, e->ppid, e->comm);
+        if (type == TRACE_EVT_FORK) sublimation_sink_appendf(&g_out, " child=%u", e->child_pid);
+        if (type == TRACE_EVT_EXIT) sublimation_sink_appendf(&g_out, " exit_code=0x%x", static_cast<unsigned>(e->exit_code));
+        if (type == TRACE_EVT_EXEC) {
+          const uint8_t* tail = data + sizeof(*e);
+          if (e->path_len) sublimation_sink_appendf(&g_out, " file='%s'", tail_text(tail, e->path_len).c_str());
+          else sublimation_sink_appendf(&g_out, " file='%.64s'", e->filename);
+          if (e->argv_len)
+            sublimation_sink_appendf(&g_out, " argv='%s'", tail_text(tail + e->path_len, e->argv_len).c_str());
+        }
         sublimation_sink_appendf(&g_out, "\n");
+        break;
+      }
+      case TRACE_EVT_SYSCALL: {
+        if (len < sizeof(montauk_syscall_event)) break;
+        auto* c = reinterpret_cast<const montauk_syscall_event*>(data);
+        const char* nm = montauk::model::syscall_name(c->nr);
+        sublimation_sink_appendf(&g_out, "[%10.3f] SYSCALL %s(%d) pid=%-7u tid=%-7u args=0x%" PRIx64 ",0x%" PRIx64
+                    ",0x%" PRIx64 ",0x%" PRIx64 ",0x%" PRIx64 ",0x%" PRIx64 " = %" PRId64 " dur=%" PRIu64 "ns ip=0x%" PRIx64,
+                    elapsed_ms(c->timestamp_ns), nm ? nm : "?", c->nr, c->pid, c->tid,
+                    (uint64_t)c->arg0, (uint64_t)c->arg1, (uint64_t)c->arg2, (uint64_t)c->arg3,
+                    (uint64_t)c->arg4, (uint64_t)c->arg5, (int64_t)c->result, (uint64_t)c->duration_ns,
+                    (uint64_t)c->ip);
+        if (c->resolved)
+          sublimation_sink_appendf(&g_out, " in=[0x%" PRIx64 "-0x%" PRIx64 ")%s", (uint64_t)c->vma_start,
+                      (uint64_t)c->vma_end, c->anon ? " anon" : "");
+        const uint8_t* tail = data + sizeof(*c);
+        if (c->path_len) sublimation_sink_appendf(&g_out, " path='%s'", tail_text(tail, c->path_len).c_str());
+        if (c->path2_len)
+          sublimation_sink_appendf(&g_out, " path2='%s'", tail_text(tail + c->path_len, c->path2_len).c_str());
+        sublimation_sink_appendf(&g_out, " comm='%.16s'\n", c->comm);
         break;
       }
       case TRACE_EVT_PROVIDER: {
@@ -327,8 +404,9 @@ int montauk_decode_main(int argc, char** argv) {
         break;
       }
       case TRACE_EVT_DROPS: {
-        if (len < sizeof(montauk_drop_event)) break;
-        auto* d = reinterpret_cast<const montauk_drop_event*>(data);
+        montauk_drop_event dr;
+        if (!montauk_drop_read(data, len, &dr)) break;
+        const montauk_drop_event* d = &dr;
         uint64_t total = 0;
         for (uint32_t i = 0; i < MONTAUK_DROP_SLOTS; ++i) total += d->dropped[i];
         sublimation_sink_appendf(&g_out,

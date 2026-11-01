@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 # C is enabled for the in-tree sublimation sort sub-system (C23); CXX for
 # montauk itself.
-project(montauk VERSION 8.14.0 LANGUAGES C CXX)
+project(montauk VERSION 8.15.0 LANGUAGES C CXX)
 # (7.17.0: kick-capture honesty -- the storm report no longer manufactures a
 #  false kick/s=0 when the scx storm probes are unattached, and kick-latency
 #  surfaces the KICK_ISSUE->RESCHED pairing (availability, unanswered share,
@@ -287,6 +287,7 @@ install(TARGETS montauk RUNTIME DESTINATION bin)
 target_sources(montauk PRIVATE
     src/tools/trace_analyze.cpp
     src/tools/trace_query.cpp
+    src/tools/eh_unwind.cpp
     src/tools/static_scan.cpp
     src/tools/static_object.cpp
     src/tools/static_python.cpp
@@ -311,6 +312,9 @@ if(MONTAUK_BUILD_TESTS)
     tests/test_fdinfo_collector.cpp
     tests/test_snapshot_buffers.cpp
     tests/test_trace_buffers.cpp
+    tests/test_trace_names.cpp
+    tests/test_snapshot_names.cpp
+    tests/test_trace_pattern.cpp
     tests/test_anomaly.cpp
     tests/test_producer_basic.cpp
     tests/test_stress.cpp

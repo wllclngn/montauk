@@ -22,8 +22,10 @@
 // text the comparison it makes (`r1 > 5`, `x3 == 0`, `ne`), its depth the number
 // of conditional blocks that dominate it -- the nearest thing to the source
 // lane's nesting the instructions carry. A declaration is a function, or a BPF
-// map; a reference is a call, a tail call, or a BPF map's address loaded into a
-// register, so the join can say what reaches what.
+// map; a reference is a call, a tail call, a BPF map's address loaded into a
+// register, or a function's address taken -- by code (a `lea`, an `adrp`, an
+// ld_imm64) or by data (a table, a callback slot) -- so the join can say what
+// reaches what, through a pointer as well as a call.
 //
 // The graph keeps the source lane's shape: Block 0 is the entry, block 1 the
 // exit every return goes to, and the instruction blocks follow in order.
@@ -32,11 +34,13 @@
 #include <elf.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "sublimation_order.hpp"
@@ -295,7 +299,8 @@ const char* x86_cc[] = {"o", "no", "b", "ae", "e", "ne", "be", "a",
                         "s", "ns", "p", "np", "l", "ge", "le", "g"};
 
 // ModRM and what follows it (SIB, displacement), from p[i]; the index past it.
-size_t x86_modrm(const uint8_t* p, size_t i, size_t avail, int* reg) {
+// `rip` receives where a RIP-relative displacement sits, when the operand is one.
+size_t x86_modrm(const uint8_t* p, size_t i, size_t avail, int* reg, size_t* rip = nullptr) {
   if (i >= avail) return avail;
   const uint8_t m = p[i++];
   const int mod = m >> 6, rm = m & 7;
@@ -306,6 +311,7 @@ size_t x86_modrm(const uint8_t* p, size_t i, size_t avail, int* reg) {
       const uint8_t sib = p[i++];
       if (mod == 0 && (sib & 7) == 5) i += 4;
     } else if (mod == 0 && rm == 5) {
+      if (rip) *rip = i;
       i += 4;   // RIP-relative
     }
     if (mod == 1) i += 1;
@@ -394,7 +400,8 @@ Op x86_decode(const Image& im, size_t sec, long slot, const std::vector<Fn>& fns
   } else if (map == 3) {
     modrm = true; imm = 1;
   }
-  if (modrm) i = x86_modrm(p, i, avail, &reg);
+  size_t rip = SIZE_MAX;
+  if (modrm) i = x86_modrm(p, i, avail, &reg, &rip);
   if (!vex && map == 0 && (opc == 0xf6 || opc == 0xf7) && (reg == 0 || reg == 1)) imm = opc == 0xf6 ? 1 : immz;
   i += imm;
   op.width = (int)std::min(i, avail);
@@ -422,6 +429,15 @@ Op x86_decode(const Image& im, size_t sec, long slot, const std::vector<Fn>& fns
     return {};
   };
   if (vex) return op;
+  // A `lea fn(%rip)` the assembler resolved, with no relocation left to say
+  // so: Its target is a function's start in this section, and its address is
+  // taken. One a relocation still carries is read with the relocations.
+  if (map == 0 && opc == 0x8d && rip != SIZE_MAX && rip + 4 <= (size_t)op.width &&
+      !reloc_at(im, sec, (uint64_t)slot + rip)) {
+    int32_t d;
+    std::memcpy(&d, p + rip, 4);
+    if (const Fn* t = fn_at(fns, sec, next + d)) op.ref = t->name;
+  }
   if (map == 0) {
     if (opc >= 0x70 && opc <= 0x7f) { op.kind = Op::Cond; op.target = next + rel(1); op.text = x86_cc[opc & 15]; }
     else if (opc >= 0xe0 && opc <= 0xe3) {
@@ -463,6 +479,40 @@ std::vector<std::pair<long, long>> data_ranges(const Image& im, size_t sec, int 
     if (marks[k].second == 'd')
       out.push_back({marks[k].first, k + 1 < marks.size() ? marks[k + 1].first : nslots});
   return out;
+}
+
+// THE FUNCTION A RELOCATION POINTS AT, when it points at one: Its symbol when
+// that is a function, or the function starting at the place it lands in an
+// executable section. `field_to_end` is how far the field sits before the end
+// of its instruction, for a PC-relative x86-64 field, whose target is past the
+// instruction rather than at the field; `implicit` is a REL section's addend,
+// held in the bytes it relocates.
+std::string reloc_function(const Image& im, const std::vector<Fn>& fns, const Machine& m, const Reloc& r,
+                           int64_t addend, long field_to_end) {
+  const Sym& y = *r.sym;
+  if (y.type == STT_FUNC) return y.name;
+  if (y.type != STT_SECTION || y.shndx >= im.secs.size() || !(im.secs[y.shndx].flags & SHF_EXECINSTR))
+    return {};
+  const bool pcrel = std::string_view(m.dialect) == "x86-64" &&
+                     (r.type == R_X86_64_PC32 || r.type == R_X86_64_PLT32 || r.type == R_X86_64_GOTPCREL ||
+                      r.type == R_X86_64_GOTPCRELX || r.type == R_X86_64_REX_GOTPCRELX);
+  const int64_t at = addend + (pcrel ? field_to_end : 0);
+  if (at < 0 || at % m.slot_bytes) return {};
+  const Fn* t = fn_at(fns, y.shndx, (long)(at / m.slot_bytes));
+  return t ? t->name : std::string();
+}
+
+// Whether a relocation inside code takes an address, rather than naming a
+// branch's target (the call and jump relocations the decoders already read)
+// or completing an address another relocation began (aarch64's low twelve
+// bits after its adrp, which would count one address twice).
+bool takes_address(const Machine& m, const Reloc& r, const Op& op, long field, long op_end) {
+  const std::string_view d = m.dialect;
+  if (d == "x86-64") return !((op.kind == Op::Call || op.kind == Op::Goto) && field == op_end - 4);
+  if (d == "aarch64")
+    return r.type == R_AARCH64_ADR_PREL_PG_HI21 || r.type == R_AARCH64_ADR_PREL_LO21 ||
+           r.type == R_AARCH64_ADR_GOT_PAGE || r.type == R_AARCH64_ABS64;
+  return op.kind != Op::Call;   // bpf: an ld_imm64's relocation, a callback's address
 }
 
 }  // namespace
@@ -652,10 +702,38 @@ bool static_scan_object(const std::string& path, size_t file_idx, std::string& b
               "\tjump\t" + f.name + "\t" + texts[b] + "\n";
       ++counts.guards;
     }
+    std::set<std::pair<long, std::string>> named;
     for (const auto& [pc, op] : ops) {
       if (op.ref.empty()) continue;
+      named.insert({pc, op.ref});
       body += "R\t" + fs + "\t" + std::to_string(pc) + "\t" + f.name + "\t" + op.ref + "\n";
       ++counts.refs;
+    }
+    // A function's address taken in this one's code reaches it as a call
+    // would: A task frame handed to a scheduler, a callback, a table's base.
+    if (!linked) {
+      const uint64_t lo = (uint64_t)f.start * (uint64_t)m->slot_bytes, hi = (uint64_t)f.end * (uint64_t)m->slot_bytes;
+      for (auto it = im.reloc.lower_bound({f.sec, lo}); it != im.reloc.end() && it->first.first == f.sec &&
+                                                         it->first.second < hi; ++it) {
+        const long field = (long)(it->first.second / (uint64_t)m->slot_bytes);
+        auto at_op = ops.upper_bound(field);
+        if (at_op == ops.begin()) continue;
+        --at_op;
+        const long pc = at_op->first, op_end = pc + at_op->second.width;
+        if (!takes_address(*m, it->second, at_op->second, (long)it->first.second, op_end * m->slot_bytes)) continue;
+        // BPF's relocations are REL: An ld_imm64 against a section holds its
+        // offset in the instruction's imm.
+        int64_t addend = it->second.addend;
+        if (std::string_view(m->dialect) == "bpf" && it->second.sym->type == STT_SECTION) {
+          int32_t imm = 0;
+          if (at(im.img, im.secs[f.sec].off + it->first.second + 4, imm)) addend = imm;
+        }
+        const std::string name = reloc_function(im, fns, *m, it->second, addend,
+                                                op_end * m->slot_bytes - (long)it->first.second);
+        if (name.empty() || !named.insert({pc, name}).second) continue;
+        body += "R\t" + fs + "\t" + std::to_string(pc) + "\t" + f.name + "\t" + name + "\n";
+        ++counts.refs;
+      }
     }
 
     const std::string head = fs + "\t" + std::to_string(fk) + "\t" + f.name + "\t";
@@ -668,6 +746,39 @@ bool static_scan_object(const std::string& path, size_t file_idx, std::string& b
       body += "E\t" + head + std::to_string(e.from) + "\t" + std::to_string(e.to) + "\t" + e.kind + "\n";
     counts.blocks += nb;
     counts.edges += edges.size();
+  }
+
+  // A function's address held in data is a reference from file scope: A
+  // dispatch table, an ops struct, a constructor list. Read from allocated
+  // data only, since .eh_frame, the debug sections and BTF hold a relocation
+  // against every function and enter none of them; and from an absolute
+  // relocation only, since a pointer is one, where a PC-relative entry is a
+  // jump table's, whose addend is a case label plus the entry's offset.
+  auto absolute = [&](uint32_t type) {
+    const std::string_view d = m->dialect;
+    if (d == "x86-64") return type == R_X86_64_64 || type == R_X86_64_32 || type == R_X86_64_32S;
+    if (d == "aarch64") return type == R_AARCH64_ABS64 || type == R_AARCH64_ABS32;
+    return type == 2 || type == 3;   // R_BPF_64_ABS64, R_BPF_64_ABS32
+  };
+  if (!linked) {
+    std::set<std::string> held;
+    for (const auto& [key, r] : im.reloc) {
+      const size_t sec = key.first;
+      if (sec >= im.secs.size() || !absolute(r.type)) continue;
+      const Sec& ds = im.secs[sec];
+      if (!(ds.flags & SHF_ALLOC) || (ds.flags & SHF_EXECINSTR) || ds.name == ".eh_frame" ||
+          ds.name.starts_with(".BTF") || ds.name.starts_with(".debug"))
+        continue;
+      int64_t addend = r.addend;
+      if (r.type == 2 && std::string_view(m->dialect) == "bpf") {   // R_BPF_64_ABS64: a REL addend, in place
+        uint64_t v = 0;
+        if (ds.type == SHT_PROGBITS && at(im.img, ds.off + key.second, v)) addend = (int64_t)v;
+      }
+      const std::string name = reloc_function(im, fns, *m, r, addend, 0);
+      if (name.empty() || !held.insert(name).second) continue;
+      body += "R\t" + fs + "\t0\t<file>\t" + name + "\n";
+      ++counts.refs;
+    }
   }
   return true;
 }

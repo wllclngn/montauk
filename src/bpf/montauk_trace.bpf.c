@@ -108,6 +108,107 @@ static __always_inline void *rb_reserve(u32 type, u64 size) {
   return p;
 }
 
+// The same gate and the same accounting for a record built off the ring and
+// copied in: One whose length is known only once its strings are read, so it
+// takes the ring exactly the bytes it has rather than reserving its maximum.
+static __always_inline void rb_output(u32 type, void *rec, u64 size) {
+  if (type < 64 && !((capture_mask >> type) & 1ULL)) return;
+  if (bpf_ringbuf_output(&events, rec, size, 0) == 0) return;
+  u32 k = type < MONTAUK_DROP_SLOTS ? type : 0;
+  u64 *c = bpf_map_lookup_elem(&drop_counts, &k);
+  if (c) __sync_fetch_and_add(c, 1);
+}
+
+// THE SYSCALL CLASS: one record per call a traced thread makes, opt-in. A
+// Proton launch makes hundreds of thousands of calls a second, so both filters
+// apply here, before any record exists: The numbers the operator named
+// (--trace-syscalls, all of them by default) and, with --trace-syscalls-from
+// anon, only calls made from memory no file backs -- code mapped by hand, a
+// JIT, injected code -- which the mapping holding the return address decides.
+const volatile __u64 sc_nr_mask[MONTAUK_SC_NR_WORDS] = {~0ULL, ~0ULL, ~0ULL, ~0ULL,
+                                                        ~0ULL, ~0ULL, ~0ULL, ~0ULL};
+const volatile __u8 sc_from_anon = 0;
+// The most bytes one path, a filename or an argument vector carries
+// (--trace-path-bytes, up to MONTAUK_SC_PATH_MAX).
+const volatile __u32 path_bytes = 256;
+
+// A call in flight: what its entry saw, held until its exit emits the record.
+// LRU, so a thread killed inside a call cannot pin its entry.
+struct sc_enter {
+  u64 args[6];
+  u64 ts;
+  u64 ip, vma_start, vma_end;
+  s32 nr;
+  u32 pid;
+  u8  resolved, anon;
+};
+struct {
+  __uint(type, BPF_MAP_TYPE_LRU_HASH);
+  __uint(max_entries, 8192);
+  __type(key, u32);
+  __type(value, struct sc_enter);
+} sc_inflight SEC(".maps");
+
+// Where a record with strings is built before it is copied to the ring: The
+// largest fixed part and two strings at their bound.
+struct rec_scratch {
+  u8 buf[sizeof(struct montauk_syscall_event) + 2 * MONTAUK_SC_PATH_MAX];
+};
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, 1);
+  __type(key, u32);
+  __type(value, struct rec_scratch);
+} rec_scratch SEC(".maps");
+
+// A string bound the verifier can see: at least 1, at most one below the
+// largest, so a string read into it leaves its length below the bound too.
+static __always_inline u32 str_bound(void) {
+  u32 n = path_bytes;
+  if (n < 1) n = 1;
+  if (n > MONTAUK_SC_PATH_MAX - 1) n = MONTAUK_SC_PATH_MAX - 1;
+  return n;
+}
+
+// The arguments a path-taking call names a path by (x86-64): the first path's
+// index and the second's, -1 for none. readlink and readlinkat take their
+// second string from the buffer the kernel filled, which `out` names.
+static __always_inline void sc_paths(s32 nr, s32 *a, s32 *b, s32 *out) {
+  *a = -1; *b = -1; *out = -1;
+  switch (nr) {
+    case 2: case 4: case 6: case 21: case 59: case 76: case 80: case 83:   // open stat lstat access execve truncate chdir mkdir
+    case 84: case 85: case 87: case 90: case 92: case 94: case 133:        // rmdir creat unlink chmod chown lchown mknod
+    case 137: case 161:                                                     // statfs chroot
+      *a = 0; break;
+    case 82: case 86: case 88: *a = 0; *b = 1; break;                       // rename link symlink
+    case 89: *a = 0; *out = 1; break;                                       // readlink
+    case 257: case 258: case 259: case 260: case 262: case 263: case 268:  // openat mkdirat mknodat fchownat newfstatat unlinkat fchmodat
+    case 269: case 280: case 322: case 332: case 437: case 439:            // faccessat utimensat execveat statx openat2 faccessat2
+      *a = 1; break;
+    case 264: case 265: case 316: *a = 1; *b = 3; break;                   // renameat linkat renameat2
+    case 266: *a = 0; *b = 2; break;                                        // symlinkat
+    case 267: *a = 1; *out = 2; break;                                      // readlinkat
+    default: break;
+  }
+}
+
+static __always_inline u64 sc_arg(const struct sc_enter *e, s32 i) {
+  switch (i) {
+    case 0: return e->args[0]; case 1: return e->args[1]; case 2: return e->args[2];
+    case 3: return e->args[3]; case 4: return e->args[4]; case 5: return e->args[5];
+    default: return 0;
+  }
+}
+
+struct vma_info { u64 start, end; u8 anon; };
+static long vma_of(struct task_struct *task, struct vm_area_struct *vma, void *data) {
+  struct vma_info *v = data;
+  v->start = BPF_CORE_READ(vma, vm_start);
+  v->end = BPF_CORE_READ(vma, vm_end);
+  v->anon = BPF_CORE_READ(vma, vm_file) == 0;
+  return 0;
+}
+
 // T1: ONE sched emit path. Ten call sites reserved, filled nine fields in the
 // same order, stamped a timestamp and submitted -- identical but for the values,
 // which is how the tenth came to differ from the other nine without anyone
@@ -138,13 +239,46 @@ static __always_inline void sched_emit(u32 op, u32 cpu, s32 pid, s32 secondary_p
   bpf_ringbuf_submit(e, 0);
 }
 
-// Per-CPU scratch for ntsync ioctl enter → exit state passing
+// Per-CPU staging for an ntsync ioctl's arguments while sys_enter reads them;
+// too large for the stack beside the rest of the handler.
 struct {
   __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
   __uint(max_entries, 1);
   __type(key, u32);
   __type(value, struct ntsync_scratch);
 } ntsync_scratch SEC(".maps");
+
+// An ntsync ioctl's arguments from its enter to its exit, keyed by thread, as
+// heap_inflight is. The per-CPU slot alone carried them, so a wait that blocked
+// left its arguments for the next syscall any thread of the process finished on
+// that CPU, which emitted the wait under its own tid and return value, while
+// the waiter, often woken on another CPU, emitted whatever that CPU held.
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, TRACE_MAX_THREADS);
+  __type(key, u32);
+  __type(value, struct ntsync_scratch);
+} ntsync_inflight SEC(".maps");
+
+// A futex wait from its enter to its leave, keyed by thread, as ntsync_inflight
+// keeps an ioctl's: The leave is the same wait's, with the word and deadline its
+// enter read, never another syscall's.
+struct futex_wait {
+  u32 pid;
+  u32 op;
+  u64 uaddr;
+  u64 val;
+  u64 timeout_ns;
+  u32 nr_futexes;
+  u32 _pad;
+};
+
+struct {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __uint(max_entries, TRACE_MAX_THREADS);
+  __type(key, u32);
+  __type(value, struct futex_wait);
+} futex_inflight SEC(".maps");
 
 // sched_ext kick-storm counters (per-CPU; the collector sums + deltas each interval)
 struct {
@@ -154,29 +288,31 @@ struct {
   __type(value, struct scx_storm_counters);
 } scx_storm SEC(".maps");
 
-// Per-CPU scratch for openat filename passing (enter → exit)
+// An openat or mmap in flight, by thread: What its entry saw, held for its
+// exit, which emits with the call's result. By thread rather than by CPU: A
+// call that sleeps can finish on another CPU, and that CPU's slot held another
+// call's arguments, so the exit emitted a mapping or a path its call never
+// named. LRU, so a thread killed inside a call cannot pin its entry.
 struct {
-  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-  __uint(max_entries, 1);
+  __uint(type, BPF_MAP_TYPE_LRU_HASH);
+  __uint(max_entries, TRACE_MAX_THREADS);
   __type(key, u32);
   __type(value, struct fd_bpf_entry);
-} open_scratch SEC(".maps");
+} open_inflight SEC(".maps");
 
-// Per-CPU scratch for mmap arg passing (sys_enter_mmap -> sys_exit_mmap).
-// Captures fd/length/prot/flags/offset on enter; emit fires on exit using
-// the syscall return value as the mapped address.
 struct {
-  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-  __uint(max_entries, 1);
+  __uint(type, BPF_MAP_TYPE_LRU_HASH);
+  __uint(max_entries, TRACE_MAX_THREADS);
   __type(key, u32);
   __type(value, struct mmap_scratch);
-} mmap_scratch_map SEC(".maps");
+} mmap_inflight SEC(".maps");
 
 // Per-thread scratch for libc heap uprobes (entry → uretprobe).
 // malloc/calloc need to pair size (entry) with addr (return); realloc
 // needs to pair old_addr+size (entry) with new_addr (return). Keyed by
 // tid so concurrent calls from different threads don't collide.
 struct heap_scratch {
+  __u64 align;
   __u64 size;
   __u64 old_addr;
   __u32 op;
@@ -188,16 +324,20 @@ struct {
   __type(value, struct heap_scratch);
 } heap_inflight SEC(".maps");
 
-// Free-probe echo guard. The uprobe layer can deliver the free probe TWICE
-// for one logical call: two handler executions 1-3us apart, observed on a
-// thread's early frees, with the process never aborting (a real second
-// glibc free of a just-freed chunk aborts on every path, so the duplicate
-// is physically not an app re-free). Per-tid last freed pointer: a repeat
-// of the same pointer inside the window with no allocation in between is
-// the echo and is not emitted. Every allocation return clears the entry,
-// so a real rapid free/alloc/free cycle at one address never matches.
-#define FREE_ECHO_WINDOW_NS 10000
-struct free_echo { u64 ptr; u64 ts; };
+// Free re-entry guard. glibc enters free twice for one call, on purpose
+// (glibc 2.44 malloc.c, read from libc.so.6's disassembly): A thread's first
+// free finds no tcache, and tcache_free_init sets one up and tail-calls
+// __libc_free with the same pointer (1-3 us later; 21-41 us on a process's
+// first new thread, whose tcache_init maps a new arena); and a free whose
+// tcache key matches but whose block is not in the tcache leaves
+// tcache_double_free_verify the same way. A tail call hands free back exactly
+// the state its first entry had -- the stack pointer, the caller's return
+// address on the stack, the callee-saved registers rbx, rbp and r12-r15 -- and
+// only scratch registers differ. A genuine second free must return and be
+// called again, so its call site or its caller's surviving state differs, and
+// it is emitted however soon it follows; this is keyed on that state, never on
+// time. Every allocation return clears the entry.
+struct free_echo { u64 ptr; u64 regs; u64 ret; };
 struct {
   __uint(type, BPF_MAP_TYPE_LRU_HASH);
   __uint(max_entries, 8192);
@@ -292,6 +432,8 @@ const volatile unsigned char sched_detail = 0;    /* --sched-detail: gate the pe
 // requested size equals this also emits a TRACE_EVT_HEAPSTACK carrying the
 // user stack, alongside the normal TRACE_EVT_HEAP record.
 const volatile __u64 heap_stack_size = 0;
+// The page size valloc and pvalloc align to, set by userspace before load.
+const volatile __u64 page_size = 4096;
 
 // Per-CPU kthread strand threshold (ns). A per-CPU kthread whose
 // became-runnable -> ran latency reaches this emits a TRACE_EVT_KSTRAND. 5ms
@@ -418,18 +560,23 @@ static __noinline int bpf_substr_match(const char *haystack, int hay_len,
 
 // Auto-track a process: write to proc_map immediately in BPF.
 // Children will be auto-tracked by handle_fork on the next clone().
-static __always_inline void auto_track_pid(u32 pid) {
+// True when the process is tracked after the call: added here, or already
+// there (BPF_NOEXIST refuses a second add with -EEXIST).
+static __always_inline bool auto_track_pid(u32 pid) {
   struct proc_bpf_info info = {};
   info.pid = pid;
   info.ppid = 0;
   info.tracked = 1;
   info.is_root = 1;
   bpf_get_current_comm(info.comm, sizeof(info.comm));
-  bpf_map_update_elem(&proc_map, &pid, &info, BPF_NOEXIST);
+  long err = bpf_map_update_elem(&proc_map, &pid, &info, BPF_NOEXIST);
+  return err == 0 || err == -17;
 }
 
+// A fork or exit record, with its time: The lifecycle of a traced tree, which
+// once carried no timestamp and read as rows in no time at all.
 static __always_inline void emit_event(u32 type, u32 pid, u32 ppid,
-                                       u32 child_pid) {
+                                       u32 child_pid, s32 exit_code) {
   struct montauk_ring_event *evt;
   evt = rb_reserve(type, sizeof(*evt));
   if (!evt)
@@ -440,7 +587,16 @@ static __always_inline void emit_event(u32 type, u32 pid, u32 ppid,
   evt->child_pid = child_pid;
   bpf_get_current_comm(evt->comm, sizeof(evt->comm));
   __builtin_memset(evt->filename, 0, sizeof(evt->filename));
+  evt->timestamp_ns = bpf_ktime_get_ns();
+  evt->path_len = 0;
+  evt->argv_len = 0;
+  evt->exit_code = exit_code;
   bpf_ringbuf_submit(evt, 0);
+}
+
+static __always_inline u32 current_ppid(void) {
+  struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+  return BPF_CORE_READ(task, real_parent, tgid);
 }
 
 static __always_inline void emit_io_event(u32 pid, u32 tid, s32 syscall_nr,
@@ -532,9 +688,33 @@ static __always_inline void emit_keyedevt(u32 op, u64 key) {
 // Some code is built without frame pointers; the captured frames may be
 // partial but always include the innermost IP, which is the load-bearing
 // datum for "what was executing when this died."
+// The interrupted user context of the current task: Its registers, and as
+// much of the stack above its stack pointer as reads, largest first, since a
+// read that would cross the top of the stack fails whole.
+static __always_inline void signal_user_context(struct montauk_signal_event *evt) {
+  evt->user_ip = evt->user_sp = evt->user_bp = 0;
+  evt->user_stack_len = 0;
+  struct task_struct *t = bpf_get_current_task_btf();
+  if (!BPF_CORE_READ(t, mm)) return;
+  struct pt_regs *regs = (struct pt_regs *)bpf_task_pt_regs(t);
+  if (!regs) return;
+  evt->user_ip = PT_REGS_IP_CORE(regs);
+  evt->user_sp = PT_REGS_SP_CORE(regs);
+  evt->user_bp = PT_REGS_FP_CORE(regs);
+  const void *sp = (const void *)evt->user_sp;
+  if (bpf_probe_read_user(evt->user_stack, TRACE_SIGNAL_STACK_BYTES, sp) == 0)
+    evt->user_stack_len = TRACE_SIGNAL_STACK_BYTES;
+  else if (bpf_probe_read_user(evt->user_stack, TRACE_SIGNAL_STACK_BYTES / 2, sp) == 0)
+    evt->user_stack_len = TRACE_SIGNAL_STACK_BYTES / 2;
+  else if (bpf_probe_read_user(evt->user_stack, TRACE_SIGNAL_STACK_BYTES / 4, sp) == 0)
+    evt->user_stack_len = TRACE_SIGNAL_STACK_BYTES / 4;
+  else if (bpf_probe_read_user(evt->user_stack, TRACE_SIGNAL_STACK_BYTES / 8, sp) == 0)
+    evt->user_stack_len = TRACE_SIGNAL_STACK_BYTES / 8;
+}
+
 static __always_inline void emit_signal_event(void *ctx, u32 kind, u32 pid,
                                               u32 tid, s32 sig, s32 sender_pid,
-                                              s32 exit_code) {
+                                              s32 exit_code, u32 disposition) {
   struct montauk_signal_event *evt;
   evt = rb_reserve(TRACE_EVT_SIGNAL, sizeof(*evt));
   if (!evt)
@@ -546,8 +726,10 @@ static __always_inline void emit_signal_event(void *ctx, u32 kind, u32 pid,
   evt->signal_nr   = sig;
   evt->sender_pid  = sender_pid;
   evt->exit_code   = exit_code;
+  evt->disposition = disposition;
   evt->timestamp_ns = bpf_ktime_get_ns();
   bpf_get_current_comm(evt->comm, sizeof(evt->comm));
+  signal_user_context(evt);
 
   // Per-thread state lookup: what syscall was this thread in when the
   // signal fired? thread_map is keyed by tid and is updated on every
@@ -607,6 +789,9 @@ int handle_fork(struct trace_event_raw_sched_process_fork *ctx) {
   child_info.exec_file[0] = 0;
 
   bpf_map_update_elem(&proc_map, &child_pid, &child_info, BPF_ANY);
+  // The record names the forking process, its parent and the new task; a new
+  // thread is a fork whose child shares the forking process.
+  emit_event(TRACE_EVT_FORK, (u32)(bpf_get_current_pid_tgid() >> 32), current_ppid(), child_pid, 0);
   return 0;
 }
 
@@ -629,15 +814,16 @@ int handle_exec(struct trace_event_raw_sched_process_exec *ctx) {
   }
 
   // BPF-SIDE PATTERN MATCH — no userspace roundtrip.
-  if (!is_tracked(pid)) {
+  bool tracked = info != NULL;
+  if (!tracked) {
     if (trace_pat.len > 0) {
       if (bpf_substr_match(filename, 56, (const char *)trace_pat.pattern, trace_pat.len)) {
-        auto_track_pid(pid);
+        tracked = auto_track_pid(pid);
       } else {
         char comm[16] = {};
         bpf_get_current_comm(comm, sizeof(comm));
         if (bpf_substr_match(comm, 16, (const char *)trace_pat.pattern, trace_pat.len)) {
-          auto_track_pid(pid);
+          tracked = auto_track_pid(pid);
         }
       }
     }
@@ -651,16 +837,40 @@ int handle_exec(struct trace_event_raw_sched_process_exec *ctx) {
   // the auto-track block so a process that just became tracked BY this exec
   // (the common case: a fork+exec child whose new name matches the trace
   // pattern) is included, not only processes tracked before it ran.
-  if (is_tracked(pid)) {
-    struct montauk_ring_event *ee = rb_reserve(TRACE_EVT_EXEC, sizeof(*ee));
-    if (ee) {
+  // The record carries its time, the parent at exec time, the whole filename
+  // and the argument vector, each bounded by --trace-path-bytes. The arguments
+  // are the new image's own, read from where exec laid them out.
+  if (tracked) {
+    u32 zero = 0;
+    struct rec_scratch *s = bpf_map_lookup_elem(&rec_scratch, &zero);
+    if (s) {
+      struct montauk_ring_event *ee = (void *)s->buf;
+      struct task_struct *task = (struct task_struct *)bpf_get_current_task();
       ee->type      = TRACE_EVT_EXEC;
       ee->pid       = pid;
-      ee->ppid      = 0;
+      ee->ppid      = BPF_CORE_READ(task, real_parent, tgid);
       ee->child_pid = 0;
       bpf_get_current_comm(ee->comm, sizeof(ee->comm));
       __builtin_memcpy(ee->filename, filename, sizeof(ee->filename));
-      bpf_ringbuf_submit(ee, 0);
+      ee->timestamp_ns = bpf_ktime_get_ns();
+      ee->exit_code = 0;
+      const u32 bound = str_bound();
+      u8 *tail = s->buf + sizeof(*ee);
+      u32 l1 = 0, l2 = 0;
+      long n = bpf_probe_read_kernel_str(tail, bound, (void *)ctx + fname_off);
+      if (n > 1) l1 = (u32)(n - 1);
+      l1 &= MONTAUK_SC_PATH_MAX - 1;
+      const u64 as = BPF_CORE_READ(task, mm, arg_start), ae = BPF_CORE_READ(task, mm, arg_end);
+      if (ae > as) {
+        u32 m = bound;
+        if (ae - as < m) m = (u32)(ae - as);
+        m &= MONTAUK_SC_PATH_MAX - 1;
+        if (m && bpf_probe_read_user(tail + l1, m, (const void *)as) == 0) l2 = m;
+      }
+      l2 &= MONTAUK_SC_PATH_MAX - 1;
+      ee->path_len = (u16)l1;
+      ee->argv_len = (u16)l2;
+      rb_output(TRACE_EVT_EXEC, s->buf, sizeof(*ee) + l1 + l2);
     }
   }
 
@@ -677,25 +887,33 @@ int handle_exit(struct trace_event_raw_sched_process_exit *ctx) {
   // its entry would never be removed -- the map then fills under thread churn
   // and caps coverage. Deleting an absent key is a no-op.
   bpf_map_delete_elem(&thread_map, &pid);
+  bpf_map_delete_elem(&ntsync_inflight, &pid);
+  bpf_map_delete_elem(&futex_inflight, &pid);
 
-  if (!is_tracked(pid))
-    return 0;
+  // A process's discovery entry goes with its group leader, so the map holds
+  // live processes and a long capture over process churn cannot fill it.
+  if ((u32)(bpf_get_current_pid_tgid() >> 32) == pid)
+    bpf_map_delete_elem(&discovery_map, &pid);
 
   // Mark process as exited in proc_map with exit code and timestamp.
-  // Do NOT delete from proc_map — userspace needs to read the exit data.
-  // Userspace is responsible for cleaning up after scraping.
+  // Do NOT delete from proc_map — userspace needs to read the exit data, and
+  // reaps the entry a few snapshot cycles later.
   struct proc_bpf_info *info = bpf_map_lookup_elem(&proc_map, &pid);
+  if (!info)
+    return 0;
   int code = 0;
-  if (info) {
-    info->exited = 1;
-    info->exit_ts = bpf_ktime_get_ns();
-    // Exit code from task_struct: (exit_code >> 8) = status, (exit_code & 0x7f) = signal
-    struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-    if (task) {
-      bpf_probe_read_kernel(&code, sizeof(code), &task->exit_code);
-      info->exit_code = code;
-    }
+  info->exited = 1;
+  info->exit_ts = bpf_ktime_get_ns();
+  // Exit code from task_struct: (exit_code >> 8) = status, (exit_code & 0x7f) = signal
+  struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+  if (task) {
+    bpf_probe_read_kernel(&code, sizeof(code), &task->exit_code);
+    info->exit_code = code;
   }
+  // The process's exit is its group leader's: One record per process, with
+  // its status, where a thread's exit records nothing.
+  if ((u32)(bpf_get_current_pid_tgid() >> 32) == pid)
+    emit_event(TRACE_EVT_EXIT, pid, current_ppid(), 0, code);
 
   // Abnormal-exit stack snapshot: if the task died via signal OR with a
   // non-zero status, emit a SIGEVT_EXIT_ABNL with the user stack at the
@@ -710,7 +928,7 @@ int handle_exit(struct trace_event_raw_sched_process_exit *ctx) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 tid = (u32)pid_tgid;
     emit_signal_event(ctx, SIGEVT_EXIT_ABNL, pid, tid,
-                      sig_low, 0 /* sender unknown at exit */, code);
+                      sig_low, 0 /* sender unknown at exit */, code, SIGDISP_NONE);
   }
 
   return 0;
@@ -721,6 +939,108 @@ int handle_exit(struct trace_event_raw_sched_process_exit *ctx) {
 // next userspace digest can answer "what was thread X doing when it got
 // SIGSEGV?" without WINEDEBUG. Only emits for signals we care about (the
 // fatal/anomaly class); arbitrary SIGCHLD / SIGURG noise is filtered.
+// The signals worth a row: The ones that mean death or memory/state
+// corruption, and the four a graceful shutdown starts on (SIGHUP, SIGINT,
+// SIGQUIT, SIGTERM).
+static __always_inline bool signal_watched(s32 sig) {
+  switch (sig) {
+    case 1:   // SIGHUP
+    case 2:   // SIGINT
+    case 3:   // SIGQUIT
+    case 4:   // SIGILL
+    case 5:   // SIGTRAP (INT 3, __debugbreak)
+    case 6:   // SIGABRT
+    case 7:   // SIGBUS
+    case 8:   // SIGFPE
+    case 9:   // SIGKILL (rarely dispatched here, but try)
+    case 11:  // SIGSEGV
+    case 15:  // SIGTERM
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Who sent each watched signal a tracked process was last sent, keyed by the
+// target's tgid and the signal, written at generation and read at delivery.
+// A signal the kernel raised itself writes 0, so a later delivery never
+// inherits an earlier sender. LRU: A signal never delivered cannot pin a slot.
+struct {
+  __uint(type, BPF_MAP_TYPE_LRU_HASH);
+  __uint(max_entries, 4096);
+  __type(key, u64);
+  __type(value, s32);
+} sig_sender SEC(".maps");
+
+// signal_generate runs in the sender's context. A signal sent from userspace
+// (kill, tgkill, sigqueue: si_code SI_USER, SI_TKILL or SI_QUEUE) is sent by
+// the current process; any other code is the kernel's own, sent from whatever
+// context raised it, so it names no sender. An ignored signal ends here: The
+// kernel drops it rather than queue it, and this is the only moment it has.
+SEC("tp_btf/signal_generate")
+int BPF_PROG(handle_signal_generate, int sig, struct kernel_siginfo *info,
+             struct task_struct *task, int group, int result)
+{
+  if (!signal_watched(sig))
+    return 0;
+  u32 tgid = BPF_CORE_READ(task, tgid);
+  if (!is_tracked(tgid))
+    return 0;
+  s32 code = (unsigned long)info == 0 ? 0      // SEND_SIG_NOINFO: SI_USER
+           : (unsigned long)info == 1 ? 0x80   // SEND_SIG_PRIV: SI_KERNEL
+           : BPF_CORE_READ(info, si_code);
+  s32 sender = (code == 0 || code == -1 || code == -6)
+                   ? (s32)(bpf_get_current_pid_tgid() >> 32) : 0;
+  u64 key = ((u64)tgid << 32) | (u32)sig;
+  bpf_map_update_elem(&sig_sender, &key, &sender, BPF_ANY);
+
+  // TRACE_SIGNAL_IGNORED is also the result for a target already exiting;
+  // only a SIG_IGN disposition is an ignored delivery.
+  if (result != 1 || sig < 1 || sig > 64)
+    return 0;
+  struct sighand_struct *sh = BPF_CORE_READ(task, sighand);
+  if (!sh)
+    return 0;
+  u64 at = (u64)sh + bpf_core_field_offset(struct sighand_struct, action) +
+           (u64)(sig - 1) * bpf_core_type_size(struct k_sigaction) +
+           bpf_core_field_offset(struct k_sigaction, sa.sa_handler);
+  u64 handler = 0;
+  bpf_probe_read_kernel(&handler, sizeof(handler), (const void *)at);
+  if (handler != 1)
+    return 0;
+
+  struct montauk_signal_event *evt = rb_reserve(TRACE_EVT_SIGNAL, sizeof(*evt));
+  if (!evt)
+    return 0;
+  u32 tid = BPF_CORE_READ(task, pid);
+  evt->type         = TRACE_EVT_SIGNAL;
+  evt->pid          = tgid;
+  evt->tid          = tid;
+  evt->kind         = SIGEVT_DELIVER;
+  evt->signal_nr    = sig;
+  evt->sender_pid   = sender;
+  evt->exit_code    = 0;
+  evt->disposition  = SIGDISP_IGNORED;
+  evt->stack_depth  = 0;
+  evt->timestamp_ns = bpf_ktime_get_ns();
+  BPF_CORE_READ_STR_INTO(&evt->comm, task, comm);
+  evt->syscall_nr   = -1;
+  evt->io_fd        = -1;
+  evt->syscall_arg0 = 0;
+  evt->syscall_arg1 = 0;
+  struct thread_bpf_state *ts = bpf_map_lookup_elem(&thread_map, &tid);
+  if (ts) {
+    evt->syscall_nr   = ts->syscall_nr;
+    evt->io_fd        = ts->io_fd;
+    evt->syscall_arg0 = ts->syscall_arg0;
+    evt->syscall_arg1 = ts->syscall_arg1;
+  }
+  evt->user_stack_len = 0;
+  evt->user_ip = evt->user_sp = evt->user_bp = 0;
+  bpf_ringbuf_submit(evt, 0);
+  return 0;
+}
+
 SEC("tp/signal/signal_deliver")
 int handle_signal_deliver(struct trace_event_raw_signal_deliver *ctx) {
   u32 pid = bpf_get_current_pid_tgid() >> 32;
@@ -728,27 +1048,17 @@ int handle_signal_deliver(struct trace_event_raw_signal_deliver *ctx) {
     return 0;
 
   s32 sig = ctx->sig;
-  // Whitelist of "interesting" signals — the ones that mean death or
-  // memory/state corruption. SIGTERM included because games sometimes use
-  // it as a graceful shutdown trigger we want logged.
-  switch (sig) {
-    case 4:   // SIGILL
-    case 6:   // SIGABRT
-    case 7:   // SIGBUS
-    case 8:   // SIGFPE
-    case 9:   // SIGKILL (rarely dispatched here, but try)
-    case 11:  // SIGSEGV
-    case 5:   // SIGTRAP (INT 3, __debugbreak)
-    case 15:  // SIGTERM
-      break;
-    default:
-      return 0;
-  }
+  if (!signal_watched(sig))
+    return 0;
 
+  u64 key = ((u64)pid << 32) | (u32)sig;
+  s32 *sender = bpf_map_lookup_elem(&sig_sender, &key);
+  const unsigned long handler = ctx->sa_handler;
+  const u32 disposition = handler == 0 ? SIGDISP_DEFAULT
+                        : handler == 1 ? SIGDISP_IGNORED : SIGDISP_CAUGHT;
   u32 tid = (u32)bpf_get_current_pid_tgid();
-  emit_signal_event(ctx, SIGEVT_DELIVER, pid, tid, sig,
-                    0 /* sender filled by signal_generate if interleaved */,
-                    0 /* exit_code irrelevant on deliver */);
+  emit_signal_event(ctx, SIGEVT_DELIVER, pid, tid, sig, sender ? *sender : 0,
+                    0 /* exit_code irrelevant on deliver */, disposition);
   return 0;
 }
 
@@ -797,6 +1107,84 @@ static __always_inline __u64 montauk_fd_obj(int fd) {
   return (__u64)BPF_CORE_READ(f, private_data);
 }
 
+// The user-memory layouts a futex wait's enter reads, declared here rather than
+// taken from vmlinux.h: A timespec as the 64-bit ABI passes it, and one waiter of
+// futex_waitv's array.
+struct mtk_timespec { s64 tv_sec; s64 tv_nsec; };
+struct mtk_futex_waitv { u64 val; u64 uaddr; u32 flags; u32 reserved; };
+
+// The futex commands that wait: FUTEX_WAIT, FUTEX_LOCK_PI, FUTEX_WAIT_BITSET,
+// FUTEX_WAIT_REQUEUE_PI and FUTEX_LOCK_PI2, the op with its flags masked.
+static __always_inline int futex_cmd_waits(u32 cmd) {
+  return cmd == 0 || cmd == 6 || cmd == 9 || cmd == 11 || cmd == 13;
+}
+
+static __always_inline void emit_futex(u32 pid, u32 tid, const struct futex_wait *w, s64 result) {
+  struct montauk_futex_event *e = rb_reserve(TRACE_EVT_FUTEX, sizeof(*e));
+  if (!e) return;
+  e->type = TRACE_EVT_FUTEX;
+  e->pid = pid;
+  e->tid = tid;
+  e->op = w->op;
+  e->uaddr = w->uaddr;
+  e->val = w->val;
+  e->result = result;
+  e->timeout_ns = w->timeout_ns;
+  e->nr_futexes = w->nr_futexes;
+  e->_pad = 0;
+  e->timestamp_ns = bpf_ktime_get_ns();
+  bpf_get_current_comm(e->comm, sizeof(e->comm));
+  bpf_ringbuf_submit(e, 0);
+}
+
+// A futex wait's enter (futex 202 with a wait command, or futex_waitv 449): its
+// word, expected value and deadline kept by thread for the leave, the enter
+// record, and with no deadline the user stack the wait is taken from. Nothing is
+// read or kept while the class is masked out.
+static __always_inline void futex_wait_enter(struct trace_event_raw_sys_enter *ctx, u32 pid, u32 tid,
+                                             long nr) {
+  if (!((capture_mask >> TRACE_EVT_FUTEX) & 1ULL)) return;
+  struct futex_wait w = {};
+  w.pid = pid;
+  if (nr == 202) {
+    u32 op = (u32)ctx->args[1];
+    if (!futex_cmd_waits(op & 0x7f)) return;   // FUTEX_CMD_MASK: PRIVATE (128) and CLOCK_REALTIME (256) off
+    w.op = op;
+    w.uaddr = ctx->args[0];
+    w.val = (u32)ctx->args[2];
+    w.nr_futexes = 1;
+  } else {
+    // futex_waitv(waiters, nr_futexes, flags, timeout, clockid): its first waiter.
+    struct mtk_futex_waitv fw = {};
+    bpf_probe_read_user(&fw, sizeof(fw), (void *)ctx->args[0]);
+    w.op = MONTAUK_FUTEX_CMD_WAITV | (fw.flags & 128) | (ctx->args[4] == 0 ? 256 : 0);
+    w.uaddr = fw.uaddr;
+    w.val = fw.val;
+    w.nr_futexes = (u32)ctx->args[1];
+  }
+  u64 tsp = ctx->args[3];
+  w.timeout_ns = ~0ULL;
+  if (tsp) {
+    struct mtk_timespec t = {};
+    if (bpf_probe_read_user(&t, sizeof(t), (void *)tsp) == 0)
+      w.timeout_ns = (u64)t.tv_sec * 1000000000ULL + (u64)t.tv_nsec;
+  }
+  bpf_map_update_elem(&futex_inflight, &tid, &w, BPF_ANY);
+  emit_futex(pid, tid, &w, -999);
+  if (tsp) return;
+  struct montauk_futexstack_event *fs = rb_reserve(TRACE_EVT_FUTEXSTACK, sizeof(*fs));
+  if (!fs) return;
+  fs->type = TRACE_EVT_FUTEXSTACK;
+  fs->pid = pid;
+  fs->tid = tid;
+  fs->uaddr = w.uaddr;
+  long sb = bpf_get_stack(ctx, fs->stack_user, sizeof(fs->stack_user), BPF_F_USER_STACK);
+  fs->stack_depth = sb > 0 ? (u32)(sb / sizeof(u64)) : 0;
+  fs->timestamp_ns = bpf_ktime_get_ns();
+  bpf_get_current_comm(fs->comm, sizeof(fs->comm));
+  bpf_ringbuf_submit(fs, 0);
+}
+
 SEC("tp/raw_syscalls/sys_enter")
 int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
   // Cache ctx fields immediately — BPF verifier disallows ctx pointer
@@ -810,10 +1198,14 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
   u32 pid = pid_tgid >> 32;
   u32 tid = (u32)pid_tgid;
 
+  // Every syscall on the machine runs this, so the tracked set is looked up
+  // once, and a promotion below carries forward rather than looking again.
+  bool tracked = is_tracked(pid);
+
   // ALWAYS record comm in discovery_map for ALL processes.
   // This is how processes get found — clone() (no exec), then
   // set their comm via prctl(PR_SET_NAME). The discovery map catches them.
-  if (!is_tracked(pid)) {
+  if (!tracked) {
     struct discovery_entry *existing = bpf_map_lookup_elem(&discovery_map, &pid);
     if (!existing) {
       struct discovery_entry de = {};
@@ -832,7 +1224,7 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
       // No userspace roundtrip. Same as handle_exec pattern match.
       if (trace_pat.len > 0) {
         if (bpf_substr_match(de.comm, 16, (const char *)trace_pat.pattern, trace_pat.len)) {
-          auto_track_pid(pid);
+          tracked = auto_track_pid(pid);
         }
       }
     }
@@ -857,16 +1249,16 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
       bpf_map_update_elem(&discovery_map, &pid, &de, BPF_ANY);
 
       // Update proc_map if tracked
-      struct proc_bpf_info *info = bpf_map_lookup_elem(&proc_map, &pid);
+      struct proc_bpf_info *info = tracked ? bpf_map_lookup_elem(&proc_map, &pid) : NULL;
       if (info) {
         bpf_probe_read_user_str(info->comm, sizeof(info->comm), name);
-      } else {
+      } else if (!tracked) {
         // Not tracked yet — BPF-side pattern match on the new name.
         // Any process that renames its main thread to match the pattern gets
         // auto-tracked immediately. Application-agnostic.
         if (trace_pat.len > 0) {
           if (bpf_substr_match(de.comm, 16, (const char *)trace_pat.pattern, trace_pat.len)) {
-            auto_track_pid(pid);
+            tracked = auto_track_pid(pid);
           }
         }
       }
@@ -879,7 +1271,7 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
     }
   }
 
-  if (!is_tracked(pid))
+  if (!tracked)
     return 0;
 
   /* FUTEX (x86_64 syscall 202): capture op (arg1: FUTEX_WAIT=0 / FUTEX_WAKE=1
@@ -889,6 +1281,8 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
    * (op->fd, val->result, uaddr->count). */
   if (syscall_id == 202)
     emit_io_event(pid, tid, 202, (s32)arg1, (s64)arg2, arg0, 0);
+  if (syscall_id == 202 || syscall_id == 449)
+    futex_wait_enter(ctx, pid, tid, syscall_id);
 
   /* I/O-WAIT syscalls (poll/ppoll/epoll_wait/epoll_pwait/select/pselect6/
    * recvmsg/recvfrom): a thread blocked here is parked on a producer the way an
@@ -1056,6 +1450,7 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx) {
           default:
             break;
         }
+        bpf_map_update_elem(&ntsync_inflight, &tid, s, BPF_ANY);
       }
     }
   }
@@ -1093,11 +1488,27 @@ int handle_sys_exit(struct trace_event_raw_sys_exit *ctx) {
     ts->syscall_nr = -1; // back to running
   }
 
-  // ntsync ioctl exit: emit ring event if scratch was populated by enter
-  {
-    u32 zero = 0;
-    struct ntsync_scratch *s = bpf_map_lookup_elem(&ntsync_scratch, &zero);
-    if (s && s->pid == pid && (s->op != 0 || s->fd != 0)) {
+  // futex wait leave: the return of this thread's own futex wait. A restart the
+  // kernel makes inside it (-ERESTARTSYS, -ERESTARTNOINTR, -ERESTARTNOHAND,
+  // -ERESTART_RESTARTBLOCK) never reaches the caller and the wait goes on: The
+  // syscall is entered again, a fresh enter, or resumed as restart_syscall (219),
+  // whose own exit is the leave.
+  if (ctx->id == 202 || ctx->id == 449 || ctx->id == 219) {
+    struct futex_wait *fw = bpf_map_lookup_elem(&futex_inflight, &tid);
+    long ret = ctx->ret;
+    if (fw && !(ret == -512 || ret == -513 || ret == -514 || ret == -516)) {
+      if (fw->pid == pid)
+        emit_futex(pid, tid, fw, ret);
+      bpf_map_delete_elem(&futex_inflight, &tid);
+    }
+  }
+
+  // ntsync ioctl exit: the completion of this thread's own ioctl, never another
+  // syscall's. A thread's syscalls do not overlap, so an entry still here when
+  // something other than an ioctl exits is stale and goes unemitted.
+  struct ntsync_scratch *s = bpf_map_lookup_elem(&ntsync_inflight, &tid);
+  if (s) {
+    if (ctx->id == 16 && s->pid == pid) {
       struct montauk_ntsync_event *evt;
       evt = rb_reserve(TRACE_EVT_NTSYNC, sizeof(*evt));
       if (evt) {
@@ -1165,9 +1576,117 @@ int handle_sys_exit(struct trace_event_raw_sys_exit *ctx) {
 
         bpf_ringbuf_submit(evt, 0);
       }
-      s->pid = 0; // clear scratch
     }
+    bpf_map_delete_elem(&ntsync_inflight, &tid);
   }
+  return 0;
+}
+
+// One syscall record, built in the scratch and copied to the ring at its real
+// length: The entry's arguments and return address, the exit's result, and the
+// paths the call names, read from the caller's memory now that it returned.
+static __always_inline void sc_emit(const struct sc_enter *e, u32 tid, s64 ret, u64 now) {
+  u32 zero = 0;
+  struct rec_scratch *s = bpf_map_lookup_elem(&rec_scratch, &zero);
+  if (!s) return;
+  struct montauk_syscall_event *r = (void *)s->buf;
+  r->type = TRACE_EVT_SYSCALL;
+  r->pid = e->pid;
+  r->tid = tid;
+  r->nr = e->nr;
+  r->arg0 = e->args[0]; r->arg1 = e->args[1]; r->arg2 = e->args[2];
+  r->arg3 = e->args[3]; r->arg4 = e->args[4]; r->arg5 = e->args[5];
+  r->result = ret;
+  r->timestamp_ns = now;
+  r->duration_ns = now > e->ts ? now - e->ts : 0;
+  r->ip = e->ip;
+  r->vma_start = e->vma_start;
+  r->vma_end = e->vma_end;
+  r->resolved = e->resolved;
+  r->anon = e->anon;
+  r->_pad = 0;
+  bpf_get_current_comm(r->comm, sizeof(r->comm));
+
+  s32 a, b, out;
+  sc_paths(e->nr, &a, &b, &out);
+  // A successful exec has replaced the address space its pointers were in; the
+  // exec record carries the filename and arguments instead.
+  if ((e->nr == 59 || e->nr == 322) && ret == 0) { a = -1; b = -1; }
+  const u32 bound = str_bound();
+  u8 *tail = s->buf + sizeof(*r);
+  u32 l1 = 0, l2 = 0;
+  if (a >= 0) {
+    long n = bpf_probe_read_user_str(tail, bound, (const void *)sc_arg(e, a));
+    if (n > 1) l1 = (u32)(n - 1);
+  }
+  l1 &= MONTAUK_SC_PATH_MAX - 1;
+  if (b >= 0) {
+    long n = bpf_probe_read_user_str(tail + l1, bound, (const void *)sc_arg(e, b));
+    if (n > 1) l2 = (u32)(n - 1);
+  } else if (out >= 0 && ret > 0) {
+    // readlink's target: the bytes the kernel wrote, as many as it returned.
+    u32 n = bound;
+    if ((u64)ret < n) n = (u32)ret;
+    n &= MONTAUK_SC_PATH_MAX - 1;
+    if (n && bpf_probe_read_user(tail + l1, n, (const void *)sc_arg(e, out)) == 0) l2 = n;
+  }
+  l2 &= MONTAUK_SC_PATH_MAX - 1;
+  r->path_len = (u16)l1;
+  r->path2_len = (u16)l2;
+  rb_output(TRACE_EVT_SYSCALL, s->buf, sizeof(*r) + l1 + l2);
+}
+
+// THE SYSCALL CLASS'S ENTRY. tp_btf hands it the caller's registers, so the
+// arguments and the return address are the ones the call was made with, by a
+// syscall instruction anywhere: libc, a runtime, or code no file backs. Both
+// filters run here, before anything is kept. Attached only when the class is
+// captured.
+SEC("tp_btf/sys_enter")
+int BPF_PROG(handle_sc_enter, struct pt_regs *regs, long id) {
+  const u64 pid_tgid = bpf_get_current_pid_tgid();
+  const u32 pid = pid_tgid >> 32, tid = (u32)pid_tgid;
+  if (!is_tracked(pid)) return 0;
+  if (id < 0 || id >= MONTAUK_SC_NR_WORDS * 64) return 0;
+  if (!((sc_nr_mask[((u32)id >> 6) & (MONTAUK_SC_NR_WORDS - 1)] >> (id & 63)) & 1)) return 0;
+
+  struct sc_enter e = {};
+  e.nr = (s32)id;
+  e.pid = pid;
+  e.args[0] = BPF_CORE_READ(regs, di);
+  e.args[1] = BPF_CORE_READ(regs, si);
+  e.args[2] = BPF_CORE_READ(regs, dx);
+  e.args[3] = BPF_CORE_READ(regs, r10);
+  e.args[4] = BPF_CORE_READ(regs, r8);
+  e.args[5] = BPF_CORE_READ(regs, r9);
+  e.ip = BPF_CORE_READ(regs, ip);
+  struct vma_info v = {};
+  if (bpf_find_vma(bpf_get_current_task_btf(), e.ip, vma_of, &v, 0) == 0) {
+    e.resolved = 1;
+    e.anon = v.anon;
+    e.vma_start = v.start;
+    e.vma_end = v.end;
+  }
+  // An unresolved mapping is kept: Losing the one call the filter exists for
+  // to a contended lock is worse than a record too many.
+  if (sc_from_anon && e.resolved && !e.anon) return 0;
+  e.ts = bpf_ktime_get_ns();
+  // exit and exit_group never reach an exit; the entry is their whole record.
+  if (id == 60 || id == 231) {
+    sc_emit(&e, tid, 0, e.ts);
+    return 0;
+  }
+  bpf_map_update_elem(&sc_inflight, &tid, &e, BPF_ANY);
+  return 0;
+}
+
+SEC("tp_btf/sys_exit")
+int BPF_PROG(handle_sc_exit, struct pt_regs *regs, long ret) {
+  const u32 tid = (u32)bpf_get_current_pid_tgid();
+  struct sc_enter *p = bpf_map_lookup_elem(&sc_inflight, &tid);
+  if (!p) return 0;
+  struct sc_enter e = *p;
+  bpf_map_delete_elem(&sc_inflight, &tid);
+  sc_emit(&e, tid, ret, bpf_ktime_get_ns());
   return 0;
 }
 
@@ -1420,6 +1939,10 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx) {
         // probe-read path montauk uses for the exec filename.
         bpf_probe_read_kernel_str(ne->comm, sizeof(ne->comm), ctx->next_comm);
         ne->filename[0] = '\0';
+        ne->timestamp_ns = now;
+        ne->path_len = 0;
+        ne->argv_len = 0;
+        ne->exit_code = 0;
         bpf_ringbuf_submit(ne, 0);
       }
     }
@@ -1711,25 +2234,22 @@ int handle_openat_enter(struct trace_event_raw_sys_enter *ctx) {
   if (!is_tracked(pid))
     return 0;
 
-  u32 zero = 0;
-  struct fd_bpf_entry *scratch = bpf_map_lookup_elem(&open_scratch, &zero);
-  if (!scratch)
-    return 0;
-
-  scratch->pid = pid;
-  scratch->fd_num = -1;
-  scratch->type = 0; // file
+  u32 tid = (u32)pid_tgid;
+  struct fd_bpf_entry e = {};
+  e.pid = pid;
+  e.fd_num = -1;
+  e.type = 0; // file
 
   // Read filename from userspace pointer (arg1 = filename for openat)
   const char *filename = (const char *)ctx->args[1];
-  bpf_probe_read_user_str(scratch->target, sizeof(scratch->target), filename);
+  bpf_probe_read_user_str(e.target, sizeof(e.target), filename);
 
   // Classify: /dev/ prefix = device
-  if (scratch->target[0] == '/' && scratch->target[1] == 'd' &&
-      scratch->target[2] == 'e' && scratch->target[3] == 'v' &&
-      scratch->target[4] == '/')
-    scratch->type = 3; // device
+  if (e.target[0] == '/' && e.target[1] == 'd' && e.target[2] == 'e' &&
+      e.target[3] == 'v' && e.target[4] == '/')
+    e.type = 3; // device
 
+  bpf_map_update_elem(&open_inflight, &tid, &e, BPF_ANY);
   return 0;
 }
 
@@ -1741,24 +2261,26 @@ int handle_openat_exit(struct trace_event_raw_sys_exit *ctx) {
   if (!is_tracked(pid))
     return 0;
 
+  u32 tid = (u32)pid_tgid;
+  struct fd_bpf_entry *in = bpf_map_lookup_elem(&open_inflight, &tid);
+  if (!in)
+    return 0;
   long fd = ctx->ret;
-  if (fd < 0)
+  if (fd < 0) {
+    bpf_map_delete_elem(&open_inflight, &tid);
     return 0;
-
-  u32 zero = 0;
-  struct fd_bpf_entry *scratch = bpf_map_lookup_elem(&open_scratch, &zero);
-  if (!scratch || scratch->pid != pid)
-    return 0;
+  }
 
   struct fd_key key = {.pid = pid, .fd = (s32)fd};
   struct fd_bpf_entry entry = {};
   entry.pid = pid;
   entry.fd_num = (s32)fd;
-  entry.type = scratch->type;
-  __builtin_memcpy(entry.target, scratch->target, sizeof(entry.target));
+  entry.type = in->type;
+  __builtin_memcpy(entry.target, in->target, sizeof(entry.target));
+  bpf_map_delete_elem(&open_inflight, &tid);
 
   bpf_map_update_elem(&fd_map, &key, &entry, BPF_ANY);
-  emit_io_event(pid, (u32)pid_tgid, 257, (s32)fd, fd, 0, 0);
+  emit_io_event(pid, tid, 257, (s32)fd, fd, 0, 0);
   return 0;
 }
 
@@ -2082,12 +2604,19 @@ int handle_io_getevents_exit(struct trace_event_raw_sys_exit *ctx) {
 // File-backed mmap is the path Unity-style asset loaders use when they call
 // MapViewOfFile (or, on Linux, mmap directly on a file fd). It bypasses
 // pread/read entirely so without this tracepoint a Unity bundle access is
-// invisible. We filter out anonymous mappings at BPF (flags & MAP_ANONYMOUS)
-// so the ring buffer doesn't get drowned by malloc-arena mmaps.
+// invisible. Anonymous mappings are filtered at BPF (flags & MAP_ANONYMOUS) so
+// malloc-arena mmaps do not drown the ring, except an EXECUTABLE one: Code
+// mapped by hand, a JIT's, injected code, whose range is where a syscall from
+// memory no file backs comes from.
 
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS 0x20
 #endif
+#define MTK_PROT_EXEC 0x4
+
+static __always_inline int mmap_kept(u32 flags, u32 prot) {
+  return !(flags & MAP_ANONYMOUS) || (prot & MTK_PROT_EXEC);
+}
 
 SEC("tp/syscalls/sys_enter_mmap")
 int handle_mmap_enter(struct trace_event_raw_sys_enter *ctx) {
@@ -2097,20 +2626,16 @@ int handle_mmap_enter(struct trace_event_raw_sys_enter *ctx) {
   if (!is_tracked(pid))
     return 0;
 
-  u32 flags = (u32)ctx->args[3];
-  if (flags & MAP_ANONYMOUS)
-    return 0; // skip anon mappings (malloc arenas, stacks)
-
-  u32 zero = 0;
-  struct mmap_scratch *s = bpf_map_lookup_elem(&mmap_scratch_map, &zero);
-  if (!s)
-    return 0;
-
-  s->length = ctx->args[1];
-  s->prot   = (u32)ctx->args[2];
-  s->flags  = flags;
-  s->fd     = (s32)ctx->args[4];
-  s->offset = ctx->args[5];
+  // Every entry writes its arguments, the ones its exit will skip too, so an
+  // exit never reads a previous call's.
+  u32 tid = (u32)pid_tgid;
+  struct mmap_scratch s = {};
+  s.length = ctx->args[1];
+  s.prot   = (u32)ctx->args[2];
+  s.flags  = (u32)ctx->args[3];
+  s.fd     = (s32)ctx->args[4];
+  s.offset = ctx->args[5];
+  bpf_map_update_elem(&mmap_inflight, &tid, &s, BPF_ANY);
   return 0;
 }
 
@@ -2123,18 +2648,17 @@ int handle_mmap_exit(struct trace_event_raw_sys_exit *ctx) {
   if (!is_tracked(pid))
     return 0;
 
-  u32 zero = 0;
-  struct mmap_scratch *s = bpf_map_lookup_elem(&mmap_scratch_map, &zero);
-  if (!s)
+  struct mmap_scratch *in = bpf_map_lookup_elem(&mmap_inflight, &tid);
+  if (!in)
+    return 0;
+  struct mmap_scratch s = *in;
+  bpf_map_delete_elem(&mmap_inflight, &tid);
+
+  if (!mmap_kept(s.flags, s.prot))
     return 0;
 
-  // Filter again on exit — if enter was skipped (anon) the scratch holds
-  // stale data from a previous mmap; skip if flags shows anon.
-  if (s->flags & MAP_ANONYMOUS)
-    return 0;
-
-  emit_mmap_event(pid, tid, s->fd, (u64)ctx->ret, s->length, s->offset,
-                  s->prot, s->flags);
+  emit_mmap_event(pid, tid, s.fd, (u64)ctx->ret, s.length, s.offset,
+                  s.prot, s.flags);
   return 0;
 }
 
@@ -2318,6 +2842,18 @@ int handle_sched_field_gate(struct trace_event_raw_sched_field_gate *ctx) {
 // and enrolls each thread whose process is tracked into thread_map, so coverage
 // is COMPLETE regardless of how fast threads appear. Driven from userspace each
 // scan; scoped purely by proc_map membership -- fully process-agnostic, no /proc.
+//
+// The same sweep names every untracked process in discovery_map, which is what
+// the userspace rescan matches each --trace name against. sys_enter alone left
+// two holes: A process that started before attach and then sat in one blocking
+// call for the whole capture (a launcher waiting on its child) made no syscall
+// to be seen by, and an entry made before an exec kept its pre-exec name. The
+// group leader's comm, refreshed each sweep, closes both. The sweep counts
+// what it stored and what the map refused, which userspace reports once.
+__u64 sweep_named = 0;
+__u64 sweep_refused = 0;
+__s64 sweep_error = 0;
+
 SEC("iter/task")
 int enroll_threads(struct bpf_iter__task *ctx) {
   struct task_struct *task = ctx->task;
@@ -2325,8 +2861,21 @@ int enroll_threads(struct bpf_iter__task *ctx) {
     return 0;
 
   u32 tgid = BPF_CORE_READ(task, tgid);
-  if (!is_tracked(tgid))
+  if (!is_tracked(tgid)) {
+    if (BPF_CORE_READ(task, pid) == tgid && !(BPF_CORE_READ(task, flags) & PF_KTHREAD)) {
+      struct discovery_entry de = {};
+      de.pid = tgid;
+      BPF_CORE_READ_STR_INTO(&de.comm, task, comm);
+      long err = bpf_map_update_elem(&discovery_map, &tgid, &de, BPF_ANY);
+      if (err) {
+        __sync_fetch_and_add(&sweep_refused, 1);
+        sweep_error = err;
+      } else {
+        __sync_fetch_and_add(&sweep_named, 1);
+      }
+    }
     return 0;
+  }
 
   u32 tid = BPF_CORE_READ(task, pid);   // kernel 'pid' field = thread id
   if (bpf_map_lookup_elem(&thread_map, &tid))
@@ -2403,11 +2952,30 @@ static __always_inline void emit_heapstack(void *ctx, u32 op, u64 addr, u64 size
   bpf_ringbuf_submit(e, 0);
 }
 
+// Entries of the libc heap probes, [0] in tracked processes and [1] in every
+// other process on the machine. The probes attach to libc itself, so a call
+// in any process traps and is turned away here; the second count is what a
+// capture costs the rest of the box, read at stop.
+struct {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __uint(max_entries, 2);
+  __type(key, u32);
+  __type(value, u64);
+} libc_hits SEC(".maps");
+
+static __always_inline bool libc_tracked(u32 pid) {
+  const bool t = is_tracked(pid);
+  u32 k = t ? 0 : 1;
+  u64 *c = bpf_map_lookup_elem(&libc_hits, &k);
+  if (c) (*c)++;
+  return t;
+}
+
 SEC("uprobe")
 int BPF_KPROBE(uprobe_malloc, size_t size) {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid = pid_tgid >> 32;
-  if (!is_tracked(pid)) return 0;
+  if (!libc_tracked(pid)) return 0;
   u32 tid = (u32)pid_tgid;
   struct heap_scratch s = { .size = size, .old_addr = 0, .op = HEAP_OP_MALLOC };
   bpf_map_update_elem(&heap_inflight, &tid, &s, BPF_ANY);
@@ -2431,13 +2999,18 @@ SEC("uprobe")
 int BPF_KPROBE(uprobe_free, void *ptr) {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid = pid_tgid >> 32;
-  if (!is_tracked(pid)) return 0;
+  if (!libc_tracked(pid)) return 0;
   u32 tid = (u32)pid_tgid;
-  u64 now = bpf_ktime_get_ns();
+  struct pt_regs *r = (struct pt_regs *)ctx;
+  u64 mix = r->sp;
+  mix = mix * 31 + r->bx;  mix = mix * 31 + r->bp;  mix = mix * 31 + r->r12;
+  mix = mix * 31 + r->r13; mix = mix * 31 + r->r14; mix = mix * 31 + r->r15;
+  u64 ret = 0;
+  bpf_probe_read_user(&ret, sizeof(ret), (void *)r->sp);
   struct free_echo *last = bpf_map_lookup_elem(&free_echo_guard, &tid);
-  if (last && last->ptr == (u64)ptr && now - last->ts <= FREE_ECHO_WINDOW_NS)
-    return 0;  /* duplicate probe delivery of the free just emitted */
-  struct free_echo cur = { .ptr = (u64)ptr, .ts = now };
+  if (last && last->ptr == (u64)ptr && last->regs == mix && last->ret == ret)
+    return 0;  /* glibc's own tail call back into free: the same free */
+  struct free_echo cur = { .ptr = (u64)ptr, .regs = mix, .ret = ret };
   bpf_map_update_elem(&free_echo_guard, &tid, &cur, BPF_ANY);
   /* free has no return value worth recording — emit at entry directly. */
   emit_heap(HEAP_OP_FREE, (u64)ptr, 0, 0);
@@ -2448,7 +3021,7 @@ SEC("uprobe")
 int BPF_KPROBE(uprobe_realloc, void *old_ptr, size_t size) {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid = pid_tgid >> 32;
-  if (!is_tracked(pid)) return 0;
+  if (!libc_tracked(pid)) return 0;
   u32 tid = (u32)pid_tgid;
   struct heap_scratch s = { .size = size, .old_addr = (u64)old_ptr,
                             .op = HEAP_OP_REALLOC };
@@ -2473,7 +3046,7 @@ SEC("uprobe")
 int BPF_KPROBE(uprobe_calloc, size_t nmemb, size_t size) {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid = pid_tgid >> 32;
-  if (!is_tracked(pid)) return 0;
+  if (!libc_tracked(pid)) return 0;
   u32 tid = (u32)pid_tgid;
   struct heap_scratch s = { .size = nmemb * size, .old_addr = 0,
                             .op = HEAP_OP_CALLOC };
@@ -2494,16 +3067,114 @@ int BPF_KRETPROBE(uretprobe_calloc, void *ret) {
   return 0;
 }
 
-// ABORT-PATH UPROBES — libc __assert_fail / __libc_message / abort
+// The aligned allocators: each stashes its request at entry and emits at
+// return, as malloc does. (reallocarray needs no probe: glibc's calls straight
+// into realloc's or malloc's probed entry.) posix_memalign returns 0 or an error
+// and hands the block back through its first argument, so that pointer is
+// what it stashes, and the block is read through it at return.
+static __always_inline void heap_stash(u32 op, u64 size, u64 align, u64 old_addr) {
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  if (!libc_tracked(pid_tgid >> 32)) return;
+  u32 tid = (u32)pid_tgid;
+  struct heap_scratch s = { .align = align, .size = size, .old_addr = old_addr, .op = op };
+  bpf_map_update_elem(&heap_inflight, &tid, &s, BPF_ANY);
+}
+
+static __always_inline void heap_aligned_ret(void *ctx, u64 block) {
+  u32 tid = (u32)bpf_get_current_pid_tgid();
+  struct heap_scratch *s = bpf_map_lookup_elem(&heap_inflight, &tid);
+  if (!s) return;
+  if (block) {
+    emit_heap(s->op, block, s->size, s->align);
+    emit_heapstack(ctx, s->op, block, s->size);
+  }
+  bpf_map_delete_elem(&heap_inflight, &tid);
+  bpf_map_delete_elem(&free_echo_guard, &tid);
+}
+
+SEC("uprobe")
+int BPF_KPROBE(uprobe_posix_memalign, void **memptr, size_t alignment, size_t size) {
+  heap_stash(HEAP_OP_POSIX_MEMALIGN, size, alignment, (u64)memptr);
+  return 0;
+}
+
+SEC("uretprobe")
+int BPF_KRETPROBE(uretprobe_posix_memalign, int ret) {
+  u32 tid = (u32)bpf_get_current_pid_tgid();
+  struct heap_scratch *s = bpf_map_lookup_elem(&heap_inflight, &tid);
+  u64 block = 0;
+  if (s && ret == 0 && s->old_addr)
+    bpf_probe_read_user(&block, sizeof(block), (void *)s->old_addr);
+  heap_aligned_ret(ctx, block);
+  return 0;
+}
+
+SEC("uprobe")
+int BPF_KPROBE(uprobe_aligned_alloc, size_t alignment, size_t size) {
+  heap_stash(HEAP_OP_ALIGNED_ALLOC, size, alignment, 0);
+  return 0;
+}
+
+SEC("uretprobe")
+int BPF_KRETPROBE(uretprobe_aligned_alloc, void *ret) {
+  heap_aligned_ret(ctx, (u64)ret);
+  return 0;
+}
+
+SEC("uprobe")
+int BPF_KPROBE(uprobe_memalign, size_t alignment, size_t size) {
+  heap_stash(HEAP_OP_MEMALIGN, size, alignment, 0);
+  return 0;
+}
+
+SEC("uretprobe")
+int BPF_KRETPROBE(uretprobe_memalign, void *ret) {
+  heap_aligned_ret(ctx, (u64)ret);
+  return 0;
+}
+
+SEC("uprobe")
+int BPF_KPROBE(uprobe_valloc, size_t size) {
+  heap_stash(HEAP_OP_VALLOC, size, page_size, 0);
+  return 0;
+}
+
+SEC("uretprobe")
+int BPF_KRETPROBE(uretprobe_valloc, void *ret) {
+  heap_aligned_ret(ctx, (u64)ret);
+  return 0;
+}
+
+SEC("uprobe")
+int BPF_KPROBE(uprobe_pvalloc, size_t size) {
+  heap_stash(HEAP_OP_PVALLOC, size, page_size, 0);
+  return 0;
+}
+
+SEC("uretprobe")
+int BPF_KRETPROBE(uretprobe_pvalloc, void *ret) {
+  heap_aligned_ret(ctx, (u64)ret);
+  return 0;
+}
+
+// ABORT-PATH UPROBES — libc __assert_fail / abort
 // Attached at runtime by BpfTraceCollector to libc, same best-effort path as
 // the heap uprobes. glibc prints its fatal diagnostics (assert text, "double
-// free or corruption", fortify/stack-smash reports via __libc_message) to the
-// dying process's stderr and then raises SIGABRT. The SIGNAL event already
-// records the death; these record WHY — the abort text and the caller stack
-// at the abort call site, before SEH/signal handling can smear it.
-// __libc_message is internal and may not resolve on a stripped libc; abort()
-// still fires for that path (malloc_printerr → __libc_message → abort) and
-// carries the caller stack.
+// free or corruption", fortify/stack-smash reports) to the dying process's
+// stderr and then raises SIGABRT. The SIGNAL event already records the death;
+// these record WHY — the abort text and the caller stack at the abort call
+// site, before SEH/signal handling can smear it.
+//
+// The printer itself is not probed: glibc 2.39 made __libc_message a macro
+// over a hidden __libc_message_impl, so no symbol is left to attach to. What
+// every glibc does keep is the hand-off: The printer stores its text in the
+// exported `struct abort_msg_s *__abort_msg` ({ unsigned size; char msg[]; })
+// and then calls abort(). So abort() reads it. __abort_msg sits a fixed
+// distance from abort() inside one libc file, and userspace measures that
+// distance in its own copy of the same file (abort_msg_delta, 0 = unknown).
+// bpf_get_func_ip names abort()'s address in the probed process (6.6+ for a
+// uprobe; 0 before, and the text is then left empty).
+__s64 abort_msg_delta = 0;
 
 static __always_inline void emit_abort(void *ctx, u32 func, u32 line,
                                        const char *msg, const char *loc) {
@@ -2536,18 +3207,14 @@ int BPF_KPROBE(uprobe_assert_fail, const char *assertion, const char *file,
   return 0;
 }
 
-// __libc_message(fmt, ...): glibc's fatal-error printer (malloc_printerr,
-// __fortify_fail, ...). Callers pass the human-readable text as the first
-// vararg of a "%s\n"-style fmt — capture both fmt and that first vararg.
-SEC("uprobe")
-int BPF_KPROBE(uprobe_libc_message, const char *fmt, const char *arg1) {
-  emit_abort(ctx, ABORT_FN_LIBC_MESSAGE, 0, arg1, fmt);
-  return 0;
-}
-
 SEC("uprobe")
 int BPF_KPROBE(uprobe_abort) {
-  emit_abort(ctx, ABORT_FN_ABORT, 0, NULL, NULL);
+  const char *msg = NULL;
+  u64 ip = abort_msg_delta ? bpf_get_func_ip(ctx) : 0;
+  u64 am = 0;
+  if (ip && bpf_probe_read_user(&am, sizeof(am), (void *)(ip + abort_msg_delta)) == 0 && am)
+    msg = (const char *)(am + sizeof(__u32));
+  emit_abort(ctx, ABORT_FN_ABORT, 0, msg, NULL);
   return 0;
 }
 

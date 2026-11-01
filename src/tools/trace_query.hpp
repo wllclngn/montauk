@@ -14,23 +14,30 @@ namespace montauk::query {
 
 // FIELD TABLE. One row per field of every event struct in montauk_trace.h,
 // read by offset from the raw record. A field is a number (unsigned or
-// signed, any width up to 8) or fixed-width text (comm).
+// signed, any width up to 8) or text: fixed-width (comm), or a TAIL, text
+// after the record's fixed part whose length the fixed part carries (a path,
+// an argument vector). A tail field has tails_at set to where the tails begin;
+// its off is its u16 length and its size its place among the tails, whose
+// lengths sit side by side.
 enum class Kind : uint8_t { U, I, Text };
-struct Field { const char* name; uint16_t off; uint8_t size; Kind kind; };
+struct Field { const char* name; uint16_t off; uint8_t size; Kind kind; uint16_t tails_at = 0; };
 struct EventClass {
   uint32_t type;
   const char* name;
-  uint32_t size;                            // minimum record length
+  uint32_t size;                            // minimum record length: the fixed part
   const Field* fields;
   uint8_t nfields;
   int8_t op_field;                          // the field an op name selects on, or -1
   const char* (*op_name)(uint32_t);         // op value -> name, or null
-  int8_t ts_field;                          // timestamp field, or -1 (lifecycle records)
+  int8_t ts_field;                          // timestamp field, or -1
+  uint32_t legacy_size = 0;                 // the shorter layout an older capture wrote, or 0
 };
 
 const EventClass* class_named(std::string_view name);
 const EventClass* class_of(uint32_t type);
 int field_named(const EventClass& c, std::string_view name);
+// The class's field names, comma-separated, for an unknown-field error.
+std::string field_list(const EventClass& c);
 // Read on every record by every collector, so inline.
 // Fixed-width loads, one per field width, so each read is a load rather than a
 // memcpy call; a text field reads as 0.
@@ -45,13 +52,31 @@ inline int64_t read_int(const Field& f, const uint8_t* data) {
     default: return 0;
   }
 }
+inline uint16_t read_u16(const uint8_t* p) {
+  uint16_t v;
+  std::memcpy(&v, p, 2);
+  return v;
+}
 inline std::string_view read_text(const Field& f, const uint8_t* data) {
+  if (f.tails_at) {
+    size_t at = f.tails_at;
+    for (uint8_t k = 0; k < f.size; ++k) at += read_u16(data + f.off - 2 * (f.size - k));
+    return std::string_view(reinterpret_cast<const char*>(data + at), read_u16(data + f.off));
+  }
   const char* p = reinterpret_cast<const char*>(data + f.off);
   return std::string_view(p, strnlen(p, f.size));
 }
 
+// A RECORD AS THIS BUILD READS IT. One from an older capture, shorter than its
+// class's layout but no shorter than the layout it was written with, comes
+// back copied into `scratch` with the fields it predates zero and `len` grown
+// to match. A record whose tails run past its length comes back null, to be
+// skipped: Its text would read past the record. Any other comes back as is.
+const uint8_t* fit(uint32_t type, const uint8_t* data, uint32_t& len, std::vector<uint8_t>& scratch);
+
 // SELECTION: one class, an optional set of its ops, and field comparisons.
-enum class Cmp : uint8_t { Eq, Ne, Lt, Le, Gt, Ge };
+// Contains (`~`) is a substring test on a text field.
+enum class Cmp : uint8_t { Eq, Ne, Lt, Le, Gt, Ge, Contains };
 struct Clause { int field; Cmp cmp; int64_t value; std::string text; };
 struct Select {
   const EventClass* cls = nullptr;
@@ -91,6 +116,15 @@ struct Interner {
   std::unordered_map<std::string, int64_t, Hash, std::equal_to<>> interned;
 
   int64_t intern(std::string_view s) {
+    // An argument vector ends each argument with a NUL. It is stored with
+    // each one a space, the way a command line reads; no other text has one.
+    std::string spaced;
+    if (s.find('\0') != std::string_view::npos) {
+      spaced.assign(s);
+      for (char& ch : spaced) if (ch == '\0') ch = ' ';
+      while (!spaced.empty() && spaced.back() == ' ') spaced.pop_back();
+      s = spaced;
+    }
     auto it = interned.find(s);
     if (it != interned.end()) return it->second;
     const auto id = static_cast<int64_t>(strings.size());
@@ -121,6 +155,7 @@ enum class Op : uint8_t {
   Gap,     // per key: time since the previous selected event
   Pair,    // per key: an A event to the next B event, before the next A
   Last,    // per key: the last selected event
+  First,   // per key: the first selected event
 };
 struct Query {
   Select a;
@@ -128,7 +163,12 @@ struct Query {
   std::vector<int> key;                     // field indices into a's class
   int value = -1;                           // field index, or -1
   Op op = Op::Rows;
-  double t0_s = -1, t1_s = -1;              // window in seconds from the first event; <0 = open
+  // Time is counted from the capture's start, as --decode prints it; with no
+  // anchor, from the first selected event. A record with no timestamp (an
+  // older capture's lifecycle records) reads t_ns -1 and falls outside any
+  // window.
+  int64_t anchor_ns = -1;
+  double t0_s = -1, t1_s = -1;              // window in seconds; <0 = open
 };
 
 // Folds the stream once and answers the query. Events must arrive in trace

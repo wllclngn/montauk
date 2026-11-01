@@ -24,6 +24,8 @@ using montauk::model::sched_op_name;
 // A wait's per-object arrays, one field per slot.
 #define WF(i) Field{"wait_fd" #i, static_cast<uint16_t>(offsetof(montauk_ntsync_event, wait_fds) + 4 * (i)), 4, Kind::U}
 #define WO(i) Field{"wait_obj" #i, static_cast<uint16_t>(offsetof(montauk_ntsync_event, wait_objs) + 8 * (i)), 8, Kind::U}
+// Text after the fixed part: its length field, and its place among the tails.
+#define TAIL(S, N, L, k) Field{N, static_cast<uint16_t>(offsetof(S, L)), k, Kind::Text, static_cast<uint16_t>(sizeof(S))}
 constexpr Kind U = Kind::U, I = Kind::I, T = Kind::Text;
 
 const Field kSched[] = {
@@ -54,14 +56,18 @@ const Field kHeap[] = {
     F(montauk_heap_event, pid, U),  F(montauk_heap_event, tid, U),
     F(montauk_heap_event, op, U),   F(montauk_heap_event, addr, U),
     F(montauk_heap_event, size, U), F(montauk_heap_event, new_addr, U),
-    F(montauk_heap_event, timestamp_ns, U), F(montauk_heap_event, comm, T)};
+    F(montauk_heap_event, timestamp_ns, U), F(montauk_heap_event, comm, T),
+    F(montauk_heap_event, align, U)};
 const Field kSignal[] = {
     F(montauk_signal_event, pid, U),         F(montauk_signal_event, tid, U),
     F(montauk_signal_event, kind, U),        F(montauk_signal_event, signal_nr, I),
     F(montauk_signal_event, sender_pid, I),  F(montauk_signal_event, exit_code, I),
     F(montauk_signal_event, stack_depth, U), F(montauk_signal_event, timestamp_ns, U),
     F(montauk_signal_event, comm, T),        F(montauk_signal_event, syscall_nr, I),
-    F(montauk_signal_event, io_fd, I), FRAMES(montauk_signal_event)};
+    F(montauk_signal_event, io_fd, I), FRAMES(montauk_signal_event),
+    F(montauk_signal_event, disposition, U), F(montauk_signal_event, user_stack_len, U),
+    F(montauk_signal_event, user_ip, U),     F(montauk_signal_event, user_sp, U),
+    F(montauk_signal_event, user_bp, U)};
 const Field kMmap[] = {
     F(montauk_mmap_event, pid, U),    F(montauk_mmap_event, tid, U),
     F(montauk_mmap_event, fd, I),     F(montauk_mmap_event, addr, U),
@@ -72,7 +78,8 @@ const Field kAbort[] = {
     F(montauk_abort_event, pid, U),  F(montauk_abort_event, tid, U),
     F(montauk_abort_event, func, U), F(montauk_abort_event, line, U),
     F(montauk_abort_event, stack_depth, U), F(montauk_abort_event, timestamp_ns, U),
-    F(montauk_abort_event, comm, T), FRAMES(montauk_abort_event)};
+    F(montauk_abort_event, comm, T), F(montauk_abort_event, msg, T),
+    F(montauk_abort_event, loc, T), FRAMES(montauk_abort_event)};
 const Field kHeapStack[] = {
     F(montauk_heapstack_event, pid, U),  F(montauk_heapstack_event, tid, U),
     F(montauk_heapstack_event, op, U),   F(montauk_heapstack_event, addr, U),
@@ -92,6 +99,17 @@ const Field kWaitStack[] = {
     F(montauk_waitstack_event, stack_depth, U), F(montauk_waitstack_event, obj_ptr, U),
     F(montauk_waitstack_event, timeout_ns, U),  F(montauk_waitstack_event, timestamp_ns, U),
     F(montauk_waitstack_event, comm, T), FRAMES(montauk_waitstack_event)};
+const Field kFutex[] = {
+    F(montauk_futex_event, pid, U),        F(montauk_futex_event, tid, U),
+    F(montauk_futex_event, op, U),         F(montauk_futex_event, uaddr, U),
+    F(montauk_futex_event, val, U),        F(montauk_futex_event, result, I),
+    F(montauk_futex_event, timeout_ns, U), F(montauk_futex_event, nr_futexes, U),
+    F(montauk_futex_event, timestamp_ns, U), F(montauk_futex_event, comm, T)};
+const Field kFutexStack[] = {
+    F(montauk_futexstack_event, pid, U),         F(montauk_futexstack_event, tid, U),
+    F(montauk_futexstack_event, stack_depth, U), F(montauk_futexstack_event, uaddr, U),
+    F(montauk_futexstack_event, timestamp_ns, U), F(montauk_futexstack_event, comm, T),
+    FRAMES(montauk_futexstack_event)};
 const Field kStorm[] = {
     F(montauk_scx_storm_event, interval_ms, U), F(montauk_scx_storm_event, kicks, U),
     F(montauk_scx_storm_event, preempt_kicks, U), F(montauk_scx_storm_event, reenq, U),
@@ -108,17 +126,28 @@ const Field kRawStack[] = {
 const Field kRing[] = {
     F(montauk_ring_event, pid, U),       F(montauk_ring_event, ppid, U),
     F(montauk_ring_event, child_pid, U), F(montauk_ring_event, comm, T),
-    F(montauk_ring_event, filename, T)};
+    F(montauk_ring_event, filename, T),  F(montauk_ring_event, timestamp_ns, U),
+    F(montauk_ring_event, exit_code, I),
+    TAIL(montauk_ring_event, "path", path_len, 0), TAIL(montauk_ring_event, "argv", argv_len, 1)};
+const Field kSyscall[] = {
+    F(montauk_syscall_event, pid, U),       F(montauk_syscall_event, tid, U),
+    F(montauk_syscall_event, nr, I),        F(montauk_syscall_event, arg0, U),
+    F(montauk_syscall_event, arg1, U),      F(montauk_syscall_event, arg2, U),
+    F(montauk_syscall_event, arg3, U),      F(montauk_syscall_event, arg4, U),
+    F(montauk_syscall_event, arg5, U),      F(montauk_syscall_event, result, I),
+    F(montauk_syscall_event, timestamp_ns, U), F(montauk_syscall_event, duration_ns, U),
+    F(montauk_syscall_event, ip, U),        F(montauk_syscall_event, vma_start, U),
+    F(montauk_syscall_event, vma_end, U),   F(montauk_syscall_event, resolved, U),
+    F(montauk_syscall_event, anon, U),      F(montauk_syscall_event, comm, T),
+    TAIL(montauk_syscall_event, "path", path_len, 0), TAIL(montauk_syscall_event, "path2", path2_len, 1)};
+#undef TAIL
 #undef WO
 #undef WF
 #undef FRAMES
 #undef FR
 #undef F
 
-const char* heap_op(uint32_t op) {
-  static const char* n[] = {"malloc", "free", "realloc", "calloc"};
-  return op < 4 ? n[op] : "?";
-}
+const char* heap_op(uint32_t op) { return montauk::model::heap_op_name(op); }
 const char* signal_kind(uint32_t k) { return k == 0 ? "deliver" : k == 1 ? "exit_abnormal" : "?"; }
 const char* abort_fn(uint32_t f) {
   static const char* n[] = {"assert_fail", "libc_message", "abort"};
@@ -127,6 +156,7 @@ const char* abort_fn(uint32_t f) {
 const char* keyed_op(uint32_t op) { return op == 0 ? "wait" : op == 1 ? "release" : "?"; }
 const char* io_op(uint32_t nr) { return io_syscall_name(static_cast<int32_t>(nr)); }
 const char* ntsync_op(uint32_t op) { return ntsync_op_name(static_cast<uint8_t>(op)); }
+const char* futex_op(uint32_t op) { return montauk::model::futex_cmd_name(op); }
 
 template <size_t N>
 constexpr uint8_t count(const Field (&)[N]) { return static_cast<uint8_t>(N); }
@@ -136,21 +166,29 @@ const EventClass kClasses[] = {
     {TRACE_EVT_IO, "io", sizeof(montauk_io_event), kIo, count(kIo), 2, io_op, 8},
     {TRACE_EVT_NTSYNC, "ntsync", sizeof(montauk_ntsync_event), kNtsync, count(kNtsync), 2, ntsync_op, 5},
     {TRACE_EVT_HEAP, "heap", sizeof(montauk_heap_event), kHeap, count(kHeap), 2, heap_op, 6},
-    {TRACE_EVT_SIGNAL, "signal", sizeof(montauk_signal_event), kSignal, count(kSignal), 2, signal_kind, 7},
+    // A signal grew its disposition and user context in v8.15.0; an older
+    // capture's reads with them zero, its disposition unknown.
+    {TRACE_EVT_SIGNAL, "signal", sizeof(montauk_signal_event), kSignal, count(kSignal), 2, signal_kind, 7,
+     MONTAUK_SIGNAL_EVENT_V1_SIZE},
     {TRACE_EVT_MMAP, "mmap", sizeof(montauk_mmap_event), kMmap, count(kMmap), -1, nullptr, 8},
     {TRACE_EVT_ABORT, "abort", sizeof(montauk_abort_event), kAbort, count(kAbort), 2, abort_fn, 5},
     {TRACE_EVT_HEAPSTACK, "heapstk", sizeof(montauk_heapstack_event), kHeapStack, count(kHeapStack), 2, heap_op, 6},
     {TRACE_EVT_KEYEDEVT, "keyedevt", sizeof(montauk_keyedevt_event), kKeyed, count(kKeyed), 2, keyed_op, 4},
     {TRACE_EVT_KSTRAND, "kstrand", sizeof(montauk_kstrand_event), kKstrand, count(kKstrand), -1, nullptr, 4},
     {TRACE_EVT_WAITSTACK, "waitstack", sizeof(montauk_waitstack_event), kWaitStack, count(kWaitStack), -1, nullptr, 5},
+    {TRACE_EVT_FUTEX, "futex", sizeof(montauk_futex_event), kFutex, count(kFutex), 2, futex_op, 8},
+    {TRACE_EVT_FUTEXSTACK, "futexstack", sizeof(montauk_futexstack_event), kFutexStack, count(kFutexStack), -1, nullptr, 4},
     {TRACE_EVT_SCX_STORM, "scx_storm", sizeof(montauk_scx_storm_event), kStorm, count(kStorm), -1, nullptr, 4},
     {TRACE_EVT_PROVIDER, "provider", sizeof(montauk_provider_event), kProvider, count(kProvider), -1, nullptr, 0},
     {TRACE_EVT_RAWSTACK, "rawstack", sizeof(montauk_rawstack_event), kRawStack, count(kRawStack), -1, nullptr, 7},
-    {TRACE_EVT_FORK, "fork", sizeof(montauk_ring_event), kRing, count(kRing), -1, nullptr, -1},
-    {TRACE_EVT_EXEC, "exec", sizeof(montauk_ring_event), kRing, count(kRing), -1, nullptr, -1},
-    {TRACE_EVT_EXIT, "exit", sizeof(montauk_ring_event), kRing, count(kRing), -1, nullptr, -1},
-    {TRACE_EVT_COMM_CHANGE, "comm", sizeof(montauk_ring_event), kRing, count(kRing), -1, nullptr, -1},
-    {TRACE_EVT_THREAD_NAME, "thread_name", sizeof(montauk_ring_event), kRing, count(kRing), -1, nullptr, -1},
+    // The lifecycle records grew a timestamp in v8.15.0; an older capture's
+    // read with it zero.
+    {TRACE_EVT_FORK, "fork", sizeof(montauk_ring_event), kRing, count(kRing), -1, nullptr, 5, MONTAUK_RING_EVENT_V1_SIZE},
+    {TRACE_EVT_EXEC, "exec", sizeof(montauk_ring_event), kRing, count(kRing), -1, nullptr, 5, MONTAUK_RING_EVENT_V1_SIZE},
+    {TRACE_EVT_EXIT, "exit", sizeof(montauk_ring_event), kRing, count(kRing), -1, nullptr, 5, MONTAUK_RING_EVENT_V1_SIZE},
+    {TRACE_EVT_COMM_CHANGE, "comm", sizeof(montauk_ring_event), kRing, count(kRing), -1, nullptr, 5, MONTAUK_RING_EVENT_V1_SIZE},
+    {TRACE_EVT_THREAD_NAME, "thread_name", sizeof(montauk_ring_event), kRing, count(kRing), -1, nullptr, 5, MONTAUK_RING_EVENT_V1_SIZE},
+    {TRACE_EVT_SYSCALL, "syscall", sizeof(montauk_syscall_event), kSyscall, count(kSyscall), 2, io_op, 10},
 };
 
 bool iequal(std::string_view a, std::string_view b) {
@@ -193,11 +231,37 @@ const EventClass* class_of(uint32_t type) {
   return type < table.size() ? table[type] : nullptr;
 }
 
+const uint8_t* fit(uint32_t type, const uint8_t* data, uint32_t& len, std::vector<uint8_t>& scratch) {
+  const EventClass* c = class_of(type);
+  if (!c) return data;
+  if (len < c->size) {
+    if (!c->legacy_size || len < c->legacy_size) return data;
+    scratch.assign(c->size, 0);
+    std::memcpy(scratch.data(), data, len);
+    len = c->size;
+    return scratch.data();
+  }
+  size_t need = c->size;
+  for (uint8_t i = 0; i < c->nfields; ++i)
+    if (c->fields[i].tails_at) need += read_u16(data + c->fields[i].off);
+  return need <= len ? data : nullptr;
+}
+
 int field_named(const EventClass& c, std::string_view name) {
   for (int i = 0; i < c.nfields; ++i)
     if (iequal(c.fields[i].name, name)) return i;
   if (c.ts_field >= 0 && iequal(name, "ts")) return c.ts_field;
   return -1;
+}
+
+std::string field_list(const EventClass& c) {
+  std::string s;
+  for (int i = 0; i < c.nfields; ++i) {
+    if (i) s += ", ";
+    s += c.fields[i].name;
+  }
+  if (c.ts_field >= 0 && !iequal(c.fields[c.ts_field].name, "ts")) s += ", ts";
+  return s;
 }
 
 bool Select::matches_ops(const uint8_t* data) const {
@@ -209,6 +273,10 @@ bool Select::matches_ops(const uint8_t* data) const {
 bool Select::matches_where(const uint8_t* data) const {
   for (const Clause& c : where) {
     const Field& f = cls->fields[c.field];
+    if (c.cmp == Cmp::Contains) {
+      if (read_text(f, data).find(c.text) == std::string_view::npos) return false;
+      continue;
+    }
     int r;
     if (f.kind == Kind::Text) {
       r = read_text(f, data).compare(c.text);
@@ -224,6 +292,7 @@ bool Select::matches_where(const uint8_t* data) const {
       case Cmp::Le: if (r > 0) return false; break;
       case Cmp::Gt: if (r <= 0) return false; break;
       case Cmp::Ge: if (r < 0) return false; break;
+      case Cmp::Contains: break;
     }
   }
   return true;
@@ -250,8 +319,10 @@ bool parse_select(std::string_view spec, Select& out, std::string& err) {
     rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
     int64_t v;
     if (parse_int(name, v)) { out.ops.push_back(static_cast<uint32_t>(v)); continue; }
+    // Every code the name names: An op whose code carries flags beside its
+    // command, futex's PRIVATE and CLOCK_REALTIME, is named by the command.
     bool found = false;
-    for (uint32_t op = 0; op < 512 && !found; ++op)
+    for (uint32_t op = 0; op < 512; ++op)
       if (iequal(out.cls->op_name(op), name)) { out.ops.push_back(op); found = true; }
     if (!found) {
       err = "class '" + std::string(cname) + "' has no op '" + std::string(name) + "'";
@@ -268,21 +339,32 @@ bool parse_select(std::string_view spec, Select& out, std::string& err) {
 
 bool parse_clause(std::string_view spec, Select& sel, std::string& err) {
   static const struct { const char* s; Cmp c; } kOps[] = {
-      {">=", Cmp::Ge}, {"<=", Cmp::Le}, {"!=", Cmp::Ne},
+      {">=", Cmp::Ge}, {"<=", Cmp::Le}, {"!=", Cmp::Ne}, {"~", Cmp::Contains},
       {"=", Cmp::Eq},  {">", Cmp::Gt},  {"<", Cmp::Lt}};
+  // The comparison is the clause's FIRST operator, the two-character one where
+  // two start together: A value may hold any of them (`path~/a=b`).
+  const auto* op = &kOps[0];
+  size_t at = std::string_view::npos;
   for (const auto& o : kOps) {
-    const size_t at = spec.find(o.s);
-    if (at == std::string_view::npos || at == 0) continue;
+    const size_t p = spec.find(o.s);
+    if (p != std::string_view::npos && p > 0 && p < at) { at = p; op = &o; }
+  }
+  if (at != std::string_view::npos) {
+    const auto& o = *op;
     const std::string_view name = spec.substr(0, at);
     const std::string_view val = spec.substr(at + std::strlen(o.s));
     const int fi = field_named(*sel.cls, name);
     if (fi < 0) {
-      err = "class '" + std::string(sel.cls->name) + "' has no field '" + std::string(name) + "'";
+      err = "class '" + std::string(sel.cls->name) + "' has no field '" + std::string(name) +
+            "' (fields: " + field_list(*sel.cls) + ")";
       return false;
     }
     Clause c{fi, o.c, 0, {}};
     if (sel.cls->fields[fi].kind == Kind::Text) {
       c.text = std::string(val);
+    } else if (o.c == Cmp::Contains) {
+      err = "field '" + std::string(name) + "' is numeric; ~ tests text for a substring";
+      return false;
     } else if (!parse_int(val, c.value)) {
       err = "field '" + std::string(name) + "' is numeric, got '" + std::string(val) + "'";
       return false;
@@ -290,7 +372,7 @@ bool parse_clause(std::string_view spec, Select& sel, std::string& err) {
     sel.where.push_back(std::move(c));
     return true;
   }
-  err = "no comparison in '" + std::string(spec) + "' (use = != < <= > >=)";
+  err = "no comparison in '" + std::string(spec) + "' (use = != < <= > >= ~)";
   return false;
 }
 
@@ -346,10 +428,17 @@ void Engine::fold(uint32_t type, const uint8_t* data, uint32_t len) {
   const bool b = !a && q_.op == Op::Pair && q_.b.matches(type, data, len);
   if (!a && !b) return;
   const EventClass& c = *q_.a.cls;
-  int64_t ts = c.ts_field >= 0 ? read_int(c.fields[c.ts_field], data)
-                               : static_cast<int64_t>(evs_.size());
-  if (first_ts_ < 0) first_ts_ = ts;
-  ts -= first_ts_;
+  int64_t ts;
+  if (c.ts_field < 0) {
+    ts = static_cast<int64_t>(evs_.size());
+  } else if (const int64_t raw = read_int(c.fields[c.ts_field], data); raw == 0) {
+    ts = -1;                                  // no timestamp: outside every window
+  } else {
+    if (first_ts_ < 0) first_ts_ = q_.anchor_ns >= 0 ? q_.anchor_ns : raw;
+    ts = raw - first_ts_;
+  }
+  const bool windowed = q_.t0_s >= 0 || q_.t1_s >= 0;
+  if (windowed && ts < 0 && c.ts_field >= 0) return;
   if (q_.t0_s >= 0 && static_cast<double>(ts) < q_.t0_s * 1e9) return;
   if (q_.t1_s >= 0 && static_cast<double>(ts) > q_.t1_s * 1e9) return;
   append(a ? q_.a : q_.b, data, b, ts);
@@ -447,13 +536,15 @@ Table Engine::finish() {
     return out;
   }
 
-  if (q_.op == Op::Last) {
+  if (q_.op == Op::Last || q_.op == Op::First) {
     header({"t_ns"});
     if (has_val) { out.cols.push_back(raw_.cols[vcol]); out.text.push_back(raw_.text[vcol]); }
+    const bool first = q_.op == Op::First;
     for (size_t i = 0; i < idx.size();) {
       const uint32_t g = group[idx[i]];
       uint32_t last = evs_[idx[i]].row;
-      for (; i < idx.size() && group[idx[i]] == g; ++i) last = evs_[idx[i]].row;
+      for (; i < idx.size() && group[idx[i]] == g; ++i)
+        if (!first) last = evs_[idx[i]].row;
       key_cells(last);
       out.cells.push_back(raw_.at(last, tcol));
       if (has_val) {

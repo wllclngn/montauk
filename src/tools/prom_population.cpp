@@ -60,7 +60,14 @@ using DiagLabelValues =
 struct Cell {
   LabelVec display;  // cell labels (sans compare axis), for the report header
   std::map<std::string, std::vector<double>> runs;  // axis value -> per-run scalar
+  std::map<std::string, std::vector<std::string>> run_file;  // axis value -> each run's file
   std::map<std::string, std::vector<double>> samp;  // axis value -> pooled within-run
+  // --relative-to: each run over its own file's control cell, and how the cell
+  // stands to the control. A cell with a run whose file holds no control is
+  // compared raw and names those captures.
+  enum class Rel { None, Relative, Control, NoControl } rel = Rel::None;
+  std::map<std::string, std::vector<double>> ratio;  // axis value -> per-run ratio
+  std::vector<std::string> no_control;               // captures with no control
 };
 
 struct Family {
@@ -460,6 +467,12 @@ void parse_file(const std::string& path, const PopOptions& opt,
     if (end == valstr.c_str() || !std::isfinite(val)) continue;
 
     LabelVec labels = parse_labels(labelstr);
+    for (auto& kv : labels) {
+      const auto l = opt.label_alias.find(kv.first);
+      if (l == opt.label_alias.end()) continue;
+      const auto v = l->second.find(kv.second);
+      if (v != l->second.end()) kv.second = v->second;
+    }
 
     // version/commit: any *_info family carrying the label.
     if (name.size() > 5 && name.compare(name.size() - 5, 5, "_info") == 0) {
@@ -534,6 +547,7 @@ void parse_file(const std::string& path, const PopOptions& opt,
     Cell& cell = fam.cells[ck];
     if (cell.display.empty()) cell.display = cell_display(labels, drop_for_gauge);
     cell.runs[axis].push_back(val);
+    cell.run_file[axis].push_back(path);
   }
   std::free(line);
   std::fclose(f);
@@ -553,6 +567,46 @@ void parse_file(const std::string& path, const PopOptions& opt,
         auto& dst = cell.samp[ax_kv.first];
         dst.insert(dst.end(), samples.begin(), samples.end());
       }
+    }
+  }
+}
+
+// --relative-to LABEL=VALUE: each cell over the cell that differs from it only
+// in LABEL=VALUE, run by run within the same file, so a change in the box
+// between two captures divides out where the control moved with it. The
+// control cells themselves are compared raw.
+void apply_relative(std::map<std::string, Family>& data, const PopOptions& opt) {
+  for (auto& [name, fam] : data) {
+    for (auto& [key, cell] : fam.cells) {
+      const std::string v = label_get(cell.display, opt.relative_label);
+      if (!v.empty() && v == opt.relative_value) { cell.rel = Cell::Rel::Control; continue; }
+      const Cell* ctl = nullptr;
+      if (!v.empty()) {
+        LabelVec cl = cell.display;
+        for (auto& kv : cl) if (kv.first == opt.relative_label) kv.second = opt.relative_value;
+        if (auto it = fam.cells.find(cell_key(cl, {})); it != fam.cells.end()) ctl = &it->second;
+      }
+      std::set<std::string> missing;
+      for (const auto& [ax, vals] : cell.runs) {
+        const auto& files = cell.run_file[ax];
+        auto& out = cell.ratio[ax];
+        const auto c = ctl ? ctl->runs.find(ax) : decltype(ctl->runs.end()){};
+        for (size_t i = 0; i < vals.size(); ++i) {
+          double sum = 0.0;
+          size_t n = 0;
+          if (ctl && c != ctl->runs.end()) {
+            const auto& cf = ctl->run_file.at(ax);
+            for (size_t k = 0; k < c->second.size(); ++k)
+              if (cf[k] == files[i]) { sum += c->second[k]; ++n; }
+          }
+          if (n == 0 || sum == 0.0) { missing.insert(capture_key_from_path(files[i])); continue; }
+          out.push_back(vals[i] / (sum / static_cast<double>(n)));
+        }
+      }
+      if (missing.empty()) { cell.rel = Cell::Rel::Relative; continue; }
+      cell.rel = Cell::Rel::NoControl;
+      cell.no_control.assign(missing.begin(), missing.end());
+      cell.ratio.clear();
     }
   }
 }
@@ -613,6 +667,9 @@ const char* pop_help(const std::string& name) {
            "metric's own unit";
   if (name == "montauk_pop_n")
     return "Run count (files contributing a value) in the labeled group";
+  if (name == "montauk_pop_ratio")
+    return "Mean of the labeled group's per-run values each divided by the "
+           "relative_to control cell from the same file, dimensionless";
   if (name == "montauk_pop_gameshowell_p")
     return "Games-Howell pairwise p-value on within-run distributions "
            "(--full path), in (0, 1]";
@@ -1071,6 +1128,7 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
   // Trajectory mode replaces the pairwise engine outright: same parse and
   // histogram association, different inference.
   if (opt.trajectory) return run_trajectory(data, files.size(), opt);
+  if (!opt.relative_label.empty()) apply_relative(data, opt);
 
   std::vector<PromLine> prom;
   const char* better = opt.lower_is_better ? "lower=better" : "higher=better";
@@ -1115,12 +1173,23 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
   // given seed reproduces the same numbers at any thread count and schedule.
   // Text and prom lines are built privately per item and emitted serially in
   // the original map order below, keeping output ordering byte-stable.
+  // One cell's comparison, typed. The text, the prom lines and the JSON
+  // envelope all render from it, so no face carries a number the others lack:
+  // A cell with one arm still carries that arm's N, mean and range.
+  // mean, min and max are the raw runs; r* the values compared, which are
+  // the ratios in a --relative-to cell and the raw runs otherwise.
+  struct GroupStat { std::string name; size_t n; double mean, min, max; int mcb; double rmean, rmin, rmax; };
+  struct PairStat { size_t a, b; double cliff, perm_p; int power_n; };
+  struct PairP { size_t a, b; double p; };
   struct WorkItem {
     const std::string* metric;
     const std::string* ckey;
     Cell* cell;
-    std::string text;
-    std::vector<PromLine> out;
+    std::string label;
+    std::vector<GroupStat> groups;   // comparison order; fewer than two is no comparison
+    std::vector<PairStat> pairs;
+    bool have_hist = false;          // --full: within-run tests on the histograms
+    std::vector<PairP> within, gh;
   };
   std::vector<WorkItem> work;
   for (auto& fam_kv : data) {
@@ -1128,7 +1197,7 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
         fam_kv.first.find(opt.metric_filter) == std::string::npos)
       continue;
     for (auto& cell_kv : fam_kv.second.cells)
-      work.push_back({&fam_kv.first, &cell_kv.first, &cell_kv.second, {}, {}});
+      work.push_back({&fam_kv.first, &cell_kv.first, &cell_kv.second, {}, {}, {}, false, {}, {}});
   }
 
   auto process_cell = [&](WorkItem& w) {
@@ -1145,24 +1214,29 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
     const bool ordered_axis =
         opt.compare_axis == "version" || opt.compare_axis == "capture";
     if (opt.compare_axis == "version") natural_version_sort(groups);
-    sappendf(w.text, "  [%s]\n", cell_label_str(cell.display).c_str());
-    if (groups.size() < 2) {
-      sappendf(w.text, "    only %s -- no comparison\n",
-               groups.empty() ? "(none)" : display_axis(groups[0], opt).c_str());
-      return;
+    w.label = cell_label_str(cell.display);
+    // Reductions through sublimation -- one owner of what min/max mean. Every
+    // group is non-empty by construction (filtered above).
+    // A relative cell is compared on its ratios; the raw values ride beside.
+    const bool rel = cell.rel == Cell::Rel::Relative;
+    std::vector<std::vector<double>> g;
+    std::vector<std::string> gn;
+    for (const auto& s : groups) {
+      const auto& v = cell.runs[s];
+      const auto& x = rel ? cell.ratio[s] : v;
+      g.push_back(x);
+      gn.push_back(display_axis(s, opt));
+      w.groups.push_back({gn.back(), v.size(), stats::mean(v), sublimation_min_f64(v.data(), v.size()),
+                          sublimation_max_f64(v.data(), v.size()), 0, stats::mean(x),
+                          sublimation_min_f64(x.data(), x.size()), sublimation_max_f64(x.data(), x.size())});
     }
-    std::string clabel = cell_label_str(cell.display);
+    if (groups.size() < 2) return;
 
     // Bootstrap Hsu-MCB across ALL groups, regardless of the pair selector
     // (best-overall must survive pair pruning), and first, so vs-best can key
     // its pairs off the winner.
-    std::vector<std::vector<double>> g;
-    std::vector<std::string> gn;
-    for (const auto& s : groups) {
-      g.push_back(cell.runs[s]);
-      gn.push_back(display_axis(s, opt));
-    }
     auto mcb = stats::bootstrap_mcb(g, opt.lower_is_better, rng);
+    for (size_t k = 0; k < gn.size(); ++k) w.groups[k].mcb = mcb[k].verdict;
 
     // Pair selection: operator choice, else adjacent on ordered axes (linear
     // in axis values, the archive default) and all-pairs on categorical ones.
@@ -1187,92 +1261,192 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
 
     // Pairwise run-level inference over the selected pairs.
     for (const auto& pr : prs) {
-      const size_t i = pr.first, j = pr.second;
-      auto& va = cell.runs[groups[i]];
-      auto& vb = cell.runs[groups[j]];
-      double ma = stats::mean(va), mb = stats::mean(vb);
-      // Reductions through sublimation, same single pass -- one owner of what
-      // min/max mean. va/vb are non-empty by construction (groups are filtered
-      // on !g.second.empty() before the pair loop).
-      double mnA = sublimation_min_f64(va.data(), va.size());
-      double mxA = sublimation_max_f64(va.data(), va.size());
-      double mnB = sublimation_min_f64(vb.data(), vb.size());
-      double mxB = sublimation_max_f64(vb.data(), vb.size());
-      double cd = stats::cliffs_delta(va, vb);
-      double pp = stats::perm_test(va, vb, stats::Stat::Mean, 0.0, rng);
-      int npow = stats::mc_power(va, vb, rng);
-      const std::string& sa = gn[i];
-      const std::string& sb = gn[j];
-      sappendf(w.text,
-          "    %s vs %s [N=%zu/%zu]: mean %.6g (%.4g..%.4g) vs %.6g (%.4g..%.4g) | "
-          "cliff %+.2f (%s) | perm p=%.3f | power %s\n",
-          sa.c_str(), sb.c_str(), va.size(), vb.size(), ma, mnA, mxA, mb,
-          mnB, mxB, cd, stats::cliff_magnitude(cd), pp,
-          npow ? std::to_string(npow).c_str() : ">20");
-      std::string lab = "metric=\"" + metric + "\",cell=\"" + clabel +
-                        "\",pair=\"" + sa + "__" + sb + "\"";
-      w.out.push_back({"montauk_pop_cliff", lab, cd});
-      w.out.push_back({"montauk_pop_perm_p", lab, pp});
-      // power_n is right-censored at the sweep cap: 0 from mc_power means
-      // "did not reach the target within nmax," never "zero runs needed."
-      // Encode the censoring explicitly (bound as the value, companion flag)
-      // instead of a 0 that aliases a real answer.
-      w.out.push_back({"montauk_pop_power_n", lab,
-                       npow ? static_cast<double>(npow) : 20.0});
-      w.out.push_back({"montauk_pop_power_censored", lab,
-                       npow ? 0.0 : 1.0});
+      const auto& va = g[pr.first];
+      const auto& vb = g[pr.second];
+      const double cd = stats::cliffs_delta(va, vb);
+      const double pp = stats::perm_test(va, vb, stats::Stat::Mean, 0.0, rng);
+      w.pairs.push_back({pr.first, pr.second, cd, pp, stats::mc_power(va, vb, rng)});
     }
-
-    sappendf(w.text, "    MCB (%s):", better);
-    for (size_t k = 0; k < gn.size(); ++k) {
-      const char* v = mcb[k].verdict == 1 ? "best"
-                      : mcb[k].verdict == -1 ? "not-best"
-                                             : "tied";
-      sappendf(w.text, " %s=%s", gn[k].c_str(), v);
-      std::string lab = "metric=\"" + metric + "\",cell=\"" + clabel +
-                        "\",group=\"" + gn[k] + "\"";
-      w.out.push_back({"montauk_pop_mcb_is_best", lab,
-                       static_cast<double>(mcb[k].verdict)});
-      w.out.push_back({"montauk_pop_mean", lab, stats::mean(g[k])});
-      w.out.push_back({"montauk_pop_n", lab,
-                       static_cast<double>(g[k].size())});
-    }
-    sappendf(w.text, "\n");
 
     // Path A: Games-Howell + within-run quantile permutation on the
     // reconstructed histogram distributions, when present and --full was set.
     // Falls back to the run-level vectors when a cell carries no histograms,
     // so --full always emits a parametric p (at lower n).
     if (opt.full) {
-      bool have_hist = true;
+      // A within-run histogram has no control to divide by, so a relative
+      // cell takes the run-level path on its ratios.
+      w.have_hist = !rel;
       for (const auto& s : groups)
         if (cell.samp.find(s) == cell.samp.end() || cell.samp[s].size() < 2)
-          have_hist = false;
+          w.have_hist = false;
       std::vector<std::vector<double>> hs;
-      std::vector<std::string> hn;
-      for (const auto& s : groups) {
-        hs.push_back(have_hist ? cell.samp[s] : cell.runs[s]);
-        hn.push_back(display_axis(s, opt));
-      }
-      if (have_hist) {
+      for (size_t k = 0; k < groups.size(); ++k) hs.push_back(w.have_hist ? cell.samp[groups[k]] : g[k]);
+      if (w.have_hist)
         for (size_t i = 0; i < groups.size(); ++i)
-          for (size_t j = i + 1; j < groups.size(); ++j) {
-            double qp = stats::perm_test(hs[i], hs[j], stats::Stat::Percentile,
-                                         opt.quantile, rng);
-            sappendf(w.text, "      within-run q%.0f perm p=%.3f (%s vs %s)\n",
-                     opt.quantile, qp, hn[i].c_str(), hn[j].c_str());
-          }
-      }
-      auto gh = stats::games_howell(hs);
-      for (const auto& pr : gh) {
-        sappendf(w.text, "      games-howell %s vs %s: p=%.3f%s\n",
-                 hn[pr.i].c_str(), hn[pr.j].c_str(), pr.p,
-                 have_hist ? "" : " [run-level]");
-        std::string lab = "metric=\"" + metric + "\",cell=\"" + clabel +
-                          "\",pair=\"" + hn[pr.i] + "__" + hn[pr.j] + "\"";
-        w.out.push_back({"montauk_pop_gameshowell_p", lab, pr.p});
+          for (size_t j = i + 1; j < groups.size(); ++j)
+            w.within.push_back({i, j, stats::perm_test(hs[i], hs[j], stats::Stat::Percentile,
+                                                       opt.quantile, rng)});
+      for (const auto& pr : stats::games_howell(hs))
+        w.gh.push_back({static_cast<size_t>(pr.i), static_cast<size_t>(pr.j), pr.p});
+    }
+  };
+  auto mcb_name = [](int v) { return v == 1 ? "best" : v == -1 ? "not-best" : "tied"; };
+
+  // The text face of one cell.
+  const std::string control = opt.relative_label + "=" + opt.relative_value;
+  auto cell_text = [&](const WorkItem& w) {
+    std::string t;
+    const Cell& c = *w.cell;
+    const bool rel = c.rel == Cell::Rel::Relative;
+    switch (c.rel) {
+      case Cell::Rel::None: sappendf(t, "  [%s]\n", w.label.c_str()); break;
+      case Cell::Rel::Relative: sappendf(t, "  [%s] relative to %s\n", w.label.c_str(), control.c_str()); break;
+      case Cell::Rel::Control: sappendf(t, "  [%s] the %s control\n", w.label.c_str(), control.c_str()); break;
+      case Cell::Rel::NoControl: {
+        std::string caps;
+        for (const auto& k : c.no_control) caps += (caps.empty() ? "" : ", ") + k;
+        sappendf(t, "  [%s] no nonzero %s control in capture %s -- raw values\n", w.label.c_str(),
+                 control.c_str(), caps.c_str());
+        break;
       }
     }
+    if (w.groups.size() < 2) {
+      if (w.groups.empty()) sappendf(t, "    only (none) -- no comparison\n");
+      else if (const GroupStat& s = w.groups[0]; rel)
+        sappendf(t, "    only %s [N=%zu]: ratio %.4g (%.4g..%.4g), raw mean %.6g -- no comparison\n",
+                 s.name.c_str(), s.n, s.rmean, s.rmin, s.rmax, s.mean);
+      else
+        sappendf(t, "    only %s [N=%zu]: mean %.6g (%.4g..%.4g) -- no comparison\n",
+                 s.name.c_str(), s.n, s.mean, s.min, s.max);
+      return t;
+    }
+    for (const PairStat& p : w.pairs) {
+      const GroupStat &a = w.groups[p.a], &b = w.groups[p.b];
+      const std::string power = p.power_n ? std::to_string(p.power_n) : ">20";
+      if (rel)
+        sappendf(t,
+            "    %s vs %s [N=%zu/%zu]: ratio %.4g (%.4g..%.4g) vs %.4g (%.4g..%.4g) | raw mean %.6g vs %.6g | "
+            "cliff %+.2f (%s) | perm p=%.3f | power %s\n",
+            a.name.c_str(), b.name.c_str(), a.n, b.n, a.rmean, a.rmin, a.rmax, b.rmean, b.rmin, b.rmax,
+            a.mean, b.mean, p.cliff, stats::cliff_magnitude(p.cliff), p.perm_p, power.c_str());
+      else
+        sappendf(t,
+            "    %s vs %s [N=%zu/%zu]: mean %.6g (%.4g..%.4g) vs %.6g (%.4g..%.4g) | "
+            "cliff %+.2f (%s) | perm p=%.3f | power %s\n",
+            a.name.c_str(), b.name.c_str(), a.n, b.n, a.mean, a.min, a.max, b.mean,
+            b.min, b.max, p.cliff, stats::cliff_magnitude(p.cliff), p.perm_p, power.c_str());
+    }
+    sappendf(t, "    MCB (%s):", better);
+    for (const GroupStat& s : w.groups) sappendf(t, " %s=%s", s.name.c_str(), mcb_name(s.mcb));
+    sappendf(t, "\n");
+    for (const PairP& p : w.within)
+      sappendf(t, "      within-run q%.0f perm p=%.3f (%s vs %s)\n", opt.quantile, p.p,
+               w.groups[p.a].name.c_str(), w.groups[p.b].name.c_str());
+    for (const PairP& p : w.gh)
+      sappendf(t, "      games-howell %s vs %s: p=%.3f%s\n", w.groups[p.a].name.c_str(),
+               w.groups[p.b].name.c_str(), p.p, w.have_hist ? "" : " [run-level]");
+    return t;
+  };
+
+  // The prom face of one cell.
+  auto cell_prom = [&](const WorkItem& w, std::vector<PromLine>& out) {
+    const std::string base = "metric=\"" + *w.metric + "\",cell=\"" + w.label + "\"";
+    auto pair_lab = [&](size_t a, size_t b) {
+      return base + ",pair=\"" + w.groups[a].name + "__" + w.groups[b].name + "\"";
+    };
+    for (const PairStat& p : w.pairs) {
+      const std::string lab = pair_lab(p.a, p.b);
+      out.push_back({"montauk_pop_cliff", lab, p.cliff});
+      out.push_back({"montauk_pop_perm_p", lab, p.perm_p});
+      // power_n is right-censored at the sweep cap: 0 from mc_power means
+      // "did not reach the target within nmax," never "zero runs needed."
+      // Encode the censoring explicitly (bound as the value, companion flag)
+      // instead of a 0 that aliases a real answer.
+      out.push_back({"montauk_pop_power_n", lab, p.power_n ? static_cast<double>(p.power_n) : 20.0});
+      out.push_back({"montauk_pop_power_censored", lab, p.power_n ? 0.0 : 1.0});
+    }
+    for (const GroupStat& s : w.groups) {
+      const std::string lab = base + ",group=\"" + s.name + "\"";
+      if (w.groups.size() >= 2) out.push_back({"montauk_pop_mcb_is_best", lab, static_cast<double>(s.mcb)});
+      out.push_back({"montauk_pop_mean", lab, s.mean});
+      out.push_back({"montauk_pop_n", lab, static_cast<double>(s.n)});
+      if (w.cell->rel == Cell::Rel::Relative)
+        out.push_back({"montauk_pop_ratio", lab + ",relative_to=\"" + control + "\"", s.rmean});
+    }
+    for (const PairP& p : w.gh) out.push_back({"montauk_pop_gameshowell_p", pair_lab(p.a, p.b), p.p});
+  };
+
+  // The JSON face of one cell.
+  auto cell_json = [&](sublimation_json& j, const WorkItem& w) {
+    const Cell& c = *w.cell;
+    const bool rel = c.rel == Cell::Rel::Relative;
+    sublimation_json_obj_begin(&j);
+    sublimation_json_kstr(&j, "cell", w.label.c_str());
+    if (!opt.relative_label.empty()) {
+      sublimation_json_kstr(&j, "relative_to", control.c_str());
+      sublimation_json_kstr(&j, "relation", rel ? "relative" : c.rel == Cell::Rel::Control ? "control"
+                                                                                          : "no-control");
+      if (c.rel == Cell::Rel::NoControl) {
+        sublimation_json_key(&j, "no_control_captures");
+        sublimation_json_arr_begin(&j);
+        for (const auto& k : c.no_control) sublimation_json_str(&j, k.c_str());
+        sublimation_json_arr_end(&j);
+      }
+    }
+    sublimation_json_key(&j, "groups");
+    sublimation_json_arr_begin(&j);
+    for (const GroupStat& s : w.groups) {
+      sublimation_json_obj_begin(&j);
+      sublimation_json_kstr(&j, "group", s.name.c_str());
+      sublimation_json_ku64(&j, "n", s.n);
+      sublimation_json_knum(&j, "mean", s.mean);
+      sublimation_json_knum(&j, "min", s.min);
+      sublimation_json_knum(&j, "max", s.max);
+      if (rel) {
+        sublimation_json_key(&j, "ratio");
+        sublimation_json_obj_begin(&j);
+        sublimation_json_knum(&j, "mean", s.rmean);
+        sublimation_json_knum(&j, "min", s.rmin);
+        sublimation_json_knum(&j, "max", s.rmax);
+        sublimation_json_obj_end(&j);
+      }
+      if (w.groups.size() >= 2) sublimation_json_kstr(&j, "mcb", mcb_name(s.mcb));
+      sublimation_json_obj_end(&j);
+    }
+    sublimation_json_arr_end(&j);
+    sublimation_json_kbool(&j, "compared", w.groups.size() >= 2);
+    sublimation_json_key(&j, "pairs");
+    sublimation_json_arr_begin(&j);
+    for (const PairStat& p : w.pairs) {
+      sublimation_json_obj_begin(&j);
+      sublimation_json_kstr(&j, "a", w.groups[p.a].name.c_str());
+      sublimation_json_kstr(&j, "b", w.groups[p.b].name.c_str());
+      sublimation_json_knum(&j, "cliff", p.cliff);
+      sublimation_json_kstr(&j, "magnitude", stats::cliff_magnitude(p.cliff));
+      sublimation_json_knum(&j, "perm_p", p.perm_p);
+      sublimation_json_ku64(&j, "power_n", p.power_n ? static_cast<uint64_t>(p.power_n) : 20u);
+      sublimation_json_kbool(&j, "power_censored", p.power_n == 0);
+      sublimation_json_obj_end(&j);
+    }
+    sublimation_json_arr_end(&j);
+    if (opt.full) {
+      auto pp = [&](const char* key, const std::vector<PairP>& v) {
+        sublimation_json_key(&j, key);
+        sublimation_json_arr_begin(&j);
+        for (const PairP& p : v) {
+          sublimation_json_obj_begin(&j);
+          sublimation_json_kstr(&j, "a", w.groups[p.a].name.c_str());
+          sublimation_json_kstr(&j, "b", w.groups[p.b].name.c_str());
+          sublimation_json_knum(&j, "p", p.p);
+          sublimation_json_obj_end(&j);
+        }
+        sublimation_json_arr_end(&j);
+      };
+      pp("within_run", w.within);
+      pp("games_howell", w.gh);
+      sublimation_json_kbool(&j, "games_howell_run_level", !w.have_hist);
+    }
+    sublimation_json_obj_end(&j);
   };
 
   std::atomic<size_t> next_item{0};
@@ -1312,13 +1486,45 @@ int run_population(const std::vector<std::string>& files, const PopOptions& opt)
   // Ordered emit: family headers and cell blocks in the same map order the
   // serial loop produced, with each item's prom lines appended in place.
   const std::string* cur_metric = nullptr;
+  sublimation_json j;
+  sublimation_json_init(&j, &g_pop_out);
+  if (opt.want_json) {
+    sublimation_json_obj_begin(&j);
+    sublimation_json_ku64(&j, "schema_version", 1u);
+    sublimation_json_key(&j, "population");
+    sublimation_json_obj_begin(&j);
+    sublimation_json_ku64(&j, "files", files.size());
+    sublimation_json_kstr(&j, "compare_axis", opt.compare_axis.c_str());
+    sublimation_json_kstr(&j, "better", opt.lower_is_better ? "lower" : "higher");
+    sublimation_json_key(&j, "metrics");
+    sublimation_json_arr_begin(&j);
+  }
   for (auto& w : work) {
     if (!cur_metric || *cur_metric != *w.metric) {
-      sublimation_sink_appendf(&g_pop_out, "\nMETRIC %s\n", w.metric->c_str());
+      if (opt.want_json) {
+        if (cur_metric) { sublimation_json_arr_end(&j); sublimation_json_obj_end(&j); }
+        sublimation_json_obj_begin(&j);
+        sublimation_json_kstr(&j, "metric", w.metric->c_str());
+        sublimation_json_key(&j, "cells");
+        sublimation_json_arr_begin(&j);
+      } else {
+        sublimation_sink_appendf(&g_pop_out, "\nMETRIC %s\n", w.metric->c_str());
+      }
       cur_metric = w.metric;
     }
-    sublimation_sink_append(&g_pop_out, w.text.data(), w.text.size());
-    prom.insert(prom.end(), w.out.begin(), w.out.end());
+    if (opt.want_json) cell_json(j, w);
+    else {
+      const std::string t = cell_text(w);
+      sublimation_sink_append(&g_pop_out, t.data(), t.size());
+    }
+    cell_prom(w, prom);
+  }
+  if (opt.want_json) {
+    if (cur_metric) { sublimation_json_arr_end(&j); sublimation_json_obj_end(&j); }
+    sublimation_json_arr_end(&j);
+    sublimation_json_obj_end(&j);
+    sublimation_json_obj_end(&j);
+    sublimation_sink_appendc(&g_pop_out, '\n');
   }
 
   if (opt.emit_prom && !prom.empty()) {

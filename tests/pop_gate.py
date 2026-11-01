@@ -19,6 +19,7 @@ shipped with:
 
 Run:  python3 tests/pop_gate.py   (or via tests/run.py, gate layer)
 """
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -137,6 +138,113 @@ def main() -> int:
                                 "--drop-label", "stamp", "--no-emit"])
         check("fragmenting-label-fix-works",
               " vs " in fp2.stdout and "[N=2" in fp2.stdout)
+
+        # a label value renamed between releases: --alias-label maps it before
+        # cells are keyed, so the renamed archive reads exactly as the one
+        # written with the new value throughout, and without it the series splits.
+        def tool_archive(name, old_until):
+            d = Path(td) / name
+            d.mkdir()
+            for v in range(4):
+                for run_i in range(3):
+                    tool = "old" if v < old_until else "new"
+                    (d / f"1.{v}.0-2026070{v + 1}-00000{run_i}.prom").write_text(
+                        f'bench_info{{version="1.{v}.0"}} 1\n'
+                        "# TYPE bench_latency_us gauge\n"
+                        f'bench_latency_us{{tool="{tool}",scheduler="eevdf"}} '
+                        f"{100 + v * 10 + run_i}.0\n")
+            return d
+        renamed, relabelled = tool_archive("renamed", 2), tool_archive("relabelled", 0)
+        aliased = run(renamed, "--alias-label", "tool:old=new")
+        check("alias-label-pairs-renamed-series",
+              aliased.replace(str(renamed), "") == run(relabelled).replace(str(relabelled), ""))
+        check("alias-label-unaliased-splits",
+              run(renamed).replace(str(renamed), "") != run(relabelled).replace(str(relabelled), ""))
+        conflict = harness.run_text([*ANALYZE, str(renamed), "--alias-label", "tool:old=new",
+                                     "--alias-label", "tool:old=other", "--no-emit"])
+        check("alias-label-conflict-refused", conflict.returncode == 2)
+
+        # a cell only one arm carries prints that arm's N and values, and the
+        # --json envelope carries the same typed result as the text.
+        one = Path(td) / "onearm"
+        one.mkdir()
+        for i, (mode, ticks) in enumerate([("adaptive", 40), ("adaptive", 44), ("adaptive", 48)], 1):
+            (one / f"run-2026070{i}-000000.prom").write_text(
+                "# TYPE bench_regime_ticks gauge\n"
+                f'bench_regime_ticks{{mode="{mode}",regime="light"}} {ticks}\n'
+                "# TYPE bench_wake_us gauge\n"
+                f'bench_wake_us{{mode="adaptive"}} {100 + i}\n'
+                f'bench_wake_us{{mode="bpf"}} {200 + i}\n')
+        def pop(*args):
+            return harness.run_text([*ANALYZE, str(one), "--by", "mode", "--seed", "1729",
+                                     "--no-emit", *args])
+        text = pop().stdout
+        check("one-arm-prints-its-values",
+              "only adaptive [N=3]: mean 44 (40..48) -- no comparison" in text, text.strip()[:200])
+        env = pop("--json")
+        try:
+            doc = json.loads(env.stdout)
+            metrics = {m["metric"]: m["cells"] for m in doc["population"]["metrics"]}
+            ticks = metrics["bench_regime_ticks"][0]
+            wake = metrics["bench_wake_us"][0]
+            ok = (env.returncode == 0 and not ticks["compared"]
+                  and ticks["groups"] == [{"group": "adaptive", "n": 3, "mean": 44, "min": 40, "max": 48}]
+                  and wake["compared"] and len(wake["pairs"]) == 1
+                  and {g["group"]: g["mcb"] for g in wake["groups"]} == {"adaptive": "best", "bpf": "not-best"})
+        except (ValueError, KeyError, IndexError):
+            ok = False
+        check("json-envelope-carries-the-cells", ok, env.stdout.strip()[:200])
+        pairs_text = sum(1 for l in text.splitlines() if " vs " in l and "[N=" in l)
+        check("json-and-text-agree-on-pairs",
+              ok and pairs_text == sum(len(c["pairs"]) for cells in metrics.values() for c in cells))
+        check("json-trajectory-refused", pop("--json", "--trajectory").returncode == 2)
+
+        # --relative-to: each cell over its own capture's control cell, compared
+        # on the ratio; the control compared raw; a capture with no control named.
+        relx = Path(td) / "relative"
+        relx.mkdir()
+        for stamp, eevdf, mine in (("20261001-000000", 100.0, 50.0), ("20261002-000000", 200.0, 120.0)):
+            (relx / f"run-{stamp}.prom").write_text(
+                "# TYPE bench_p99_us gauge\n"
+                f'bench_p99_us{{scheduler="EEVDF",cores="4"}} {eevdf}\n'
+                f'bench_p99_us{{scheduler="mine",cores="4"}} {mine}\n'
+                f'bench_p99_us{{scheduler="mine",cores="8"}} {mine}\n')
+        (relx / "run-20261003-000000.prom").write_text(
+            "# TYPE bench_p99_us gauge\n"
+            'bench_p99_us{scheduler="mine",cores="4"} 70.0\n')
+        def rel(*args):
+            return harness.run_text([*ANALYZE, str(relx), "--by", "capture", "--seed", "1729",
+                                     "--no-emit", "--relative-to", "scheduler=EEVDF", *args])
+        rtext = rel().stdout
+        check("relative-names-missing-control",
+              "[commit=unknown cores=4 scheduler=mine version=unknown] no nonzero scheduler=EEVDF control in capture 20261003-000000 -- raw values"
+              in rtext, rtext.strip()[:300])
+        renv = rel("--json")
+        try:
+            rcells = {c["cell"]: c for m in json.loads(renv.stdout)["population"]["metrics"] for c in m["cells"]}
+            r8, ctl = rcells["commit=unknown cores=8 scheduler=mine version=unknown"], rcells["commit=unknown cores=4 scheduler=EEVDF version=unknown"]
+            rok = (r8["relation"] == "no-control" and ctl["relation"] == "control"
+                   and rcells["commit=unknown cores=4 scheduler=mine version=unknown"]["no_control_captures"] == ["20261003-000000"])
+        except (ValueError, KeyError):
+            rok = False
+        check("relative-states-in-envelope", rok, renv.stdout.strip()[:200])
+        two = Path(td) / "relative-two"
+        two.mkdir()
+        for f in sorted(relx.glob("run-2026100[12]*.prom")):
+            (two / f.name).write_text(f.read_text())
+        renv2 = harness.run_text([*ANALYZE, str(two), "--by", "capture", "--seed", "1729", "--no-emit",
+                                  "--relative-to", "scheduler=EEVDF", "--json"])
+        try:
+            c4 = {c["cell"]: c for m in json.loads(renv2.stdout)["population"]["metrics"]
+                  for c in m["cells"]}["commit=unknown cores=4 scheduler=mine version=unknown"]
+            ratios = [g["ratio"]["mean"] for g in c4["groups"]]
+            rok2 = c4["relation"] == "relative" and ratios == [0.5, 0.6] and len(c4["pairs"]) == 1
+        except (ValueError, KeyError):
+            rok2 = False
+        check("relative-ratio-per-capture", rok2, renv2.stdout.strip()[:200])
+        check("relative-axis-refused",
+              harness.run_text([*ANALYZE, str(relx), "--by", "scheduler", "--no-emit",
+                                "--relative-to", "scheduler=EEVDF"]).returncode == 2)
 
     note(f"{'FAIL' if fails else 'PASS'}: "
          f"{len(fails)} failure(s)" if fails else "PASS: all properties hold")

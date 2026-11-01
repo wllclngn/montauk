@@ -763,7 +763,7 @@ def main() -> int:
         return 1
 
     parser = argparse.ArgumentParser(
-        description="Build and install montauk system monitor",
+        description="Build and install montauk, the observability platform: monitor, tracer, static lane and analyzer",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Commands:

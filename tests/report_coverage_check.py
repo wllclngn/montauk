@@ -85,6 +85,45 @@ def check_concluded(label, reports):
     return 0
 
 
+def check_storm_envelope(td: Path) -> int:
+    """storm's envelope carries every number its verdict prints. The fixture
+    holds no storm records, so this writes a capture of them: the fixture's
+    header and 40 intervals of montauk_scx_storm_event (type 17), a quarter of
+    them storming, then reads the same capture as text and as --json."""
+    import struct
+    cap = td / "storm.mtk"
+    recs = []
+    for i in range(40):
+        kicks, preempt, reenq = (900, 600, 4000) if i % 4 == 0 else (90, 10, 120)
+        recs.append(struct.pack("<IIQQQQ", 17, 50, kicks, preempt, reenq, 1_000_000_000 + i * 50_000_000))
+    cap.write_bytes(cc.FIXTURE.read_bytes()[:TRACE_HEADER_BYTES] +
+                    b"".join(struct.pack("<I", len(r)) + r for r in recs))
+    text = harness.run_text([*harness.ANALYZE, str(cap), "--report", "storm"]).stdout
+    env = harness.run_text([*harness.ANALYZE, str(cap), "--report", "storm", "--json"]).stdout
+    m = re.search(r"storm (\d+)/(\d+) intervals \(([\d.]+)%\); reenq/s p50=(\d+) peak=(\d+); "
+                  r"kick/s=(\d+) \(preempt (\d+)\) reenq/s=(\d+)", text)
+    try:
+        g = {(x["name"], x.get("labels", "")): x["value"] for x in json.loads(env)["reports"][0]["gauges"]}
+    except (ValueError, KeyError, IndexError):
+        note("FAIL: storm's envelope does not parse"); return 1
+    if not m:
+        note(f"FAIL: storm's verdict did not conclude on storm records: {text[:120]!r}"); return 1
+    want = {("montauk_analysis_storm_intervals", 'set="storm"'): int(m.group(1)),
+            ("montauk_analysis_storm_intervals", 'set="all"'): int(m.group(2)),
+            ("montauk_analysis_storm_pct", ""): float(m.group(3)),
+            ("montauk_analysis_storm_reenq_per_s", 'stat="p50"'): int(m.group(4)),
+            ("montauk_analysis_storm_reenq_per_s", 'stat="peak"'): int(m.group(5)),
+            ("montauk_analysis_storm_kick_per_s", 'flag="all"'): int(m.group(6)),
+            ("montauk_analysis_storm_kick_per_s", 'flag="preempt"'): int(m.group(7)),
+            ("montauk_analysis_storm_reenq_per_s", 'stat="mean"'): int(m.group(8))}
+    # The verdict rounds; the gauge carries the value it rounded.
+    bad = [k for k, v in want.items() if k not in g or abs(g[k] - v) > (0.05 if isinstance(v, float) else 0.5)]
+    if bad:
+        note(f"FAIL: storm's verdict prints numbers its envelope does not carry: {bad}"); return 1
+    note(f"storm's envelope carries all {len(want)} numbers its verdict prints")
+    return 0
+
+
 def main() -> int:
     if harness.missing_bins(harness.MONTAUK):
         note("FAIL: montauk not built"); return 1
@@ -114,6 +153,7 @@ def main() -> int:
         empty.write_bytes(cc.FIXTURE.read_bytes()[:TRACE_HEADER_BYTES])
         out_empty = harness.run_text([*harness.ANALYZE, str(empty), "--json"],
                                      env={**os.environ, "TZ": "UTC"}).stdout
+        fails += check_storm_envelope(Path(td))
     try:
         fails += check_concluded("empty trace", json.loads(out_empty)["reports"])
     except (ValueError, KeyError):

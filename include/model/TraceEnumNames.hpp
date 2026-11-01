@@ -9,8 +9,10 @@
 #pragma once
 
 #include "montauk_trace.h"
+#include "model/SyscallTable.hpp"
 
 #include <cstdint>
+#include <string_view>
 
 namespace montauk::model {
 
@@ -36,6 +38,32 @@ inline const char* sched_op_name(uint32_t op) {
   }
 }
 
+inline const char* heap_op_name(uint32_t op) {
+  switch (op) {
+    case HEAP_OP_MALLOC:         return "malloc";
+    case HEAP_OP_FREE:           return "free";
+    case HEAP_OP_REALLOC:        return "realloc";
+    case HEAP_OP_CALLOC:         return "calloc";
+    case HEAP_OP_POSIX_MEMALIGN: return "posix_memalign";
+    case HEAP_OP_ALIGNED_ALLOC:  return "aligned_alloc";
+    case HEAP_OP_MEMALIGN:       return "memalign";
+    case HEAP_OP_VALLOC:         return "valloc";
+    case HEAP_OP_PVALLOC:        return "pvalloc";
+    default:                     return "?";
+  }
+}
+
+// A heap op that hands back a fresh block at addr, and one that moves the block
+// at addr to new_addr. Every consumer of the heap stream asks one of these
+// rather than listing ops, so an allocator added here reaches all of them.
+inline bool heap_op_allocates(uint32_t op) {
+  return op == HEAP_OP_MALLOC || op == HEAP_OP_CALLOC ||
+         (op >= HEAP_OP_POSIX_MEMALIGN && op <= HEAP_OP_PVALLOC);
+}
+inline bool heap_op_moves(uint32_t op) {
+  return op == HEAP_OP_REALLOC;
+}
+
 inline const char* ntsync_op_name(uint8_t op) {
   switch (op) {
     case NTS_CREATE_SEM:   return "create_sem";
@@ -57,58 +85,50 @@ inline const char* ntsync_op_name(uint8_t op) {
 }
 
 // x86-64 syscall number -> name, nullptr when unnamed: The live thread view's
-// current syscall and, through io_syscall_name, every IO report and decode
-// line. One table, the union of the collector's and the analyzer's, which had
-// drifted apart -- each named syscalls the other printed as unknown.
+// current syscall, the syscall class's records and, through io_syscall_name,
+// every IO report and decode line. The kernel's whole table, where a hand list
+// once named 40 calls and printed the rest as unknown.
 inline const char* syscall_name(int32_t nr) {
-  switch (nr) {
-    case 0:   return "read";
-    case 1:   return "write";
-    case 2:   return "open";
-    case 3:   return "close";
-    case 5:   return "fstat";
-    case 7:   return "poll";
-    case 8:   return "lseek";
-    case 9:   return "mmap";
-    case 10:  return "mprotect";
-    case 11:  return "munmap";
-    case 16:  return "ioctl";
-    case 17:  return "pread64";
-    case 18:  return "pwrite64";
-    case 23:  return "select";
-    case 35:  return "nanosleep";
-    case 44:  return "sendto";
-    case 45:  return "recvfrom";
-    case 46:  return "sendmsg";
-    case 47:  return "recvmsg";
-    case 48:  return "shutdown";
-    case 56:  return "clone";
-    case 59:  return "execve";
-    case 61:  return "wait4";
-    case 62:  return "kill";
-    case 202: return "futex";
-    case 208: return "io_getevents";
-    case 209: return "io_submit";
-    case 228: return "clock_nanosleep";
-    case 232: return "epoll_wait";
-    case 257: return "openat";
-    case 270: return "pselect6";
-    case 271: return "ppoll";
-    case 281: return "epoll_pwait";
-    case 290: return "eventfd2";
-    case 302: return "prlimit64";
-    case 332: return "statx";
-    case 426: return "io_uring_enter";
-    case 435: return "clone3";
-    case 441: return "epoll_pwait2";
-    default:  return nullptr;
-  }
+  constexpr int32_t n = static_cast<int32_t>(sizeof(kSyscallNames) / sizeof(kSyscallNames[0]));
+  return nr >= 0 && nr < n ? kSyscallNames[nr] : nullptr;
+}
+
+// A syscall's number by its name, -1 when the kernel has no call by that name.
+inline int32_t syscall_number(std::string_view name) {
+  constexpr int32_t n = static_cast<int32_t>(sizeof(kSyscallNames) / sizeof(kSyscallNames[0]));
+  for (int32_t i = 0; i < n; ++i)
+    if (kSyscallNames[i] && name == kSyscallNames[i]) return i;
+  return -1;
 }
 
 // The same name for a report or decode line, "?" when unnamed.
 inline const char* io_syscall_name(int32_t nr) {
   const char* n = syscall_name(nr);
   return n ? n : "?";
+}
+
+// A futex op's command, its PRIVATE and CLOCK_REALTIME flags masked, as futex(2)
+// numbers them; futex_waitv as MONTAUK_FUTEX_CMD_WAITV names it in a
+// TRACE_EVT_FUTEX record.
+inline const char* futex_cmd_name(uint32_t op) {
+  switch (op & 0x7f) {
+    case 0:  return "wait";
+    case 1:  return "wake";
+    case 2:  return "fd";
+    case 3:  return "requeue";
+    case 4:  return "cmp_requeue";
+    case 5:  return "wake_op";
+    case 6:  return "lock_pi";
+    case 7:  return "unlock_pi";
+    case 8:  return "trylock_pi";
+    case 9:  return "wait_bitset";
+    case 10: return "wake_bitset";
+    case 11: return "wait_requeue_pi";
+    case 12: return "cmp_requeue_pi";
+    case 13: return "lock_pi2";
+    case MONTAUK_FUTEX_CMD_WAITV: return "waitv";
+    default: return "?";
+  }
 }
 
 // Event TYPE -> lowercase name: the analyzer's summary rows and prom labels.
@@ -134,6 +154,9 @@ inline const char* evt_type_name(uint32_t t) {
     case TRACE_EVT_THREAD_NAME: return "thread_name";
     case TRACE_EVT_RAWSTACK: return "rawstack";
     case TRACE_EVT_DROPS: return "drops";
+    case TRACE_EVT_FUTEX: return "futex";
+    case TRACE_EVT_FUTEXSTACK: return "futexstack";
+    case TRACE_EVT_SYSCALL: return "syscall";
     default: return "unknown";
   }
 }
@@ -163,6 +186,16 @@ inline const char* signal_name(int32_t n) {
     case 17: return "SIGCHLD"; case 19: return "SIGSTOP"; case 24: return "SIGXCPU";
     case 25: return "SIGXFSZ"; case 31: return "SIGSYS";
     default: return nullptr;
+  }
+}
+
+// What a signal row's disposition did (signal_disposition).
+inline const char* signal_disposition_name(uint32_t d) {
+  switch (d) {
+    case SIGDISP_DEFAULT: return "default";
+    case SIGDISP_IGNORED: return "ignored";
+    case SIGDISP_CAUGHT:  return "caught";
+    default:              return "-";
   }
 }
 

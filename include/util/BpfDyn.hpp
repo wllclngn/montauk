@@ -22,6 +22,9 @@ struct BpfApi {
   decltype(&::bpf_iter_create) p_bpf_iter_create{};
   decltype(&::bpf_link__destroy) p_bpf_link__destroy{};
   decltype(&::bpf_link__fd) p_bpf_link__fd{};
+  // Optional: Teardown names each link's kind with it, and a libbpf without
+  // it detaches the same links unnamed rather than refusing to trace.
+  decltype(&::bpf_link_get_info_by_fd) p_bpf_link_get_info_by_fd{};
   decltype(&::bpf_map_delete_elem) p_bpf_map_delete_elem{};
   decltype(&::bpf_map__fd) p_bpf_map__fd{};
   decltype(&::bpf_map_get_next_key) p_bpf_map_get_next_key{};

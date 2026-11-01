@@ -198,6 +198,9 @@ def layer_gate():
     # The query face against the fixture's known kicks: counts, pairing and
     # which end of a pair each clause binds.
     query = run([sys.executable, str(ROOT / "tests" / "query_check.py")]) == 0
+    # A stopped process reads no GPU and a running one is attributed, on a box
+    # with an NVIDIA GPU read through NVML (SKIP elsewhere).
+    gpustop = run([sys.executable, str(ROOT / "tests" / "gpu_stop_check.py")]) == 0
     # sublimation is the only sort in shipped code; std/libc/kernel sorts live
     # only in tests, as the oracle.
     sortban = run([sys.executable, str(ROOT / "tests" / "sort_ban_check.py")]) == 0
@@ -226,14 +229,18 @@ def layer_gate():
     confuse = run([sys.executable, str(subt / "test_confuse.py"), str(BUILD / "sublimation")]) == 0
     # sort on text: whole lines in byte order, never a truncated line.
     sorttext = run([sys.executable, str(subt / "test_sort_text.py"), str(BUILD / "sublimation")]) == 0
+    # search refuses \b \B \< \> by name rather than matching nothing.
+    srchassert = run([sys.executable, str(subt / "test_search_assert.py"), str(BUILD / "sublimation")]) == 0
+    # quantile, describe and group median: each estimator is the one the help names.
+    medcli = run([sys.executable, str(subt / "test_median_cli.py"), str(BUILD / "sublimation")]) == 0
     # The TUI's ^C teardown on a real pty: exits clean, nothing paints after
     # the terminal is restored. Standard library only, so it always runs.
     interrupt = run([sys.executable, str(ROOT / "tests" / "tui" / "interrupt_check.py")]) == 0
     # C++ consumer gate. Nothing else here compiles the public headers as C++,
     # which is how a bare unreachable() macro reached an outside consumer.
     cxx = run([sys.executable, str(subt / "test_cxx_headers.py")]) == 0
-    return (corpus and parity and pop and semantic and static and inst and bare and cover and query and sortban and match and fuzz
-            and learn and spectral and signal and stats and tee and records and jsonrep and counted and confuse and sorttext and interrupt and cxx and abi)
+    return (corpus and parity and pop and semantic and static and inst and bare and cover and query and gpustop and sortban and match and fuzz
+            and learn and spectral and signal and stats and tee and records and jsonrep and counted and confuse and sorttext and srchassert and medcli and interrupt and cxx and abi)
 
 
 def layer_perf():
@@ -253,7 +260,13 @@ def layer_trace():
     if os.geteuid() != 0:
         print("[run] trace: SKIP (needs root -- sudo python3 tests/run.py --layer trace)")
         return SKIP
-    return run([sys.executable, str(ROOT / "tests" / "trace_loadtest.py")]) == 0
+    load = run([sys.executable, str(ROOT / "tests" / "trace_loadtest.py")]) == 0
+    # The same capture with the sched_ext kfunc trampolines armed, so the
+    # teardown measured covers the storm path too.
+    storm = run([sys.executable, str(ROOT / "tests" / "trace_loadtest.py"), "--storm"]) == 0
+    # Known small programs, each traced alone and held to what it did.
+    fixtures = run([sys.executable, str(ROOT / "tests" / "trace_fixtures_check.py")]) == 0
+    return load and storm and fixtures
 
 
 LAYERS = {"unit": layer_unit, "gate": layer_gate, "perf": layer_perf,

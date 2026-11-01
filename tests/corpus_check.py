@@ -374,6 +374,22 @@ def check_json_wellformed() -> bool:
     return True
 
 
+def check_json_out() -> bool:
+    """--json-out FILE: one pass writes the text report to stdout and the
+    envelope to FILE, each byte-identical to its own separate run."""
+    with tempfile.TemporaryDirectory() as td:
+        dest = Path(td) / "envelope.json"
+        both = run_stdout(ANALYZE, ["--json-out", str(dest)])
+        env = dest.read_bytes().decode() if dest.exists() else ""
+    text, alone = run_stdout(ANALYZE, []), run_stdout(ANALYZE, ["--json"])
+    if both != text or env != alone:
+        note(f"FAIL json-out -- text {'same' if both == text else 'differs'}, "
+             f"envelope {'same' if env == alone else 'differs'} against the separate runs")
+        return False
+    note(f"PASS json-out (text {len(text)} bytes and envelope {len(env)} bytes from one pass)")
+    return True
+
+
 def check_surfaces_run() -> bool:
     """Analyzer and decoder must complete over the fixture. Not a byte compare --
     a nonzero exit or a crash is the failure this catches."""
@@ -424,6 +440,7 @@ def main() -> int:
         regenerate_fixture(Path(td))
         ok = check_surfaces_run()
         ok = check_json_wellformed() and ok
+        ok = check_json_out() and ok
         ok = check_cli_runs() and ok
         ok = check_grow_boundary() and ok
         ok = check_tally_ties() and ok

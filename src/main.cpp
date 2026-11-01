@@ -16,6 +16,9 @@
 #include "collectors/BpfTraceCollector.hpp"
 #endif
 #include "model/Snapshot.hpp"
+#include "montauk_trace.h"
+#include "model/TraceEnumNames.hpp"
+#include <array>
 #include "ui/Terminal.hpp"
 #include "ui/Renderer.hpp"
 #include "ui/Config.hpp"
@@ -43,7 +46,6 @@ using montauk::ui::on_sigint;
 
 // CLI/usage stdout drains through one buffered sink, drained at exit.
 static sublimation_sink g_out;
-static void drain_out() { sublimation_sink_drain(&g_out); }
 using montauk::ui::on_atexit_restore;
 using montauk::ui::tty_stdout;
 using montauk::ui::config;
@@ -110,8 +112,7 @@ int main(int argc, char** argv) {
   std::signal(SIGABRT, on_fatal_signal);
   std::signal(SIGBUS,  on_fatal_signal);
   std::signal(SIGQUIT, on_fatal_signal);
-  sublimation_sink_init(&g_out, 1);
-  std::atexit(drain_out);
+  sublimation_sink_init_at_exit(&g_out, 1);
   // Text-only UI is the default and only mode. Ctrl+C to exit.
   // Default: run indefinitely with 250ms refresh (no flags needed).
   int iterations = 0; // 0 or less => run until Ctrl+C
@@ -133,6 +134,12 @@ int main(int argc, char** argv) {
   // of itself needed and did not have. Both default to today's behaviour.
   [[maybe_unused]] uint64_t trace_ring_bytes = 0;
   [[maybe_unused]] uint64_t trace_class_mask = 0;
+  // The syscall class (--trace-syscalls, --trace-syscalls-from) and the string
+  // bound every path, filename and argument vector takes (--trace-path-bytes).
+  [[maybe_unused]] bool want_syscall_class = false, sc_from_anon = false;
+  [[maybe_unused]] uint32_t path_bytes = 256;
+  [[maybe_unused]] std::array<uint64_t, MONTAUK_SC_NR_WORDS> sc_numbers{};
+  sc_numbers.fill(~0ULL);
   bool json_once = false;      // --json: one-shot structured snapshot to stdout, then exit
   int  cpu_window = 0;         // --cpu-window N: sample aggregate CPU N times, emit the series
   int  anomalies_n = 0;        // --anomalies N: rank the published anomaly scores
@@ -186,10 +193,23 @@ int main(int argc, char** argv) {
       // NAMES, not a bitmask. An operator narrowing a capture is already doing
       // something subtle; making them hand-assemble 1<<7 invites the mistake
       // that loses the class they cared about.
-      static const struct { const char* name; int bit; } kClasses[] = {
-        {"fork",1},{"exec",2},{"exit",3},{"comm",4},{"io",5},{"ntsync",6},
-        {"sched",7},{"heap",8},{"signal",9},{"mmap",10},{"provider",11},
-        {"abort",12},{"heapstack",13},{"keyedevt",14},
+      // Each name is the event types it carries, bit N = TRACE_EVT_N. Every
+      // type the BPF side emits belongs to one, so a narrowed capture keeps
+      // what serves the class it asked for: The wait-site stacks ride their
+      // wait's class, ntsync's or futex's, the thread names comm, the kernel
+      // strands and storm counters sched.
+      constexpr auto b = [](int n) { return 1ULL << n; };
+      static const struct { const char* name; uint64_t bits; } kClasses[] = {
+        {"fork", b(TRACE_EVT_FORK)}, {"exec", b(TRACE_EVT_EXEC)}, {"exit", b(TRACE_EVT_EXIT)},
+        {"comm", b(TRACE_EVT_COMM_CHANGE) | b(TRACE_EVT_THREAD_NAME)},
+        {"io", b(TRACE_EVT_IO)},
+        {"ntsync", b(TRACE_EVT_NTSYNC) | b(TRACE_EVT_WAITSTACK) | b(TRACE_EVT_RAWSTACK)},
+        {"sched", b(TRACE_EVT_SCHED) | b(TRACE_EVT_KSTRAND) | b(TRACE_EVT_SCX_STORM)},
+        {"heap", b(TRACE_EVT_HEAP)}, {"signal", b(TRACE_EVT_SIGNAL)}, {"mmap", b(TRACE_EVT_MMAP)},
+        {"provider", b(TRACE_EVT_PROVIDER)}, {"abort", b(TRACE_EVT_ABORT)},
+        {"heapstack", b(TRACE_EVT_HEAPSTACK)}, {"keyedevt", b(TRACE_EVT_KEYEDEVT)},
+        {"futex", b(TRACE_EVT_FUTEX) | b(TRACE_EVT_FUTEXSTACK)},
+        {"syscall", b(TRACE_EVT_SYSCALL)},
       };
       std::string list = argv[++i];
       uint64_t mask = 0;
@@ -202,7 +222,7 @@ int main(int argc, char** argv) {
         if (tok.empty()) { if (c == list.size()) break; continue; }
         bool found = false;
         for (const auto& k : kClasses)
-          if (tok == k.name) { mask |= (1ULL << k.bit); found = true; break; }
+          if (tok == k.name) { mask |= k.bits; found = true; break; }
         if (!found) {
           std::string known;
           for (const auto& k : kClasses) { known += " "; known += k.name; }
@@ -218,6 +238,54 @@ int main(int argc, char** argv) {
         return 1;
       }
       trace_class_mask = mask;
+    }
+    else if (a == "--trace-syscalls" && i + 1 < argc) {
+      // NAMES OR NUMBERS, comma-separated: the calls the syscall class records.
+      // An unknown name is refused rather than dropped, since dropping it would
+      // record nothing for the one call the operator was after.
+      want_syscall_class = true;
+      sc_numbers.fill(0);
+      std::string list = argv[++i];
+      size_t from = 0;
+      while (from <= list.size()) {
+        size_t c = list.find(',', from);
+        if (c == std::string::npos) c = list.size();
+        const std::string tok = list.substr(from, c - from);
+        from = c + 1;
+        if (!tok.empty()) {
+          char* endp = nullptr;
+          long nr = std::strtol(tok.c_str(), &endp, 10);
+          if (!endp || *endp) nr = montauk::model::syscall_number(tok);
+          if (nr < 0 || nr >= static_cast<long>(MONTAUK_SC_NR_WORDS * 64)) {
+            montauk::util::log_error("--trace-syscalls: no x86-64 syscall '%s'", tok.c_str());
+            return 1;
+          }
+          sc_numbers[static_cast<size_t>(nr) >> 6] |= 1ULL << (nr & 63);
+        }
+        if (c == list.size()) break;
+      }
+      if (std::all_of(sc_numbers.begin(), sc_numbers.end(), [](uint64_t w) { return w == 0; })) {
+        montauk::util::log_error("--trace-syscalls named no syscall");
+        return 1;
+      }
+    }
+    else if (a == "--trace-syscalls-from" && i + 1 < argc) {
+      // Where a call is made from. `anon` is memory no file backs: code mapped
+      // by hand, a JIT's, injected code. The only place there is, so far.
+      if (std::string(argv[++i]) != "anon") {
+        montauk::util::log_error("--trace-syscalls-from takes anon (calls made from memory no file backs)");
+        return 1;
+      }
+      want_syscall_class = true;
+      sc_from_anon = true;
+    }
+    else if (a == "--trace-path-bytes" && i + 1 < argc) {
+      const long n = std::strtol(argv[++i], nullptr, 10);
+      if (n < 1 || n > MONTAUK_SC_PATH_MAX - 1) {
+        montauk::util::log_error("--trace-path-bytes takes 1 to %d", MONTAUK_SC_PATH_MAX - 1);
+        return 1;
+      }
+      path_bytes = static_cast<uint32_t>(n);
     }
     else if (a == "--pmu-comm" && i + 1 < argc) pmu_comm = argv[++i];
     else if (a == "--pmu-pid" && i + 1 < argc) pmu_pids.push_back(parse_int_arg(argv[++i], 0));
@@ -326,11 +394,14 @@ int main(int argc, char** argv) {
       sublimation_sink_appendf(&g_out, "       --log DIR             Write timestamped snapshots to DIR\n");
       sublimation_sink_appendf(&g_out, "       --log-interval-ms MS  Write interval in ms (default: 1000)\n");
       sublimation_sink_appendf(&g_out, "       --headless            Daemon mode (no TUI, requires --metrics or --log)\n");
-      sublimation_sink_appendf(&g_out, "       --trace PATTERN       Trace process group matching PATTERN (headless)\n");
+      sublimation_sink_appendf(&g_out, "       --trace PATTERN       Trace the process trees matching PATTERN (headless): A comma-separated list of names, each a case-insensitive substring of a process name\n");
       sublimation_sink_appendf(&g_out, "       --trace-out FILE      Write raw binary event log; decode with --decode\n");
       sublimation_sink_appendf(&g_out, "       --stream-out DEVICE   Second, independent binary stream (same format as --trace-out), meant for a character device (e.g. a qemu-backed serial port) so capture survives a hang that takes --trace-out's filesystem down with it\n");
       sublimation_sink_appendf(&g_out, "       --trace-ring-bytes N  BPF ring size (default 1M; accepts K/M/G). The default was never sized against a real offered rate: one sched-messaging capture offered ~2.8M events/s against ~254k/s drained and kept 5.7%% of its stream. Rounded up to a power of two\n");
-      sublimation_sink_appendf(&g_out, "       --trace-classes LIST  Capture only these event classes (comma-separated: fork,exec,exit,comm,io,ntsync,sched,heap,signal,mmap,provider,abort,heapstack,keyedevt). Stops one loud class drowning the one the capture is FOR -- excluded classes are never reserved, and are NOT counted as drops\n");
+      sublimation_sink_appendf(&g_out, "       --trace-classes LIST  Capture only these event classes (comma-separated: fork,exec,exit,comm,io,ntsync,sched,heap,signal,mmap,provider,abort,heapstack,keyedevt,futex,syscall; ntsync and futex also carry their wait-site stacks, comm the thread names, sched the kernel strands and storm counters). Stops one loud class drowning the one the capture is FOR -- excluded classes are never reserved, and are NOT counted as drops. Without this flag every class but syscall is captured\n");
+      sublimation_sink_appendf(&g_out, "       --trace-syscalls LIST  The syscall class, opt-in: one record per call of the traced tree with its number, six arguments, result, duration, return address and the mapping it lies in, and the paths it names (readlink's returned target too). LIST is names or numbers, comma-separated (readlink,readlinkat,89); every call when only --trace-syscalls-from is given. A filter applied in the kernel, so calls left out cost no ring space\n");
+      sublimation_sink_appendf(&g_out, "       --trace-syscalls-from anon  Record only calls made from memory no file backs (code mapped by hand, a JIT's, injected code), decided by the mapping holding each call's return address. Asks for the syscall class\n");
+      sublimation_sink_appendf(&g_out, "       --trace-path-bytes N  The most bytes one path, exec filename or argument vector carries (default 256, at most 4095)\n");
       sublimation_sink_appendf(&g_out, "       --sched-detail        Stream the heavy per-switch scheduler-decision detail -- per-CPU idle boundaries and the EEVDF pick fallback (off by default; the placement/slice/stall reports need it, ~6x cost on CPU-cycling workloads)\n");
       sublimation_sink_appendf(&g_out, "       --init-theme          Detect terminal palette and write config.toml\n");
       sublimation_sink_appendf(&g_out, "       --pmu-comm SUBSTR     Attach hardware counters to processes whose command matches SUBSTR (instructions, cycles, dTLB load misses, cache misses, per process). Needs no root and no sysctl, unlike --trace's system-wide PMU; re-resolved every tick, so a workload started later is picked up\n");
@@ -413,7 +484,14 @@ int main(int argc, char** argv) {
       if (!stream_out.empty()) trace_collector->set_stream_output(stream_out);
       trace_collector->set_sched_detail(sched_detail);  // before start(): sets a frozen rodata bit
       trace_collector->set_ring_bytes(trace_ring_bytes);   // before load: libbpf freezes map size
+      // Naming the syscall class's filters asks for the class: "everything"
+      // grows to include it, and a narrowed list gains it.
+      if (want_syscall_class)
+        trace_class_mask = trace_class_mask ? trace_class_mask | (1ULL << TRACE_EVT_SYSCALL) : ~0ULL;
       trace_collector->set_capture_mask(trace_class_mask); // before load: .rodata
+      trace_collector->set_syscall_numbers(sc_numbers);
+      trace_collector->set_syscalls_from_anon(sc_from_anon);
+      trace_collector->set_path_bytes(path_bytes);
       trace_collector->start();
     }
 #else
@@ -450,7 +528,7 @@ int main(int argc, char** argv) {
         sublimation_sink_appendf(&g_out, "%s%.6f", k ? "," : "", cs.usage_pct);
       }
       sublimation_sink_appendf(&g_out, "],\"source\":\"montauk CpuCollector\"}\n");
-      drain_out();
+      sublimation_sink_drain(&g_out);
       return 0;
     }
 
@@ -492,7 +570,7 @@ int main(int argc, char** argv) {
       }
       sublimation_sink_appendf(&g_out, "],\"shifted\":%s,\"basis\":\"spectral residual over montauk CpuCollector\"}\n",
                            emitted ? "true" : "false");
-      drain_out();
+      sublimation_sink_drain(&g_out);
       return 0;
     }
 
@@ -547,7 +625,7 @@ int main(int argc, char** argv) {
         sublimation_sink_appendf(&g_out, "],\"population\":%zu,\"basis\":\"fused MAD, "
             "Mahalanobis and Half-Space Trees (rank-averaged); higher is more anomalous\"}\n",
             ms.anomaly_features.size());
-        drain_out();
+        sublimation_sink_drain(&g_out);
         return 0;
       }
 
@@ -664,7 +742,7 @@ int main(int argc, char** argv) {
             "\"effective-resistance (commute-time) nearest over a self-tuning affinity graph "
             "(cpu, rss, gpu, faults, threads, ctxsw); lower resistance is more similar\"}\n",
             n, total);
-        drain_out();
+        sublimation_sink_drain(&g_out);
         return 0;
       }
 

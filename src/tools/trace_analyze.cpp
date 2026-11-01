@@ -11,6 +11,7 @@
 #include "model/TraceReader.hpp"
 #include "model/TraceEnumNames.hpp"
 #include "montauk_trace.h"
+#include "eh_unwind.hpp"
 #include "prom_population.hpp"
 #include "prom_stats.hpp"
 #include "trace_query.hpp"
@@ -43,7 +44,7 @@ using montauk::util::log_error;
 // "ntdll.so+0x...", naming WHERE the contended lock lives. The same machinery
 // would symbolize heapstk/abort IPs; for now it serves the sync reports.
 struct MapsResolver {
-  struct Seg { uint64_t start, end, file_off; bool exec; std::string path; };
+  using Seg = montauk::unwind::Segment;
   std::unordered_map<uint32_t, std::vector<Seg>> by_pid_;
   bool empty_ = true;
 
@@ -90,9 +91,16 @@ struct MapsResolver {
       while (*e == ' ') ++e;
       while (*e && *e != ' ') ++e;                 // dev
       while (*e == ' ') ++e;
-      while (*e && *e != ' ') ++e;                 // inode
+      uint64_t inode = std::strtoull(e, &e, 10);
       while (*e == ' ') ++e;
-      segs.push_back({start, end, off, exec, *e ? std::string(e) : std::string()});
+      Seg s;
+      s.start = start;
+      s.end = end;
+      s.file_off = off;
+      s.inode = inode;
+      s.exec = exec;
+      if (*e) s.path = e;
+      segs.push_back(std::move(s));
     }
   }
 
@@ -201,10 +209,7 @@ static montauk_drop_event g_drop_final{};
 static bool g_drop_seen = false;
 
 static void fold_drop_snapshot(uint32_t type, const uint8_t* data, uint32_t len) {
-  if (type == TRACE_EVT_DROPS && len >= sizeof(montauk_drop_event)) {
-    std::memcpy(&g_drop_final, data, sizeof(g_drop_final));
-    g_drop_seen = true;
-  }
+  if (type == TRACE_EVT_DROPS && montauk_drop_read(data, len, &g_drop_final)) g_drop_seen = true;
 }
 
 static uint64_t drops_total() {
@@ -262,6 +267,8 @@ static std::string redact_comm(const char* comm) {
 #include <unordered_set>
 #include <vector>
 
+#include <cerrno>
+#include <fcntl.h>
 #include <sys/stat.h>
 
 #ifndef MONTAUK_VERSION
@@ -274,7 +281,6 @@ namespace {
 // (atexit, set in main) -- one write instead of a syscall per std::printf. The
 // .prom file writers and stderr logs are unaffected.
 sublimation_sink g_out;
-void drain_out() { sublimation_sink_drain(&g_out); }
 
 // NTSYNC wait result semantics: >= 0 is the signaled object index,
 // -110 is ETIMEDOUT, other negatives are -errno. The BPF side also emits
@@ -301,6 +307,7 @@ constexpr size_t kWaitsTopResults = 4;
 
 using montauk::model::sched_op_name;
 using montauk::model::ntsync_op_name;
+using montauk::model::heap_op_name;
 using montauk::model::io_syscall_name;
 using montauk::model::signal_name;
 using montauk::model::evt_type_name;
@@ -601,6 +608,16 @@ const char* prom_help(const char* name) {
      "CCDF log-log slope of the migration-avalanche sizes (SOC tail)"},
     {"montauk_offender",
      "A specific misbehaving entity (kind/id/metric/sev); value is the metric"},
+    {"montauk_analysis_storm_captured",
+     "1 when the sched_ext kick-storm counters were captured, 0 when the probes were not attached"},
+    {"montauk_analysis_storm_pct",
+     "Share of capture intervals whose reenqueue rate reached the storm threshold, percent"},
+    {"montauk_analysis_storm_intervals",
+     "Capture intervals: set=storm those at the storm threshold, set=all every interval"},
+    {"montauk_analysis_storm_reenq_per_s",
+     "Reenqueues per second: stat=p50 and stat=peak over the intervals, stat=mean over the capture"},
+    {"montauk_analysis_storm_kick_per_s",
+     "Kicks per second over the capture: flag=all every kick, flag=preempt the preempting ones"},
   };
   for (const auto& h : kHelp)
     if (std::strcmp(h.name, name) == 0) return h.help;
@@ -1267,6 +1284,7 @@ struct Collected : montauk::query::Interner {
   std::vector<std::vector<int>> fidx;
   std::vector<bool> keep_raw, is_tally;
   std::vector<std::unordered_map<TallyKey, uint64_t, TallyHash>> tallies;
+  uint64_t types = 0;                        // the event types any source selects
   size_t base = 1;                           // cells before the fields: [src,] ts
   std::vector<size_t> span;                  // per source: cells a row of it takes
   size_t nrows = 0;
@@ -1309,6 +1327,7 @@ struct Collected : montauk::query::Interner {
         f.push_back(i);
       }
       if (s.tally && f.size() > 2) { log_error("saved query '%s': a tally keys on at most two fields", s.select); std::abort(); }
+      types |= q.cls && q.cls->type < 64 ? 1ull << q.cls->type : ~0ull;
       sel.push_back(std::move(q));
       fidx.push_back(std::move(f));
       keep_raw.push_back(s.raw);
@@ -1420,6 +1439,7 @@ void compose_verdict(ReportResult& r, const char* klass, const char* fmt, ...) {
 // where a row per event would cost far more than the few counters and lists
 // the analysis actually needs. It folds and nothing else; derive reads it.
 struct Stream {
+  uint64_t types = 1ull << TRACE_EVT_SCHED;  // the event types fold is handed
   virtual ~Stream() = default;
   virtual void fold(uint32_t type, const uint8_t* data, uint32_t len) = 0;
 };
@@ -1559,6 +1579,9 @@ struct Report {
   explicit Report(const ReportDef& d)
       : def(d), in(shared_collected(d.sources)), stream(d.stream ? d.stream() : nullptr) {}
   const char* name() const { return def.name; }
+  bool wants(uint32_t type) const {
+    return type >= 64 || (((stream ? stream->types : in->types) >> type) & 1);
+  }
   // The first ACTIVE report on a shared buffer folds it; a selected report
   // whose twin was not selected still gets its rows.
   void fold(uint32_t type, const uint8_t* data, uint32_t len) {
@@ -1579,6 +1602,21 @@ struct Report {
   void prom(std::vector<PromMetric>& out) const { out.insert(out.end(), res.gauges.begin(), res.gauges.end()); }
   void offenders(std::vector<Offender>& out) const { out.insert(out.end(), res.offenders.begin(), res.offenders.end()); }
   void json(sublimation_json& j) const { json_result(j, def.name, res); }
+};
+
+// Each event reaches only the reports that select its type. Handing every
+// event to every report ran each row report's source list against the whole
+// trace, a cost paid per event and per report whether or not it matched.
+struct Dispatch {
+  std::array<std::vector<Report*>, 64> by_type;
+  std::vector<Report*> all;
+  explicit Dispatch(std::vector<Report*> rs) : all(std::move(rs)) {
+    for (uint32_t t = 0; t < by_type.size(); ++t)
+      for (Report* r : all) if (r->wants(t)) by_type[t].push_back(r);
+  }
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) const {
+    for (Report* r : type < by_type.size() ? by_type[type] : all) r->fold(type, data, len);
+  }
 };
 
 // REPORT storm: the sched_ext cpu_release kick-storm, from TRACE_EVT_SCX_STORM
@@ -1627,8 +1665,13 @@ void derive_storm(const Collected& in, ReportResult& r) {
       kind, storm, rates.size(), pct, p50, peak, static_cast<double>(kicks) / secs,
       static_cast<double>(preempt) / secs, static_cast<double>(reenq) / secs);
   r.gauges.push_back({"montauk_analysis_storm_captured", "", 1.0});
+  // Every number the verdict prints, from the same values.
   r.gauges.push_back({"montauk_analysis_storm_pct", "", pct});
+  r.gauges.push_back({"montauk_analysis_storm_intervals", "set=\"storm\"", static_cast<double>(storm)});
+  r.gauges.push_back({"montauk_analysis_storm_intervals", "set=\"all\"", static_cast<double>(rates.size())});
+  r.gauges.push_back({"montauk_analysis_storm_reenq_per_s", "stat=\"p50\"", p50});
   r.gauges.push_back({"montauk_analysis_storm_reenq_per_s", "stat=\"peak\"", peak});
+  r.gauges.push_back({"montauk_analysis_storm_reenq_per_s", "stat=\"mean\"", static_cast<double>(reenq) / secs});
   r.gauges.push_back({"montauk_analysis_storm_kick_per_s", "flag=\"all\"", static_cast<double>(kicks) / secs});
   r.gauges.push_back({"montauk_analysis_storm_kick_per_s", "flag=\"preempt\"", static_cast<double>(preempt) / secs});
   if (peak >= kStormReenqPerS)
@@ -1842,16 +1885,31 @@ void derive_heapstk(const Collected& in, ReportResult& r) {
 // endstate: a thread asleep in poll() on a socket is parked on its data source
 // the way an ntsync waiter is parked on a signaler, in a syscall that may never
 // return. BPF emits a pending enter marker (result=-999) and a completion on
-// return; an enter with no completion at trace end is parked.
-void derive_iowait(const Collected& in, ReportResult& r) {
-  struct Parked { bool open = false; int64_t since = 0, nr = 0, fd = -1, pid = 0, comm = 0; };
+// return; an enter with no completion at trace end is parked. Folded as the
+// events arrive: each thread's latest enter, closed by its completion.
+struct IowaitStream final : Stream {
+  struct Parked { bool open = false; int64_t since = 0, nr = 0, fd = -1, pid = 0; char comm[16] = {}; };
+  montauk::query::Select sel;
   std::map<int64_t, Parked> tids;
+  IowaitStream() {
+    std::string err;
+    montauk::query::parse_select("io.poll,ppoll,epoll_wait,epoll_pwait,recvmsg,recvfrom,select,pselect6,ioctl", sel, err);
+    types = 1ull << TRACE_EVT_IO;
+  }
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (!sel.matches(type, data, len)) return;
+    const auto* e = reinterpret_cast<const montauk_io_event*>(data);
+    Parked& p = tids[e->tid];
+    if (e->result != kWaitEntrySentinel) { p.open = false; return; }
+    p = {true, static_cast<int64_t>(e->timestamp_ns), e->syscall_nr, e->fd, e->pid, {}};
+    std::memcpy(p.comm, e->comm, sizeof p.comm);
+  }
+};
+
+void derive_iowait(const Stream& st, ReportResult& r) {
+  using Parked = IowaitStream::Parked;
+  const auto& tids = static_cast<const IowaitStream&>(st).tids;
   const auto max_ts = static_cast<int64_t>(g_census.span_of({TRACE_EVT_IO}).second);
-  in.each([&](Collected::Row e) {
-    Parked& p = tids[e[4]];
-    if (e[1] == kWaitEntrySentinel) p = {true, e.ts(), e[0], e[2], e[3], e[5]};
-    else p.open = false;
-  });
   std::vector<std::pair<int64_t, const Parked*>> parked;
   for (const auto& [tid, p] : tids) if (p.open) parked.emplace_back(tid, &p);
   if (parked.empty()) {
@@ -1860,7 +1918,7 @@ void derive_iowait(const Collected& in, ReportResult& r) {
   }
   sublimation_order_u64(parked, false,
                         [](const std::pair<int64_t, const Parked*>& p) { return static_cast<uint64_t>(p.second->since); });
-  auto comm_of = [&](const Parked* p) { return redact_comm(in.strings[static_cast<size_t>(p->comm)].c_str()); };
+  auto comm_of = [](const Parked* p) { return redact_comm(std::string(p->comm, strnlen(p->comm, sizeof p->comm)).c_str()); };
   const Parked* lp = parked.front().second;
   compose_verdict(r, "IOWAIT-PARKED",
       "%zu thread(s) parked in a blocking I/O-wait at trace end "
@@ -1886,10 +1944,8 @@ const ReportDef kIolat = {"iolat", {{"io", {"syscall_nr", "duration_ns", "tid", 
 const ReportDef kHeapstk = {"heapstk", {{"heapstk", {"size", "stack_depth", "comm", "frame0", "frame1", "frame2",
                                                      "frame3", "frame4", "frame5", "frame6", "frame7"}}},
                             false, derive_heapstk};
-const ReportDef kIowait = {"iowait",
-                           {{"io.poll,ppoll,epoll_wait,epoll_pwait,recvmsg,recvfrom,select,pselect6,ioctl",
-                             {"syscall_nr", "result", "fd", "pid", "tid", "comm"}}},
-                           false, derive_iowait};
+const ReportDef kIowait = {"iowait", {}, false, nullptr, false,
+                           [] { return std::unique_ptr<Stream>(new IowaitStream); }, derive_iowait};
 
 // REPORT seat: self-preemption and CPU-seat anchoring from the per-CPU SWITCH_IN
 // stream every scheduler emits. A task's stints (SWITCH_INs) over its wakes
@@ -1946,12 +2002,19 @@ void derive_seat(const Collected& in, ReportResult& r) {
 // lenses. Bins the scheduling-event stream into a fixed set of windows and runs
 // sublimation's matrix profile over the per-window rate, surfacing the run's
 // discord (the most anomalous window) and motif (the most recurring pattern)
-// without being told what to look for.
-void derive_matrix_profile(const Collected& in, ReportResult& r) {
+// without being told what to look for. Its state is one timestamp per sched
+// event, which derive sorts in place.
+struct MatrixProfileStream final : Stream {
+  mutable std::vector<uint64_t> ts;
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
+    ts.push_back(reinterpret_cast<const montauk_sched_event*>(data)->timestamp_ns);
+  }
+};
+
+void derive_matrix_profile(const Stream& st, ReportResult& r) {
   constexpr size_t NBINS = 128, WIN = 8;
-  std::vector<uint64_t> ts;
-  ts.reserve(in.rows());
-  in.each([&](Collected::Row e) { ts.push_back(static_cast<uint64_t>(e.ts())); });
+  auto& ts = static_cast<const MatrixProfileStream&>(st).ts;
   const uint64_t n_ev = ts.size();
   auto none = [&] { compose_verdict(r, "NO-PROFILE", "too few scheduling events for a profile"); };
   if (n_ev < NBINS * 2) { none(); return; }
@@ -2052,17 +2115,25 @@ void derive_work_conservation(const Collected& in, ReportResult& r) {
 // while another sat idle, so the fix is winning the race. None free means the
 // box was GENUINELY SATURATED, and the fix is on the busy CPU. Built from the
 // per-CPU idle boundaries, queried at each floored wake's became-runnable
-// instant.
-void derive_placement_race(const Collected& in, ReportResult& r) {
-  std::unordered_map<int64_t, std::vector<std::pair<uint64_t, uint8_t>>> idle;
+// instant. Every idle boundary is kept, but a wake only once it is over the
+// floor, so the state is a 16-byte pair per boundary and one per floored wake.
+struct PlacementRaceStream final : Stream {
+  // derive sorts each CPU's boundaries in place, once; a copy would double them.
+  mutable std::unordered_map<int64_t, std::vector<std::pair<uint64_t, uint8_t>>> idle;
   std::vector<std::pair<uint64_t, int64_t>> floored;   // (wake instant, run cpu)
-  in.each([&](Collected::Row e) {
-    if (e.src() == 0) { idle[e[0]].push_back({static_cast<uint64_t>(e.ts()), static_cast<uint8_t>(e[1] ? 1 : 0)}); return; }
-    const uint64_t wait = e.u(1);
-    if (wait < g_qual_floor_ns) return;
-    const uint64_t run = static_cast<uint64_t>(e.ts());
-    floored.push_back({run > wait ? run - wait : 0, e[0]});
-  });
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
+    const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    if (s->op == SCHED_OP_CPU_IDLE) { idle[s->cpu].push_back({s->timestamp_ns, static_cast<uint8_t>(s->sub_idx ? 1 : 0)}); return; }
+    if (s->op != SCHED_OP_WAKE2RUN || s->runtime_ns < g_qual_floor_ns) return;
+    floored.push_back({s->timestamp_ns > s->runtime_ns ? s->timestamp_ns - s->runtime_ns : 0, s->cpu});
+  }
+};
+
+void derive_placement_race(const Stream& st, ReportResult& r) {
+  const auto& P = static_cast<const PlacementRaceStream&>(st);
+  auto& idle = P.idle;
+  const auto& floored = P.floored;
   // NO-IDLE-STREAM is a CAPTURE limitation and must not read as clean: the
   // difference between "re-capture" and "this run was clean".
   if (idle.empty()) {
@@ -2122,13 +2193,22 @@ void derive_slice(const Collected&, ReportResult& r) {
   constexpr uint64_t kStrandNs = 10000000ULL;
   std::vector<uint64_t> slices;
   std::vector<std::pair<uint64_t, uint64_t>> tl;   // (slice start, duration), for the trajectory
-  for (const auto& kv : g_sched_picks.active()) {
-    const auto& v = kv.second;
-    for (size_t i = 1; i < v.size(); ++i) {
-      const uint64_t d = v[i].ts - v[i - 1].ts;
-      if (d > 0 && d < kStrandNs) { slices.push_back(d); tl.push_back({v[i - 1].ts, d}); }
+  // Counted first: grown by doubling, the two lists peaked at up to three times
+  // the slices they held, on the busiest stream in the trace.
+  auto each_slice = [](auto fn) {
+    for (const auto& kv : g_sched_picks.active()) {
+      const auto& v = kv.second;
+      for (size_t i = 1; i < v.size(); ++i) {
+        const uint64_t d = v[i].ts - v[i - 1].ts;
+        if (d > 0 && d < kStrandNs) fn(v[i - 1].ts, d);
+      }
     }
-  }
+  };
+  size_t n = 0;
+  each_slice([&](uint64_t, uint64_t) { ++n; });
+  slices.reserve(n);
+  tl.reserve(n);
+  each_slice([&](uint64_t at, uint64_t d) { slices.push_back(d); tl.push_back({at, d}); });
   // A capture limitation, not a finding: the PICK stream needs --sched-detail.
   if (slices.empty()) { compose_verdict(r, "NO-PICK-STREAM", "no slices (PICK stream absent)"); return; }
   sublimation_u64(slices.data(), slices.size());
@@ -2195,49 +2275,60 @@ void derive_slice(const Collected&, ReportResult& r) {
 // with no resched before the next kick (or trace end) is UNANSWERED; one that
 // landed within 5ms of a successful TICK_STOP on that cpu raced the CPU's own
 // idle entry. A SELF-kick (issuer == target) is the scheduler preempting
-// itself -- it cannot buy parallelism, only reorder its own queue.
-void derive_kick_latency(const Collected& in, ReportResult& r) {
-  struct Ev { uint64_t ts; uint32_t issuer_or_ok; uint64_t aux; };
-  std::unordered_map<int64_t, std::vector<Ev>> kicks, tick_stop;
-  std::unordered_map<int64_t, std::vector<uint64_t>> resched;
-  in.each([&](Collected::Row e) {
-    const uint64_t ts = static_cast<uint64_t>(e.ts());
-    if (e.src() == 0) kicks[e[0]].push_back({ts, static_cast<uint32_t>(e[1]), e.u(2)});
-    else if (e.src() == 1) resched[e[0]].push_back(ts);
-    else tick_stop[e[0]].push_back({ts, static_cast<uint32_t>(e[1]), e.u(2)});
-  });
+// itself -- it cannot buy parallelism, only reorder its own queue. Per CPU, a
+// resched is a bare timestamp and a tick-stop its timestamp and success.
+struct KickLatencyStream final : Stream {
+  struct Kick { uint64_t ts; uint32_t issuer; uint64_t flags; };
+  // derive sorts each CPU's lists in place, once; a copy would double them.
+  mutable std::unordered_map<int64_t, std::vector<Kick>> kicks;
+  mutable std::unordered_map<int64_t, std::vector<uint64_t>> resched;
+  mutable std::unordered_map<int64_t, std::vector<std::pair<uint64_t, uint8_t>>> tick_stop;
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
+    const auto* s = reinterpret_cast<const montauk_sched_event*>(data);
+    if (s->op == SCHED_OP_KICK_ISSUE)
+      kicks[s->cpu].push_back({s->timestamp_ns, static_cast<uint32_t>(s->last_cpu), s->score});
+    else if (s->op == SCHED_OP_RESCHED)
+      resched[s->cpu].push_back(s->timestamp_ns);
+    else if (s->op == SCHED_OP_TICK_STOP)
+      tick_stop[s->cpu].push_back({s->timestamp_ns, static_cast<uint8_t>(s->sub_idx == 1)});
+  }
+};
+
+void derive_kick_latency(const Stream& st, ReportResult& r) {
+  const auto& K = static_cast<const KickLatencyStream&>(st);
+  const auto& kicks = K.kicks;
   const uint64_t last_ts = g_sched_max_ts;
   uint64_t total = 0, unanswered = 0, raced = 0, self_total = 0, self_preempt = 0;
   std::vector<uint64_t> lat;
   struct Miss { int64_t cpu; uint64_t ts; bool tickless; };
   std::vector<Miss> misses;
   std::unordered_map<int64_t, uint64_t> unanswered_by_cpu, self_preempt_by_cpu;
-  for (auto& [cpu, kv] : kicks) {
-    std::vector<uint64_t> rs = resched[cpu];
+  for (auto& [cpu, ks] : K.kicks) {
+    auto& rs = K.resched[cpu];
     if (!rs.empty()) sublimation_u64(rs.data(), rs.size());
-    std::vector<Ev> ks = kv;
-    sublimation_order_u64(ks, false, [](const Ev& e) { return e.ts; });
-    std::vector<Ev> stop = tick_stop[cpu];
-    sublimation_order_u64(stop, false, [](const Ev& e) { return e.ts; });
+    sublimation_order_u64(ks, false, [](const KickLatencyStream::Kick& e) { return e.ts; });
+    auto& stop = K.tick_stop[cpu];
+    sublimation_order_u64(stop, false, [](const std::pair<uint64_t, uint8_t>& e) { return e.first; });
     uint64_t cpu_unanswered = 0;
     for (size_t i = 0; i < ks.size(); ++i) {
       const uint64_t kick = ks[i].ts, bound = i + 1 < ks.size() ? ks[i + 1].ts : last_ts;
       ++total;
-      // SCX_KICK_PREEMPT is 0x2 in the scx ABI; aux is the flag bitmask.
-      if (ks[i].issuer_or_ok == static_cast<uint32_t>(cpu)) {
+      // SCX_KICK_PREEMPT is 0x2 in the scx ABI; flags is the bitmask.
+      if (ks[i].issuer == static_cast<uint32_t>(cpu)) {
         ++self_total;
-        if (ks[i].aux & 0x2ULL) { ++self_preempt; ++self_preempt_by_cpu[cpu]; }
+        if (ks[i].flags & 0x2ULL) { ++self_preempt; ++self_preempt_by_cpu[cpu]; }
       }
       const size_t ri = sublimation_searchsorted_u64(rs.data(), rs.size(), kick, 0);
       if (ri < rs.size() && rs[ri] <= bound) { lat.push_back(rs[ri] - kick); continue; }
       ++unanswered;
       ++cpu_unanswered;
-      bool tickless = false;
-      for (auto it = stop.rbegin(); it != stop.rend(); ++it) {
-        if (it->ts > kick) continue;
-        if (kick - it->ts <= 5'000'000ULL && it->issuer_or_ok == 1) tickless = true;
-        break;
-      }
+      // The last tick-stop at or before the kick decides: a successful one
+      // within 5ms raced the CPU's own idle entry.
+      const auto past = std::upper_bound(stop.begin(), stop.end(), kick,
+          [](uint64_t t, const std::pair<uint64_t, uint8_t>& e) { return t < e.first; });
+      const bool tickless = past != stop.begin() && kick - std::prev(past)->first <= 5'000'000ULL &&
+                            std::prev(past)->second == 1;
       if (tickless) ++raced;
       misses.push_back({cpu, kick, tickless});
     }
@@ -2330,17 +2421,20 @@ const ReportDef kSeat = {"seat",
                           {"sched.wake2run", {"pid"}, {"runtime_ns<900000"}, false, true},
                           {"sched.wake2run", {"pid"}, {}, false, true}},
                          false, derive_seat};
-const ReportDef kMatrixProfile = {"matrix-profile", {{"sched", {}}}, false, derive_matrix_profile};
+const ReportDef kMatrixProfile = {"matrix-profile", {}, false, nullptr, false,
+                                  [] { return std::unique_ptr<Stream>(new MatrixProfileStream); },
+                                  derive_matrix_profile};
 const ReportDef kWorkConservation = {"work-conservation", {{"sched.pick", {"cpu", "pid"}}}, false,
                                      derive_work_conservation};
-const ReportDef kPlacementRace = {"placement-race", {{"sched.cpu_idle", {"cpu", "sub_idx"}},
-                                                     {"sched.wake2run", {"cpu", "runtime_ns"}}},
-                                  true, derive_placement_race};
+// Each reads only g_sched_max_cpu or g_sched_max_ts, which the driver folds
+// unconditionally, so neither asks for the substrate's timelines.
+const ReportDef kPlacementRace = {"placement-race", {}, false, nullptr, false,
+                                  [] { return std::unique_ptr<Stream>(new PlacementRaceStream); },
+                                  derive_placement_race};
 const ReportDef kSlice = {"slice", {}, true, derive_slice};
-const ReportDef kKickLatency = {"kick-latency", {{"sched.kick_issue", {"cpu", "last_cpu", "score"}},
-                                                 {"sched.resched", {"cpu"}},
-                                                 {"sched.tick_stop", {"cpu", "sub_idx", "score"}}},
-                                true, derive_kick_latency};
+const ReportDef kKickLatency = {"kick-latency", {}, false, nullptr, false,
+                                [] { return std::unique_ptr<Stream>(new KickLatencyStream); },
+                                derive_kick_latency};
 const ReportDef kService = {"service", {}, true, derive_service};
 
 // REPORT summary: the census -- every record by type and subtype, the span the
@@ -2364,18 +2458,21 @@ void derive_summary(const Collected&, ReportResult& r) {
     const char* nm = io_syscall_name(static_cast<int32_t>(nr));
     row("IO", std::strcmp(nm, "?") == 0 ? "nr=" + std::to_string(nr) : std::string(nm), io_ops[nr]);
   }
+  const auto& sc_ops = g_census.op_n[TRACE_EVT_SYSCALL];
+  for (size_t nr = 0; nr < sc_ops.size(); ++nr) {
+    const char* nm = io_syscall_name(static_cast<int32_t>(nr));
+    row("SYSCALL", std::strcmp(nm, "?") == 0 ? "nr=" + std::to_string(nr) : std::string(nm), sc_ops[nr]);
+  }
   for (uint32_t o = 1; o < MONTAUK_SCHED_OP_MAX; ++o) row("SCHED", sched_op_name(o), op(TRACE_EVT_SCHED, o));
-  row("HEAP", "malloc", op(TRACE_EVT_HEAP, HEAP_OP_MALLOC));
-  row("HEAP", "free", op(TRACE_EVT_HEAP, HEAP_OP_FREE));
-  row("HEAP", "realloc", op(TRACE_EVT_HEAP, HEAP_OP_REALLOC));
-  row("HEAP", "calloc", op(TRACE_EVT_HEAP, HEAP_OP_CALLOC));
+  for (uint32_t o = HEAP_OP_MALLOC; o <= HEAP_OP_PVALLOC; ++o)
+    row("HEAP", heap_op_name(o), op(TRACE_EVT_HEAP, o));
   row("SIGNAL", "deliver", op(TRACE_EVT_SIGNAL, SIGEVT_DELIVER));
   row("SIGNAL", "exit_abnormal", op(TRACE_EVT_SIGNAL, SIGEVT_EXIT_ABNL));
   row("ABORT", "__assert_fail", op(TRACE_EVT_ABORT, ABORT_FN_ASSERT_FAIL));
   row("ABORT", "__libc_message", op(TRACE_EVT_ABORT, ABORT_FN_LIBC_MESSAGE));
   row("ABORT", "abort", op(TRACE_EVT_ABORT, ABORT_FN_ABORT));
   row("HEAPSTK", "size_filtered", of_type(TRACE_EVT_HEAPSTACK));
-  row("MMAP", "file_backed", of_type(TRACE_EVT_MMAP));
+  row("MMAP", "file_or_exec", of_type(TRACE_EVT_MMAP));
   row("KSTRAND", "pcpu_kthread", of_type(TRACE_EVT_KSTRAND));
   row("FORK", "", of_type(TRACE_EVT_FORK));
   row("EXEC", "", of_type(TRACE_EVT_EXEC));
@@ -2387,7 +2484,7 @@ void derive_summary(const Collected&, ReportResult& r) {
   static constexpr uint32_t kRowed[] = {TRACE_EVT_NTSYNC, TRACE_EVT_IO, TRACE_EVT_SCHED, TRACE_EVT_HEAP,
                                         TRACE_EVT_SIGNAL, TRACE_EVT_ABORT, TRACE_EVT_HEAPSTACK, TRACE_EVT_MMAP,
                                         TRACE_EVT_KSTRAND, TRACE_EVT_FORK, TRACE_EVT_EXEC, TRACE_EVT_EXIT,
-                                        TRACE_EVT_COMM_CHANGE, TRACE_EVT_PROVIDER};
+                                        TRACE_EVT_COMM_CHANGE, TRACE_EVT_PROVIDER, TRACE_EVT_SYSCALL};
   std::vector<Row> unknown;
   for (const auto& [t, n] : by_type) {
     if (std::find(std::begin(kRowed), std::end(kRowed), t) != std::end(kRowed)) continue;
@@ -2712,14 +2809,17 @@ void derive_doublefree(const Collected& in, ReportResult& r) {
     const uint32_t tid = static_cast<uint32_t>(e[1]);
     const uint64_t addr = e.u(3), size = e.u(4), new_addr = e.u(5);
     auto store = [&](std::unordered_map<uint64_t, Live>& m, uint64_t a, uint64_t sz) { m[key(pid, a)] = {sz, tid, e[6]}; };
-    switch (e[2]) {
-      case HEAP_OP_MALLOC: case HEAP_OP_CALLOC:
-        if (addr) { store(live, addr, size); freed.erase(key(pid, addr)); }
-        break;
-      case HEAP_OP_REALLOC:
-        if (addr) { live.erase(key(pid, addr)); freed.erase(key(pid, addr)); }
-        if (new_addr) { store(live, new_addr, size); freed.erase(key(pid, new_addr)); }
-        break;
+    const uint32_t op = static_cast<uint32_t>(e[2]);
+    if (montauk::model::heap_op_allocates(op)) {
+      if (addr) { store(live, addr, size); freed.erase(key(pid, addr)); }
+      return;
+    }
+    if (montauk::model::heap_op_moves(op)) {
+      if (addr) { live.erase(key(pid, addr)); freed.erase(key(pid, addr)); }
+      if (new_addr) { store(live, new_addr, size); freed.erase(key(pid, new_addr)); }
+      return;
+    }
+    switch (op) {
       case HEAP_OP_FREE: {
         if (!addr) break;  // free(NULL) is legal
         ++frees;
@@ -2764,24 +2864,35 @@ void derive_doublefree(const Collected& in, ReportResult& r) {
 // REPORT futex: threads blocked on a futex-backed lock at trace end, grouped by
 // opaque uaddr. A thread whose last activity is a FUTEX_WAIT -- above all one
 // re-issued on the same uaddr -- is wedged entering that lock. Addresses are
-// opaque; naming a lock is a consumer's join against its own metadata.
-void derive_futex(const Collected& in, ReportResult& r) {
+// opaque; naming a lock is a consumer's join against its own metadata. The io
+// record of a futex(2) call carries its op in fd and its uaddr in count.
+struct FutexStream final : Stream {
   struct TidF { uint64_t last_wait_ts = 0, wait_uaddr = 0; uint32_t retries = 0; };
   struct Wake { uint64_t wakes = 0; };
   std::map<uint32_t, TidF> tids;
   std::map<uint64_t, Wake> wakes;
-  in.each([&](Collected::Row e) {
-    const uint32_t opb = static_cast<uint32_t>(e[1]) & 0x7f;
-    const uint64_t uaddr = e.u(2);
-    TidF& t = tids[static_cast<uint32_t>(e[0])];
+  FutexStream() { types = 1ull << TRACE_EVT_IO; }
+  void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
+    if (type != TRACE_EVT_IO || len < sizeof(montauk_io_event)) return;
+    const auto* e = reinterpret_cast<const montauk_io_event*>(data);
+    if (e->syscall_nr != 202) return;
+    const uint32_t opb = static_cast<uint32_t>(e->fd) & 0x7f;
+    const uint64_t uaddr = e->count;
+    TidF& t = tids[e->tid];
     if (futex_is_wait(opb)) {
       if (t.wait_uaddr == uaddr && t.last_wait_ts != 0) ++t.retries; else t.retries = 1;
-      t.last_wait_ts = static_cast<uint64_t>(e.ts());
+      t.last_wait_ts = e->timestamp_ns;
       t.wait_uaddr = uaddr;
     } else if (futex_is_wake(opb)) {
       ++wakes[uaddr].wakes;
     }
-  });
+  }
+};
+
+void derive_futex(const Stream& st, ReportResult& r) {
+  using TidF = FutexStream::TidF;
+  const auto& tids = static_cast<const FutexStream&>(st).tids;
+  const auto& wakes = static_cast<const FutexStream&>(st).wakes;
   static constexpr std::initializer_list<uint32_t> kActivity = {
       TRACE_EVT_IO, TRACE_EVT_NTSYNC, TRACE_EVT_HEAP, TRACE_EVT_MMAP, TRACE_EVT_SIGNAL};
   const uint64_t max_ts = g_census.span_of(kActivity).second;
@@ -2913,7 +3024,8 @@ const ReportDef kPairing = {"pairing",
                             false, derive_pairing};
 const ReportDef kDoubleFree = {"doublefree", {{"heap", {"pid", "tid", "op", "addr", "size", "new_addr", "comm"}}},
                                false, derive_doublefree};
-const ReportDef kFutex = {"futex", {{"io", {"tid", "fd", "count"}, {"syscall_nr=202"}}}, false, derive_futex, true};
+const ReportDef kFutex = {"futex", {}, false, nullptr, true,
+                          [] { return std::unique_ptr<Stream>(new FutexStream); }, derive_futex};
 const ReportDef kKeyedEvt = {"keyedevt", {{"keyedevt", {"tid", "pid", "comm", "op", "key"}}}, false, derive_keyedevt, true};
 
 // REPORT abortpm: per-ABORT arena post-mortem. The glibc top-chunk / !prev
@@ -2941,11 +3053,11 @@ void derive_abortpm(const Collected& in, ReportResult& r) {
       case 0: {   // heap: tid op addr size new_addr comm
         const int64_t op = e[1];
         const uint64_t addr = e.u(2), size = e.u(3), new_addr = e.u(4);
-        if (op == HEAP_OP_MALLOC || op == HEAP_OP_CALLOC) {
+        if (montauk::model::heap_op_allocates(static_cast<uint32_t>(op))) {
           if (addr) { live[addr] = {size, tid, e[5]}; last_alloc[tid] = addr; }
         } else if (op == HEAP_OP_FREE) {
           if (addr) live.erase(addr);
-        } else if (op == HEAP_OP_REALLOC) {
+        } else if (montauk::model::heap_op_moves(static_cast<uint32_t>(op))) {
           if (addr) live.erase(addr);
           if (new_addr) { live[new_addr] = {size, tid, e[5]}; last_alloc[tid] = new_addr; }
         }
@@ -3102,14 +3214,33 @@ void derive_signals(const Collected& in, ReportResult& r) {
       state = std::string("in ") + (io[0] == '?' ? "syscall " + std::to_string(e[6]) : std::string(io));
       if (e[7] >= 0) state += " fd=" + std::to_string(e[7]);
     }
-    // The death site: the stack joined against the maps sidecar, when it resolves.
+    // The site: the stack joined against the maps sidecar, when it resolves.
+    // The frame-pointer walk the kernel took stops at the first function that
+    // keeps no frame pointer, so where the record carries the interrupted
+    // context, the call frame information of the mapped files walks it again
+    // offline, and the longer walk is the site.
+    const auto& rec = e.raw<montauk_signal_event>();
+    const uint32_t pid = static_cast<uint32_t>(e[0]);
+    std::vector<uint64_t> frames(rec.stack_user,
+                                 rec.stack_user + std::min<uint32_t>(rec.stack_depth, TRACE_STACK_MAX_FRAMES));
+    bool by_cfi = false;
+    if (rec.user_stack_len) {
+      const montauk::unwind::UserContext uc{rec.user_ip, rec.user_sp, rec.user_bp, rec.user_stack,
+                                            std::min<size_t>(rec.user_stack_len, TRACE_SIGNAL_STACK_BYTES)};
+      auto walked = montauk::unwind::walk(
+          uc, [&](uint64_t a) { return g_maps.find_seg(pid, a); }, TRACE_STACK_MAX_FRAMES);
+      if (walked.size() > 1 && walked.size() >= frames.size()) {
+        frames = std::move(walked);
+        by_cfi = true;
+      }
+    }
     std::string site;
     int shown = 0;
-    for (uint64_t i = 0; i < std::min<uint64_t>(e.u(8), 8); ++i) {
-      const std::string res = g_maps.resolve(static_cast<uint32_t>(e[0]), e.u(10 + i));
+    for (uint64_t ip : frames) {
+      const std::string res = g_maps.resolve(pid, ip);
       if (res.empty() || res == "[anon]") continue;
       site += (site.empty() ? "" : " <- ") + res;
-      if (++shown >= 4) break;
+      if (++shown >= 12) break;
     }
     Detail row = Detail::object();
     row.put("t_s", Detail::of(static_cast<double>(v.ts - min_ts) / 1e9))
@@ -3118,9 +3249,13 @@ void derive_signals(const Collected& in, ReportResult& r) {
        .put("pid", Detail::count(e.u(0))).put("tid", Detail::count(e.u(1)))
        .put("comm", Detail::text(redact_comm(e.text(9).c_str()))).put("signal", Detail::text(label(v)))
        .put("sender", Detail::of(static_cast<double>(e[4])))
+       .put("disposition", Detail::text(montauk::model::signal_disposition_name(static_cast<uint32_t>(e[18]))))
        .put("status", Detail::text(e[2] == SIGEVT_EXIT_ABNL ? std::to_string((e[5] >> 8) & 0xff) : "-"))
        .put("state", Detail::text(state)).put("midtrace_death", Detail::flag(death(v)));
-    if (!site.empty()) row.put("site", Detail::text(site));
+    if (!site.empty()) {
+      row.put("site", Detail::text(site));
+      row.put("site_by", Detail::text(by_cfi ? "eh_frame" : "frame pointers"));
+    }
     events.arr.push_back(std::move(row));
   }
   r.detail.emplace_back("by_comm", std::move(rollup));
@@ -3128,11 +3263,13 @@ void derive_signals(const Collected& in, ReportResult& r) {
 }
 
 // REPORT endstate: who was doing what when the trace ENDED. After a wedged
-// program is stopped, the threads still parked in ntsync waits -- and how long
-// they had been parked -- name the stall; a thread killed while parked is a
-// victim too, since the usual capture is taken after a force-quit. Each parked
-// thread's wait objects carry their signal history: never signaled is a dead
-// producer, signaled after the park is a lost wakeup.
+// program is stopped, the threads still parked in ntsync waits or on futex
+// words -- and how long they had been parked -- name the stall; a thread killed
+// while parked is a victim too, since the usual capture is taken after a
+// force-quit. Each ntsync waiter's objects carry their signal history: never
+// signaled is a dead producer, signaled after the park is a lost wakeup. A
+// futex waiter is named by its word and the site its last wait with no
+// deadline was taken from.
 void derive_endstate(const Collected& in, ReportResult& r) {
   struct TidState { bool wait_open = false, exited = false; uint64_t wait_since = 0, timeout_ns = 0;
                     uint32_t wait_count = 0; uint64_t objs[NTSYNC_MAX_WAIT_FDS]{}; uint32_t fds[NTSYNC_MAX_WAIT_FDS]{}; };
@@ -3143,6 +3280,10 @@ void derive_endstate(const Collected& in, ReportResult& r) {
   std::map<uint32_t, std::vector<uint64_t>> wait_stack;
   struct RawStack { uint32_t pid; uint64_t rip; std::vector<uint8_t> bytes; };
   std::map<uint32_t, RawStack> raw_stack;
+  struct FutexState { bool open = false; uint64_t since = 0, uaddr = 0, timeout_ns = 0; uint32_t op = 0, pid = 0; };
+  std::map<uint32_t, FutexState> futexes;
+  struct FutexSite { uint64_t uaddr = 0, ts = 0; std::vector<uint64_t> frames; };
+  std::map<uint32_t, FutexSite> futex_stack;
   in.each([&](Collected::Row e) {
     const uint32_t tid = static_cast<uint32_t>(e[0]);
     switch (e.src()) {
@@ -3160,6 +3301,27 @@ void derive_endstate(const Collected& in, ReportResult& r) {
       case 3:
         if (e[1] == SIGEVT_EXIT_ABNL) tids[tid].exited = true;
         return;
+      case 4: {
+        // futex: tid op uaddr result timeout_ns pid
+        FutexState& f = futexes[tid];
+        f.open = e[3] == kWaitEntrySentinel;
+        if (f.open) {
+          f.since = static_cast<uint64_t>(e.ts());
+          f.op = static_cast<uint32_t>(e[1]);
+          f.uaddr = e.u(2);
+          f.timeout_ns = e.u(4);
+          f.pid = static_cast<uint32_t>(e[5]);
+        }
+        return;
+      }
+      case 5: {
+        const auto& w = e.raw<montauk_futexstack_event>();
+        auto& site = futex_stack[tid];
+        site.uaddr = w.uaddr;
+        site.ts = w.timestamp_ns;
+        site.frames.assign(w.stack_user, w.stack_user + std::min<uint32_t>(w.stack_depth, TRACE_STACK_MAX_FRAMES));
+        return;
+      }
       default: break;
     }
     // ntsync: tid op fd result wait_count timeout_ns obj_ptr wait_fd0..7 wait_obj0..7
@@ -3193,35 +3355,46 @@ void derive_endstate(const Collected& in, ReportResult& r) {
     }
   });
   static constexpr std::initializer_list<uint32_t> kTouch = {
-      TRACE_EVT_WAITSTACK, TRACE_EVT_RAWSTACK, TRACE_EVT_NTSYNC, TRACE_EVT_HEAP, TRACE_EVT_IO, TRACE_EVT_SIGNAL};
+      TRACE_EVT_WAITSTACK, TRACE_EVT_RAWSTACK, TRACE_EVT_NTSYNC, TRACE_EVT_HEAP, TRACE_EVT_IO, TRACE_EVT_SIGNAL,
+      TRACE_EVT_FUTEX, TRACE_EVT_FUTEXSTACK};
   static constexpr std::initializer_list<uint32_t> kNamed = {
-      TRACE_EVT_WAITSTACK, TRACE_EVT_RAWSTACK, TRACE_EVT_HEAP, TRACE_EVT_IO, TRACE_EVT_SIGNAL};
+      TRACE_EVT_WAITSTACK, TRACE_EVT_RAWSTACK, TRACE_EVT_HEAP, TRACE_EVT_IO, TRACE_EVT_SIGNAL,
+      TRACE_EVT_FUTEX, TRACE_EVT_FUTEXSTACK};
   const uint64_t max_ts = g_census.span_of(kTouch).second;
   auto pid_of = [&](uint32_t tid) { const auto* l = g_threads.latest(tid, kTouch, false); return l ? l->pid : 0; };
   auto comm_of = [&](uint32_t tid) {
     const auto* l = g_threads.latest(tid, kNamed, true);
     return redact_comm(ThreadLedger::comm(l).c_str());
   };
+  auto exited = [&](uint32_t tid) { auto it = tids.find(tid); return it != tids.end() && it->second.exited; };
   size_t blocked_now = 0;
   for (const auto& [tid, t] : tids) if (t.wait_open && !t.exited) ++blocked_now;
+  for (const auto& [tid, f] : futexes) if (f.open && !exited(tid)) ++blocked_now;
   r.gauges.push_back({"montauk_analysis_endstate_blocked_threads", "", static_cast<double>(blocked_now)});
-  if (tids.empty() && g_threads.by_tid.empty()) { compose_verdict(r, "NO-THREADS", "no per-thread activity in trace"); return; }
+  if (tids.empty() && futexes.empty() && g_threads.by_tid.empty()) { compose_verdict(r, "NO-THREADS", "no per-thread activity in trace"); return; }
   // A stall victim: still parked at trace end, or killed after holding an
-  // open wait for at least 2s.
+  // open wait for at least 2s, in an ntsync wait or on a futex word alike.
   constexpr uint64_t kParkSlackNs = 1'000'000, kKilledStallNs = 2'000'000'000ULL;
-  std::vector<std::pair<uint32_t, const TidState*>> blocked;
+  struct Parked { uint32_t tid; uint64_t since; bool exited; const TidState* t; const FutexState* f; };
+  std::vector<Parked> blocked;
   for (const auto& [tid, t] : tids) {
     if (!t.wait_open) continue;
     const uint64_t open_ns = max_ts > t.wait_since ? max_ts - t.wait_since : 0;
-    if (!t.exited || open_ns >= kKilledStallNs) blocked.emplace_back(tid, &t);
+    if (!t.exited || open_ns >= kKilledStallNs) blocked.push_back({tid, t.wait_since, t.exited, &t, nullptr});
   }
-  sublimation_order_u64(blocked, false, [](const std::pair<uint32_t, const TidState*>& p) { return p.second->wait_since; });
+  for (const auto& [tid, f] : futexes) {
+    if (!f.open) continue;
+    const uint64_t open_ns = max_ts > f.since ? max_ts - f.since : 0;
+    const bool gone = exited(tid);
+    if (!gone || open_ns >= kKilledStallNs) blocked.push_back({tid, f.since, gone, nullptr, &f});
+  }
+  sublimation_order_u64(blocked, false, [](const Parked& p) { return p.since; });
   if (blocked.empty()) { compose_verdict(r, "NO-PARKED", "no threads parked or killed-while-parked in this trace"); return; }
   // Genuinely parked only if it did nothing after the wait entry; any later
   // event means it woke and the completion was lost.
-  auto status_of = [&](uint32_t tid, const TidState& t) -> const char* {
-    if (t.exited) return "KILLED-PARKED";
-    return g_threads.last_ts(tid, kTouch) <= t.wait_since + kParkSlackNs ? "PARKED" : "woke(lost-compl)";
+  auto status_of = [&](const Parked& p) -> const char* {
+    if (p.exited) return "KILLED-PARKED";
+    return g_threads.last_ts(p.tid, kTouch) <= p.since + kParkSlackNs ? "PARKED" : "woke(lost-compl)";
   };
   auto type_name = [](uint8_t create_op, uint8_t signal_op) {
     switch (create_op) { case NTS_CREATE_SEM: return "SEM"; case NTS_CREATE_MUTEX: return "MUTEX"; case NTS_CREATE_EVENT: return "EVENT"; default: break; }
@@ -3231,48 +3404,76 @@ void derive_endstate(const Collected& in, ReportResult& r) {
       default: return "object";
     }
   };
-  size_t genuine = 0;
-  for (const auto& [tid, t] : blocked) if (std::string(status_of(tid, *t)) != "woke(lost-compl)") ++genuine;
-  const auto& [wtid, w] = blocked.front();
+  size_t genuine = 0, on_futex = 0;
+  for (const Parked& p : blocked) {
+    if (std::string(status_of(p)) != "woke(lost-compl)") ++genuine;
+    if (p.f) ++on_futex;
+  }
+  const Parked& w = blocked.front();
   // The verdict NAMES what the longest-parked thread is starved of.
   std::string objdesc;
-  if (w->wait_count > 0) {
-    auto it = objs.find(w->objs[0]);
+  if (w.f) {
+    objdesc = "; on futex word " + fmt_obj(w.f->pid, w.f->uaddr, true);
+  } else if (w.t->wait_count > 0) {
+    auto it = objs.find(w.t->objs[0]);
     const char* ty = type_name(it != objs.end() ? it->second.create_op : 0xFF, it != objs.end() ? it->second.last_signal_op : 0xFF);
     if (it == objs.end() || it->second.signals == 0) objdesc = std::string("; ") + ty + " NEVER signaled (dead producer / no signaler)";
-    else if (it->second.last_signal_ts > w->wait_since) objdesc = std::string("; ") + ty + " signaled AFTER park (lost wakeup)";
+    else if (it->second.last_signal_ts > w.since) objdesc = std::string("; ") + ty + " signaled AFTER park (lost wakeup)";
     else objdesc = std::string("; ") + ty + " last wakeup BEFORE the park — producer went quiet";
   }
   compose_verdict(r, genuine ? "STALLED" : "LOST-COMPLETION",
-                  "%zu thread(s) stuck in an ntsync wait (%zu genuine stall victims, "
+                  "%zu thread(s) stuck in a wait (%zu ntsync, %zu futex; %zu genuine stall victims, "
                   "%zu woke/lost-compl); longest tid=%u '%s' %s %.1fs%s",
-                  blocked.size(), genuine, blocked.size() - genuine, wtid, comm_of(wtid).c_str(),
-                  w->exited ? "killed while parked" : "parked", static_cast<double>(max_ts - w->wait_since) / 1e9,
-                  objdesc.c_str());
+                  blocked.size(), blocked.size() - on_futex, on_futex, genuine, blocked.size() - genuine, w.tid,
+                  comm_of(w.tid).c_str(), w.exited ? "killed while parked" : "parked",
+                  static_cast<double>(max_ts - w.since) / 1e9, objdesc.c_str());
   auto hex = [](uint64_t v) { char b[24]; std::snprintf(b, sizeof b, "0x%016" PRIx64, v); return std::string(b); };
+  // Where in the code a thread is parked: its wait stack against the maps
+  // sidecar, the first four frames that land in a file.
+  auto site_of = [](uint32_t pid, const std::vector<uint64_t>& frames) {
+    std::string site;
+    int shown = 0;
+    for (uint64_t ip : frames) {
+      const std::string res = g_maps.resolve(pid, ip);
+      if (res.empty() || res == "[anon]") continue;
+      site += (site.empty() ? "" : " <- ") + res;
+      if (++shown >= 4) break;
+    }
+    return site;
+  };
   Detail threads = Detail::array(), waits = Detail::array();
-  for (const auto& [tid, t] : blocked) {
+  for (const Parked& p : blocked) {
+    const uint32_t tid = p.tid;
+    const uint32_t pid = p.f ? p.f->pid : static_cast<uint32_t>(pid_of(tid));
     const uint64_t last = g_threads.last_ts(tid, kTouch);
     Detail th = Detail::object();
-    th.put("tid", Detail::count(tid)).put("pid", Detail::count(static_cast<uint64_t>(pid_of(tid))))
-      .put("comm", Detail::text(comm_of(tid)))
-      .put("open_s", Detail::of(static_cast<double>(max_ts - t->wait_since) / 1e9))
-      .put("act_after_ms", Detail::of(last > t->wait_since ? static_cast<double>(last - t->wait_since) / 1e6 : 0.0))
-      .put("status", Detail::text(status_of(tid, *t))).put("objs", Detail::count(t->wait_count))
-      .put("timeout_ns", Detail::count(t->timeout_ns));
+    th.put("tid", Detail::count(tid)).put("pid", Detail::count(static_cast<uint64_t>(pid)))
+      .put("comm", Detail::text(comm_of(tid))).put("wait", Detail::text(p.f ? "futex" : "ntsync"))
+      .put("open_s", Detail::of(static_cast<double>(max_ts - p.since) / 1e9))
+      .put("act_after_ms", Detail::of(last > p.since ? static_cast<double>(last - p.since) / 1e6 : 0.0))
+      .put("status", Detail::text(status_of(p)));
+    if (p.f) {
+      // The word and the site its wait was taken from: the stack of this
+      // wait's own enter, taken for a wait with no deadline.
+      th.put("uaddr", Detail::text(hex(p.f->uaddr))).put("word", Detail::text(fmt_obj(pid, p.f->uaddr, true)))
+        .put("op", Detail::text(montauk::model::futex_cmd_name(p.f->op))).put("timeout_ns", Detail::count(p.f->timeout_ns));
+      auto fs = futex_stack.find(tid);
+      if (fs != futex_stack.end() && fs->second.uaddr == p.f->uaddr && fs->second.ts >= p.since &&
+          fs->second.ts <= p.since + kParkSlackNs) {
+        const std::string site = site_of(pid, fs->second.frames);
+        if (!site.empty()) th.put("parked_at", Detail::text(site));
+      }
+      threads.arr.push_back(std::move(th));
+      continue;
+    }
+    const TidState* t = p.t;
+    th.put("objs", Detail::count(t->wait_count)).put("timeout_ns", Detail::count(t->timeout_ns));
     // Where in the code it is parked: its last infinite-wait stack against
     // the maps sidecar, and a scan of its raw stack slice for return
     // addresses a frame-pointer-less walk cannot reach.
     auto ws = wait_stack.find(tid);
     if (ws != wait_stack.end()) {
-      std::string site;
-      int shown = 0;
-      for (uint64_t ip : ws->second) {
-        const std::string res = g_maps.resolve(static_cast<uint32_t>(pid_of(tid)), ip);
-        if (res.empty() || res == "[anon]") continue;
-        site += (site.empty() ? "" : " <- ") + res;
-        if (++shown >= 4) break;
-      }
+      const std::string site = site_of(pid, ws->second);
       if (!site.empty()) th.put("parked_at", Detail::text(site));
     }
     auto rs = raw_stack.find(tid);
@@ -3298,14 +3499,14 @@ void derive_endstate(const Collected& in, ReportResult& r) {
       char b[192];
       if (sigs == 0) {
         verdict = "NEVER signaled — dead producer / no signaler";
-      } else if (it->second.last_signal_ts > t->wait_since) {
+      } else if (it->second.last_signal_ts > p.since) {
         std::snprintf(b, sizeof b, "signaled +%.1fms AFTER park by tid=%u (%s) — LOST WAKEUP",
-                      static_cast<double>(it->second.last_signal_ts - t->wait_since) / 1e6,
+                      static_cast<double>(it->second.last_signal_ts - p.since) / 1e6,
                       it->second.last_signal_tid, ntsync_op_name(it->second.last_signal_op));
         verdict = b;
       } else {
         std::snprintf(b, sizeof b, "last signal -%.1fms BEFORE park by tid=%u (%s)",
-                      static_cast<double>(t->wait_since - it->second.last_signal_ts) / 1e6,
+                      static_cast<double>(p.since - it->second.last_signal_ts) / 1e6,
                       it->second.last_signal_tid, ntsync_op_name(it->second.last_signal_op));
         verdict = b;
       }
@@ -3330,7 +3531,7 @@ const ReportDef kAbortPm = {"abortpm",
 const ReportDef kSignals = {"signals",
                             {{"signal", {"pid", "tid", "kind", "signal_nr", "sender_pid", "exit_code", "syscall_nr",
                                          "io_fd", "stack_depth", "comm", "frame0", "frame1", "frame2", "frame3",
-                                         "frame4", "frame5", "frame6", "frame7"}}},
+                                         "frame4", "frame5", "frame6", "frame7", "disposition"}, {}, true}},
                             false, derive_signals};
 const ReportDef kEndstate = {"endstate",
                              {{"waitstack", {"tid"}, {}, true},
@@ -3339,7 +3540,9 @@ const ReportDef kEndstate = {"endstate",
                                           "wait_fd0", "wait_fd1", "wait_fd2", "wait_fd3", "wait_fd4", "wait_fd5",
                                           "wait_fd6", "wait_fd7", "wait_obj0", "wait_obj1", "wait_obj2", "wait_obj3",
                                           "wait_obj4", "wait_obj5", "wait_obj6", "wait_obj7"}},
-                              {"signal", {"tid", "kind"}}},
+                              {"signal", {"tid", "kind"}},
+                              {"futex", {"tid", "op", "uaddr", "result", "timeout_ns", "pid"}},
+                              {"futexstack", {"tid"}, {}, true}},
                              false, derive_endstate, true};
 
 // REPORT wakers: localize request-level latency to the WAKER's critical path.
@@ -3632,6 +3835,7 @@ struct LocalityStream final : Stream {
     if (ts_min == 0 || ts < ts_min) ts_min = ts;
     if (ts > ts_max) ts_max = ts;
   }
+  LocalityStream() { types |= 1ull << TRACE_EVT_PROVIDER; }   // the topology snapshot
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
     if (topo.fold(type, data, len)) return;
     if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
@@ -3780,6 +3984,7 @@ struct DsqStream final : Stream {
   uint64_t pool_moves = 0, steal_moves = 0, drain_stays = 0, drains_unmatched = 0, drains_total = 0;
   uint64_t mig_total = 0, mig_pull = 0, mig_push = 0, mig_place = 0, place_to_decider_cpu = 0, place_decider_local = 0;
   std::array<uint64_t, 4> mig_pull_tier{}, mig_push_tier{}, mig_place_tier{};
+  DsqStream() { types |= 1ull << TRACE_EVT_PROVIDER; }   // the topology snapshot
   void fold(uint32_t type, const uint8_t* data, uint32_t len) override {
     if (topo.fold(type, data, len)) return;
     if (type != TRACE_EVT_SCHED || len < sizeof(montauk_sched_event)) return;
@@ -4588,13 +4793,18 @@ int run_digest(const std::string& dir, bool redact, bool want_json) {
   auto reports = make_reports();
   for (const auto& r : reports) arm_ledger(r.get());
   if (have_events) {
+    std::vector<Report*> all;
+    for (auto& r : reports) all.push_back(r.get());
+    const Dispatch dispatch(std::move(all));
+    std::vector<uint8_t> fitted;
     (void)reader.for_each([&](uint32_t t, const uint8_t* d, uint32_t l) {
+      if (!(d = montauk::query::fit(t, d, l, fitted))) return;
       // The SAME driver-level fold the --report path runs. The digest used to
       // call only r->fold(), which left both the drop accounting and the shared
       // sched substrate empty -- so it under-reported loss as absent and
       // mis-diagnosed dispatch stalls from a substrate with nothing in it.
       fold_driver_state(t, d, l);
-      for (auto& r : reports) r->fold(t, d, l);
+      dispatch.fold(t, d, l);
     });
     for (auto& r : reports) r->compute();  // finalize typed results once, before any renderer
   }
@@ -4735,13 +4945,36 @@ int run_query(const char* path, int argc, char** argv) {
     else if (a == "--count") qy.op = q::Op::Count;
     else if (a == "--gap") qy.op = q::Op::Gap;
     else if (a == "--last") qy.op = q::Op::Last;
+    else if (a == "--first") qy.op = q::Op::First;
     else if (a == "--pair" && has_val) { qy.op = q::Op::Pair; pair_ops = argv[++i]; }
     else if (a == "--between" && has_val) {
+      // START:END from the capture's start, each a number with a unit (ns, us,
+      // ms, s; a bare number is seconds), either side open. The number was once
+      // read up to its first non-digit, so `256ms` meant 256 seconds.
       const std::string w = argv[++i];
       const size_t colon = w.find(':');
-      if (colon == std::string::npos) { log_error("--between takes START:END seconds"); return 2; }
-      if (colon > 0) qy.t0_s = std::strtod(w.c_str(), nullptr);
-      if (colon + 1 < w.size()) qy.t1_s = std::strtod(w.c_str() + colon + 1, nullptr);
+      auto secs = [](const std::string& t, double& out) {
+        char* end = nullptr;
+        const double v = std::strtod(t.c_str(), &end);
+        if (end == t.c_str() || v < 0) return false;
+        const std::string unit(end);
+        const double scale = unit.empty() || unit == "s" ? 1.0 : unit == "ms" ? 1e-3
+                           : unit == "us" ? 1e-6 : unit == "ns" ? 1e-9 : -1.0;
+        if (scale < 0) return false;
+        out = v * scale;
+        return true;
+      };
+      if (colon == std::string::npos ||
+          (colon > 0 && !secs(w.substr(0, colon), qy.t0_s)) ||
+          (colon + 1 < w.size() && !secs(w.substr(colon + 1), qy.t1_s))) {
+        log_error("--between takes START:END from the capture's start, each a number with "
+                  "an optional unit (ns, us, ms, s; seconds when bare): 256ms:1095ms");
+        return 2;
+      }
+      if (qy.t0_s >= 0 && qy.t1_s >= 0 && qy.t1_s < qy.t0_s) {
+        log_error("--between: END is before START");
+        return 2;
+      }
     }
     else if (a == "--stats" && has_val) stats = argv[++i];
     else if (a == "--json") want_json = true;
@@ -4752,12 +4985,14 @@ int run_query(const char* path, int argc, char** argv) {
     if (!q::parse_clause(w, qy.a, err)) { log_error("--where: %s", err.c_str()); return 2; }
   for (const auto& k : keys) {
     const int f = q::field_named(*qy.a.cls, k);
-    if (f < 0) { log_error("--by: class '%s' has no field '%s'", qy.a.cls->name, k.c_str()); return 2; }
+    if (f < 0) { log_error("--by: class '%s' has no field '%s' (fields: %s)", qy.a.cls->name, k.c_str(),
+                          q::field_list(*qy.a.cls).c_str()); return 2; }
     qy.key.push_back(f);
   }
   if (!value.empty()) {
     qy.value = q::field_named(*qy.a.cls, value);
-    if (qy.value < 0) { log_error("--value: class '%s' has no field '%s'", qy.a.cls->name, value.c_str()); return 2; }
+    if (qy.value < 0) { log_error("--value: class '%s' has no field '%s' (fields: %s)", qy.a.cls->name, value.c_str(),
+                          q::field_list(*qy.a.cls).c_str()); return 2; }
   }
   if (!pair_wheres.empty() && qy.op != q::Op::Pair) {
     log_error("--pair-where qualifies the closing event of --pair; there is no --pair");
@@ -4780,8 +5015,12 @@ int run_query(const char* path, int argc, char** argv) {
     log_error("cannot read trace '%s'", path);
     return 1;
   }
+  qy.anchor_ns = static_cast<int64_t>(reader.header().mono_anchor_ns);
   q::Engine eng(qy);
-  (void)reader.for_each([&](uint32_t t, const uint8_t* d, uint32_t l) { eng.fold(t, d, l); });
+  std::vector<uint8_t> fitted;
+  (void)reader.for_each([&](uint32_t t, const uint8_t* d, uint32_t l) {
+    if ((d = q::fit(t, d, l, fitted))) eng.fold(t, d, l);
+  });
   const q::Table tb = eng.finish();
 
   // The measure the stats read: what the operator produced, else the value.
@@ -5238,8 +5477,10 @@ static int run_guards(const std::string& path, bool want_json) {
   // section, an object's exports -- and the rest is reached by walking from
   // each name to what its body (or a macro's) names. A function a macro
   // defines (`TEST(name) { }`, scanned as `TEST:name`) is reached with the
-  // macro, whose expansion -- unseen -- may register it. Reaching is by
-  // spelling, so two declarations sharing a name are reached together.
+  // macro, whose expansion -- unseen -- may register it, and answers to the
+  // name the macro declares (`BPF_STRUCT_OPS(tick, ...)` is reached from a
+  // struct_ops table's `.tick = (void *)tick`). Reaching is by spelling, so two
+  // declarations sharing a name are reached together.
   //
   // REACHED FROM NONE IS STILL NOT DEAD, and the report says so where it is
   // read. A caller outside the scanned files, or a table filled at run time,
@@ -5248,7 +5489,12 @@ static int run_guards(const std::string& path, bool want_json) {
   // conclusion is not.
   {
     std::set<std::string> declared_names, named;
-    for (const StaticDecl& d : decls) declared_names.insert(d.name);
+    std::map<std::string, std::vector<const std::string*>> answers_to;
+    for (const StaticDecl& d : decls) {
+      declared_names.insert(d.name);
+      const size_t colon = d.name.find(':');
+      if (colon != std::string::npos) answers_to[d.name.substr(colon + 1)].push_back(&d.name);
+    }
     std::map<std::string, std::vector<const std::string*>> names_from;
     std::vector<std::string> todo;
     std::set<std::string> reached;
@@ -5270,15 +5516,21 @@ static int run_guards(const std::string& path, bool want_json) {
       todo.pop_back();
       auto it = names_from.find(n);
       if (it != names_from.end()) for (const std::string* m : it->second) reach(*m);
+      if (auto a = answers_to.find(n); a != answers_to.end())
+        for (const std::string* m : a->second) reach(*m);
     }
     std::vector<const StaticDecl*> unreached;
     std::map<std::string, uint64_t> unreached_kind;
     size_t unnamed = 0;
+    auto is_named = [&](const std::string& n) {
+      const size_t colon = n.find(':');
+      return named.count(n) || (colon != std::string::npos && named.count(n.substr(colon + 1)));
+    };
     for (const StaticDecl& d : decls)
       if (!reached.count(d.name)) {
         unreached.push_back(&d);
         ++unreached_kind[d.kind];
-        if (!named.count(d.name)) ++unnamed;
+        if (!is_named(d.name)) ++unnamed;
       }
     char v[512];
     std::snprintf(v, sizeof(v),
@@ -5298,7 +5550,7 @@ static int run_guards(const std::string& path, bool want_json) {
           .put("kind", Detail::text(d->kind))
           .put("file", Detail::text(d->file))
           .put("line", Detail::count(d->line))
-          .put("named", Detail::text(named.count(d->name) ? "only from unreached code" : "by nothing")));
+          .put("named", Detail::text(is_named(d->name) ? "only from unreached code" : "by nothing")));
     declared.detail.emplace_back("unreached", std::move(rows));
     declared.detail.emplace_back("caveat", Detail::text(
         "reached from none is not dead: a caller outside the scanned files and a table "
@@ -5333,7 +5585,7 @@ static int run_guards(const std::string& path, bool want_json) {
       dom_depth = std::max(dom_depth, st.dom_depth);
       for (const StaticBlock& b : f.blocks) macros += b.kind == "macro";
       for (const StaticEdge& e : f.edges) {
-        handlers += e.kind == "handler";
+        handlers += e.kind == "handler" || e.kind == "unwind";
         unresolved += e.kind == "goto-unresolved";
       }
     }
@@ -5364,10 +5616,11 @@ static int run_guards(const std::string& path, bool want_json) {
           .put("dominator_depth", Detail::count((uint64_t)stats[by_cyclo[r]].dom_depth)));
     }
     cfg.detail.emplace_back("most_complex", std::move(top));
+    // Every row, as the declarations report lists every unreached name: A cap
+    // hid all but the first functions' blocks, with no way to see the rest.
     Detail unreach = Detail::array();
-    for (size_t i = 0; i < fns.size() && unreach.arr.size() < 32; ++i)
+    for (size_t i = 0; i < fns.size(); ++i)
       for (uint32_t b : stats[i].dead) {
-        if (unreach.arr.size() == 32) break;
         unreach.arr.push_back(Detail::object()
             .put("function", Detail::text(fns[i].func))
             .put("file", Detail::text(fns[i].file))
@@ -5413,7 +5666,8 @@ static int run_guards(const std::string& path, bool want_json) {
     cfg.detail.emplace_back("caveat", Detail::text(
         "exceptions, longjmp, computed gotos and calls that never return are edges a "
         "lexer cannot see; a macro that opens a block is drawn as a loop and a catch "
-        "as a handler edge from its try, both from their shape; a seam is cut in the "
+        "as a handler edge from its try, as is a Python finally's unwind edge, all from "
+        "their shape; a seam is cut in the "
         "graph made symmetric, so its sides are densely joined blocks and never "
         "dominance"));
     cfg.gauges.push_back({"montauk_static_cfg_functions", "", (double)fns.size()});
@@ -5464,8 +5718,7 @@ static int run_guards(const std::string& path, bool want_json) {
 int montauk_analyze_main(int argc, char** argv) {
   // Report stdout buffers into g_out and drains once at exit; set up before any
   // output path (including --version) so every return drains.
-  sublimation_sink_init(&g_out, 1);
-  std::atexit(drain_out);
+  sublimation_sink_init_at_exit(&g_out, 1);
 
   // --version: the upgrade detector (bench-enduser / install.py) reads this to
   // decide whether an installed montauk is older than the clone and needs a
@@ -5478,11 +5731,13 @@ int montauk_analyze_main(int argc, char** argv) {
                    (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h");
   if (argc < 2 || want_help) {
     std::fprintf(want_help ? stdout : stderr,
-        "usage: montauk --analyze TRACE [--report name[,name...]] [--json]\n"
+        "usage: montauk --analyze TRACE [--report name[,name...]]\n"
+        "                       [--json | --json-out FILE]\n"
         "                       [--sig N|NAME] [--comm SUBSTR] [--pid N] [--tid N]\n"
         "                       [--window SECONDS] [--floor-us US]\n"
         "                       (--json emits the structured envelope instead of\n"
-        "                        the text report. --pid/--tid narrow to one task's\n"
+        "                        the text report; --json-out writes it to FILE from\n"
+        "                        the same pass, beside it. --pid/--tid narrow to one task's\n"
         "                        events in sched, locality, dispatch-stall, wakers\n"
         "                        and fractal, and to one thread's in signals; --sig\n"
         "                        and --comm remain signals-only (sched events carry\n"
@@ -5491,25 +5746,31 @@ int montauk_analyze_main(int argc, char** argv) {
         "       montauk --analyze TRACE --select CLASS[.OP,...] [--where FIELD<op>V]...\n"
         "                       [--by FIELD[,FIELD]] [--value FIELD]\n"
         "                       [--count | --gap | --pair OP [--pair-where FIELD<op>V]...\n"
-        "                        | --last]\n"
+        "                        | --first | --last]\n"
         "                       [--between START:END] [--stats n,p50,p99,max,mean]\n"
         "                       [--json]\n"
         "                       (a question as a command line: select events by\n"
         "                        class, op and any field, key them, and apply one\n"
         "                        operator. --pair closes each event at the next OP\n"
         "                        on the same key; --where qualifies the opening\n"
-        "                        event only and --pair-where the closing one.\n"
+        "                        event only and --pair-where the closing one, and\n"
+        "                        FIELD~TEXT is a substring test on a text field.\n"
+        "                        --between and t_ns count from the capture's start,\n"
+        "                        each bound a number with ns, us, ms or s (256ms:1.1s).\n"
         "                        --stats reduces the operator's\n"
         "                        measure. Classes: sched io ntsync heap signal mmap\n"
         "                        abort heapstk keyedevt kstrand waitstack scx_storm\n"
-        "                        provider rawstack fork exec exit comm thread_name)\n"
+        "                        provider rawstack futex futexstack fork exec exit\n"
+        "                        comm thread_name syscall)\n"
         "       montauk --analyze DIR|FILE.prom [more.prom...] [--by LABEL]\n"
         "                       [--pairs adjacent|all|vs-best] [--trajectory]\n"
         "                       [--metric substr] [--full] [--higher-better]\n"
         "                       [--alias OLD=NEW] [--alias-axis OLD=NEW]\n"
+        "                       [--alias-label LABEL:OLD=NEW]\n"
+        "                       [--relative-to LABEL=VALUE]\n"
         "                       [--drop-label L] [--threads n] [--seed n]\n"
         "                       [--perms n] [--alpha a] [--min-effect d]\n"
-        "                       [--quantile q] [--no-emit]\n"
+        "                       [--quantile q] [--no-emit] [--json]\n"
         "                       (LABEL: any prom label, plus the synthetic\n"
         "                        version | commit | capture; default scheduler.\n"
         "                        --pairs defaults to adjacent on the ordered\n"
@@ -5677,6 +5938,33 @@ int montauk_analyze_main(int argc, char** argv) {
           }
           opt.axis_alias[spec.substr(0, eq)] = spec.substr(eq + 1);
         }
+        else if (a == "--alias-label" && i + 1 < argc) {
+          const std::string spec = argv[++i];
+          const size_t colon = spec.find(':');
+          const size_t eq = colon == std::string::npos ? std::string::npos : spec.find('=', colon);
+          if (colon == 0 || eq == std::string::npos || eq == colon + 1 || eq + 1 >= spec.size()) {
+            log_error("--alias-label needs LABEL:OLD=NEW (a label value rename, e.g. tool:quark=quark-x11)");
+            return 2;
+          }
+          const std::string lbl = spec.substr(0, colon), oldv = spec.substr(colon + 1, eq - colon - 1),
+                            newv = spec.substr(eq + 1);
+          auto& m = opt.label_alias[lbl];
+          if (auto it = m.find(oldv); it != m.end() && it->second != newv) {
+            log_error("--alias-label %s:%s given twice with conflicting targets", lbl.c_str(), oldv.c_str());
+            return 2;
+          }
+          m[oldv] = newv;
+        }
+        else if (a == "--relative-to" && i + 1 < argc) {
+          const std::string spec = argv[++i];
+          const size_t eq = spec.find('=');
+          if (eq == std::string::npos || eq == 0 || eq + 1 >= spec.size()) {
+            log_error("--relative-to needs LABEL=VALUE (the control arm, e.g. scheduler=EEVDF)");
+            return 2;
+          }
+          opt.relative_label = spec.substr(0, eq);
+          opt.relative_value = spec.substr(eq + 1);
+        }
         else if (a == "--drop-label" && i + 1 < argc) {
           std::string lbl = argv[++i];
           if (lbl == opt.compare_axis) {
@@ -5713,10 +6001,29 @@ int montauk_analyze_main(int argc, char** argv) {
           }
           opt.compare_axis = "group";
         }
+        else if (a == "--json") opt.want_json = true;
         else if (a == "--redact") { /* no comms in population mode */ }
         else if (!a.empty() && a[0] != '-') files.push_back(a);
         else {
           log_error("unknown population flag '%s'", a.c_str());
+          return 2;
+        }
+      }
+      if (opt.want_json && opt.trajectory) {
+        log_error("--json carries the pairwise comparison; --trajectory renders text only");
+        return 2;
+      }
+      // The control is a cell identity, so it can be neither the axis that
+      // splits a cell nor a label taken out of identity.
+      if (!opt.relative_label.empty()) {
+        if (opt.trajectory) {
+          log_error("--relative-to divides the pairwise comparison's cells; --trajectory reads raw runs");
+          return 2;
+        }
+        if (opt.relative_label == opt.compare_axis ||
+            std::find(opt.drop_labels.begin(), opt.drop_labels.end(), opt.relative_label) != opt.drop_labels.end()) {
+          log_error("--relative-to %s names the compare axis or a dropped label; the control must "
+                    "be a label that keys a cell", opt.relative_label.c_str());
           return 2;
         }
       }
@@ -5730,7 +6037,7 @@ int montauk_analyze_main(int argc, char** argv) {
   auto reports = make_reports();
 
   std::vector<Report*> active;
-  std::string report_list;
+  std::string report_list, json_out;
   bool want_json = false;
   for (int i = 2; i < argc; ++i) {
     std::string a = argv[i];
@@ -5738,6 +6045,8 @@ int montauk_analyze_main(int argc, char** argv) {
       g_redact_comm = true;
     } else if (a == "--json") {
       want_json = true;
+    } else if (a == "--json-out" && i + 1 < argc) {
+      json_out = argv[++i];
     } else if (a == "--report" && i + 1 < argc) {
       report_list = argv[++i];
     } else if (int used = 0, q = take_row_qualifier(argc, argv, i, &used);
@@ -5759,6 +6068,10 @@ int montauk_analyze_main(int argc, char** argv) {
       log_error("unknown flag '%s' (see montauk --analyze --help)", a.c_str());
       return 2;
     }
+  }
+  if (want_json && !json_out.empty()) {
+    log_error("--json writes the envelope to stdout; --json-out FILE writes it beside the text report");
+    return 2;
   }
   for (auto& r : reports) active.push_back(r.get());
   if (!select_reports(active, report_list)) return 2;
@@ -5787,10 +6100,15 @@ int montauk_analyze_main(int argc, char** argv) {
   g_maps.load_dir(path);
 
   for (const Report* r : active) arm_ledger(r);
+  const Dispatch dispatch(active);
   const auto t0 = std::chrono::steady_clock::now();
+  std::vector<uint8_t> fitted;
   auto status = reader.for_each([&](uint32_t type, const uint8_t* data, uint32_t len) {
+    // An older capture's shorter records read at today's layout, and a record
+    // whose text runs past it is skipped.
+    if (!(data = montauk::query::fit(type, data, len, fitted))) return;
     fold_driver_state(type, data, len);
-    for (Report* r : active) r->fold(type, data, len);
+    dispatch.fold(type, data, len);
   });
   if (status == montauk::model::TraceReadStatus::CorruptLength) {
     log_warn("corrupt record length %u at event %" PRIu64 "; reporting on data read so far",
@@ -5805,14 +6123,13 @@ int montauk_analyze_main(int argc, char** argv) {
   // --json: the structured surface. Same typed results the text/prom renderers
   // read, wrapped in one envelope: trace context + the reports array. An agent
   // reads this instead of scraping the human report. Pure alternate output --
-  // no text report, no .prom write, no offenders block.
-  if (want_json) {
+  // no text report, no .prom write, no offenders block. --json-out writes the
+  // same envelope to a file from this one pass, and the text report follows.
+  auto envelope = [&](sublimation_sink* out) {
     const auto& mh = reader.header();
-    char mpat[33];
-    std::snprintf(mpat, sizeof mpat, "%.*s",
-                  static_cast<int>(sizeof(mh.pattern)), mh.pattern);
+    const char* mpat = reader.pattern().c_str();
     sublimation_json j;
-    sublimation_json_init(&j, &g_out);
+    sublimation_json_init(&j, out);
     sublimation_json_obj_begin(&j);
       sublimation_json_ku64(&j, "schema_version", 1u);
       sublimation_json_key(&j, "trace");
@@ -5863,8 +6180,24 @@ int montauk_analyze_main(int argc, char** argv) {
         for (Report* r : active) r->json(j);
       sublimation_json_arr_end(&j);
     sublimation_json_obj_end(&j);
-    sublimation_sink_appendc(&g_out, '\n');
+    sublimation_sink_appendc(out, '\n');
+  };
+  if (want_json) {
+    envelope(&g_out);
     return 0;
+  }
+  if (!json_out.empty()) {
+    const int fd = ::open(json_out.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) {
+      log_error("cannot write %s: %s", json_out.c_str(), std::strerror(errno));
+      return 1;
+    }
+    sublimation_sink js;
+    sublimation_sink_init(&js, fd);
+    envelope(&js);
+    sublimation_sink_drain(&js);
+    sublimation_sink_free(&js);
+    ::close(fd);
   }
 
   bool first = true;
@@ -5906,9 +6239,7 @@ int montauk_analyze_main(int argc, char** argv) {
   // FIRST on every analysis .prom, matching the bench-* .prom files.
   {
     const auto& mh = reader.header();
-    char mpat[33];
-    std::snprintf(mpat, sizeof(mpat), "%.*s",
-                  static_cast<int>(sizeof(mh.pattern)), mh.pattern);
+    const std::string& mpat = reader.pattern();
     std::string info = "montauk_version=\"" MONTAUK_VERSION "\",trace_pattern=\"";
     info += mpat;
     info += "\",format_version=\"" + std::to_string(mh.version) + "\"";

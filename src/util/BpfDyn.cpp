@@ -24,6 +24,7 @@ const BpfApi& bpf_api() {
     a.p_bpf_iter_create = reinterpret_cast<decltype(a.p_bpf_iter_create)>(L("bpf_iter_create"));
     a.p_bpf_link__destroy = reinterpret_cast<decltype(a.p_bpf_link__destroy)>(L("bpf_link__destroy"));
     a.p_bpf_link__fd = reinterpret_cast<decltype(a.p_bpf_link__fd)>(L("bpf_link__fd"));
+    a.p_bpf_link_get_info_by_fd = reinterpret_cast<decltype(a.p_bpf_link_get_info_by_fd)>(L("bpf_link_get_info_by_fd"));
     a.p_bpf_map_delete_elem = reinterpret_cast<decltype(a.p_bpf_map_delete_elem)>(L("bpf_map_delete_elem"));
     a.p_bpf_map__fd = reinterpret_cast<decltype(a.p_bpf_map__fd)>(L("bpf_map__fd"));
     a.p_bpf_map_get_next_key = reinterpret_cast<decltype(a.p_bpf_map_get_next_key)>(L("bpf_map_get_next_key"));

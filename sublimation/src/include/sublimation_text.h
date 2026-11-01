@@ -95,6 +95,7 @@ enum {
     SUBLIMATION_SEARCH_ERR_EMPTY,     // zero-length pattern
     SUBLIMATION_SEARCH_ERR_TOO_LONG,  // past the regex face's position budget
     SUBLIMATION_SEARCH_ERR_SYNTAX,    // the expression does not parse
+    SUBLIMATION_SEARCH_ERR_ASSERTION, // \b \B \< \>: a zero-width assertion
 };
 
 typedef struct {
@@ -122,6 +123,7 @@ typedef struct {
     int     icase;
     int     valid;
     int     error;  // one of the SUBLIMATION_SEARCH_ERR_* codes above
+    uint32_t error_at; // ERR_ASSERTION: offset of the refused backslash
     // CONFUSION CLASSES (fuzzy face; see sublimation_search_confuse). Each
     // member is rewritten to its class's shortest member in the pattern and
     // the text alike, so a substitution inside a class costs nothing: The

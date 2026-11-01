@@ -12,12 +12,16 @@ namespace montauk::app {
 class GpuAttributor {
 public:
   using Clock = std::chrono::steady_clock;
-  GpuAttributor();
+  // sample_interval is how often enrich runs, and so how far back a first pass
+  // reads: NVML keeps a stopped process's last sample, frozen at the stop,
+  // and hands it to any query from the start of time.
+  explicit GpuAttributor(Clock::duration sample_interval);
   ~GpuAttributor();
-  // Enrich snapshot 's' with per-process GPU%. Called periodically (~1 Hz recommended).
+  // Enrich snapshot 's' with per-process GPU%. Called once per sample_interval.
   void enrich(montauk::model::Snapshot& s);
 
 private:
+  Clock::duration sample_interval_;
   struct GpuSmooth { double ema{0.0}; Clock::time_point last_sample{}; Clock::time_point last_running{}; };
   std::unordered_map<int, GpuSmooth> gpu_smooth_;
   montauk::collectors::FdinfoProcessCollector fdinfo_{};

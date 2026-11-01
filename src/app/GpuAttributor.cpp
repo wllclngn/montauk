@@ -123,7 +123,7 @@ GpuOwnerScan scan_gpu_owner(const Procs& processes) {
 }
 }  // namespace
 
-GpuAttributor::GpuAttributor() {}
+GpuAttributor::GpuAttributor(Clock::duration sample_interval) : sample_interval_(sample_interval) {}
 GpuAttributor::~GpuAttributor() {
 #ifdef MONTAUK_HAVE_NVML
   nvml_shutdown_if_needed();
@@ -137,6 +137,10 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
   std::unordered_map<int,int> pid_to_gpu; // per-PID util percent
   std::unordered_set<int> running_pids;
   std::unordered_map<int, uint64_t> pid_to_gpu_mem_kb;
+  // NVML's per-process query answered on every device, samples or none. Its
+  // answer then stands: An empty set is no process measurably on the GPU, and
+  // the device-level guesses below run only where no per-process source answers.
+  bool per_process_answered = false;
 #ifdef MONTAUK_HAVE_NVML
   // NVML path (NVIDIA)
   ensure_nvml_init();
@@ -147,6 +151,13 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
       if (nvml_last_proc_ts_per_dev_.size() != ndev) nvml_last_proc_ts_per_dev_.assign(ndev, 0ull);
       bool mig_enabled_global = false;
       std::unordered_set<int> nvml_running;
+      // A pass with no previous one reads back one sampling interval, not
+      // from the start of time. NVML stamps samples in wall-clock microseconds.
+      const auto now_us = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::system_clock::now().time_since_epoch()).count();
+      const auto first_floor = static_cast<unsigned long long>(
+          now_us - std::chrono::duration_cast<std::chrono::microseconds>(sample_interval_).count());
+      per_process_answered = ndev > 0;
       for (unsigned int di=0; di<ndev; ++di) {
         nvmlDevice_t dev{}; if (A.DeviceGetHandleByIndex(di, &dev) != NVML_SUCCESS) continue;
         unsigned currentMode = 0, pendingMode = 0;
@@ -179,7 +190,9 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
         }
         if (!mig_enabled_global) {
           unsigned long long& last_ts = nvml_last_proc_ts_per_dev_[di];
-          unsigned long long query_ts = (last_ts > 200000ull) ? (last_ts - 200000ull) : 0ull;
+          const unsigned long long floor_ts = last_ts ? last_ts : first_floor;
+          unsigned long long query_ts = last_ts ? ((last_ts > 200000ull) ? (last_ts - 200000ull) : 0ull)
+                                                : first_floor;
           unsigned int count = 0; auto ret = A.DeviceGetProcessUtilization(dev, nullptr, &count, query_ts);
           if (ret == NVML_ERROR_INSUFFICIENT_SIZE && count > 0) {
             std::vector<nvmlProcessUtilizationSample_t> buf(count);
@@ -188,7 +201,11 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
               unsigned long long newest = last_ts;
               for (unsigned int i=0;i<count;i++) {
                 const auto& sm = buf[i];
-                if (sm.smUtil <= 100 && sm.encUtil <= 100 && sm.decUtil <= 100 && sm.timeStamp > last_ts) {
+                if (log_nvml)
+                  montauk::util::log_info("NVML: sample dev %u pid %u sm %u enc %u dec %u ts %llu (last_ts %llu)",
+                                          di, sm.pid, sm.smUtil, sm.encUtil, sm.decUtil,
+                                          (unsigned long long)sm.timeStamp, (unsigned long long)last_ts);
+                if (sm.smUtil <= 100 && sm.encUtil <= 100 && sm.decUtil <= 100 && sm.timeStamp > floor_ts) {
                   int pid = (int)sm.pid; int util = std::max({(int)sm.smUtil, (int)sm.encUtil, (int)sm.decUtil});
                   auto it = pid_to_gpu.find(pid); if (it==pid_to_gpu.end() || util > it->second) pid_to_gpu[pid] = util;
                   if (sm.timeStamp > newest) newest = sm.timeStamp;
@@ -198,12 +215,26 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
                 last_ts = newest;
               }
               last_nvml_sample_tp_ = now_tp;
-            } else if (log_nvml) {
-              montauk::util::log_error("NVML: GetProcessUtilization failed on device %u (ret=%d)", di, (int)ret);
+            } else if (ret == NVML_ERROR_NOT_FOUND) {
+              // The size probe counts buffered samples; the read keeps only
+              // those newer than query_ts, and NOT_FOUND is none of them. That
+              // is an answer, the same one the probe gives when it finds none.
+              if (log_nvml)
+                montauk::util::log_info("NVML: no process samples on device %u since %llu", di,
+                                        (unsigned long long)query_ts);
+            } else {
+              per_process_answered = false;
+              if (log_nvml)
+                montauk::util::log_error("NVML: GetProcessUtilization failed on device %u (ret=%d)", di, (int)ret);
             }
-          } else if (log_nvml) {
-            montauk::util::log_info("NVML: no process samples on device %u (ret=%d, count=%u, last_ts=%llu)", di, (int)ret, count, (unsigned long long)last_ts);
+          } else {
+            if (ret != NVML_ERROR_NOT_FOUND && !(ret == NVML_SUCCESS && count == 0))
+              per_process_answered = false;
+            if (log_nvml)
+              montauk::util::log_info("NVML: no process samples on device %u (ret=%d, count=%u, last_ts=%llu)", di, (int)ret, count, (unsigned long long)last_ts);
           }
+        } else {
+          per_process_answered = false;
         }
       }
       running_pids.insert(nvml_running.begin(), nvml_running.end());
@@ -439,13 +470,13 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
   }
 
   // Fallbacks: if no per-process samples but exactly one running PID, attribute device-level util to it
-  if (pid_to_gpu.empty() && running_pids.size() == 1 && !s.nvml.mig_enabled) {
+  if (pid_to_gpu.empty() && !per_process_answered && running_pids.size() == 1 && !s.nvml.mig_enabled) {
     int only_pid = *running_pids.begin();
     int dev_util = (int)std::max({ (double)as_int_pct(s.vram.gpu_util_pct), (double)as_int_pct(s.vram.enc_util_pct), (double)as_int_pct(s.vram.dec_util_pct) });
     if (dev_util > 0) pid_to_gpu[only_pid] = dev_util;
   }
   // Heuristic: If still empty but device shows activity, attribute to a single clear GPU process
-  if (pid_to_gpu.empty() && !s.nvml.mig_enabled) {
+  if (pid_to_gpu.empty() && !per_process_answered && !s.nvml.mig_enabled) {
     int dev_util = (int)std::max({ (double)as_int_pct(s.vram.gpu_util_pct), (double)as_int_pct(s.vram.enc_util_pct), (double)as_int_pct(s.vram.dec_util_pct) });
     if (dev_util > 0) {
       const auto scan = scan_gpu_owner(s.procs.processes);
@@ -459,7 +490,7 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
     }
   }
   // Fallback: distribute device util proportionally to GPU memory among running pids
-  if (pid_to_gpu.empty() && !running_pids.empty() && !s.nvml.mig_enabled) {
+  if (pid_to_gpu.empty() && !per_process_answered && !running_pids.empty() && !s.nvml.mig_enabled) {
     int dev_util = (int)std::max({ (double)as_int_pct(s.vram.gpu_util_pct), (double)as_int_pct(s.vram.enc_util_pct), (double)as_int_pct(s.vram.dec_util_pct) });
     if (dev_util > 0) {
       uint64_t total_mem = 0; for (int pid : running_pids) { auto it = pid_to_gpu_mem_kb.find(pid); if (it!=pid_to_gpu_mem_kb.end() && it->second>0) total_mem += it->second; }
@@ -492,9 +523,11 @@ void GpuAttributor::enrich(montauk::model::Snapshot& s) {
   for (auto& p : s.procs.processes) {
     double disp = 0.0; auto itst = gpu_smooth_.find(p.pid);
     if (itst != gpu_smooth_.end() && itst->second.last_sample.time_since_epoch().count() > 0) {
-      auto age = now_tp - itst->second.last_sample; bool running = running_pids.count(p.pid) > 0;
-      if (running) disp = itst->second.ema;
-      else if (age <= hold) disp = itst->second.ema;
+      // Held and decayed by the age of its last sample alone. Holding a GPU
+      // context is not using the GPU: A stopped process keeps its context, and
+      // was shown at its last reading for as long as it stayed stopped.
+      auto age = now_tp - itst->second.last_sample;
+      if (age <= hold) disp = itst->second.ema;
       else { auto over = age - hold; auto dwin = (itst->second.last_running.time_since_epoch().count() > 0 ? decay : exit_decay); double t = (double)std::chrono::duration_cast<std::chrono::milliseconds>(over).count() / (double)std::chrono::duration_cast<std::chrono::milliseconds>(dwin).count();
              if (t < 1.0) disp = itst->second.ema * (1.0 - t); else disp = 0.0; }
     }

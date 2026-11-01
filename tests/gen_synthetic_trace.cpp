@@ -152,6 +152,42 @@ void io_evt(int32_t syscall_nr, int32_t fd, int64_t result, uint64_t count,
   emit(&e, sizeof(e));
 }
 
+// A futex wait's record as the BPF side keeps it beside the syscall's io record:
+// its enter (result -999) or its leave.
+void futex_evt(uint32_t op, uint64_t uaddr, uint64_t val, int64_t result,
+               uint64_t timeout_ns, uint32_t tid, uint64_t ts) {
+  montauk_futex_event e{};
+  e.type = TRACE_EVT_FUTEX;
+  e.pid = 1000;
+  e.tid = tid;
+  e.op = op;
+  e.uaddr = uaddr;
+  e.val = val;
+  e.result = result;
+  e.timeout_ns = timeout_ns;
+  e.nr_futexes = 1;
+  e.timestamp_ns = ts;
+  set_comm(e.comm, "worker");
+  emit(&e, sizeof(e));
+}
+
+// The site a futex wait with no deadline is taken from: three frames no maps
+// sidecar resolves, so the fixture holds the record, not a symbol.
+void futexstack_evt(uint64_t uaddr, uint32_t tid, uint64_t ts) {
+  montauk_futexstack_event e{};
+  e.type = TRACE_EVT_FUTEXSTACK;
+  e.pid = 1000;
+  e.tid = tid;
+  e.uaddr = uaddr;
+  e.stack_depth = 3;
+  e.stack_user[0] = 0x7f00'0000'1000ull;
+  e.stack_user[1] = 0x7f00'0000'2000ull;
+  e.stack_user[2] = 0x7f00'0000'3000ull;
+  e.timestamp_ns = ts;
+  set_comm(e.comm, "worker");
+  emit(&e, sizeof(e));
+}
+
 void heap_evt(uint32_t op, uint64_t addr, uint64_t size, uint32_t tid, uint64_t ts) {
   montauk_heap_event e{};
   e.type = TRACE_EVT_HEAP;
@@ -426,6 +462,16 @@ int main(int argc, char** argv) {
            1004, ts + 600'000 + static_cast<uint64_t>(i) * 30'000);
   // One left open at trace end: a thread still blocked on a futex.
   io_evt(202, 0, -999, 0xF00000, 1005, ts + 980'000);
+  // Their wait records: each of tid 1004's waits enters with a 1ms deadline
+  // and leaves woken, and tid 1005's enters with none, takes its site and never
+  // leaves, the thread endstate names parked on the word.
+  for (int i = 0; i < 12; ++i) {
+    const uint64_t at = ts + 600'000 + static_cast<uint64_t>(i) * 30'000;
+    futex_evt(/*FUTEX_WAIT_BITSET|PRIVATE*/137, 0xF00000, 2, -999, 1'000'000, 1004, at + 100);
+    futex_evt(137, 0xF00000, 2, 0, 1'000'000, 1004, at + 20'000);
+  }
+  futex_evt(/*FUTEX_WAIT|PRIVATE*/128, 0xF00000, 2, -999, ~0ull, 1005, ts + 980'100);
+  futexstack_evt(0xF00000, 1005, ts + 980'200);
 
   // io: read/write pairs, then a poll left pending at trace end (iowait).
   ts += 600'000;

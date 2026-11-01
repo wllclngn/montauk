@@ -3,6 +3,8 @@
 #include "app/ProviderEmitter.hpp"
 #include "collectors/ProviderCollector.hpp"
 #include "sublimation_text.h"
+#include "montauk_trace.h"
+#include <array>
 #include <thread>
 #include <string>
 #include <vector>
@@ -51,12 +53,29 @@ public:
   // Ring size in BYTES. 0 keeps the compiled-in default. Applied before load,
   // where libbpf still allows a resize.
   void set_ring_bytes(uint64_t b) { ring_bytes_ = b; }
-  // Per-class capture mask, bit N = TRACE_EVT_N. 0 keeps every class, so an
-  // operator who sets nothing captures what they captured before.
+  // Per-class capture mask, bit N = TRACE_EVT_N. 0 keeps every class but the
+  // syscall class, so an operator who sets nothing captures what they captured
+  // before; the syscall class is a record per call and is asked for by name.
   void set_capture_mask(uint64_t m) { capture_mask_ = m; }
+  // The syscall class's filters and the string bound, all before load:
+  // The numbers to record (bit N = syscall N, all when never set), only calls
+  // made from memory no file backs, and the bytes one path, filename or
+  // argument vector carries.
+  void set_syscall_numbers(const std::array<uint64_t, MONTAUK_SC_NR_WORDS>& m) { sc_numbers_ = m; }
+  void set_syscalls_from_anon(bool on) { sc_from_anon_ = on; }
+  void set_path_bytes(uint32_t n) { path_bytes_ = n; }
+
+  // True if `s` matches any of the --trace pattern tokens (substring, ci).
+  bool matches_any(const std::string& s) const;
 
 private:
   void run(std::stop_token st);
+  // Frees the ring, then destroys every link one at a time, timed, and the
+  // skeleton after them. stop() calls it once the loop is joined and the
+  // capture closed.
+  void detach();
+  // The capture header, and the pattern record when the pattern needs one.
+  bool write_trace_header(int fd) const;
 
   // Append one raw ring record ([len][payload]) to the binary log buffer;
   // flush if the buffer crosses the batch threshold. No-op when binary
@@ -83,8 +102,8 @@ private:
   uint64_t scx_kicks_last_ = 0, scx_preempt_last_ = 0, scx_reenq_last_ = 0;
   uint64_t scx_sample_last_ns_ = 0;
   // True only once the scx storm probes (fentry/scx_bpf_kick_cpu et al.)
-  // actually attach under MONTAUK_SCX_STORM. Off by default (the probes are
-  // gated for the 7.1+ trampoline-patch freeze), and while off the scx_storm
+  // actually attach under MONTAUK_SCX_STORM. Off by default on cost (arming the set
+  // nearly tripled a saturated capture's event rate), and while off the scx_storm
   // map stays all-zero -- so a sample taken then is not a measured zero, it is
   // no measurement at all. Gate the emit on this so the trace never carries a
   // fictional zero-count interval the analyzer would render as kick/s=0.
@@ -95,6 +114,8 @@ private:
   // be armed on its own; a consumer asking "is RESCHED measured" must not read
   // the storm bit for that answer.
   bool scx_resched_active_ = false;
+  // A libc heap probe attached, so stop reports what the probes trapped.
+  bool libc_probes_ = false;
 
   // Ring-drop accounting: sample the BPF drop_counts map (per-CPU per-type
   // reserve failures) and stamp a cumulative TRACE_EVT_DROPS snapshot into
@@ -122,13 +143,12 @@ private:
   // Ring buffer event callback
   static int handle_event(void* ctx, void* data, size_t len);
 
-  // True if `s` matches any of the --trace pattern tokens (substring, ci).
-  bool matches_any(const std::string& s) const;
-
   montauk::app::TraceBuffers& buffers_;
   std::string pattern_;            // full --trace value (comma-separated list)
   std::string primary_pattern_;    // first token: the BPF .rodata fast-path
   std::vector<sublimation_search> matchers_;  // one per token (fixed, icase); OR
+  std::vector<std::string> names_;  // the tokens matchers_ was compiled from
+  bool sweep_reported_ = false;     // the first discovery sweep's count is logged
   // montauk's own producer endpoint in the provider mesh: serves the trace
   // snapshot as Prometheus text so montauk is a peer, not a stderr dumper.
   montauk::app::ProviderEmitter emitter_{montauk::app::ProviderEmitter::kSelfName};
@@ -164,7 +184,14 @@ private:
   std::string trace_dir_;
   bool sched_detail_{false};   // --sched-detail: stream per-CPU idle boundaries
   uint64_t ring_bytes_{0};     // --trace-ring-bytes: 0 = compiled default
-  uint64_t capture_mask_{0};   // --trace-classes: 0 = every class
+  uint64_t capture_mask_{0};   // --trace-classes: 0 = every class but syscall
+  std::array<uint64_t, MONTAUK_SC_NR_WORDS> sc_numbers_ = [] {
+    std::array<uint64_t, MONTAUK_SC_NR_WORDS> a{};
+    a.fill(~0ULL);
+    return a;
+  }();                         // --trace-syscalls: every number by default
+  bool sc_from_anon_{false};   // --trace-syscalls-from anon
+  uint32_t path_bytes_{256};   // --trace-path-bytes
   std::vector<uint8_t> trace_buf_;
   // Second binary stream (--stream-out), same wire format, independent fd and
   // buffer -- a character-device target that must keep working even if

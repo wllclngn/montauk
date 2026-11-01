@@ -26,6 +26,19 @@ TraceReadStatus TraceReader::open(const char* path) {
     return TraceReadStatus::BadMagic;
   }
   if (hdr_.version != kTraceFormatVersion) return TraceReadStatus::BadVersion;
+  pattern_.assign(hdr_.pattern, strnlen(hdr_.pattern, sizeof(hdr_.pattern)));
+  if (hdr_.flags & kTraceFlagPatternRecord) {
+    TraceRecordLen len = 0;
+    if (std::fread(&len, sizeof(len), 1, f_) != 1 || len < sizeof(uint32_t) ||
+        len > kTraceMaxRecordLen)
+      return TraceReadStatus::TruncatedRecord;
+    rec_.resize(len);
+    if (std::fread(rec_.data(), 1, len, f_) != len) return TraceReadStatus::TruncatedRecord;
+    uint32_t type = 0;
+    std::memcpy(&type, rec_.data(), sizeof(type));
+    if (type == kTracePatternRecordType)
+      pattern_.assign(reinterpret_cast<const char*>(rec_.data()) + sizeof(type), len - sizeof(type));
+  }
   return TraceReadStatus::Ok;
 }
 

@@ -30,7 +30,7 @@ if [[ $BUILDDIR -ef "$startdir" && "$startdir" == *" "* ]]; then
     BUILDDIR=/tmp/makepkg-$pkgname
 fi
 
-pkgver=8.14.0.r2037.gf28a75ec
+pkgver=8.15.0.r2037.gf28a75ec
 pkgrel=1
 pkgdesc='Linux observability platform: event-driven monitor, eBPF tracer and analyzer on an in-tree flow-model sort/search engine, with kernel-module telemetry and GPU attribution'
 arch=('x86_64')

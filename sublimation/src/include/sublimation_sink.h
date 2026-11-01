@@ -148,4 +148,26 @@ static inline void sublimation_sink_free(sublimation_sink* s) {
   s->cap = SUBLIMATION_SINK_SBO;
 }
 
+// Initialize `s` for `fd` and drain it at exit, so every return path flushes
+// what it buffered. atexit takes no argument, so the sinks to drain are held
+// here: A few per translation unit, each tool's output sink.
+#define SUBLIMATION_SINK_AT_EXIT_MAX 4
+static inline sublimation_sink** sublimation_sink_at_exit_slots_(void) {
+  static sublimation_sink* slots[SUBLIMATION_SINK_AT_EXIT_MAX];
+  return slots;
+}
+static inline void sublimation_sink_drain_at_exit_(void) {
+  sublimation_sink** slots = sublimation_sink_at_exit_slots_();
+  for (int i = 0; i < SUBLIMATION_SINK_AT_EXIT_MAX && slots[i]; ++i) sublimation_sink_drain(slots[i]);
+}
+static inline void sublimation_sink_init_at_exit(sublimation_sink* s, int fd) {
+  sublimation_sink_init(s, fd);
+  sublimation_sink** slots = sublimation_sink_at_exit_slots_();
+  int i = 0;
+  while (i < SUBLIMATION_SINK_AT_EXIT_MAX && slots[i] && slots[i] != s) ++i;
+  if (i == SUBLIMATION_SINK_AT_EXIT_MAX || slots[i] == s) return;
+  if (i == 0) atexit(sublimation_sink_drain_at_exit_);
+  slots[i] = s;
+}
+
 #endif  // SUBLIMATION_SINK_H

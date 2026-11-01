@@ -2,16 +2,20 @@
 #include "ui/Config.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <format>
 #include <fstream>
 
 namespace montauk::ui {
 
-void HelpOverlay::load_manpage(int width) {
-  cached_width_ = width;
-  lines_.clear();
+namespace {
 
+// The manpage formatted at `width` columns. Runs on a worker thread: man takes
+// a few hundred milliseconds, and on the render thread every resize stalled
+// the UI for that long.
+std::vector<std::string> read_manpage(int width) {
+  std::vector<std::string> lines;
   // MANWIDTH tells man to reformat the page at our actual column width, so
   // the content reflows on resize / split-screen instead of being chopped.
   // `col -b` strips overstrike (man's bold rendering); user opted plain text.
@@ -23,23 +27,26 @@ void HelpOverlay::load_manpage(int width) {
     while (std::fgets(buf, sizeof(buf), p)) {
       std::string line(buf);
       if (!line.empty() && line.back() == '\n') line.pop_back();
-      lines_.push_back(std::move(line));
+      lines.push_back(std::move(line));
     }
     pclose(p);
   }
 
   // Dev-mode fallback: if popen produced nothing (man not installed, manpage
   // not yet copied to /usr/local/share/man/), try the manpage in cwd.
-  if (lines_.empty()) {
+  if (lines.empty()) {
     std::ifstream f("montauk.1");
     std::string line;
-    while (std::getline(f, line)) lines_.push_back(line);
+    while (std::getline(f, line)) lines.push_back(line);
   }
 
-  if (lines_.empty()) {
-    lines_.push_back("Help unavailable: install montauk via ./install.py to populate the manpage.");
+  if (lines.empty()) {
+    lines.push_back("Help unavailable: install montauk via ./install.py to populate the manpage.");
   }
+  return lines;
 }
+
+}  // namespace
 
 void HelpOverlay::toggle() {
   visible_ = !visible_;
@@ -77,7 +84,25 @@ void HelpOverlay::render(widget::Canvas& canvas,
   const int inner_w = std::max(1, rect.width - 2);
   const int inner_h = std::max(1, rect.height - 2);
 
-  if (cached_width_ != inner_w) load_manpage(inner_w);
+  // A finished load replaces the page; a page at the wrong width starts one.
+  // Until it lands the previous page stays up, and before the first, a line
+  // says it is coming. One load at a time: a std::async future blocks in its
+  // destructor, so replacing one in flight would stall this thread anyway.
+  if (pending_.valid() && pending_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    lines_ = pending_.get();
+    cached_width_ = pending_width_;
+  }
+  if (cached_width_ != inner_w && !pending_.valid()) {
+    pending_width_ = inner_w;
+    pending_ = std::async(std::launch::async, read_manpage, inner_w);
+  }
+  if (lines_.empty()) {
+    widget::LayoutRect inner = draw_box_border(canvas, rect, "HELP",
+                                               widget::parse_sgr_style(ui_config().border),
+                                               widget::parse_sgr_style(ui_config().accent));
+    canvas.draw_text(inner.x, inner.y, "Loading the manual page...");
+    return;
+  }
 
   const int total = static_cast<int>(lines_.size());
   const int max_scroll = std::max(0, total - inner_h);

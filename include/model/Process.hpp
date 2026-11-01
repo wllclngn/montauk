@@ -24,6 +24,7 @@ struct ProcSample {
   uint64_t gpu_mem_kb{0};
   std::string user_name;
   std::string cmd;
+  std::string comm{};    // the kernel's name for it (/proc/PID/comm); cmd may be rewritten
   std::string exe_path;
   // Extra stat-derived signals for anomaly enrichment (all-process, free from
   // the /proc/PID/stat line the collectors already parse).

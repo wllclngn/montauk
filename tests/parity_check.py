@@ -166,6 +166,11 @@ CASES = [
     ("search -c -e -e",    ["search", "-c", "-e", "foo", "-e", "bar"],
                                                                  "/usr/bin/grep -c -e foo -e bar", WORDS),
     ("search -e ''",       ["search", "-e", ""],                 "/usr/bin/grep -e ''",            WORDS),
+    # -e's value is a pattern whatever it looks like, help's spelling included,
+    # and --regexp is its long form in both spellings.
+    ("search -e --help",   ["search", "-e", "--help"],           "/usr/bin/grep -e --help",        "a --help b\nnone\n"),
+    ("search --regexp=",   ["search", "--regexp=--help"],        "/usr/bin/grep --regexp=--help",  "a --help b\nnone\n"),
+    ("search --regexp",    ["search", "--regexp", "fo+"],        "/usr/bin/grep -E --regexp 'fo+'", WORDS),
     ("search -H stdin",    ["search", "-H", "foo"],              "/usr/bin/grep -H foo",           WORDS),
 ]
 
@@ -343,6 +348,57 @@ def check_exit_codes(paths, fails, oks):
             print(f"           grep       : rc={rp.returncode} {rp.stdout!r}")
 
 
+# search -r against grep -r over one tree: a nested directory, a binary file,
+# an empty file, a symlink to a directory and one to a file inside the tree
+# (the walk skips both), and a symlink named on the command line (followed).
+# Run from the tree's parent, so both tools print the same relative paths and
+# read each directory in the same order.
+RECURSIVE_CASES = [
+    ("search -r",              ["-r", "foo", "t"]),
+    ("search -rn",             ["-rn", "foo", "t"]),
+    ("search -rln",            ["-rln", "foo", "t"]),
+    ("search -rL",             ["-rL", "foo", "t"]),
+    ("search -rc",             ["-rc", "foo", "t"]),
+    ("search -r trailing /",   ["-r", "foo", "t/"]),
+    ("search -r named link",   ["-r", "foo", "cmdlink"]),
+    ("search -r dir + file",   ["-r", "foo", "t", "solo.txt"]),
+    ("search -r one file",     ["-r", "foo", "solo.txt"]),
+    ("search -rh",             ["-rh", "foo", "t"]),
+    ("search dir without -r",  ["foo", "t"]),
+    ("search dir + file, no -r", ["foo", "t", "solo.txt"]),
+]
+
+
+def check_recursive(tmp, fails, oks):
+    """search -r vs /usr/bin/grep -r: stdout AND return code."""
+    root = tmp / "rtree"
+    (root / "t" / "sub" / "deep").mkdir(parents=True)
+    (root / "other").mkdir()
+    (root / "t" / "a.txt").write_bytes(b"foo one\nbar\n")
+    (root / "t" / "b.txt").write_bytes(b"nothing\n")
+    (root / "t" / "empty").write_bytes(b"")
+    (root / "t" / "bin.dat").write_bytes(b"foo\x00bin\n")
+    (root / "t" / "sub" / "deep" / "c.txt").write_bytes(b"foo deep\n")
+    (root / "other" / "o.txt").write_bytes(b"foo other\n")
+    (root / "solo.txt").write_bytes(b"foo solo\n")
+    (root / "t" / "linkdir").symlink_to("../other")
+    (root / "t" / "linkfile").symlink_to("a.txt")
+    (root / "cmdlink").symlink_to("other")
+    cases = list(RECURSIVE_CASES) + [("search -r no FILE", ["-r", "foo"]),
+                                     ("search -rn no FILE", ["-rn", "foo"])]
+    for name, args in cases:
+        cwd = root / "t" if "no FILE" in name else root
+        sp = harness.run_text([str(SUB), "search", *args], input="", cwd=cwd)
+        rp = harness.run_text(["/usr/bin/grep", *args], input="", cwd=cwd)
+        if (sp.returncode, sp.stdout) == (rp.returncode, rp.stdout):
+            oks.append(name)
+        else:
+            fails.append(name)
+            note(f"FAIL {name}")
+            print(f"           sublimation: rc={sp.returncode} {sp.stdout!r}")
+            print(f"           grep       : rc={rp.returncode} {rp.stdout!r}")
+
+
 def check_contract(paths, fails, oks):
     """sublimation-only cases: fixed expected code, optional stderr needle."""
     for name, sub_argv, stdin, rc, needle in CONTRACT_CASES:
@@ -417,6 +473,7 @@ def main():
                 print(f"           grep       : {ro!r}")
         check_exit_codes(paths, fails, oks)
         check_contract(paths, fails, oks)
+        check_recursive(Path(td), fails, oks)
     check_version(fails, oks)
     note(f"{len(oks)} match, {len(fails)} diverged, {len(skips)} skipped"
          + (f" (absent: {', '.join(skips)})" if skips else ""))

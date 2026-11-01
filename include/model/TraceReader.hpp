@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace montauk::model {
@@ -41,6 +42,9 @@ public:
   void close();
 
   [[nodiscard]] const TraceFileHeader& header() const { return hdr_; }
+  // The whole --trace pattern: the header's field, or the record that carries
+  // it when the field could not.
+  [[nodiscard]] const std::string& pattern() const { return pattern_; }
 
   // Event timestamps are CLOCK_MONOTONIC; map to wall clock / elapsed time
   // via the anchors captured in the header.
@@ -86,6 +90,7 @@ public:
 private:
   FILE* f_ = nullptr;
   TraceFileHeader hdr_{};
+  std::string pattern_;
   std::vector<uint8_t> rec_;
   uint64_t n_events_ = 0;
   uint32_t corrupt_len_ = 0;

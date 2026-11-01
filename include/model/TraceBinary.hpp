@@ -44,8 +44,18 @@ struct TraceFileHeader {
                             // as mono_anchor_ns. Lets the decoder convert any
                             // event to absolute wall-clock:
                             //   wall = real_anchor_ns + (event.ts - mono_anchor_ns)
-  char     pattern[32];     // the --trace PATTERN, NUL-padded, for context
+  char     pattern[32];     // the --trace PATTERN, NUL-padded, for context: its
+                            // first 31 bytes when kTraceFlagPatternRecord is set
 };
+
+// flags bit 0: The pattern did not fit the header's field, and the first record
+// carries it whole: A uint32 type (TRACE_EVT_PATTERN) and then the pattern's
+// bytes, the rest of the record, no NUL. A capture whose pattern fits leaves the
+// bit clear and writes no such record, so it reads exactly as it always has;
+// a reader that predates the bit sees one record of a type it skips.
+inline constexpr uint32_t kTraceFlagPatternRecord = 1u << 0;
+// TRACE_EVT_PATTERN, spelled here so a reader needs no BPF header.
+inline constexpr uint32_t kTracePatternRecordType = 21;
 
 // Per-record length prefix type. Records are framed as
 // [TraceRecordLen][payload bytes].

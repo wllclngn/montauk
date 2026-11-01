@@ -16,9 +16,12 @@
 #define TRACE_MAX_DISCOVERY 4096  // discovery map: all processes seen by sys_enter
 #define TRACE_PATTERN_MAX   32   // max pattern length for BPF-side matching
 #define TRACE_MAX_CPUS      256   // cpu_cache_domain map size; logical-CPU index space
-#define MONTAUK_DROP_SLOTS  24    // drop-counter slots, indexed by event type
-                                  // (slot 0 = out-of-range catchall); sized past
-                                  // the enum's top value with headroom
+#define MONTAUK_DROP_SLOTS  25    // drop-counter slots, indexed by event type
+                                  // (slot 0 = out-of-range catchall); one past
+                                  // the enum's top value. It sizes the DROPS
+                                  // record, so a reader takes the slot count
+                                  // from the record's length: A capture written
+                                  // with fewer slots still reads
 
 // BPF-side pattern for immediate exec matching (no userspace roundtrip).
 // Userspace writes this once at startup. BPF reads it on every exec.
@@ -44,9 +47,9 @@ enum montauk_event_type {
   TRACE_EVT_SCHED       = 7,
   TRACE_EVT_HEAP        = 8,  // libc malloc/free/realloc/calloc uprobes
   TRACE_EVT_SIGNAL      = 9,  // tp/signal/signal_deliver + abnormal exit stacks
-  TRACE_EVT_MMAP        = 10, // file-backed mmap (anon mappings filtered out)
+  TRACE_EVT_MMAP        = 10, // file-backed mmap, and anonymous mappings made executable (other anon mappings filtered out)
   TRACE_EVT_PROVIDER    = 11, // userspace-appended provider snapshot (never emitted by BPF)
-  TRACE_EVT_ABORT       = 12, // libc abort-path uprobes (__assert_fail/__libc_message/abort)
+  TRACE_EVT_ABORT       = 12, // libc abort-path uprobes (__assert_fail/abort)
   TRACE_EVT_HEAPSTACK   = 13, // caller stack for size-filtered malloc/calloc (MONTAUK_HEAP_STACK_SIZE)
   TRACE_EVT_KEYEDEVT    = 14, // ntdll keyed-event uprobes (critical-section wait/release; key = CS addr)
   TRACE_EVT_KSTRAND     = 15, // per-CPU kernel-thread dispatch strand (became-runnable -> ran latency over threshold)
@@ -55,6 +58,10 @@ enum montauk_event_type {
   TRACE_EVT_THREAD_NAME = 18, // tid->comm binding, deduped (one per tid), so the holder ledger can name a CPU-bound task that predates the trace and emits no syscall (montauk_ring_event payload)
   TRACE_EVT_RAWSTACK    = 19, // raw user stack slice + RIP/RSP/RBP at an INFINITE wait-enter, for offline DWARF .eh_frame unwinding (FP-less Wine code)
   TRACE_EVT_DROPS       = 20, // cumulative ring-drop counter snapshot (userspace-appended at drain cadence; BPF never emits this type)
+  TRACE_EVT_PATTERN     = 21, // the whole --trace pattern when the header's field cannot hold it (first record; userspace only)
+  TRACE_EVT_FUTEX       = 22, // a futex wait a traced thread enters and leaves: its word, expected value and deadline
+  TRACE_EVT_FUTEXSTACK  = 23, // user stack at a futex wait-enter with no deadline (names where a parked thread blocks)
+  TRACE_EVT_SYSCALL     = 24, // one syscall a traced thread made: number, arguments, result, duration, return address and paths (opt-in class)
 };
 
 // Drop-counter snapshot record. Userspace samples the BPF drop_counts map
@@ -75,6 +82,25 @@ struct montauk_drop_event {
   __u64 writer_errors;               // failed write() calls on the trace fd
   __u64 writer_lost_bytes;           // bytes dropped when a flush aborted
 };
+
+#ifndef __BPF__
+// A drop record as this build lays it out, from one written with any slot
+// count: The slots the record carries (the rest zero), then the three writer
+// counters from its tail. 0 when the record is too short to be one.
+static inline int montauk_drop_read(const void *data, __u32 len, struct montauk_drop_event *out) {
+  const __u32 head = 16, tail = 3 * sizeof(__u64);
+  if (len < head + tail + sizeof(__u64)) return 0;
+  __u32 slots = (len - head - tail) / sizeof(__u64);
+  if (slots > MONTAUK_DROP_SLOTS) slots = MONTAUK_DROP_SLOTS;
+  const unsigned char *p = (const unsigned char *)data;
+  __builtin_memset(out, 0, sizeof(*out));
+  __builtin_memcpy(out, p, head);
+  __builtin_memcpy(out->dropped, p + head, slots * sizeof(__u64));
+  __builtin_memcpy((unsigned char *)out + __builtin_offsetof(struct montauk_drop_event, writer_attempted),
+                   p + len - tail, tail);
+  return 1;
+}
+#endif
 
 // Provider snapshot record (userspace-appended to the binary trace log;
 // BPF never emits this type). The fixed header below is followed by
@@ -109,8 +135,9 @@ struct montauk_scx_storm_event {
 };
 
 // File-backed mmap event. Captures fd, length, prot, flags, offset, return
-// address for every file-backed mmap. Anonymous mappings are filtered out
-// at BPF (flags & MAP_ANONYMOUS) so the trace stays scoped to file I/O.
+// address for every file-backed mmap, and for an anonymous mapping made with
+// PROT_EXEC (code mapped by hand, a JIT's). Other anonymous mappings are
+// filtered out at BPF so the trace stays scoped to file I/O and code.
 // This is the only path that surfaces mmap'd asset access — Unity bundles,
 // shared libraries, etc. don't show in pread/read traces when the game
 // uses MapViewOfFile.
@@ -118,7 +145,7 @@ struct montauk_mmap_event {
   __u32 type;          // TRACE_EVT_MMAP
   __u32 pid;
   __u32 tid;
-  __s32 fd;            // file fd; anon mappings are filtered before emit
+  __s32 fd;            // file fd; -1 for an anonymous executable mapping (other anon ones are filtered)
   __u64 addr;          // return value from mmap
   __u64 length;        // arg1
   __u64 offset;        // arg5 — file offset of mapping
@@ -152,6 +179,21 @@ enum signal_event_kind {
 // event keeps ringbuf pressure manageable.
 #define TRACE_STACK_MAX_FRAMES 32
 
+// What a delivery's disposition did. An ignored signal is dropped by the
+// kernel when it is generated and never delivered, so its row is stamped at
+// generation, in the sender's moment, with no stack.
+enum signal_disposition {
+  SIGDISP_NONE    = 0,  // an abnormal exit, or a capture older than v8.15.0
+  SIGDISP_DEFAULT = 1,  // the default action: termination, a core, or nothing
+  SIGDISP_IGNORED = 2,  // SIG_IGN
+  SIGDISP_CAUGHT  = 3,  // a handler runs
+};
+
+// The bytes of user stack a signal record copies from its stack pointer.
+#define TRACE_SIGNAL_STACK_BYTES 4096
+// The record's length before it carried its disposition and user context.
+#define MONTAUK_SIGNAL_EVENT_V1_SIZE 336
+
 struct montauk_signal_event {
   __u32 type;                            // TRACE_EVT_SIGNAL
   __u32 pid;
@@ -173,12 +215,22 @@ struct montauk_signal_event {
   __s32 io_fd;                           // last I/O syscall's fd (-1 = none)
   __u64 syscall_arg0;                    // first syscall arg at signal time
   __u64 syscall_arg1;                    // second syscall arg
+  // What the signal's disposition did with it, and the interrupted user
+  // context: The registers and the top of the user stack, which --analyze
+  // unwinds offline by .eh_frame where frame pointers stop. An older capture's
+  // record ends at syscall_arg1 and reads with these zero.
+  __u32 disposition;                     // signal_disposition
+  __u32 user_stack_len;                  // bytes of user_stack[] read from user_sp (0 = none)
+  __u64 user_ip;
+  __u64 user_sp;
+  __u64 user_bp;
+  __u8  user_stack[TRACE_SIGNAL_STACK_BYTES];
 };
 
 // Abort-path function identifiers (subtype of TRACE_EVT_ABORT).
 enum abort_fn {
   ABORT_FN_ASSERT_FAIL  = 0,  // __assert_fail(assertion, file, line, function)
-  ABORT_FN_LIBC_MESSAGE = 1,  // __libc_message(fmt, ...) — glibc fatal-error printer
+  ABORT_FN_LIBC_MESSAGE = 1,  // __libc_message(fmt, ...): older captures only
   ABORT_FN_ABORT        = 2,  // abort()
 };
 
@@ -199,8 +251,8 @@ struct montauk_abort_event {
   __u64 stack_user[TRACE_STACK_MAX_FRAMES]; // user-mode IPs, frame 0 = innermost
   __u64 timestamp_ns;
   char  comm[16];
-  char  msg[TRACE_ABORT_MSG_MAX]; // assert: assertion expr; libc_message: first vararg ("%s" payload)
-  char  loc[TRACE_ABORT_MSG_MAX]; // assert: source file; libc_message: fmt string
+  char  msg[TRACE_ABORT_MSG_MAX]; // assert: assertion expr; abort: glibc's __abort_msg text
+  char  loc[TRACE_ABORT_MSG_MAX]; // assert: source file
 };
 
 // Heap-allocation caller-stack event. Emitted ALONGSIDE the regular
@@ -235,6 +287,53 @@ struct montauk_waitstack_event {
   __u32 stack_depth;   // number of valid frames in stack_user[]
   __u64 obj_ptr;       // first waited object's kernel ptr (0 if none) -- correlates to endstate
   __u64 timeout_ns;    // always infinite here (the gate)
+  __u64 stack_user[TRACE_STACK_MAX_FRAMES]; // user-mode IPs, frame 0 = innermost
+  __u64 timestamp_ns;
+  char  comm[16];
+};
+
+// futex_waitv's command in a TRACE_EVT_FUTEX record. No futex op is 127, so the
+// low seven bits name it beside the real commands, with FUTEX_PRIVATE_FLAG (128)
+// and FUTEX_CLOCK_REALTIME (256) above them as futex(2) carries them: Its first
+// waiter's FUTEX2_PRIVATE is the same bit, and its clockid CLOCK_REALTIME sets
+// the clock flag.
+#define MONTAUK_FUTEX_CMD_WAITV 127
+
+// A futex wait a traced thread enters and leaves, as an enter (result -999) and
+// a leave (the call's return) per thread: FUTEX_WAIT, FUTEX_WAIT_BITSET,
+// FUTEX_WAIT_REQUEUE_PI, FUTEX_LOCK_PI, FUTEX_LOCK_PI2 and futex_waitv, with the
+// word's address, the value the wait expects there and the deadline as the call
+// gave it. A thread whose last enter has no leave is parked on that word; a
+// restart the kernel makes inside the wait (-ERESTARTSYS and its kin) is no
+// leave, since the wait goes on. The futex syscall's io record rides beside it
+// for every futex call, waits and wakes alike; this one is the wait's own.
+struct montauk_futex_event {
+  __u32 type;          // TRACE_EVT_FUTEX
+  __u32 pid;
+  __u32 tid;
+  __u32 op;            // the futex op with its flags; MONTAUK_FUTEX_CMD_WAITV for futex_waitv
+  __u64 uaddr;         // the word (futex_waitv: its first waiter's)
+  __u64 val;           // the value the wait expects (futex_waitv: its first waiter's)
+  __s64 result;        // -999 at enter; the syscall's return at leave
+  __u64 timeout_ns;    // the call's timespec in ns, ~0 for none: relative for a
+                       // FUTEX_WAIT without FUTEX_CLOCK_REALTIME, absolute otherwise
+  __u32 nr_futexes;    // futex_waitv's count of words; 1 otherwise
+  __u32 _pad;
+  __u64 timestamp_ns;
+  char  comm[16];
+};
+
+// User stack at a futex wait-enter with no deadline, the futex twin of
+// WAITSTACK: A thread parked on a futex at trace end never leaves, so its last
+// futexstack names WHERE in the code it is blocked, and uaddr keys it to the
+// wait it was taken for. Gated to waits with no deadline, as WAITSTACK is, to
+// bound volume.
+struct montauk_futexstack_event {
+  __u32 type;          // TRACE_EVT_FUTEXSTACK
+  __u32 pid;
+  __u32 tid;
+  __u32 stack_depth;   // number of valid frames in stack_user[]
+  __u64 uaddr;         // the word the wait is on
   __u64 stack_user[TRACE_STACK_MAX_FRAMES]; // user-mode IPs, frame 0 = innermost
   __u64 timestamp_ns;
   char  comm[16];
@@ -287,6 +386,14 @@ enum heap_op {
   HEAP_OP_FREE    = 1,
   HEAP_OP_REALLOC = 2,
   HEAP_OP_CALLOC  = 3,
+  // The aligned allocators: An aligned request never passes through malloc,
+  // and glibc can serve one from a block just freed, so without these a block
+  // taken back this way reads as freed twice. Each carries its alignment.
+  HEAP_OP_POSIX_MEMALIGN = 4,
+  HEAP_OP_ALIGNED_ALLOC  = 5,
+  HEAP_OP_MEMALIGN       = 6,
+  HEAP_OP_VALLOC         = 7,  // page-aligned
+  HEAP_OP_PVALLOC        = 8,  // page-aligned, size rounded up to pages
 };
 
 struct montauk_heap_event {
@@ -296,7 +403,10 @@ struct montauk_heap_event {
   __u32 op;            // heap_op
   __u64 addr;          // malloc/calloc: return value; free/realloc: input pointer
   __u64 size;          // requested size (free: 0)
-  __u64 new_addr;      // realloc: new pointer (else 0)
+  union {
+    __u64 new_addr;    // realloc: new pointer
+    __u64 align;       // the aligned allocators: the alignment asked for
+  };
   __u64 timestamp_ns;  // ktime_get_ns
   char  comm[16];
 };
@@ -514,15 +624,50 @@ struct ntsync_scratch {
   __u32 wait_fds[NTSYNC_MAX_WAIT_FDS];
 };
 
-// Ring buffer event (kernel → userspace)
+// Ring buffer event (kernel → userspace): fork, exec, exit, comm and thread
+// names. An exec record is this struct and then path_len bytes of the whole
+// filename and argv_len bytes of the argument vector, each argument ended by a
+// NUL. A capture written before v8.15.0 ends its records at filename, and the
+// analyzer reads the fields after it as zero (MONTAUK_RING_EVENT_V1_SIZE).
 struct montauk_ring_event {
   __u32 type;
   __u32 pid;
-  __u32 ppid;
-  __u32 child_pid;
+  __u32 ppid;          // exec: the parent process at exec time; fork: the forking process's parent
+  __u32 child_pid;     // fork: the new task
   char  comm[16];
-  char  filename[64];  // exec'd filename from tracepoint (not /proc)
+  char  filename[64];  // exec'd filename from tracepoint (not /proc), cut at 64
+  __u64 timestamp_ns;  // CLOCK_MONOTONIC, as every other record
+  __u16 path_len;      // exec: bytes of the whole filename after this struct
+  __u16 argv_len;      // exec: bytes of the argument vector after the filename
+  __s32 exit_code;     // exit: the status as wait(2) reports it
 };
+#define MONTAUK_RING_EVENT_V1_SIZE 96
+
+// One syscall a traced thread made, emitted at its exit (the syscall class,
+// opt-in). A record is this struct and then path_len bytes of the first path
+// the call names and path2_len of the second, no NUL: openat's path, both of
+// rename's, and for readlink and readlinkat the target the kernel returned.
+struct montauk_syscall_event {
+  __u32 type;          // TRACE_EVT_SYSCALL
+  __u32 pid;
+  __u32 tid;
+  __s32 nr;            // x86-64 syscall number
+  __u64 arg0, arg1, arg2, arg3, arg4, arg5;
+  __s64 result;        // the return value; a negative errno on failure
+  __u64 timestamp_ns;  // at exit
+  __u64 duration_ns;   // entry to exit
+  __u64 ip;            // the user address the call returns to, after its syscall instruction
+  __u64 vma_start;     // the mapping holding ip, when resolved
+  __u64 vma_end;
+  __u8  resolved;      // 1 when the mapping holding ip was found
+  __u8  anon;          // 1 when no file backs that mapping: code mapped by hand, JIT, injected
+  __u16 path_len;
+  __u16 path2_len;
+  __u16 _pad;
+  char  comm[16];
+};
+#define MONTAUK_SC_PATH_MAX 4096   // the most --trace-path-bytes takes, per path
+#define MONTAUK_SC_NR_WORDS 8      // the syscall-number filter: 512 numbers as a bitmap
 
 // I/O ring event: emitted on every read/write/lseek/pread64/pwrite64/fstat exit
 // for tracked processes. Carries full syscall details for event-level tracing.

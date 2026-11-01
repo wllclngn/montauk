@@ -13,6 +13,11 @@ Two modes:
              MTKTRACE magic, montauk stops within the timeout of a single SIGINT
              (the teardown / Ctrl+C path), decode succeeds. Reports the clean-exit
              EXIT_ABNL stderr count -- 0 means the flood suppression holds.
+             The spawned workload is traced by the SECOND of three names, the
+             first matching nothing: The workers start before attach and sit in
+             one sleep for the whole capture, and a program exec'd after attach
+             double-frees. Both must be traced, and the abort must carry glibc's
+             own text.
 
   --compare A.bin B.bin
              decode both and diff their per-op event counts. This is the T1
@@ -24,12 +29,14 @@ Needs root for the capture mode (BPF). Run:
 The --compare mode needs no privileges.
 """
 import argparse
+import json
 import os
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -123,23 +130,61 @@ def run_capture(args):
             note(f"tracing existing processes matching '{pattern}'")
         else:
             # A reliably-matchable workload: copies of /usr/bin/sleep renamed to a
-            # unique token, alive longer than the capture so the BPF enrolls them.
+            # unique token, asleep until the test kills them.
             token = "mtkloadgen"
             binp = tmp / token
             shutil.copy2("/usr/bin/sleep", binp)
-            kids = [subprocess.Popen([str(binp), str(args.run + 5)])
-                    for _ in range(args.procs)]
-            pattern = token
-            note(f"spawned {len(kids)} '{token}' workers; tracing pattern '{token}'")
+            kids = [subprocess.Popen([str(binp), "infinity"]) for _ in range(args.procs)]
+            # A double free glibc aborts on, held on its stdin until montauk has
+            # found it by its post-exec name.
+            src = tmp / "abortgen.c"
+            src.write_text("#include <stdlib.h>\n#include <unistd.h>\n"
+                           "int main(void) { char c; read(0, &c, 1); void *volatile p = malloc(24);"
+                           " free(p); free(p); return 0; }\n")
+            cc = subprocess.run(["cc", "-O0", "-w", "-o", str(tmp / "mtkabortgen"), str(src)],
+                                capture_output=True, text=True)
+            check(cc.returncode == 0, f"abort workload builds ({cc.stderr.strip()[:120]})")
+            pattern = f"mtknomatch,{token},mtkabortgen"
+            note(f"spawned {len(kids)} '{token}' workers; tracing pattern '{pattern}'")
 
         # Deliberately point --trace-out at a NON-EXISTENT subdir to exercise the
         # parent-directory auto-create.
         out = tmp / "auto" / "made" / "capture.bin"
+        env = dict(os.environ)
+        if args.storm:
+            env["MONTAUK_SCX_STORM"] = "1"
+            note("storm path: MONTAUK_SCX_STORM=1 arms the kick, reenqueue and resched probes")
         proc = subprocess.Popen(
             [str(MONTAUK), "--trace", pattern, "--trace-out", str(out)],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        # montauk's log, read as it arrives, so each step below waits on the
+        # event it needs rather than on a guess at how long it takes.
+        log = []
+        reader = threading.Thread(target=lambda: log.extend(proc.stdout), daemon=True)
+        reader.start()
 
-        time.sleep(args.run)
+        def wait_for(pred):
+            end = time.monotonic() + args.stop_timeout
+            while time.monotonic() < end:
+                if any(pred(l) for l in list(log)):
+                    return True
+                time.sleep(0.05)
+            return False
+
+        if kids:
+            wait_for(lambda l: "eBPF trace attached" in l)
+            abortgen = subprocess.Popen([str(tmp / "mtkabortgen")], stdin=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL)
+            wait_for(lambda l: f"DISCOVERED pid={abortgen.pid} " in l)
+            abortgen.communicate(b"x", timeout=args.stop_timeout)
+            for k in kids:
+                k.terminate()
+            for k in kids:
+                k.wait()
+            for k in kids:
+                wait_for(lambda l, pid=k.pid: "SIGNAL" in l and f"pid={pid} " in l)
+        else:
+            time.sleep(args.run)
         proc.send_signal(signal.SIGINT)
         t0 = time.monotonic()
         stopped_first = True
@@ -156,12 +201,21 @@ def run_capture(args):
                 proc.kill()
                 note("still alive after second SIGINT -- killed")
         stop_dt = time.monotonic() - t0
-        stderr = proc.stdout.read() if proc.stdout else ""
+        reader.join(timeout=args.stop_timeout)
+        stderr = "".join(log)
 
         for k in kids:
             k.terminate()
 
         check(stopped_first, f"clean stop on a single SIGINT ({stop_dt:.2f}s)")
+        # The detach is explicit and timed in stop(): Its line carries the time
+        # by link kind and the slowest links, the record a faster teardown
+        # will be built against.
+        detach = [l for l in stderr.splitlines() if "BPF detach:" in l]
+        check(len(detach) == 1, f"one timed detach line ({len(detach)})")
+        for l in stderr.splitlines():
+            if "BPF detach" in l:
+                note(l.strip())
         check(out.exists() and out.stat().st_size > 0,
               f"parent dir auto-created + non-empty capture "
               f"({out.stat().st_size if out.exists() else 0} bytes)")
@@ -190,12 +244,36 @@ def run_capture(args):
                 last = drops[-1]
                 check("total=0 " in last,
                       f"zero ring drops under nominal load ({last.strip()})")
+        if kids and out.exists() and out.stat().st_size > 0:
+            def rows(*q):
+                r = harness.run_text([str(MONTAUK), "--analyze", str(out), "--select", *q, "--json"])
+                return json.loads(r.stdout)["rows"] if r.returncode == 0 else []
+            # Each worker dies on the SIGTERM above, and a traced death is a
+            # signal event under its pid.
+            killed = {r[0] for r in rows("signal", "--by", "pid,comm", "--count") if r[1] == "mtkloadgen"}
+            check(len(killed) == len(kids),
+                  f"a second name finds processes blocked since before attach "
+                  f"({len(killed)} of {len(kids)} deaths traced)")
+            aborts = rows("abort.abort", "--by", "comm,msg", "--count")
+            check(any(r[0] == "mtkabortgen" and r[1].strip() for r in aborts),
+                  f"a third name finds a process by its post-exec name, and its abort "
+                  f"carries the C library's text ({aborts})")
         if "requires eBPF" in stderr or "requires root" in stderr:
             note("note: montauk reported a capability/eBPF problem -- see its stderr above")
 
         # CSV report for the user: the captured event breakdown, category,count.
         if args.csv is not None and counts:
             emit_csv(args.csv, ["category", "count"], sorted(counts.items()))
+
+        # A failed run keeps its evidence: The capture to analyze and montauk's
+        # own log, which names each process it discovered.
+        if fails:
+            keep = Path("/tmp/montauk/trace_loadtest")
+            keep.mkdir(parents=True, exist_ok=True)
+            if out.exists():
+                shutil.copy2(out, keep / "capture.bin")
+            (keep / "montauk.log").write_text(stderr)
+            note(f"evidence kept in {keep}")
 
     note("OK" if fails == 0 else f"{fails} check(s) FAILED")
     return 1 if fails else 0
@@ -255,6 +333,9 @@ def main():
                     help="capture seconds before SIGINT (default 4)")
     ap.add_argument("--stop-timeout", type=float, default=10.0,
                     help="seconds to allow for a clean stop (default 10)")
+    ap.add_argument("--storm", action="store_true",
+                    help="capture with MONTAUK_SCX_STORM=1, so the teardown measured "
+                         "includes the sched_ext kfunc trampolines")
     ap.add_argument("--compare", nargs=2, metavar=("A.bin", "B.bin"),
                     help="diff two captures' per-category counts (the T1 before/after test)")
     ap.add_argument("--csv", nargs="?", const="-", default=None, metavar="PATH",

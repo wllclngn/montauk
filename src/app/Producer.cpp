@@ -209,7 +209,7 @@ void Producer::run(std::stop_token st) {
   // Throttle heavy NVML per-process sampling to ~1s to keep UI snappy
   auto next_nvml = steady_clock::now();
   const auto nvml_interval = 1000ms;
-  if (!gpu_attr_) gpu_attr_ = std::make_unique<montauk::app::GpuAttributor>();
+  if (!gpu_attr_) gpu_attr_ = std::make_unique<montauk::app::GpuAttributor>(nvml_interval);
 
   // HOT start warm-up: take fast pre-samples so first publish has real deltas
   {

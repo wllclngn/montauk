@@ -1,4 +1,4 @@
-.TH MONTAUK 1 "October 2026" "montauk 8.14.0" "User Commands"
+.TH MONTAUK 1 "October 2026" "montauk 8.15.0" "User Commands"
 .SH NAME
 montauk \- Linux observability platform: monitor, eBPF tracer and analyzer
 .SH SYNOPSIS
@@ -87,11 +87,17 @@ eBPF trace mode: attaches BPF programs to kernel tracepoints
 syscalls) for real-time, event-driven process group instrumentation.
 Implies headless mode.
 .sp
+PATTERN is a comma-separated list of names, each a case-insensitive substring
+of a process name. The first is also matched in-kernel the moment a process
+execs, makes its first syscall or renames itself; every name is matched on each
+scan of the trace loop, whose period the attach log names.
+.sp
 Process discovery uses a three-layer approach: (1) exec filename matching
-from the sched_process_exec tracepoint, (2) a global discovery map that
-records the comm of every process making syscalls, scanned periodically for
-pattern matches, and (3) automatic fork tracking of children once a root
-process is found. This works for any process model \(em standard exec, clone() without exec(),
+from the sched_process_exec tracepoint, (2) a global discovery map holding
+the name of every live process, from its syscalls and from a task-iterator
+sweep each scan, so a process blocked in one call since before attach is still
+found, scanned periodically for pattern matches, and (3) automatic fork
+tracking of children once a root process is found. This works for any process model \(em standard exec, clone() without exec(),
 processes that rename themselves via prctl(PR_SET_NAME), thread pools, container
 runtimes, or any other Linux process lifecycle. Zero /proc reads after eBPF
 attach.
@@ -142,7 +148,12 @@ Capture only the named event classes, comma separated:
 .BR provider ,
 .BR abort ,
 .BR heapstack ,
-.BR keyedevt .
+.BR keyedevt ,
+.BR futex .
+.B ntsync
+and
+.B futex
+also carry their wait-site stacks.
 Exists to stop one loud class drowning the class the capture is
 .IR for :
 in the run above roughly 18.2M of 19.1M dropped events were
@@ -393,8 +404,63 @@ montauk --pmu-comm mywork --headless --metrics 9101
 # A capture that keeps its stream: bigger ring, and only the classes wanted
 montauk --trace myapp --trace-out /tmp/a.mtktrace \\
         --trace-ring-bytes 64M --trace-classes sched,fork,exec,exit
+
+# Every call made from memory no file backs, with the paths it names
+montauk --trace myapp --trace-out /tmp/a.mtktrace --trace-syscalls-from anon
 .RE
 .fi
+.SS The syscall class
+.B \-\-trace-syscalls
+.I LIST
+(names or numbers, comma-separated) and
+.B \-\-trace-syscalls-from anon
+ask for the syscall class, which no other flag captures: One record per call of
+the traced tree, emitted at its exit, with its number, six arguments, result
+(a negative errno on failure), duration, the address it returns to and the
+mapping holding that address, flagged
+.I anon
+when no file backs it. A path-taking call carries the paths it names (open,
+openat, openat2, the stat and access families, exec, unlink, rmdir, mkdir,
+rename and link and their *at forms), and readlink and readlinkat the target
+the kernel returned. Both filters run in the kernel, so a call left out costs no
+ring space;
+.B \-\-trace-syscalls-from anon
+keeps only calls made from memory no file backs: Code mapped by hand, a JIT's,
+injected code.
+.B \-\-trace-path-bytes
+.I N
+bounds every path, exec filename and argument vector (default 256, at most
+4095). Exec records carry the parent at exec time, the whole filename and the
+argument vector; fork and exit records carry their time, and exit the status.
+Read them with
+.B \-\-select syscall
+and
+.BR \-\-where " path~TEXT".
+.SS The signal class
+A signal sent to a traced process is a row when it means death or corruption
+(SIGILL, SIGTRAP, SIGABRT, SIGBUS, SIGFPE, SIGKILL, SIGSEGV) or starts a
+shutdown (SIGHUP, SIGINT, SIGQUIT, SIGTERM). Each row carries its
+.IR disposition :
+.B default
+when the default action runs,
+.B caught
+when a handler does and
+.B ignored
+for SIG_IGN, which the kernel drops when the signal is generated, so that row is
+stamped then and has no stack. Each carries the pid of the process that sent it
+(kill, tgkill or sigqueue from userspace; 0 for a signal the kernel raised).
+An abnormal exit is a row too. A delivery also carries the interrupted
+registers and the top 4 KB of the user stack, and the
+.B signals
+report walks that copy by the
+.B .eh_frame
+call frame information of the files the capture's
+.IR PID .maps
+sidecar names, which reaches through code built without frame pointers where
+the kernel's frame-pointer walk stops. The report's site is the longer of the
+two walks, named in
+.BR site_by ;
+a file gone or rebuilt since the capture ends the walk at its frames.
 .SS Binary Event Log (\-\-trace-out)
 The periodic Prometheus snapshot (above) is the right data path for
 aggregate per-thread state. For high-rate event streams \(em particularly
@@ -448,26 +514,57 @@ on the same key, before the next opener; the unanswered are counted.
 qualifies the opener only;
 .B \-\-pair\-where
 .I FIELD<op>VALUE
-qualifies the closer) or
+qualifies the closer),
+.B \-\-first
+or
 .B \-\-last
-(each key's final event).
+(each key's first or final event).
+.I FIELD~TEXT
+tests a text field for a substring.
 .B \-\-between
 .I START:END
-windows it in seconds from the first selected event,
+windows it from the capture's start, where
+.B \-\-decode
+counts its elapsed time from, each bound a number with ns, us, ms or s
+(seconds when bare) and either side open; t_ns counts from there too, and a
+record with no timestamp (an older capture's lifecycle records) reads -1,
 .B \-\-stats
 .I n,p50,p99,max,mean
 reduces the operator's measure with the reports' own nearest-rank estimator,
 and
 .B \-\-json
 emits columns and rows. Classes: sched io ntsync heap signal mmap abort heapstk
-keyedevt kstrand waitstack scx_storm provider rawstack fork exec exit comm
-thread_name.
+keyedevt kstrand waitstack scx_storm provider rawstack futex futexstack fork
+exec exit comm thread_name syscall.
 .PP
 .B montauk \-\-analyze \-\-json
 emits the same reports as one structured JSON envelope (schema_version, trace
 context and a reports array) instead of the text report. It renders the same
 typed results the text and Prometheus renderers read, so an agent or a script
 consumes the diagnostics without parsing prose.
+.B \-\-json-out
+.I FILE
+writes that envelope to FILE from the same pass and prints the text report as
+well, so a consumer that wants both reads the capture once.
+.PP
+Over a directory of
+.I .prom
+runs,
+.B \-\-by
+.I LABEL
+compares the runs as a population and takes
+.B \-\-json
+for the same comparison as an envelope.
+.B \-\-alias-label
+.I LABEL:OLD=NEW
+(repeatable, exact) renames a label's value before cells are keyed, so a value
+a producer renamed between releases pairs across them.
+.B \-\-relative-to
+.I LABEL=VALUE
+divides each cell, run by run within the same file, by the cell that differs
+from it only in LABEL=VALUE, and compares the ratios with the raw values beside
+them; a cell with a run whose file holds no such control is compared raw and
+names that capture.
 .PP
 \-\-trace-out is independent of MONTAUK_TRACE_VERBOSE (the per-event stderr
 firehose, a human-eyeball aid for low-rate single-app debugging) and of
@@ -853,13 +950,25 @@ and every reference from file scope: a table or initialiser, a conditional
 directive, a function placed in a section
 .RB ( SEC() ,
 .BR __attribute__((section)) ,
-constructor, destructor or used), a Python dunder method, and an object's
-exports. A prototype is not a reference, a macro's body references from the
-macro, a stem pasted into a name with
+constructor, destructor or used), a Python dunder method, a function a test
+runner calls (Rust's
+.B #[test]
+and
+.BR #[bench] ,
+a unittest TestCase's test* methods and fixtures, pytest's test* functions and
+Test* class methods in a test_*.py or *_test.py file), and an object's exports.
+In an object, a function whose address code or data takes (a callback, a
+dispatch table) is referenced as a call is. A prototype is not a reference, a
+macro's body references from the macro, a stem pasted into a name with
 .B ##
 references each declared name it begins, and a function a macro defines
-.RB ( TEST(name) )
-is reached with the macro. Reaching is by spelling, so declarations sharing a
+.RB ( TEST(name) ,
+.BR BPF_STRUCT_OPS(name,\ ...) )
+is reached with the macro and by the name it declares, so a struct_ops table's
+.B .tick = (void *)tick
+reaches its callback. A head with a
+.B =
+after its last parenthesis is an initializer, never a function. Reaching is by spelling, so declarations sharing a
 name are reached together. Reached from none is not dead \(em a caller outside
 the scanned files and a table filled at run time look the same \(em so the
 report is a short list to read, not a verdict.
@@ -1028,6 +1137,6 @@ Report issues at: https://github.com/wllclngn/montauk/issues
 .SH COPYRIGHT
 GPL-2.0-only. See LICENSE file in repository.
 .SH VERSION
-montauk 8.14.0
+montauk 8.15.0
 .br
 October 2026

@@ -54,12 +54,12 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <stdatomic.h>
 
 // Data output (stdout) drains through one buffered sink instead of a syscall
 // per printf; stderr diagnostics stay on stderr unchanged.
 static sublimation_sink g_out;
-static void drain_out(void) { sublimation_sink_drain(&g_out); }
 
 // Checked allocation for the line-buffering verbs. A NULL from the allocator is
 // an out-of-memory the CLI cannot proceed past, so report it and exit rather
@@ -102,13 +102,18 @@ static void usage(FILE *out) {
         "                        (or N,N) is --keyed --field N, each further -k a\n"
         "                        tie-break key; -t D is the delimiter, -r is --desc. A\n"
         "                        key spanning fields (-k 1,3) is refused\n"
-        "  quantile Q            the Q-quantile, Q in 0..1 (e.g. 0.99); --nearest for nearest-rank\n"
+        "  quantile Q            the Q-quantile, Q in 0..1 (e.g. 0.99): the element at\n"
+        "                        floor(q*n), never interpolated, so 1 2 3 4 gives 3 at\n"
+        "                        0.5; --nearest for nearest-rank. The interpolated median\n"
+        "                        (2.5 there) is 'group KEY median'\n"
         "  select K              the K-th smallest value, 0-based\n"
         "  searchsorted V        insertion index of V in the sorted input\n"
         "  sum / mean            sum / mean of the value stream\n"
         "  stdev / variance      sample (n-1) standard deviation / variance\n"
         "  min / max             minimum / maximum value\n"
-        "  describe              count/mean/stdev/min/quartiles/max in one shot (pandas .describe)\n"
+        "  describe              count/mean/stdev/min/quartiles/max in one shot; the\n"
+        "                        quartiles are quantile's floor(q*n) elements, not the\n"
+        "                        interpolated ones pandas .describe() prints\n"
         "  outliers              values outside the Tukey IQR fences (robust outlier flag)\n"
         "  histogram             text histogram of the distribution, 10 bins (the shape)\n"
         "  count [--words|--bytes] number of input lines/words/bytes (wc -l/-w/-c)\n"
@@ -152,7 +157,8 @@ static void usage(FILE *out) {
         "  where 'N OP V' [FILE] lines where field N OP V (awk '$N OP V'; OP: < <= > >= == !=)\n"
         "  group KEY OP [VAL]    group by field KEY, aggregate field VAL (datamash -g; OP:\n"
         "                        sum|mean|count|min|max|sstdev|pstdev|first|last|\n"
-        "                        median|mode|antimode|unique|collapse|countunique)\n"
+        "                        median|mode|antimode|unique|collapse|countunique);\n"
+        "                        median interpolates between the two middle values\n"
         "  uniq [-d|-u] [-i] [FILE] collapse adjacent duplicate lines (-d dups only, -u uniques only, -i case-insensitive)\n"
         "  cut LO-HI [FILE]      character columns, 1-based inclusive: N, lo-hi, lo-, -hi;\n"
         "                        also 'cut -c LO-HI'. Delimited fields are the field verb\n"
@@ -220,9 +226,13 @@ static void usage(FILE *out) {
         "                        standalone tokens only, not bundleable with other short flags\n"
         "  -w / -x               search: whole words only / whole line must match\n"
         "  -l / -L               search: only names of files with / without a match\n"
+        "  -r, --recursive       search: walk each directory operand depth-first, as grep\n"
+        "                        -r does (no FILE walks .); a symlink is followed only when\n"
+        "                        named; without -r a directory is refused\n"
         "  -e PAT / -f FILE      search: add PAT / FILE's lines to the pattern set (a line\n"
         "                        matches if ANY pattern does); positionals all become\n"
-        "                        input files, like grep\n"
+        "                        input files, like grep; --regexp PAT is -e's long form,\n"
+        "                        and -e's PAT is a pattern whatever it looks like\n"
         "  -H / -h               search: force the filename prefix on / off\n"
         "  -s                    search: silence cannot-open messages (exit 2 still reported)\n"
         "  -a / -I               search: binary input as text / as never-matching (default:\n"
@@ -899,6 +909,46 @@ static void strlist_push(char ***v, int *n, int *cap, const char *s) {
     (*v)[(*n)++] = strdup(s);
 }
 
+// search -r's walk, as GNU grep's: Depth-first, each directory's entries in
+// readdir order, regular files kept, and a symlink met in the walk skipped, as
+// are devices, FIFOs and sockets (a symlink named on the command line is
+// followed; the caller stats those). Each directory's names are read whole and
+// its stream closed before descending, so a deep tree holds no descriptors.
+// `bare` drops the "./" an implicit walk of "." would otherwise prefix.
+static void walk_tree(const char *dir, int bare, char ***v, int *n, int *cap, int *err, int quiet_errs) {
+    DIR *d = opendir(dir);
+    if (!d) {
+        *err = 1;
+        if (!quiet_errs) fprintf(stderr, "sublimation: %s: %s\n", dir, strerror(errno));
+        return;
+    }
+    char **names = NULL; int nn = 0, ncap = 0;
+    for (struct dirent *e; (e = readdir(d)) != NULL;)
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) strlist_push(&names, &nn, &ncap, e->d_name);
+    closedir(d);
+    const size_t dl = strlen(dir);
+    const int slash = dl && dir[dl - 1] == '/';
+    for (int i = 0; i < nn; i++) {
+        const size_t len = (bare ? 0 : dl + 1) + strlen(names[i]) + 1;
+        char *path = (char *)malloc(len);
+        if (!path) { fputs("sublimation: out of memory\n", stderr); exit(1); }
+        if (bare) snprintf(path, len, "%s", names[i]);
+        else snprintf(path, len, slash ? "%s%s" : "%s/%s", dir, names[i]);
+        struct stat st;
+        if (lstat(path, &st) != 0) {
+            *err = 1;
+            if (!quiet_errs) fprintf(stderr, "sublimation: %s: %s\n", path, strerror(errno));
+        } else if (S_ISDIR(st.st_mode)) {
+            walk_tree(path, 0, v, n, cap, err, quiet_errs);
+        } else if (S_ISREG(st.st_mode)) {
+            strlist_push(v, n, cap, path);
+        }
+        free(path);
+        free(names[i]);
+    }
+    free(names);
+}
+
 // --files-from LIST: input file paths, newline- or NUL-delimited ('-' =
 // stdin); NUL-delimited is auto-detected (any NUL byte in the list = find
 // -print0 form). This is search's traversal affordance: `find ... |
@@ -1441,6 +1491,7 @@ static int run_tee(int argc, char **argv) {
     for (int i = 0; i < argc; i++) {
         const char *a = argv[i];
         if (!endopts && !strcmp(a, "--")) { endopts = 1; continue; }
+        if (!endopts && !strcmp(a, "--help")) { usage(stdout); return 0; }
         if (!endopts && (!strcmp(a, "-a") || !strcmp(a, "--append"))) { append = 1; continue; }
         if (!endopts && a[0] == '-' && a[1]) {
             fprintf(stderr, "sublimation: tee: '%s' is not supported; -a is the only option\n", a);
@@ -1500,21 +1551,11 @@ int main(int argc, char **argv) {
         usage(stdout);
         return 0;
     }
-    // `VERB --help` reaches the usage text too, so asking a verb how it works
-    // never costs an error exit. Only the long form is scanned past argv[1]:
-    // search owns -h for its filename-prefix toggle.
-    for (int i = 2; i < argc; i++) {
-        if (!strcmp(argv[i], "--help")) {
-            usage(stdout);
-            return 0;
-        }
-    }
     const char *cmd = argv[1];
 
     // One stdout sink for all data output; atexit covers every return/exit path,
     // streaming loops drain periodically (below) to bound memory.
-    sublimation_sink_init(&g_out, 1);
-    atexit(drain_out);
+    sublimation_sink_init_at_exit(&g_out, 1);
 
     // version: sourced ONLY from the header macros -- the one version story.
     // The CLI has no version of its own; it reports the library it fronts.
@@ -1571,6 +1612,7 @@ int main(int argc, char **argv) {
     int bin_text = 0, bin_skip = 0;               // search -a (binary as text) / -I (binary never matches)
     int fname_on = 0, fname_off = 0;              // search -H / -h: force the filename prefix on / off
     int smartcase = 0;                            // search -S: smart case (a ripgrep-ism)
+    int recursive = 0;                            // search -r: walk directory operands, grep -r
     int line_buffered = 0;                        // search --line-buffered: drain per output line
     int color_mode = 0;                           // search --color: 0 never, 1 auto (TTY), 2 always
     const char *label = NULL;                     // search --label: stdin's display name
@@ -1659,6 +1701,11 @@ int main(int argc, char **argv) {
             continue;
         }
         if (!strcmp(a, "--")) { endopts = 1; continue; }
+        // `VERB --help` reaches the usage text too, so asking a verb how it
+        // works never costs an error exit. Read here, where an option's value
+        // has already been taken, so `search -e --help` searches for it as grep
+        // does. Only the long form: search owns -h for its filename prefix.
+        if (!strcmp(a, "--help")) { usage(stdout); return 0; }
         if (!strcmp(a, "--field") && i + 1 < argc) { field_arg = argv[i + 1]; field = atoi(argv[++i]); }
         else if (!strcmp(a, "--delim") && i + 1 < argc) { delim = argv[++i]; delim_set = 1; }
         // -d is the --delim alias everywhere except uniq, which owns -d for its
@@ -1770,7 +1817,7 @@ int main(int argc, char **argv) {
         else if (is_search && !strcmp(a, "-A") && i + 1 < argc) ctx_after = strtol(argv[++i], NULL, 10);   // grep -A N
         else if (is_search && !strcmp(a, "-B") && i + 1 < argc) ctx_before = strtol(argv[++i], NULL, 10);  // grep -B N
         else if (is_search && !strcmp(a, "-C") && i + 1 < argc) ctx_after = ctx_before = strtol(argv[++i], NULL, 10);  // grep -C N
-        else if (is_search && !strcmp(a, "-e") && i + 1 < argc) {                             // grep -e PAT (repeatable)
+        else if (is_search && (!strcmp(a, "-e") || !strcmp(a, "--regexp")) && i + 1 < argc) { // grep -e/--regexp PAT (repeatable)
             if (nepat >= 256) { fprintf(stderr, "sublimation: too many -e patterns\n"); return 2; }
             epats[nepat++] = argv[++i];
         }
@@ -1790,6 +1837,7 @@ int main(int argc, char **argv) {
             else { fprintf(stderr, "sublimation: --color takes auto|always|never\n"); return 2; }
         }
         else if (is_search && !strcmp(a, "--files-from") && i + 1 < argc) files_from = argv[++i];
+        else if (is_search && !strcmp(a, "--recursive")) recursive = 1;
         else if (is_search && !strcmp(a, "--confuse") && i + 1 < argc) confuse = argv[++i];
         // --tally implies -o: it counts the spans, so it must extract them.
         else if (is_search && !strcmp(a, "--tally")) { tally_mode = 1; only_match = 1; }
@@ -1828,6 +1876,7 @@ int main(int argc, char **argv) {
                         case 'H': fname_on = 1; break;     // grep -H: always prefix the filename
                         case 'h': fname_off = 1; break;    // grep -h: never prefix the filename
                         case 'S': smartcase = 1; break;    // smart case (ripgrep-ism): -i unless a pattern has an uppercase letter
+                        case 'r': recursive = 1; break;    // grep -r: walk each directory operand
                         default: known = 0; break;
                     }
                 } else if (is_uniq) {
@@ -2141,6 +2190,10 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "sublimation: pattern '%s' needs more than the regex face's "
                             "128 positions, one per literal, class or metacharacter (use -F "
                             "for a literal, or split it across -e)\n", pats[p]);
+                else if (pk == 0 && !fixed && srchs[p].error == SUBLIMATION_SEARCH_ERR_ASSERTION)
+                    fprintf(stderr, "sublimation: pattern '%s' uses '%.2s', a zero-width assertion "
+                            "the regex face does not carry (\\b \\B \\< \\>); use -w for whole "
+                            "words\n", pats[p], pats[p] + srchs[p].error_at);
                 else if (pk == 0 && !fixed)
                     fprintf(stderr, "sublimation: bad pattern '%s' -- the expression does not "
                             "parse\n", pats[p]);
@@ -2173,17 +2226,44 @@ int main(int argc, char **argv) {
         // Input set: the positionals plus --files-from's list, in that order.
         // An empty --files-from list means "no inputs" (exit 1), never a
         // silent fallback to stdin.
-        char **sfiles = NULL; int nsf = 0, sfcap = 0;
-        if (pos) strlist_push(&sfiles, &nsf, &sfcap, pos);   // only when -e/-f made it a FILE
-        for (int fi = 0; fi < nfiles; fi++) strlist_push(&sfiles, &nsf, &sfcap, files[fi]);
-        if (files_from && load_files_from(files_from, &sfiles, &nsf, &sfcap) != 0) {
+        char **named = NULL; int nnamed = 0, ncap = 0;
+        if (pos) strlist_push(&named, &nnamed, &ncap, pos);   // only when -e/-f made it a FILE
+        for (int fi = 0; fi < nfiles; fi++) strlist_push(&named, &nnamed, &ncap, files[fi]);
+        if (files_from && load_files_from(files_from, &named, &nnamed, &ncap) != 0) {
             fprintf(stderr, "sublimation: cannot open '%s'\n", files_from);
             return 2;
         }
-        int use_stdin = (nsf == 0 && !files_from);
-        // Filename prefix: grep's default (several inputs) overridden by
-        // -H / -h. --files-from entries count exactly like positionals here.
-        int prefix = fname_off ? 0 : (fname_on || nsf > 1);
+        // A directory is read only under -r, walked in its place in the list;
+        // without -r it is refused as grep refuses it, never read as an empty
+        // file. -r with nothing named walks the working directory.
+        int had_error = 0;                // an unreadable FILE -> exit 2, grep's contract
+        int walked_dir = 0;
+        char **sfiles = NULL; int nsf = 0, sfcap = 0;
+        if (recursive && nnamed == 0 && !files_from) {
+            walk_tree(".", 1, &sfiles, &nsf, &sfcap, &had_error, suppress);
+            walked_dir = 1;
+        }
+        for (int fi = 0; fi < nnamed; fi++) {
+            struct stat st;
+            if (stat(named[fi], &st) == 0 && S_ISDIR(st.st_mode)) {
+                if (recursive) {
+                    walk_tree(named[fi], 0, &sfiles, &nsf, &sfcap, &had_error, suppress);
+                    walked_dir = 1;
+                } else {
+                    had_error = 1;
+                    if (!suppress) fprintf(stderr, "sublimation: %s: Is a directory\n", named[fi]);
+                }
+            } else {
+                strlist_push(&sfiles, &nsf, &sfcap, named[fi]);
+            }
+            free(named[fi]);
+        }
+        free(named);
+        int use_stdin = (nsf == 0 && nnamed == 0 && !files_from && !recursive);
+        // Filename prefix: grep's default (several inputs, or a directory
+        // walked) overridden by -H / -h. --files-from entries count exactly
+        // like positionals here.
+        int prefix = fname_off ? 0 : (fname_on || nnamed > 1 || walked_dir);
         int color = (color_mode == 2) || (color_mode == 1 && isatty(1));
         // --line-buffered, and implicitly at a TTY: drain the sink per output
         // line so hits land as they happen, not at buffer-fill boundaries.
@@ -2198,7 +2278,6 @@ int main(int argc, char **argv) {
         StrMap tmap;
         if (tally_mode) smap_init(&tmap);
         int q_done = 0;                   // -q: stop everything at the first hit
-        int had_error = 0;                // an unreadable FILE -> exit 2, grep's contract
         // -A/-B/-C context lines. Confirmed directly against real grep before
         // writing this: -o disables context entirely (real grep does too);
         // -n marks a matched/shown line with ':' but a context line with '-'
@@ -2436,9 +2515,8 @@ int main(int argc, char **argv) {
         } else {
         // Read each named file, or stdin when none were given. A single named file
         // is the common `grep PATTERN file` idiom -- sublimation serves it directly
-        // now instead of treating the path as an unexpected argument. Native
-        // traversal (-r, globs) is still find's job, by target; --files-from
-        // above is the bridge.
+        // now instead of treating the path as an unexpected argument; -r's walk
+        // expanded each directory into its files above.
         for (int fi = 0; fi < (use_stdin ? 1 : nsf) && !q_done; fi++) {
             FILE *in = stdin;
             const char *fname = NULL;
@@ -3983,7 +4061,7 @@ int main(int argc, char **argv) {
     } else if (!strcmp(cmd, "max")) {     // running maximum
         emit_value(sublimation_max_f64(data.v, data.n), 0);
 
-    } else if (!strcmp(cmd, "describe")) {  // pandas .describe() / R summary() in one shot
+    } else if (!strcmp(cmd, "describe")) {  // pandas .describe()'s fields in one shot, floor(q*n) quartiles
         sub_describe_t d = sublimation_describe_f64(data.v, data.n);
         if (json) {
             sublimation_json j; json_open(&j, cmd, data.n, skipped);
